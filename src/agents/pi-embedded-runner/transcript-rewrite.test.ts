@@ -280,7 +280,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 describe("rewriteTranscriptEntriesInSqliteTranscript", () => {
   it("emits transcript updates when the active SQLite branch changes without opening a manager", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-"));
-    const sessionManager = SessionManager.create(dir, dir);
+    const sessionManager = SessionManager.create(dir);
     const entryIds = appendSessionMessages(sessionManager, [
       asAppendMessage({
         role: "user",

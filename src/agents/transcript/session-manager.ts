@@ -7,7 +7,6 @@ import {
 } from "../../config/sessions/paths.js";
 import {
   appendSqliteSessionTranscriptEvent,
-  listSqliteSessionTranscriptFiles,
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
@@ -42,10 +41,6 @@ function createSessionHeader(params: {
   };
 }
 
-function createSessionFileName(header: SessionHeader): string {
-  return `${header.timestamp.replace(/[:.]/g, "-")}_${header.id}.jsonl`;
-}
-
 type TranscriptSqliteScope = {
   agentId: string;
   sessionId: string;
@@ -64,22 +59,7 @@ function normalizeSessionFileIdentifier(sessionFile: string): string {
   return isSqliteSessionTranscriptLocator(trimmed) ? trimmed : path.resolve(trimmed);
 }
 
-function resolveSessionDirForIdentifier(sessionFile: string, sessionDir?: string): string {
-  if (sessionDir) {
-    return path.resolve(sessionDir);
-  }
-  return isSqliteSessionTranscriptLocator(sessionFile) ? "" : path.dirname(sessionFile);
-}
-
-function createSessionFileIdentifier(
-  header: SessionHeader,
-  sessionDir?: string,
-  agentId = DEFAULT_AGENT_ID,
-): string {
-  const dir = sessionDir?.trim();
-  if (dir) {
-    return path.join(path.resolve(dir), createSessionFileName(header));
-  }
+function createSessionFileIdentifier(header: SessionHeader, agentId = DEFAULT_AGENT_ID): string {
   return createSqliteSessionTranscriptLocator({
     agentId,
     sessionId: header.id,
@@ -141,6 +121,11 @@ function loadTranscriptState(params: { sessionFile: string; sessionId?: string; 
     ? sessionFile
     : path.resolve(sessionFile);
   const existingScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
+  if (!isSqliteSessionTranscriptLocator(transcriptPath) && !existingScope) {
+    throw new Error(
+      `Legacy transcript has not been imported into SQLite: ${transcriptPath}. Run "openclaw doctor --fix" to build the session database.`,
+    );
+  }
   const scope = {
     agentId: existingScope?.agentId ?? resolveAgentIdFromSessionPath(transcriptPath),
     sessionId:
@@ -263,36 +248,6 @@ function buildSessionInfoFromState(
   }
 }
 
-async function listSessionsFromDir(
-  dir: string,
-  onProgress?: SessionListProgress,
-  progressOffset = 0,
-  progressTotal?: number,
-): Promise<SessionInfo[]> {
-  const resolvedDir = path.resolve(dir);
-  const sqliteFiles = listSqliteSessionTranscriptFiles().filter(
-    (entry) => path.dirname(path.resolve(entry.path)) === resolvedDir,
-  );
-  const sessions: SessionInfo[] = [];
-  let loaded = 0;
-  const total = progressTotal ?? sqliteFiles.length;
-  for (const file of sqliteFiles) {
-    const state = createTranscriptStateFromEvents(
-      loadSqliteSessionTranscriptEvents({
-        agentId: file.agentId,
-        sessionId: file.sessionId,
-      }).map((entry) => entry.event),
-    );
-    loaded += 1;
-    onProgress?.(progressOffset + loaded, total);
-    const info = buildSessionInfoFromState(file.path, state, new Date(file.updatedAt));
-    if (info) {
-      sessions.push(info);
-    }
-  }
-  return sessions.toSorted((a, b) => b.modified.getTime() - a.modified.getTime());
-}
-
 function listSqliteTranscriptRecords(): SqliteTranscriptRecord[] {
   const seen = new Set<string>();
   return [
@@ -332,12 +287,10 @@ function loadTranscriptStateForRecord(record: SqliteTranscriptRecord): Transcrip
 export class TranscriptSessionManager implements SessionManager {
   private state: TranscriptState;
   private sessionFile: string | undefined;
-  private sessionDir: string;
   private persist: boolean;
   private sqliteScope: TranscriptSqliteScope | undefined;
 
   private constructor(params: {
-    sessionDir: string;
     state: TranscriptState;
     sessionFile?: string;
     persist: boolean;
@@ -346,7 +299,6 @@ export class TranscriptSessionManager implements SessionManager {
     this.sessionFile = params.sessionFile
       ? normalizeSessionFileIdentifier(params.sessionFile)
       : undefined;
-    this.sessionDir = params.sessionDir ? path.resolve(params.sessionDir) : "";
     this.state = params.state;
     this.persist = params.persist;
     this.sqliteScope = params.sqliteScope;
@@ -356,7 +308,6 @@ export class TranscriptSessionManager implements SessionManager {
     sessionFile: string;
     sessionId?: string;
     cwd?: string;
-    sessionDir?: string;
   }): TranscriptSessionManager {
     const sessionFile = normalizeSessionFileIdentifier(params.sessionFile);
     const loaded = loadTranscriptState({
@@ -365,7 +316,6 @@ export class TranscriptSessionManager implements SessionManager {
       cwd: params.cwd,
     });
     return new TranscriptSessionManager({
-      sessionDir: resolveSessionDirForIdentifier(sessionFile, params.sessionDir),
       sessionFile,
       persist: true,
       state: loaded.state,
@@ -373,10 +323,9 @@ export class TranscriptSessionManager implements SessionManager {
     });
   }
 
-  static create(cwd: string, sessionDir?: string): TranscriptSessionManager {
+  static create(cwd: string): TranscriptSessionManager {
     const header = createSessionHeader({ cwd });
-    const sessionFile = createSessionFileIdentifier(header, sessionDir);
-    const dir = resolveSessionDirForIdentifier(sessionFile, sessionDir);
+    const sessionFile = createSessionFileIdentifier(header);
     const sqliteScope = {
       agentId: resolveAgentIdFromSessionPath(sessionFile),
       sessionId: header.id,
@@ -385,7 +334,6 @@ export class TranscriptSessionManager implements SessionManager {
     const state = new TranscriptState({ header, entries: [] });
     persistFullTranscriptStateToSqlite(sqliteScope, state);
     return new TranscriptSessionManager({
-      sessionDir: dir,
       sessionFile,
       persist: true,
       state,
@@ -396,47 +344,24 @@ export class TranscriptSessionManager implements SessionManager {
   static inMemory(cwd = process.cwd()): TranscriptSessionManager {
     const header = createSessionHeader({ cwd });
     return new TranscriptSessionManager({
-      sessionDir: "",
       persist: false,
       state: new TranscriptState({ header, entries: [] }),
       sqliteScope: undefined,
     });
   }
 
-  static continueRecent(cwd: string, sessionDir?: string): TranscriptSessionManager {
-    if (!sessionDir) {
-      const newestSqlite = listSqliteTranscriptRecords().find((entry) => {
-        const state = loadTranscriptStateForRecord(entry);
-        return state.getCwd() === cwd;
-      });
-      if (newestSqlite) {
-        return TranscriptSessionManager.open({ sessionFile: newestSqlite.path, cwd });
-      }
-      return TranscriptSessionManager.create(cwd);
-    }
-    const dir = sessionDir ? path.resolve(sessionDir) : "";
-    const newestSqlite = listSqliteSessionTranscriptFiles()
-      .filter((entry) => {
-        if (!dir) {
-          return true;
-        }
-        return (
-          !isSqliteSessionTranscriptLocator(entry.path) &&
-          path.dirname(path.resolve(entry.path)) === dir
-        );
-      })
-      .toSorted((a, b) => b.updatedAt - a.updatedAt)[0];
+  static continueRecent(cwd: string): TranscriptSessionManager {
+    const newestSqlite = listSqliteTranscriptRecords().find((entry) => {
+      const state = loadTranscriptStateForRecord(entry);
+      return state.getCwd() === cwd;
+    });
     if (newestSqlite) {
       return TranscriptSessionManager.open({ sessionFile: newestSqlite.path, cwd });
     }
-    return TranscriptSessionManager.create(cwd, dir);
+    return TranscriptSessionManager.create(cwd);
   }
 
-  static forkFrom(
-    sourcePath: string,
-    targetCwd: string,
-    sessionDir?: string,
-  ): TranscriptSessionManager {
+  static forkFrom(sourcePath: string, targetCwd: string): TranscriptSessionManager {
     const sourceFile = normalizeSessionFileIdentifier(sourcePath);
     const sourceScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sourceFile });
     if (!sourceScope) {
@@ -451,7 +376,7 @@ export class TranscriptSessionManager implements SessionManager {
       cwd: targetCwd,
       parentSession: sourceFile,
     });
-    const sessionFile = createSessionFileIdentifier(header, sessionDir, sourceScope.agentId);
+    const sessionFile = createSessionFileIdentifier(header, sourceScope.agentId);
     const state = new TranscriptState({ header, entries: sourceState.getEntries() });
     const sqliteScope = {
       agentId: sourceScope.agentId,
@@ -462,17 +387,10 @@ export class TranscriptSessionManager implements SessionManager {
     return TranscriptSessionManager.open({ sessionFile, cwd: targetCwd });
   }
 
-  static async list(
-    cwd: string,
-    sessionDir?: string,
-    onProgress?: SessionListProgress,
-  ): Promise<SessionInfo[]> {
-    if (!sessionDir) {
-      return (await TranscriptSessionManager.listAll(onProgress)).filter(
-        (session) => session.cwd === cwd,
-      );
-    }
-    return await listSessionsFromDir(path.resolve(sessionDir), onProgress);
+  static async list(cwd: string, onProgress?: SessionListProgress): Promise<SessionInfo[]> {
+    return (await TranscriptSessionManager.listAll(onProgress)).filter(
+      (session) => session.cwd === cwd,
+    );
   }
 
   static async listAll(onProgress?: SessionListProgress): Promise<SessionInfo[]> {
@@ -493,7 +411,6 @@ export class TranscriptSessionManager implements SessionManager {
 
   setSessionFile(sessionFile: string): void {
     this.sessionFile = normalizeSessionFileIdentifier(sessionFile);
-    this.sessionDir = resolveSessionDirForIdentifier(this.sessionFile);
     this.persist = true;
     const loaded = loadTranscriptState({
       sessionFile: this.sessionFile,
@@ -512,10 +429,7 @@ export class TranscriptSessionManager implements SessionManager {
     this.state = new TranscriptState({ header, entries: [] });
     if (this.persist) {
       this.sessionFile =
-        this.sessionFile ??
-        (this.sessionDir
-          ? path.join(this.sessionDir, createSessionFileName(header))
-          : createSessionFileIdentifier(header, undefined, this.sqliteScope?.agentId));
+        this.sessionFile ?? createSessionFileIdentifier(header, this.sqliteScope?.agentId);
       this.sqliteScope = {
         agentId: resolveAgentIdFromSessionPath(this.sessionFile),
         sessionId: header.id,
@@ -532,10 +446,6 @@ export class TranscriptSessionManager implements SessionManager {
 
   getCwd(): string {
     return this.state.getCwd();
-  }
-
-  getSessionDir(): string {
-    return this.sessionDir;
   }
 
   getSessionId(): string {
@@ -676,13 +586,10 @@ export class TranscriptSessionManager implements SessionManager {
       cwd: this.getCwd(),
       parentSession: this.sessionFile,
     });
-    const timestamp = header.timestamp.replace(/[:.]/g, "-");
-    const sessionFile = this.sessionDir
-      ? path.join(this.sessionDir, `${timestamp}_${header.id}.jsonl`)
-      : createSqliteSessionTranscriptLocator({
-          agentId: this.sqliteScope?.agentId ?? DEFAULT_AGENT_ID,
-          sessionId: header.id,
-        });
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: this.sqliteScope?.agentId ?? DEFAULT_AGENT_ID,
+      sessionId: header.id,
+    });
     if (!this.persist) {
       return undefined;
     }
@@ -723,20 +630,18 @@ export function openTranscriptSessionManager(params: {
 }
 
 export const SessionManagerValue = {
-  create: (cwd: string, sessionDir?: string) => TranscriptSessionManager.create(cwd, sessionDir),
-  open: (sessionFile: string, sessionDir?: string, cwdOverride?: string) => {
+  create: (cwd: string) => TranscriptSessionManager.create(cwd),
+  open: (sessionFile: string, cwdOverride?: string) => {
     return TranscriptSessionManager.open({
       sessionFile,
       cwd: cwdOverride,
-      sessionDir,
     });
   },
-  continueRecent: (cwd: string, sessionDir?: string) =>
-    TranscriptSessionManager.continueRecent(cwd, sessionDir),
+  continueRecent: (cwd: string) => TranscriptSessionManager.continueRecent(cwd),
   inMemory: (cwd?: string) => TranscriptSessionManager.inMemory(cwd),
-  forkFrom: (sourcePath: string, targetCwd: string, sessionDir?: string) =>
-    TranscriptSessionManager.forkFrom(sourcePath, targetCwd, sessionDir),
-  list: (cwd: string, sessionDir?: string, onProgress?: SessionListProgress) =>
-    TranscriptSessionManager.list(cwd, sessionDir, onProgress),
+  forkFrom: (sourcePath: string, targetCwd: string) =>
+    TranscriptSessionManager.forkFrom(sourcePath, targetCwd),
+  list: (cwd: string, onProgress?: SessionListProgress) =>
+    TranscriptSessionManager.list(cwd, onProgress),
   listAll: (onProgress?: SessionListProgress) => TranscriptSessionManager.listAll(onProgress),
 };

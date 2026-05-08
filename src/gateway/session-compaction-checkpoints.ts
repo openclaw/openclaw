@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import {
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
@@ -13,10 +12,7 @@ import type {
   SessionCompactionCheckpointReason,
   SessionEntry,
 } from "../config/sessions.js";
-import {
-  createSqliteSessionTranscriptLocator,
-  isSqliteSessionTranscriptLocator,
-} from "../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
   deleteSqliteSessionTranscript,
   deleteSqliteSessionTranscriptSnapshot,
@@ -146,18 +142,11 @@ function createCheckpointVirtualTranscriptPath(params: {
   if (!sourceFile) {
     return undefined;
   }
-  if (isSqliteSessionTranscriptLocator(sourceFile)) {
-    const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sourceFile });
-    return createSqliteSessionTranscriptLocator({
-      agentId: scope?.agentId ?? DEFAULT_AGENT_ID,
-      sessionId: params.checkpointId,
-    });
-  }
-  const parsed = path.parse(sourceFile);
-  return path.join(
-    parsed.dir,
-    `${parsed.name}.checkpoint.${params.checkpointId}${parsed.ext || ".jsonl"}`,
-  );
+  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sourceFile });
+  return createSqliteSessionTranscriptLocator({
+    agentId: scope?.agentId ?? DEFAULT_AGENT_ID,
+    sessionId: params.checkpointId,
+  });
 }
 
 export async function readSessionLeafIdFromTranscriptAsync(
@@ -176,7 +165,6 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
   sourceSessionId?: string;
   agentId?: string;
   targetCwd?: string;
-  sessionDir?: string;
 }): Promise<ForkedCompactionCheckpointTranscript | null> {
   const sourceFile = params.sourceFile?.trim();
   const entries = loadTranscriptEntriesFromSqlite({
@@ -200,15 +188,7 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
     ? resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sourceFile })
     : undefined;
   const agentId = params.agentId?.trim() || sourceScope?.agentId || DEFAULT_AGENT_ID;
-  const sessionFile =
-    sourceFile && isSqliteSessionTranscriptLocator(sourceFile)
-      ? createSqliteSessionTranscriptLocator({ agentId, sessionId })
-      : (() => {
-          const sessionDir =
-            params.sessionDir ?? (sourceFile ? path.dirname(sourceFile) : process.cwd());
-          const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-          return path.join(sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
-        })();
+  const sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,

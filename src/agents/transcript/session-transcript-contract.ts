@@ -134,7 +134,6 @@ export type SessionManager = {
   newSession(options?: { id?: string; parentSession?: string }): string | undefined;
   isPersisted(): boolean;
   getCwd(): string;
-  getSessionDir(): string;
   getSessionId(): string;
   getSessionFile(): string | undefined;
   appendMessage(message: PersistableSessionMessage): string;
@@ -183,11 +182,11 @@ export type SessionManager = {
 };
 
 export const SessionManager = SessionManagerValue as {
-  create(cwd: string, sessionDir?: string): SessionManager;
-  open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager;
-  continueRecent(cwd: string, sessionDir?: string): SessionManager;
+  create(cwd: string): SessionManager;
+  open(path: string, cwdOverride?: string): SessionManager;
+  continueRecent(cwd: string): SessionManager;
   inMemory(cwd?: string): SessionManager;
-  forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string): SessionManager;
-  list(cwd: string, sessionDir?: string, onProgress?: SessionListProgress): Promise<SessionInfo[]>;
+  forkFrom(sourcePath: string, targetCwd: string): SessionManager;
+  list(cwd: string, onProgress?: SessionListProgress): Promise<SessionInfo[]>;
   listAll(onProgress?: SessionListProgress): Promise<SessionInfo[]>;
 };

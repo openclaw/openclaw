@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
@@ -19,7 +18,6 @@ import {
   resolveMainSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
-  isSqliteSessionTranscriptLocator,
   type SessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions.js";
@@ -1349,10 +1347,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: target.agentId,
       sourceFile: checkpoint.preCompaction.sessionFile,
       sourceSessionId: checkpoint.preCompaction.sessionId,
-      sessionDir:
-        entry.sessionFile && !isSqliteSessionTranscriptLocator(entry.sessionFile)
-          ? path.dirname(entry.sessionFile)
-          : undefined,
     });
     if (!branchedSession?.sessionFile) {
       respond(
@@ -1470,10 +1464,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: target.agentId,
       sourceFile: checkpoint.preCompaction.sessionFile,
       sourceSessionId: checkpoint.preCompaction.sessionId,
-      sessionDir:
-        entry.sessionFile && !isSqliteSessionTranscriptLocator(entry.sessionFile)
-          ? path.dirname(entry.sessionFile)
-          : undefined,
     });
     if (!restoredSession?.sessionFile) {
       respond(
