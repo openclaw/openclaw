@@ -1974,26 +1974,57 @@ export function buildGatewaySessionRow(params: {
   };
 }
 
-function resolveSessionListSearchDisplayName(
-  key: string,
-  entry?: SessionEntry,
-): string | undefined {
+function resolveDirectSessionAccountSearchDisplayName(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  entry?: SessionEntry;
+}): string | undefined {
+  const parsedDirect = parseDirectChannelKey(params.key);
+  if (!parsedDirect || params.entry?.label) {
+    return undefined;
+  }
+  const originLabel = params.entry?.origin?.label;
+  const originLabelIsDirectId = originLabelLooksLikeDirectSessionId({
+    originLabel,
+    channel:
+      normalizeOptionalString(params.entry?.origin?.provider) ??
+      normalizeOptionalString(params.entry?.channel) ??
+      normalizeOptionalString(params.entry?.lastChannel) ??
+      parsedDirect.channel,
+    accountId:
+      normalizeOptionalString(params.entry?.origin?.accountId) ??
+      normalizeOptionalString(params.entry?.lastAccountId) ??
+      parsedDirect.accountId,
+    peerId: parsedDirect.peerId,
+  });
+  if (originLabel && !originLabelIsDirectId) {
+    return undefined;
+  }
+  return resolveDirectSessionAccountDisplayName(params);
+}
+
+function resolveSessionListSearchDisplayName(params: {
+  cfg?: OpenClawConfig;
+  key: string;
+  entry?: SessionEntry;
+}): string | undefined {
+  const { cfg, key, entry } = params;
   if (entry?.displayName) {
     return entry.displayName;
   }
-  const parsed = parseGroupKey(key);
+  const parsed = parseGroupKey(params.key);
   const channel = entry?.channel ?? parsed?.channel;
-  if (!channel) {
-    return undefined;
+  if (channel) {
+    return buildGroupDisplayName({
+      provider: channel,
+      subject: entry?.subject,
+      groupChannel: entry?.groupChannel,
+      space: entry?.space,
+      id: parsed?.id,
+      key,
+    });
   }
-  return buildGroupDisplayName({
-    provider: channel,
-    subject: entry?.subject,
-    groupChannel: entry?.groupChannel,
-    space: entry?.space,
-    id: parsed?.id,
-    key,
-  });
+  return cfg ? resolveDirectSessionAccountSearchDisplayName({ cfg, key, entry }) : undefined;
 }
 
 export function loadGatewaySessionRow(
@@ -2085,6 +2116,7 @@ function sortAndLimitSessionEntries(
 }
 
 function filterSessionEntries(params: {
+  cfg?: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
@@ -2165,7 +2197,7 @@ function filterSessionEntries(params: {
   if (search) {
     entries = entries.filter(([key, entry]) => {
       const fields = [
-        resolveSessionListSearchDisplayName(key, entry),
+        resolveSessionListSearchDisplayName({ cfg: params.cfg, key, entry }),
         entry?.label,
         entry?.subject,
         entry?.sessionId,
@@ -2186,6 +2218,7 @@ function filterSessionEntries(params: {
 }
 
 function selectSessionEntries(params: {
+  cfg?: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
@@ -2203,6 +2236,7 @@ function selectSessionEntries(params: {
 }
 
 export function filterAndSortSessionEntries(params: {
+  cfg?: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
@@ -2232,6 +2266,7 @@ export function listSessionsFromStore(params: {
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({
+    cfg,
     store,
     opts,
     now,
@@ -2301,6 +2336,7 @@ export async function listSessionsFromStoreAsync(params: {
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({
+    cfg,
     store,
     opts,
     now,
