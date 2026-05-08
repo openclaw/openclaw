@@ -1,6 +1,9 @@
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
-import { parseModelRef } from "../../agents/model-selection-normalize.js";
+import {
+  buildModelAliasIndex,
+  resolveModelRefFromString,
+} from "../../agents/model-selection-shared.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
@@ -602,11 +605,16 @@ async function prepareCronRunContext(params: {
     });
     let resolvedFromFallback = false;
     if (fallbacks && fallbacks.length > 0) {
+      const aliasIndex = buildModelAliasIndex({
+        cfg: cfgWithAgentDefaults,
+        defaultProvider: provider,
+      });
       for (const raw of fallbacks) {
-        const ref = parseModelRef(raw, provider);
-        if (!ref) {
+        const resolved = resolveModelRefFromString({ raw, defaultProvider: provider, aliasIndex });
+        if (!resolved) {
           continue;
         }
+        const ref = resolved.ref;
         const fallbackPreflight = await preflightRuntime.preflightCronModelProvider({
           cfg: cfgWithAgentDefaults,
           provider: ref.provider,

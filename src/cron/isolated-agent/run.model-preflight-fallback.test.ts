@@ -142,4 +142,42 @@ describe("runCronIsolatedAgentTurn — model preflight fallback", () => {
     expect(result.status).toBe("ok");
     expect(preflightCronModelProviderMock).toHaveBeenCalledTimes(1);
   });
+
+  it("resolves alias fallback refs through the alias index", async () => {
+    preflightCronModelProviderMock
+      .mockResolvedValueOnce({
+        status: "unavailable",
+        reason: "primary unreachable",
+        provider: "ollama",
+        model: "llama3",
+        baseUrl: "http://localhost:11434",
+        retryAfterMs: 300000,
+      })
+      .mockResolvedValue({ status: "available" });
+
+    // "fast-model" is a configured alias for anthropic/claude-haiku-4-5
+    resolveAgentModelFallbacksOverrideMock.mockReturnValue(["fast-model"]);
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-haiku-4-5": { alias: "fast-model" },
+              },
+            },
+          },
+        },
+        job: makeIsolatedAgentTurnJob({ payload: { kind: "agentTurn", message: "hello" } }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(preflightCronModelProviderMock).toHaveBeenCalledTimes(2);
+    expect(preflightCronModelProviderMock.mock.calls[1][0]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+    });
+  });
 });
