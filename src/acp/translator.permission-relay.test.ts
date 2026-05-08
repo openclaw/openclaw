@@ -274,7 +274,6 @@ describe("ACP translator permission relay", () => {
 
     const approvalId = "approval-shared";
     await agent.handleGatewayEvent(createApprovalRequestEvent({ approvalId }));
-    await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(requestPermission).not.toHaveBeenCalled();
     expect(approvalResolveCalls(request)).toHaveLength(0);
@@ -341,8 +340,6 @@ describe("ACP translator permission relay", () => {
         sessionKey: "agent:main:other",
       }),
     );
-
-    await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(harness.requestPermission).not.toHaveBeenCalled();
     expect(approvalResolveCalls(harness.request)).toHaveLength(0);
