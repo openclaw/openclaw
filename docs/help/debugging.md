@@ -274,9 +274,10 @@ OPENCLAW_RAW_STREAM=1
 OPENCLAW_RAW_STREAM_PATH=~/.openclaw/logs/raw-stream.jsonl
 ```
 
-Default file:
+Default storage:
 
-`~/.openclaw/logs/raw-stream.jsonl`
+SQLite diagnostics (`diagnostics.raw_stream`). Set `--raw-stream-path` or
+`OPENCLAW_RAW_STREAM_PATH` only when you need an explicit JSONL export file.
 
 ## Raw chunk logging (pi-mono)
 
