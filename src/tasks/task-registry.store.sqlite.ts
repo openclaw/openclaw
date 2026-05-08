@@ -1,15 +1,12 @@
-import { existsSync, rmSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { resolveLegacyTaskRegistrySqlitePath } from "./task-registry.paths.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 import {
   parseOptionalTaskTerminalOutcome,
@@ -40,17 +37,12 @@ type TaskRegistryRow = Selectable<TaskRunsTable> & {
 
 type TaskDeliveryStateRow = Selectable<TaskDeliveryStateTable>;
 
-type TableInfoRow = {
-  name: string;
-};
-
 type TaskRegistryDatabase = {
   db: DatabaseSync;
   path: string;
 };
 
 let cachedDatabase: TaskRegistryDatabase | null = null;
-const SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
   if (typeof value === "bigint") {
@@ -267,110 +259,6 @@ function replaceTaskDeliveryStateRow(
   );
 }
 
-function hasLegacyTaskRunsColumn(db: DatabaseSync, columnName: string): boolean {
-  const rows = db.prepare(`PRAGMA table_info(task_runs)`).all() as TableInfoRow[];
-  return rows.some((row) => row.name === columnName);
-}
-
-function migrateLegacyOwnerColumns(db: DatabaseSync) {
-  if (!hasLegacyTaskRunsColumn(db, "owner_key")) {
-    db.exec(`ALTER TABLE task_runs ADD COLUMN owner_key TEXT;`);
-  }
-  if (!hasLegacyTaskRunsColumn(db, "requester_session_key")) {
-    db.exec(`ALTER TABLE task_runs ADD COLUMN requester_session_key TEXT;`);
-  }
-  if (!hasLegacyTaskRunsColumn(db, "scope_kind")) {
-    db.exec(`ALTER TABLE task_runs ADD COLUMN scope_kind TEXT NOT NULL DEFAULT 'session';`);
-  }
-  if (hasLegacyTaskRunsColumn(db, "requester_session_key")) {
-    db.exec(`
-      UPDATE task_runs
-      SET owner_key = requester_session_key
-      WHERE owner_key IS NULL
-    `);
-  }
-  db.exec(`
-    UPDATE task_runs
-    SET owner_key = CASE
-      WHEN trim(COALESCE(owner_key, '')) <> '' THEN trim(owner_key)
-      ELSE 'system:' || runtime || ':' || COALESCE(NULLIF(source_id, ''), task_id)
-    END
-  `);
-  db.exec(`
-    UPDATE task_runs
-    SET scope_kind = CASE
-      WHEN scope_kind = 'system' THEN 'system'
-      WHEN owner_key LIKE 'system:%' THEN 'system'
-      ELSE 'session'
-    END
-  `);
-  db.exec(`
-    UPDATE task_runs
-    SET requester_session_key = CASE
-      WHEN scope_kind = 'system' THEN ''
-      WHEN trim(COALESCE(requester_session_key, '')) <> '' THEN trim(requester_session_key)
-      ELSE owner_key
-    END
-  `);
-}
-
-function ensureLegacyTaskRegistrySchema(db: DatabaseSync) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS task_runs (
-      task_id TEXT NOT NULL PRIMARY KEY,
-      runtime TEXT NOT NULL,
-      task_kind TEXT,
-      source_id TEXT,
-      requester_session_key TEXT,
-      owner_key TEXT NOT NULL,
-      scope_kind TEXT NOT NULL,
-      child_session_key TEXT,
-      parent_flow_id TEXT,
-      parent_task_id TEXT,
-      agent_id TEXT,
-      run_id TEXT,
-      label TEXT,
-      task TEXT NOT NULL,
-      status TEXT NOT NULL,
-      delivery_status TEXT NOT NULL,
-      notify_policy TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      started_at INTEGER,
-      ended_at INTEGER,
-      last_event_at INTEGER,
-      cleanup_after INTEGER,
-      error TEXT,
-      progress_summary TEXT,
-      terminal_summary TEXT,
-      terminal_outcome TEXT
-    );
-  `);
-  migrateLegacyOwnerColumns(db);
-  if (!hasLegacyTaskRunsColumn(db, "task_kind")) {
-    db.exec(`ALTER TABLE task_runs ADD COLUMN task_kind TEXT;`);
-  }
-  if (!hasLegacyTaskRunsColumn(db, "parent_flow_id")) {
-    db.exec(`ALTER TABLE task_runs ADD COLUMN parent_flow_id TEXT;`);
-  }
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS task_delivery_state (
-      task_id TEXT NOT NULL PRIMARY KEY,
-      requester_origin_json TEXT,
-      last_notified_event_at INTEGER
-    );
-  `);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_run_id ON task_runs(run_id);`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_status ON task_runs(runtime, status);`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_cleanup_after ON task_runs(cleanup_after);`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_at);`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);`);
-  db.exec(
-    `CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);`,
-  );
-}
-
 function openTaskRegistryDatabase(): TaskRegistryDatabase {
   const database = openOpenClawStateDatabase();
   const pathname = database.path;
@@ -479,73 +367,4 @@ export function deleteTaskDeliveryStateFromSqlite(taskId: string) {
 
 export function closeTaskRegistrySqliteStore() {
   cachedDatabase = null;
-}
-
-export function legacyTaskRegistrySidecarExists(env: NodeJS.ProcessEnv = process.env): boolean {
-  return existsSync(resolveLegacyTaskRegistrySqlitePath(env));
-}
-
-function removeSqliteSidecars(pathname: string): boolean {
-  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-    rmSync(`${pathname}${suffix}`, { force: true });
-  }
-  return !existsSync(pathname);
-}
-
-export function importLegacyTaskRegistrySidecarToSqlite(env: NodeJS.ProcessEnv = process.env): {
-  importedTasks: number;
-  importedDeliveryStates: number;
-  removedSource: boolean;
-  sourcePath: string;
-} {
-  const sourcePath = resolveLegacyTaskRegistrySqlitePath(env);
-  if (!existsSync(sourcePath)) {
-    return {
-      importedTasks: 0,
-      importedDeliveryStates: 0,
-      removedSource: false,
-      sourcePath,
-    };
-  }
-
-  const { DatabaseSync } = requireNodeSqlite();
-  const legacyDb = new DatabaseSync(sourcePath);
-  let importedTasks = 0;
-  let importedDeliveryStates = 0;
-  try {
-    ensureLegacyTaskRegistrySchema(legacyDb);
-    const taskRows = selectTaskRows(legacyDb);
-    const deliveryRows = selectTaskDeliveryStateRows(legacyDb);
-    const tasks = taskRows.map(rowToTaskRecord);
-    const deliveryStates = deliveryRows.map(rowToTaskDeliveryState);
-    withWriteTransaction(({ db }) => {
-      for (const task of tasks) {
-        upsertTaskRow(db, bindTaskRecordBase(task));
-      }
-      for (const deliveryState of deliveryStates) {
-        replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(deliveryState));
-      }
-    });
-    importedTasks = tasks.length;
-    importedDeliveryStates = deliveryStates.length;
-  } finally {
-    legacyDb.close();
-  }
-  return {
-    importedTasks,
-    importedDeliveryStates,
-    removedSource: removeSqliteSidecars(sourcePath),
-    sourcePath,
-  };
-}
-
-export function removeLegacyTaskRegistrySidecar(env: NodeJS.ProcessEnv = process.env): {
-  removedSource: boolean;
-  sourcePath: string;
-} {
-  const sourcePath = resolveLegacyTaskRegistrySqlitePath(env);
-  return {
-    removedSource: removeSqliteSidecars(sourcePath),
-    sourcePath,
-  };
 }

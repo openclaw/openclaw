@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { importLegacyTaskFlowRegistrySidecarToSqlite } from "../commands/doctor-sqlite-sidecars.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -16,7 +17,6 @@ import {
   resolveTaskFlowRegistrySqlitePath,
 } from "./task-flow-registry.paths.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
-import { importLegacyTaskFlowRegistrySidecarToSqlite } from "./task-flow-registry.store.sqlite.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
 function createStoredFlow(): TaskFlowRecord {

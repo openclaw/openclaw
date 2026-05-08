@@ -33,9 +33,7 @@ export type {
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
   closePluginStateSqliteStore,
-  importLegacyPluginStateSidecarToSqlite,
   isPluginStateDatabaseOpen,
-  legacyPluginStateSidecarExists,
   probePluginStateStore,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";

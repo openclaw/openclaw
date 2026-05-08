@@ -1,15 +1,12 @@
-import { existsSync, rmSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { resolveLegacyTaskFlowRegistrySqlitePath } from "./task-flow-registry.paths.js";
 import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
 import {
   parseOptionalTaskFlowSyncMode,
@@ -35,7 +32,6 @@ type FlowRegistryDatabase = {
 };
 
 let cachedDatabase: FlowRegistryDatabase | null = null;
-const SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
   if (typeof value === "bigint") {
@@ -181,105 +177,6 @@ function upsertFlowRow(db: DatabaseSync, row: Insertable<FlowRunsTable>): void {
   );
 }
 
-function hasLegacyFlowRunsColumn(db: DatabaseSync, columnName: string): boolean {
-  const rows = db.prepare(`PRAGMA table_info(flow_runs)`).all() as Array<{ name?: string }>;
-  return rows.some((row) => row.name === columnName);
-}
-
-function ensureLegacyTaskFlowRegistrySchema(db: DatabaseSync) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS flow_runs (
-      flow_id TEXT NOT NULL PRIMARY KEY,
-      shape TEXT,
-      sync_mode TEXT NOT NULL DEFAULT 'managed',
-      owner_key TEXT NOT NULL,
-      requester_origin_json TEXT,
-      controller_id TEXT,
-      revision INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL,
-      notify_policy TEXT NOT NULL,
-      goal TEXT NOT NULL,
-      current_step TEXT,
-      blocked_task_id TEXT,
-      blocked_summary TEXT,
-      state_json TEXT,
-      wait_json TEXT,
-      cancel_requested_at INTEGER,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      ended_at INTEGER
-    );
-  `);
-  if (
-    !hasLegacyFlowRunsColumn(db, "owner_key") &&
-    hasLegacyFlowRunsColumn(db, "owner_session_key")
-  ) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN owner_key TEXT;`);
-    db.exec(`
-      UPDATE flow_runs
-      SET owner_key = owner_session_key
-      WHERE owner_key IS NULL
-    `);
-  }
-  if (!hasLegacyFlowRunsColumn(db, "shape")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN shape TEXT;`);
-  }
-  if (!hasLegacyFlowRunsColumn(db, "sync_mode")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN sync_mode TEXT;`);
-    if (hasLegacyFlowRunsColumn(db, "shape")) {
-      db.exec(`
-        UPDATE flow_runs
-        SET sync_mode = CASE
-          WHEN shape = 'single_task' THEN 'task_mirrored'
-          ELSE 'managed'
-        END
-        WHERE sync_mode IS NULL
-      `);
-    } else {
-      db.exec(`
-        UPDATE flow_runs
-        SET sync_mode = 'managed'
-        WHERE sync_mode IS NULL
-      `);
-    }
-  }
-  if (!hasLegacyFlowRunsColumn(db, "controller_id")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN controller_id TEXT;`);
-  }
-  db.exec(`
-    UPDATE flow_runs
-    SET controller_id = 'core/legacy-restored'
-    WHERE sync_mode = 'managed'
-      AND (controller_id IS NULL OR trim(controller_id) = '')
-  `);
-  if (!hasLegacyFlowRunsColumn(db, "revision")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN revision INTEGER;`);
-    db.exec(`
-      UPDATE flow_runs
-      SET revision = 0
-      WHERE revision IS NULL
-    `);
-  }
-  if (!hasLegacyFlowRunsColumn(db, "blocked_task_id")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN blocked_task_id TEXT;`);
-  }
-  if (!hasLegacyFlowRunsColumn(db, "blocked_summary")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN blocked_summary TEXT;`);
-  }
-  if (!hasLegacyFlowRunsColumn(db, "state_json")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN state_json TEXT;`);
-  }
-  if (!hasLegacyFlowRunsColumn(db, "wait_json")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN wait_json TEXT;`);
-  }
-  if (!hasLegacyFlowRunsColumn(db, "cancel_requested_at")) {
-    db.exec(`ALTER TABLE flow_runs ADD COLUMN cancel_requested_at INTEGER;`);
-  }
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);`);
-}
-
 function openFlowRegistryDatabase(): FlowRegistryDatabase {
   const database = openOpenClawStateDatabase();
   const pathname = database.path;
@@ -334,63 +231,4 @@ export function deleteTaskFlowRegistryRecordFromSqlite(flowId: string) {
 
 export function closeTaskFlowRegistrySqliteStore() {
   cachedDatabase = null;
-}
-
-export function legacyTaskFlowRegistrySidecarExists(env: NodeJS.ProcessEnv = process.env): boolean {
-  return existsSync(resolveLegacyTaskFlowRegistrySqlitePath(env));
-}
-
-function removeSqliteSidecars(pathname: string): boolean {
-  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-    rmSync(`${pathname}${suffix}`, { force: true });
-  }
-  return !existsSync(pathname);
-}
-
-export function importLegacyTaskFlowRegistrySidecarToSqlite(env: NodeJS.ProcessEnv = process.env): {
-  importedFlows: number;
-  removedSource: boolean;
-  sourcePath: string;
-} {
-  const sourcePath = resolveLegacyTaskFlowRegistrySqlitePath(env);
-  if (!existsSync(sourcePath)) {
-    return {
-      importedFlows: 0,
-      removedSource: false,
-      sourcePath,
-    };
-  }
-
-  const { DatabaseSync } = requireNodeSqlite();
-  const legacyDb = new DatabaseSync(sourcePath);
-  let importedFlows = 0;
-  try {
-    ensureLegacyTaskFlowRegistrySchema(legacyDb);
-    const rows = selectFlowRows(legacyDb);
-    const flows = rows.map(rowToFlowRecord);
-    withWriteTransaction(({ db }) => {
-      for (const flow of flows) {
-        upsertFlowRow(db, bindFlowRecord(flow));
-      }
-    });
-    importedFlows = flows.length;
-  } finally {
-    legacyDb.close();
-  }
-  return {
-    importedFlows,
-    removedSource: removeSqliteSidecars(sourcePath),
-    sourcePath,
-  };
-}
-
-export function removeLegacyTaskFlowRegistrySidecar(env: NodeJS.ProcessEnv = process.env): {
-  removedSource: boolean;
-  sourcePath: string;
-} {
-  const sourcePath = resolveLegacyTaskFlowRegistrySqlitePath(env);
-  return {
-    removedSource: removeSqliteSidecars(sourcePath),
-    sourcePath,
-  };
 }

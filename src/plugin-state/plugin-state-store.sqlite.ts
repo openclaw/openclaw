@@ -1,4 +1,3 @@
-import { existsSync, rmSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import {
@@ -12,10 +11,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import {
-  resolveLegacyPluginStateSqlitePath,
-  resolvePluginStateSqlitePath,
-} from "./plugin-state-store.paths.js";
+import { resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
 import {
   PluginStateStoreError,
   type PluginStateEntry,
@@ -24,8 +20,6 @@ import {
   type PluginStateStoreProbeResult,
   type PluginStateStoreProbeStep,
 } from "./plugin-state-store.types.js";
-
-const LEGACY_PLUGIN_STATE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 65_536;
 
@@ -718,76 +712,4 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
 
 export function closePluginStateSqliteStore(): void {
   cachedDatabase = null;
-}
-
-export type LegacyPluginStateSidecarImportResult = {
-  sourcePath: string;
-  importedEntries: number;
-  removedSource: boolean;
-};
-
-function removeLegacyPluginStateSidecarFiles(sourcePath: string): boolean {
-  let removed = false;
-  for (const suffix of LEGACY_PLUGIN_STATE_SIDECAR_SUFFIXES) {
-    const candidate = `${sourcePath}${suffix}`;
-    if (!existsSync(candidate)) {
-      continue;
-    }
-    rmSync(candidate, { force: true });
-    removed = true;
-  }
-  return removed;
-}
-
-export function legacyPluginStateSidecarExists(env: NodeJS.ProcessEnv = process.env): boolean {
-  return existsSync(resolveLegacyPluginStateSqlitePath(env));
-}
-
-export function importLegacyPluginStateSidecarToSqlite(
-  env: NodeJS.ProcessEnv = process.env,
-): LegacyPluginStateSidecarImportResult {
-  const sourcePath = resolveLegacyPluginStateSqlitePath(env);
-  if (!existsSync(sourcePath)) {
-    return {
-      sourcePath,
-      importedEntries: 0,
-      removedSource: false,
-    };
-  }
-
-  const { DatabaseSync } = requireNodeSqlite();
-  const legacyDb = new DatabaseSync(sourcePath);
-  let rows: PluginStateRow[];
-  try {
-    rows = executeSqliteQuerySync<PluginStateRow>(
-      legacyDb,
-      getPluginStateKysely(legacyDb)
-        .selectFrom("plugin_state_entries")
-        .select(["plugin_id", "namespace", "entry_key", "value_json", "created_at", "expires_at"])
-        .orderBy("plugin_id", "asc")
-        .orderBy("namespace", "asc")
-        .orderBy("entry_key", "asc"),
-    ).rows;
-  } finally {
-    legacyDb.close();
-  }
-
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      for (const row of rows) {
-        upsertPluginStateEntry(database.db, {
-          ...row,
-          created_at: normalizeNumber(row.created_at) ?? 0,
-          expires_at: normalizeNumber(row.expires_at) ?? null,
-        });
-      }
-    },
-    { env },
-  );
-
-  return {
-    sourcePath,
-    importedEntries: rows.length,
-    removedSource: removeLegacyPluginStateSidecarFiles(sourcePath),
-  };
 }

@@ -63,10 +63,6 @@ import {
   legacyChannelPairingFilesExist,
 } from "../pairing/pairing-store.js";
 import {
-  importLegacyPluginStateSidecarToSqlite,
-  legacyPluginStateSidecarExists,
-} from "../plugin-state/plugin-state-store.js";
-import {
   importLegacyPluginBindingApprovalFileToSqlite,
   legacyPluginBindingApprovalFileExists,
 } from "../plugins/conversation-binding.js";
@@ -74,20 +70,20 @@ import {
   importLegacyInstalledPluginIndexFileToSqlite,
   legacyInstalledPluginIndexFileExists,
 } from "../plugins/installed-plugin-index-store.js";
-import {
-  importLegacyTaskFlowRegistrySidecarToSqlite,
-  legacyTaskFlowRegistrySidecarExists,
-} from "../tasks/task-flow-registry.store.sqlite.js";
-import {
-  importLegacyTaskRegistrySidecarToSqlite,
-  legacyTaskRegistrySidecarExists,
-} from "../tasks/task-registry.store.sqlite.js";
 import { note } from "../terminal/note.js";
 import {
   importLegacyTuiLastSessionStoreToSqlite,
   legacyTuiLastSessionFileExists,
 } from "../tui/tui-last-session.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  importLegacyPluginStateSidecarToSqlite,
+  importLegacyTaskFlowRegistrySidecarToSqlite,
+  importLegacyTaskRegistrySidecarToSqlite,
+  legacyPluginStateSidecarExists,
+  legacyTaskFlowRegistrySidecarExists,
+  legacyTaskRegistrySidecarExists,
+} from "./doctor-sqlite-sidecars.js";
 
 type LegacyStateProbe = {
   deviceIdentity: boolean;
