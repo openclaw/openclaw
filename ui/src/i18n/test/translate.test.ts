@@ -62,6 +62,17 @@ describe("i18n", () => {
     });
   }
 
+  function readString(value: unknown, path: string): string {
+    let cursor = value;
+    for (const part of path.split(".")) {
+      cursor =
+        cursor && typeof cursor === "object"
+          ? (cursor as Record<string, unknown>)[part]
+          : undefined;
+    }
+    return typeof cursor === "string" ? cursor : "";
+  }
+
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -147,6 +158,38 @@ describe("i18n", () => {
       vi: viLocale,
     })) {
       expect((value.common as { health: string }).health, locale).not.toBe(englishHealth);
+    }
+  });
+
+  it("keeps login failure guidance localized in shipped locale bundles", () => {
+    const checkedKeys = flatten(
+      (en.login as { failure: Record<string, string | Record<string, unknown>> }).failure,
+      "login.failure",
+    );
+    expect(checkedKeys.length).toBeGreaterThan(0);
+    for (const [locale, value] of Object.entries({
+      ar,
+      de,
+      es,
+      fa,
+      fr,
+      id,
+      it: itLocale,
+      ja_JP,
+      ko,
+      nl,
+      pl,
+      pt_BR,
+      th,
+      tr,
+      uk,
+      vi: viLocale,
+      zh_CN,
+      zh_TW,
+    })) {
+      for (const key of checkedKeys) {
+        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+      }
     }
   });
 
