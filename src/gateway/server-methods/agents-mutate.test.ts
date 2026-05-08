@@ -22,7 +22,6 @@ const mocks = vi.hoisted(() => ({
   isWorkspaceSetupCompleted: vi.fn(async () => false),
   resolveAgentDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/agents/test-agent"),
   resolveAgentWorkspaceDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/workspace/test-agent"),
-  resolveSessionTranscriptsDirForAgent: vi.fn((_agentId?: string) => "/transcripts/test-agent"),
   listAgentsForGateway: vi.fn(() => ({
     defaultId: "main",
     mainKey: "agent:main:main",
@@ -97,10 +96,6 @@ vi.mock("../../agents/workspace.js", async () => {
     isWorkspaceSetupCompleted: mocks.isWorkspaceSetupCompleted,
   };
 });
-
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveSessionTranscriptsDirForAgent: mocks.resolveSessionTranscriptsDirForAgent,
-}));
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: mocks.movePathToTrash,
