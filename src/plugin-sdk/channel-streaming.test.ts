@@ -210,28 +210,27 @@ describe("channel-streaming", () => {
         lines: [" tool: read ", "patch applied", "tests done"],
         formatLine: (line) => `\`${line}\``,
       }),
-    ).toBe("Shelling\n• `patch applied`\n• `tests done`");
+    ).toBe("• `patch applied`\n• `tests done`");
     expect(
       formatChannelProgressDraftText({
         entry,
         lines: ["🛠️ Exec", "plain update"],
       }),
-    ).toBe("Shelling\n🛠️ Exec\n• plain update");
+    ).toBe("🛠️ Exec\n• plain update");
   });
 
-  it("can render progress labels as rolling lines", () => {
+  it("renders progress labels as rolling lines", () => {
     const entry = { streaming: { progress: { label: "Shelling", maxLines: 3 } } };
 
     expect(
       formatChannelProgressDraftText({
         entry,
-        labelPlacement: "line",
         lines: ["🛠️ Exec", "📖 Read", "🩹 Patch"],
       }),
     ).toBe("🛠️ Exec\n📖 Read\n🩹 Patch");
   });
 
-  it("lets channels render structured progress lines", () => {
+  it("renders structured progress lines with compact details", () => {
     const line = buildChannelProgressDraftLine({
       event: "patch",
       summary: "1 modified",
@@ -242,8 +241,6 @@ describe("channel-streaming", () => {
       formatChannelProgressDraftText({
         entry: { streaming: { progress: { label: false } } },
         lines: line ? [line] : [],
-        formatStructuredLine: (entry) =>
-          entry.detail ? `${entry.icon ?? ""} ${entry.detail}`.trim() : entry.text,
       }),
     ).toBe("🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-prev…");
   });
@@ -259,7 +256,7 @@ describe("channel-streaming", () => {
   });
 
   it("keeps compacted raw progress lines from leaking unmatched markdown backticks", () => {
-    const line = formatChannelProgressDraftLine(
+    const line = buildChannelProgressDraftLine(
       {
         event: "tool",
         name: "exec",
@@ -273,10 +270,12 @@ describe("channel-streaming", () => {
 
     const text = formatChannelProgressDraftText({
       entry: { streaming: { progress: { label: "Shelling" } } },
-      lines: [line ?? ""],
+      lines: line ? [line] : [],
     });
 
-    expect(text).toBe("Shelling\n🛠️ Exec: run node script…that/keeps/going/and/going/index…");
+    expect(text).toBe(
+      "Shelling\n🛠️ run node script scripts/check-something-with-a-very-long-path, node…",
+    );
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });
 

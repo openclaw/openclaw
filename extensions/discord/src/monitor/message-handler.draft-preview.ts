@@ -95,8 +95,6 @@ export function createDiscordDraftPreviewController(params: {
       entry: params.discordConfig,
       lines: previewToolProgressLines,
       seed: progressSeed,
-      labelPlacement: "line",
-      formatStructuredLine: formatDiscordProgressDraftLine,
     });
     if (!previewText || previewText === lastPartialText) {
       return;
@@ -196,8 +194,6 @@ export function createDiscordDraftPreviewController(params: {
           entry: params.discordConfig,
           lines: previewToolProgressLines,
           seed: progressSeed,
-          labelPlacement: "line",
-          formatStructuredLine: formatDiscordProgressDraftLine,
         });
         lastPartialText = previewText;
         draftText = previewText;
@@ -428,23 +424,4 @@ function shouldStartDiscordProgressDraftNow(
   line: string | ChannelProgressDraftLine | undefined,
 ): boolean {
   return typeof line === "object" && line?.kind === "patch" && Boolean(line.detail);
-}
-
-function formatDiscordProgressDraftLine(line: ChannelProgressDraftLine): string {
-  const icon = line.icon?.trim();
-  const prefix = icon ? `${icon} ` : "";
-  const detail = line.detail?.trim();
-  if (detail) {
-    return `${prefix}${detail}`;
-  }
-  const status = line.status?.trim();
-  if (status) {
-    return `${prefix}${status}`;
-  }
-  const text = line.text.trim();
-  const label = line.label.trim();
-  if (!icon && text && text !== label) {
-    return text;
-  }
-  return `${prefix}${label}`.trim();
 }
