@@ -197,45 +197,16 @@ export type SessionConfig = {
   resetByType?: SessionResetByTypeConfig;
   /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */
   resetByChannel?: Record<string, SessionResetConfig>;
-  store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
-  /** Session transcript write-lock acquisition policy. */
-  writeLock?: SessionWriteLockConfig;
   agentToAgent?: {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
-  /** Explicit SQLite session-row maintenance (age and entry-count retention). */
-  maintenance?: SessionMaintenanceConfig;
-};
-
-export type SessionWriteLockConfig = {
-  /** How long to wait while acquiring a session transcript write lock. Default: 60000. */
-  acquireTimeoutMs?: number;
-};
-
-export type SessionMaintenanceMode = "enforce" | "warn";
-
-export type SessionMaintenanceConfig = {
-  /** Whether to enforce maintenance or warn only. Default: "warn". */
-  mode?: SessionMaintenanceMode;
-  /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
-  pruneAfter?: string | number;
-  /** @deprecated Use pruneAfter instead. */
-  pruneDays?: number;
-  /** Maximum number of session entries to keep. Default: 500. */
-  maxEntries?: number;
-  /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
-  rotateBytes?: number | string;
-  /** @deprecated Ignored. Session transcripts are stored in SQLite. */
-  maxDiskBytes?: number | string;
-  /** @deprecated Ignored with maxDiskBytes. */
-  highWaterBytes?: number | string;
 };
 
 export type LoggingConfig = {

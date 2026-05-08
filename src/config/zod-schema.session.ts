@@ -1,6 +1,4 @@
 import { z } from "zod";
-import { parseDurationMs } from "../cli/parse-duration.js";
-import { normalizeStringifiedOptionalString } from "../shared/string-coerce.js";
 import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import {
@@ -50,17 +48,10 @@ export const SessionSchema = z
       .strict()
       .optional(),
     resetByChannel: z.record(z.string(), SessionResetConfigSchema).optional(),
-    store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
-    writeLock: z
-      .object({
-        acquireTimeoutMs: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),
@@ -76,34 +67,6 @@ export const SessionSchema = z
         defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
       })
       .strict()
-      .optional(),
-    maintenance: z
-      .object({
-        mode: z.enum(["enforce", "warn"]).optional(),
-        pruneAfter: z.union([z.string(), z.number()]).optional(),
-        /** @deprecated Use pruneAfter instead. */
-        pruneDays: z.number().int().positive().optional(),
-        maxEntries: z.number().int().positive().optional(),
-        rotateBytes: z.union([z.string(), z.number()]).optional(),
-        maxDiskBytes: z.union([z.string(), z.number()]).optional(),
-        highWaterBytes: z.union([z.string(), z.number()]).optional(),
-      })
-      .strict()
-      .superRefine((val, ctx) => {
-        if (val.pruneAfter !== undefined) {
-          try {
-            parseDurationMs(normalizeStringifiedOptionalString(val.pruneAfter) ?? "", {
-              defaultUnit: "d",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["pruneAfter"],
-              message: "invalid duration (use ms, s, m, h, d)",
-            });
-          }
-        }
-      })
       .optional(),
   })
   .strict()

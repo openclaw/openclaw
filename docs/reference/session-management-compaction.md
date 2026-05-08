@@ -85,45 +85,39 @@ OpenClaw resolves these via `src/config/sessions/*`.
 
 ---
 
-## Store Maintenance
+## Store Cleanup
 
-Session persistence has explicit maintenance controls (`session.maintenance`) for SQLite session rows:
+SQLite is the canonical per-agent session backend. `sessions.json` is a legacy
+doctor-import input, not a parallel export/debug store. Runtime code should
+read and write explicit `{ agentId, sessionKey }` rows.
 
-- `mode`: `warn` (default) or `enforce`
-- `pruneAfter`: stale-entry age cutoff (default `30d`)
-- `maxEntries`: cap entries in the session store (default `500`)
-- `maxDiskBytes`: deprecated and ignored
-- `highWaterBytes`: deprecated and ignored
+Runtime writes normalize and persist only; they do not prune, cap, import,
+archive, or run disk-budget cleanup. Session store reads also do not import,
+prune, or cap entries during Gateway startup. Use `openclaw doctor --fix` for
+legacy JSON/JSONL import.
 
-Normal Gateway writes flow through a per-store session writer that serializes in-process mutations. SQLite is the canonical per-agent backend; `sessions.json` is a legacy doctor-import input, not a parallel export/debug store. Runtime code should prefer `updateSessionStore(...)` or `updateSessionStoreEntry(...)`. Runtime writes normalize and persist only; they do not prune, cap, import, archive, or run disk-budget cleanup. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue. Session store reads do not import, prune, or cap entries during Gateway startup; use `openclaw doctor --fix` for legacy JSON import and `openclaw sessions cleanup --enforce` for row cleanup. `openclaw sessions cleanup --enforce` applies the configured age/count policy immediately. Compaction checkpoint cleanup removes SQLite snapshot rows, not file artifacts.
-
-Maintenance keeps durable external conversation pointers such as group sessions
-and thread-scoped chat sessions, but synthetic runtime entries for cron, hooks,
-heartbeat, ACP, and sub-agents can still be removed when they exceed the
-configured age or count.
-
-OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes`, `maxDiskBytes`, and `highWaterBytes` keys are ignored and `openclaw doctor --fix` removes them from older configs.
+OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups
+during Gateway writes. Legacy `session.maintenance.*` and `session.writeLock.*`
+settings are doctor-migrated raw config only, and `openclaw doctor --fix`
+removes them from older configs.
 
 Transcript mutations are serialized through SQLite transactions plus the
-per-session append queue. The legacy `session.writeLock.acquireTimeoutMs`
-setting remains for older import/debug paths that still touch JSONL files.
+per-session append queue. Runtime bootstrap and manual compaction repair write
+SQLite transcript rows directly; retained `.jsonl` paths are lookup/export
+metadata only.
 
-In `mode: "warn"`, OpenClaw reports potential row pruning/capping but does not mutate the store.
-
-Run maintenance on demand:
-
-```bash
-openclaw sessions cleanup --dry-run
-openclaw sessions cleanup --enforce
-```
+Legacy session import belongs to `openclaw doctor --fix`. Runtime no longer has
+a session cleanup command that prunes missing transcript rows; after doctor
+runs, reset or delete any intentionally stale session explicitly.
 
 ---
 
 ## Cron sessions and run logs
 
-Isolated cron runs also create session entries/transcripts. Session rows use the same explicit session cleanup path as other rows:
+Isolated cron runs also create session entries/transcripts. Session rows use the
+same SQLite session tables as other rows:
 
-- `openclaw sessions cleanup --enforce` maintains old isolated cron run sessions through `session.maintenance`.
+- Legacy cron session imports happen through `openclaw doctor --fix`.
 - `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune SQLite cron run history (defaults: `2_000_000` approximate serialized bytes and `2000` rows per job).
 
 When cron force-creates a new isolated run session, it sanitizes the previous
@@ -181,7 +175,7 @@ Key fields (not exhaustive):
   freshness uses this so heartbeat, cron, and exec events do not keep sessions
   alive. Legacy rows without this field fall back to the recovered session start
   time for idle freshness.
-- `updatedAt`: last store-row mutation timestamp, used for listing, pruning, and
+- `updatedAt`: last store-row mutation timestamp, used for listing and
   bookkeeping. It is not the authority for daily/idle reset freshness.
 - `sessionFile`: optional explicit transcript path override
 - `chatType`: `direct | group | room` (helps UIs and send policy)
@@ -448,11 +442,11 @@ flush logic lives on the Gateway side today.
 ## Troubleshooting checklist
 
 - Session key wrong? Start with [/concepts/session](/concepts/session) and confirm the `sessionKey` in `/status`.
-- Store vs transcript mismatch? Confirm the Gateway host and the store path from `openclaw status`.
+- Session metadata vs transcript mismatch? Confirm the Gateway host and agent database from `openclaw status`.
 - Compaction spam? Check:
   - model context window (too small)
   - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)
-  - tool-result bloat: enable/tune session pruning
+  - tool-result bloat: review compaction thresholds and tool-result persistence
 - Silent turns leaking? Confirm the reply starts with `NO_REPLY` (case-insensitive exact token) and you're on a build that includes the streaming suppression fix.
 
 ## Related

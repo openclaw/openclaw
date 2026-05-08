@@ -5,52 +5,25 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 
-function hasLegacyRotateBytes(value: unknown): boolean {
-  const maintenance = getRecord(value);
-  return Boolean(maintenance && Object.prototype.hasOwnProperty.call(maintenance, "rotateBytes"));
+function hasLegacySessionMaintenance(value: unknown): boolean {
+  const session = getRecord(value);
+  return Boolean(session && Object.prototype.hasOwnProperty.call(session, "maintenance"));
 }
 
-function hasLegacyDiskBudget(value: unknown): boolean {
-  const maintenance = getRecord(value);
-  return Boolean(
-    maintenance &&
-    (Object.prototype.hasOwnProperty.call(maintenance, "maxDiskBytes") ||
-      Object.prototype.hasOwnProperty.call(maintenance, "highWaterBytes")),
-  );
+function hasLegacySessionWriteLock(value: unknown): boolean {
+  const session = getRecord(value);
+  return Boolean(session && Object.prototype.hasOwnProperty.call(session, "writeLock"));
 }
 
-function hasLegacyResetArchiveRetention(value: unknown): boolean {
-  const maintenance = getRecord(value);
-  return Boolean(
-    maintenance && Object.prototype.hasOwnProperty.call(maintenance, "resetArchiveRetention"),
-  );
+function hasLegacySessionStore(value: unknown): boolean {
+  const session = getRecord(value);
+  return Boolean(session && Object.prototype.hasOwnProperty.call(session, "store"));
 }
 
 function hasLegacyParentForkMaxTokens(value: unknown): boolean {
   const session = getRecord(value);
   return Boolean(session && Object.prototype.hasOwnProperty.call(session, "parentForkMaxTokens"));
 }
-
-const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
-  path: ["session", "maintenance"],
-  message:
-    'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
-  match: hasLegacyRotateBytes,
-};
-
-const LEGACY_SESSION_MAINTENANCE_DISK_BUDGET_RULE: LegacyConfigRule = {
-  path: ["session", "maintenance"],
-  message:
-    'session.maintenance.maxDiskBytes/highWaterBytes are deprecated and ignored; run "openclaw doctor --fix" to remove them.',
-  match: hasLegacyDiskBudget,
-};
-
-const LEGACY_SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_RULE: LegacyConfigRule = {
-  path: ["session", "maintenance"],
-  message:
-    'session.maintenance.resetArchiveRetention was removed with reset transcript archives; run "openclaw doctor --fix" to remove it.',
-  match: hasLegacyResetArchiveRetention,
-};
 
 const LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE: LegacyConfigRule = {
   path: ["session"],
@@ -59,61 +32,65 @@ const LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE: LegacyConfigRule = {
   match: hasLegacyParentForkMaxTokens,
 };
 
+const LEGACY_SESSION_MAINTENANCE_RULE: LegacyConfigRule = {
+  path: ["session"],
+  message:
+    'session.maintenance is ignored with SQLite-backed sessions; run "openclaw doctor --fix" to remove it.',
+  match: hasLegacySessionMaintenance,
+};
+
+const LEGACY_SESSION_WRITE_LOCK_RULE: LegacyConfigRule = {
+  path: ["session"],
+  message:
+    'session.writeLock is ignored because SQLite serializes session writes; run "openclaw doctor --fix" to remove it.',
+  match: hasLegacySessionWriteLock,
+};
+
+const LEGACY_SESSION_STORE_RULE: LegacyConfigRule = {
+  path: ["session"],
+  message:
+    'session.store is ignored because sessions live in per-agent SQLite databases; run "openclaw doctor --fix" to remove it.',
+  match: hasLegacySessionStore,
+};
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
-    id: "session.maintenance.rotateBytes",
-    describe: "Remove deprecated session.maintenance.rotateBytes",
-    legacyRules: [LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE],
+    id: "session.store",
+    describe: "Remove ignored legacy session.store settings",
+    legacyRules: [LEGACY_SESSION_STORE_RULE],
     apply: (raw, changes) => {
-      const maintenance = getRecord(getRecord(raw.session)?.maintenance);
-      if (!maintenance || !Object.prototype.hasOwnProperty.call(maintenance, "rotateBytes")) {
+      const session = getRecord(raw.session);
+      if (!session || !Object.prototype.hasOwnProperty.call(session, "store")) {
         return;
       }
-      delete maintenance.rotateBytes;
-      changes.push("Removed deprecated session.maintenance.rotateBytes.");
+      delete session.store;
+      changes.push("Removed ignored session.store; sessions live in per-agent SQLite databases.");
     },
   }),
   defineLegacyConfigMigration({
-    id: "session.maintenance.diskBudget",
-    describe: "Remove deprecated session.maintenance disk budget settings",
-    legacyRules: [LEGACY_SESSION_MAINTENANCE_DISK_BUDGET_RULE],
+    id: "session.maintenance",
+    describe: "Remove ignored session.maintenance settings",
+    legacyRules: [LEGACY_SESSION_MAINTENANCE_RULE],
     apply: (raw, changes) => {
-      const maintenance = getRecord(getRecord(raw.session)?.maintenance);
-      if (!maintenance) {
+      const session = getRecord(raw.session);
+      if (!session || !Object.prototype.hasOwnProperty.call(session, "maintenance")) {
         return;
       }
-      let removed = false;
-      if (Object.prototype.hasOwnProperty.call(maintenance, "maxDiskBytes")) {
-        delete maintenance.maxDiskBytes;
-        removed = true;
-      }
-      if (Object.prototype.hasOwnProperty.call(maintenance, "highWaterBytes")) {
-        delete maintenance.highWaterBytes;
-        removed = true;
-      }
-      if (removed) {
-        changes.push(
-          "Removed deprecated session.maintenance.maxDiskBytes/highWaterBytes; session transcripts are stored in SQLite.",
-        );
-      }
+      delete session.maintenance;
+      changes.push("Removed ignored session.maintenance; SQLite sessions do not prune rows.");
     },
   }),
   defineLegacyConfigMigration({
-    id: "session.maintenance.resetArchiveRetention",
-    describe: "Remove legacy session.maintenance.resetArchiveRetention",
-    legacyRules: [LEGACY_SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_RULE],
+    id: "session.writeLock",
+    describe: "Remove ignored session.writeLock settings",
+    legacyRules: [LEGACY_SESSION_WRITE_LOCK_RULE],
     apply: (raw, changes) => {
-      const maintenance = getRecord(getRecord(raw.session)?.maintenance);
-      if (
-        !maintenance ||
-        !Object.prototype.hasOwnProperty.call(maintenance, "resetArchiveRetention")
-      ) {
+      const session = getRecord(raw.session);
+      if (!session || !Object.prototype.hasOwnProperty.call(session, "writeLock")) {
         return;
       }
-      delete maintenance.resetArchiveRetention;
-      changes.push(
-        "Removed session.maintenance.resetArchiveRetention; reset transcript archives are no longer used.",
-      );
+      delete session.writeLock;
+      changes.push("Removed ignored session.writeLock; SQLite serializes session writes.");
     },
   }),
   defineLegacyConfigMigration({

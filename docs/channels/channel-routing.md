@@ -139,9 +139,9 @@ explicit `--store` path, but per-agent runtime metadata should go through the
 shared state database. Startup does not import or rewrite legacy session
 indexes.
 
-Gateway and ACP session discovery also scans disk-backed agent stores under the
-default `agents/` root and under templated `session.store` roots. Discovered
-stores must stay inside that resolved agent root. Symlinks and out-of-root paths
+Gateway and ACP session discovery reads per-agent SQLite metadata and scans
+disk-backed transcripts under the default `agents/` root. Discovered transcript
+files must stay inside that resolved agent root. Symlinks and out-of-root paths
 are ignored.
 
 ## WebChat behavior

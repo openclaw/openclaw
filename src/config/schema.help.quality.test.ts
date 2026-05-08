@@ -155,7 +155,6 @@ const TARGET_KEYS = [
   "session.resetByType.group",
   "session.resetByType.thread",
   "session.resetByChannel",
-  "session.store",
   "session.typingIntervalSeconds",
   "session.typingMode",
   "session.mainKey",
@@ -176,14 +175,6 @@ const TARGET_KEYS = [
   "session.threadBindings.maxAgeHours",
   "session.threadBindings.spawnSessions",
   "session.threadBindings.defaultSpawnContext",
-  "session.maintenance",
-  "session.maintenance.mode",
-  "session.maintenance.pruneAfter",
-  "session.maintenance.pruneDays",
-  "session.maintenance.maxEntries",
-  "session.maintenance.rotateBytes",
-  "session.maintenance.maxDiskBytes",
-  "session.maintenance.highWaterBytes",
   "approvals",
   "approvals.exec",
   "approvals.exec.enabled",
@@ -697,33 +688,6 @@ describe("config help copy quality", () => {
 
     const rawKeyPrefix = FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"];
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
-  });
-
-  it("documents session write-lock acquire timeout defaults", () => {
-    const acquireTimeout = FIELD_HELP["session.writeLock.acquireTimeoutMs"];
-    expect(acquireTimeout.includes("60000")).toBe(true);
-    expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
-  });
-
-  it("documents session maintenance duration examples and deprecations", () => {
-    const pruneAfter = FIELD_HELP["session.maintenance.pruneAfter"];
-    expect(pruneAfter.includes("30d")).toBe(true);
-    expect(pruneAfter.includes("12h")).toBe(true);
-
-    const rotate = FIELD_HELP["session.maintenance.rotateBytes"];
-    expect(/deprecated/i.test(rotate)).toBe(true);
-    expect(rotate.includes("doctor --fix")).toBe(true);
-
-    const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
-    expect(/deprecated/i.test(deprecated)).toBe(true);
-    expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
-
-    const maxDisk = FIELD_HELP["session.maintenance.maxDiskBytes"];
-    expect(/deprecated|ignored/i.test(maxDisk)).toBe(true);
-    expect(maxDisk.includes("doctor --fix")).toBe(true);
-
-    const highWater = FIELD_HELP["session.maintenance.highWaterBytes"];
-    expect(/deprecated|ignored/i.test(highWater)).toBe(true);
   });
 
   it("documents cron run-log retention controls", () => {

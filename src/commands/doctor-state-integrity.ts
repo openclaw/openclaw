@@ -15,10 +15,9 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
-  resolveStorePath,
+  resolveLegacySessionStorePath,
 } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
-import { updateSessionStore } from "../config/sessions/store.js";
+import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
 import {
   hasSqliteSessionTranscriptEvents,
   loadSqliteSessionTranscriptEvents,
@@ -649,7 +648,7 @@ export async function noteStateIntegrity(
   const oauthDir = resolveOAuthDir(env, stateDir);
   const agentId = resolveDefaultAgentId(cfg);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveLegacySessionStorePath(undefined, { agentId });
   const storeDir = path.dirname(storePath);
   const absoluteStorePath = path.resolve(storePath);
   const displayStateDir = shortenHomePath(stateDir);
@@ -876,7 +875,9 @@ export async function noteStateIntegrity(
     );
   }
 
-  const store = loadSessionStore(storePath);
+  const store = Object.fromEntries(
+    listSessionEntries({ agentId, env }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
@@ -901,9 +902,8 @@ export async function noteStateIntegrity(
       warnings.push(
         [
           `- ${missing.length}/${recentTranscriptCandidates.length} recent sessions are missing transcripts.`,
-          `  Import legacy session indexes: ${formatCliCommand("openclaw doctor --fix")}`,
-          `  Preview cleanup impact: ${formatCliCommand("openclaw sessions cleanup --dry-run")}`,
-          `  Prune missing entries: ${formatCliCommand("openclaw sessions cleanup --enforce --fix-missing")}`,
+          `  Run migration/import repair: ${formatCliCommand("openclaw doctor --fix")}`,
+          "  If the transcript sources are gone, reset or delete the affected sessions explicitly.",
         ].join("\n"),
       );
     }
@@ -931,15 +931,17 @@ export async function noteStateIntegrity(
       if (repairWedged) {
         let repaired = 0;
         const repairedAt = Date.now();
-        await updateSessionStore(absoluteStorePath, (currentStore) => {
-          for (const [key] of wedgedSubagentSessions) {
-            const current = currentStore[key];
-            if (current && clearWedgedSubagentRecoveryAbort(current, repairedAt)) {
+        for (const [key] of wedgedSubagentSessions) {
+          const current = store[key];
+          if (current) {
+            const next = structuredClone(current);
+            if (clearWedgedSubagentRecoveryAbort(next, repairedAt)) {
               repaired += 1;
-              currentStore[key] = current;
+              upsertSessionEntry({ agentId, env, sessionKey: key, entry: next });
+              store[key] = next;
             }
           }
-        });
+        }
         if (repaired > 0) {
           changes.push(
             `- Cleared aborted restart-recovery flags for ${countLabel(
@@ -1036,7 +1038,7 @@ export async function noteStateIntegrity(
       warnings.push(
         [
           `- Found ${orphanCount} in ${displaySessionsDir}.`,
-          "  These .jsonl files are no longer referenced by sessions.json, so they are not part of any active session history.",
+          "  These legacy .jsonl files are no longer referenced by SQLite session rows, so they are not part of any active session history.",
           "  Doctor can delete them after the session transcript migration/import has run.",
           `  Examples: ${orphanPreview}`,
         ].join("\n"),

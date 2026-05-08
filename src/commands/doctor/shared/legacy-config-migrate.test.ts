@@ -27,7 +27,7 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
 }
 
 describe("legacy session maintenance migrate", () => {
-  it("removes deprecated session.maintenance.rotateBytes", () => {
+  it("removes ignored session.maintenance", () => {
     const res = migrateLegacyConfigForTest({
       session: {
         maintenance: {
@@ -39,61 +39,72 @@ describe("legacy session maintenance migrate", () => {
       },
     });
 
-    expect(res.config?.session?.maintenance).toEqual({
-      mode: "enforce",
-      pruneAfter: "30d",
-      maxEntries: 500,
-    });
-    expect(res.changes).toContain("Removed deprecated session.maintenance.rotateBytes.");
-  });
-
-  it("removes deprecated session.maintenance disk budget settings", () => {
-    const res = migrateLegacyConfigForTest({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "30d",
-          maxEntries: 500,
-          maxDiskBytes: "500mb",
-          highWaterBytes: "400mb",
-        },
-      },
-    });
-
-    expect(res.config?.session?.maintenance).toEqual({
-      mode: "enforce",
-      pruneAfter: "30d",
-      maxEntries: 500,
-    });
+    expect(res.config?.session).toEqual({});
     expect(res.changes).toContain(
-      "Removed deprecated session.maintenance.maxDiskBytes/highWaterBytes; session transcripts are stored in SQLite.",
+      "Removed ignored session.maintenance; SQLite sessions do not prune rows.",
     );
   });
 
-  it("removes legacy session.maintenance.resetArchiveRetention", () => {
+  it("removes ignored session.writeLock", () => {
     const res = migrateLegacyConfigForTest({
       session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "30d",
-          maxEntries: 500,
-          resetArchiveRetention: "14d",
+        writeLock: {
+          acquireTimeoutMs: 120_000,
         },
       },
     });
 
-    expect(res.config?.session?.maintenance).toEqual({
-      mode: "enforce",
-      pruneAfter: "30d",
-      maxEntries: 500,
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain(
+      "Removed ignored session.writeLock; SQLite serializes session writes.",
+    );
+  });
+
+  it("keeps unrelated session settings while removing ignored maintenance and writeLock", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        store: "sessions.json",
+        idleMinutes: 120,
+        writeLock: {
+          acquireTimeoutMs: 120_000,
+        },
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    expect(res.config?.session).toEqual({
+      idleMinutes: 120,
     });
     expect(res.changes).toContain(
-      "Removed session.maintenance.resetArchiveRetention; reset transcript archives are no longer used.",
+      "Removed ignored session.store; sessions live in per-agent SQLite databases.",
+    );
+    expect(res.changes).toContain(
+      "Removed ignored session.maintenance; SQLite sessions do not prune rows.",
+    );
+    expect(res.changes).toContain(
+      "Removed ignored session.writeLock; SQLite serializes session writes.",
     );
   });
 });
 
 describe("legacy session parent fork migrate", () => {
+  it("removes ignored session.store", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        store: "sessions.json",
+      },
+    });
+
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain(
+      "Removed ignored session.store; sessions live in per-agent SQLite databases.",
+    );
+  });
+
   it("removes legacy session.parentForkMaxTokens", () => {
     const res = migrateLegacyConfigForTest({
       session: {
@@ -102,9 +113,10 @@ describe("legacy session parent fork migrate", () => {
       },
     });
 
-    expect(res.config?.session).toEqual({
-      store: "sessions.json",
-    });
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain(
+      "Removed ignored session.store; sessions live in per-agent SQLite databases.",
+    );
     expect(res.changes).toContain(
       "Removed session.parentForkMaxTokens; parent fork sizing is automatic.",
     );
