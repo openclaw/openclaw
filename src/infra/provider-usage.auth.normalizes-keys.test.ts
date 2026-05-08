@@ -305,7 +305,6 @@ describe("resolveProviderAuths key normalization", () => {
     const base = await suiteRootTracker.make("case");
     const stateDir = path.join(base, ".openclaw");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
-    nodeFs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
     nodeFs.mkdirSync(agentDir, { recursive: true });
     nodeFs.writeFileSync(
       path.join(agentDir, "auth-profiles.json"),

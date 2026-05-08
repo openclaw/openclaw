@@ -120,7 +120,7 @@ export async function withTempHome<T>(
   const envSnapshot = snapshotExtraEnv(envKeys);
 
   setTempHome(base);
-  await fs.mkdir(path.join(base, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+  await fs.mkdir(path.join(base, ".openclaw", "agents", "main", "agent"), { recursive: true });
   if (opts.env) {
     for (const [key, raw] of Object.entries(opts.env)) {
       const value = typeof raw === "function" ? raw(base) : raw;
