@@ -225,7 +225,6 @@ describe("normalizeForwardedContext", () => {
         date: 123,
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Ada Lovelace (@ada)");
     expect(ctx?.fromType).toBe("user");
     expect(ctx?.fromId).toBe("42");
@@ -238,7 +237,6 @@ describe("normalizeForwardedContext", () => {
     const ctx = normalizeForwardedContext({
       forward_origin: { type: "hidden_user", sender_user_name: "Hidden Name", date: 456 },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Hidden Name");
     expect(ctx?.fromType).toBe("hidden_user");
     expect(ctx?.fromTitle).toBe("Hidden Name");
@@ -260,7 +258,6 @@ describe("normalizeForwardedContext", () => {
         message_id: 42,
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Tech News (Editor)");
     expect(ctx?.fromType).toBe("channel");
     expect(ctx?.fromId).toBe("-1001234");
@@ -285,7 +282,6 @@ describe("normalizeForwardedContext", () => {
         author_signature: "Admin",
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Discussion Group (Admin)");
     expect(ctx?.fromType).toBe("chat");
     expect(ctx?.fromId).toBe("-1005678");
@@ -305,7 +301,6 @@ describe("normalizeForwardedContext", () => {
         message_id: 1,
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.fromSignature).toBe("New Sig");
     expect(ctx?.from).toBe("My Channel (New Sig)");
   });
@@ -320,7 +315,6 @@ describe("normalizeForwardedContext", () => {
         message_id: 1,
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.fromSignature).toBeUndefined();
     expect(ctx?.from).toBe("Updates");
   });
@@ -334,7 +328,6 @@ describe("normalizeForwardedContext", () => {
         message_id: 1,
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("News");
     expect(ctx?.fromSignature).toBeUndefined();
     expect(ctx?.fromChatType).toBe("channel");
