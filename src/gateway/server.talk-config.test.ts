@@ -383,8 +383,11 @@ describe("gateway talk.config", () => {
             // the UI keeps the SecretRef context, but every field becomes the
             // sentinel so no credential material leaks to read-scope callers.
             const redactedApiKey = talk?.providers?.[GENERIC_TALK_PROVIDER_ID]?.apiKey;
-            expect(redactedApiKey).toBeTypeOf("object");
-            expect((redactedApiKey as SecretRef).id).toBe("__OPENCLAW_REDACTED__");
+            expect(redactedApiKey).toEqual({
+              id: "__OPENCLAW_REDACTED__",
+              provider: "__OPENCLAW_REDACTED__",
+              source: "__OPENCLAW_REDACTED__",
+            });
             expect(talk?.resolved?.config?.apiKey).toEqual(redactedApiKey);
           });
 

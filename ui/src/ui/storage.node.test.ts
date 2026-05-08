@@ -571,9 +571,12 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
 
-    expect(persisted.sessionsByGateway).toBeTypeOf("object");
-    expect(persisted.sessionsByGateway).not.toBeNull();
-    const scopes = Object.keys(persisted.sessionsByGateway);
+    const sessionsByGateway = persisted.sessionsByGateway as unknown;
+    expect(typeof sessionsByGateway).toBe("object");
+    expect(sessionsByGateway).not.toBeNull();
+    expect(Array.isArray(sessionsByGateway)).toBe(false);
+    const scopedSessions = sessionsByGateway as Record<string, unknown>;
+    const scopes = Object.keys(scopedSessions);
     expect(scopes).toHaveLength(10);
     // oldest stale entries should be evicted
     expect(scopes).not.toContain("wss://stale-0.example:8443");
@@ -581,7 +584,7 @@ describe("loadSettings default gateway URL derivation", () => {
     // newest stale entries and the current gateway should be retained
     expect(scopes).toContain("wss://stale-10.example:8443");
     expect(scopes).toContain("wss://gateway.example:8443");
-    expect(persisted.sessionsByGateway["wss://gateway.example:8443"]).toEqual({
+    expect(scopedSessions["wss://gateway.example:8443"]).toEqual({
       sessionKey: "agent:current:main",
       lastActiveSessionKey: "agent:current:main",
     });
