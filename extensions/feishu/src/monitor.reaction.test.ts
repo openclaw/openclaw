@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 import * as dedup from "./dedup.js";
@@ -52,6 +52,15 @@ vi.mock("./event.runtime.js", async () => {
     ...actual,
     getActiveFeishuEventRuntimeEventTypes: getActiveFeishuEventRuntimeEventTypesMock,
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./bot.js");
+  vi.doUnmock("./monitor.transport.js");
+  vi.doUnmock("./thread-bindings.js");
+  vi.doUnmock("./event.runtime.js");
+  vi.resetModules();
 });
 
 const cfg = {} as ClawdbotConfig;
@@ -236,6 +245,12 @@ function createMention(params: { openId: string; name: string; key?: string }): 
     id: { open_id: params.openId },
     name: params.name,
   };
+}
+
+function mentionOpenIds(event: FeishuMessageEvent): string[] {
+  return (event.message.mentions ?? []).flatMap((mention) =>
+    mention.id.open_id ? [mention.id.open_id] : [],
+  );
 }
 
 function createFeishuMonitorRuntime(params?: {
@@ -567,9 +582,9 @@ describe("Feishu inbound debounce regressions", () => {
     await vi.advanceTimersByTimeAsync(25);
 
     const dispatched = expectSingleDispatchedEvent();
-    const mergedMentions = dispatched.message.mentions ?? [];
-    expect(mergedMentions.some((mention) => mention.id.open_id === "ou_bot")).toBe(true);
-    expect(mergedMentions.some((mention) => mention.id.open_id === "ou_user_a")).toBe(false);
+    const mergedOpenIds = mentionOpenIds(dispatched);
+    expect(mergedOpenIds).toContain("ou_bot");
+    expect(mergedOpenIds).not.toContain("ou_user_a");
   });
 
   it("passes prefetched botName through to handleFeishuMessage", async () => {
@@ -627,8 +642,7 @@ describe("Feishu inbound debounce regressions", () => {
     const { dispatched, parsed } = expectParsedFirstDispatchedEvent();
     expect(parsed.mentionedBot).toBe(true);
     expect(parsed.mentionTargets).toBeUndefined();
-    const mergedMentions = dispatched.message.mentions ?? [];
-    expect(mergedMentions.every((mention) => mention.id.open_id === "ou_bot")).toBe(true);
+    expect(mentionOpenIds(dispatched)).toEqual(["ou_bot"]);
   });
 
   it("preserves bot mention signal when the latest merged message has no mentions", async () => {

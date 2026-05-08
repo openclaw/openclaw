@@ -83,6 +83,7 @@ type ModelCallLifecycleDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "model.call.completed" | "model.call.error" }
 >;
+type ModelFailoverDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "model.failover" }>;
 type HarnessRunDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "harness.run.started" | "harness.run.completed" | "harness.run.error" }
@@ -95,6 +96,7 @@ type SessionRecoveryDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "session.recovery.requested" | "session.recovery.completed" }
 >;
+type TalkDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "talk.event" }>;
 
 const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
   inputMessages: false,
@@ -844,6 +846,18 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Age of sessions selected for recovery",
         },
       );
+      const talkEventCounter = meter.createCounter("openclaw.talk.event", {
+        unit: "1",
+        description: "Talk events emitted by type",
+      });
+      const talkEventDurationHistogram = meter.createHistogram("openclaw.talk.event.duration_ms", {
+        unit: "ms",
+        description: "Talk event duration when reported",
+      });
+      const talkAudioBytesHistogram = meter.createHistogram("openclaw.talk.audio.bytes", {
+        unit: "By",
+        description: "Talk audio frame byte lengths",
+      });
       const runAttemptCounter = meter.createCounter("openclaw.run.attempt", {
         unit: "1",
         description: "Run attempts",
@@ -1526,6 +1540,28 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         sessionRecoveryAgeHistogram.record(evt.ageMs, attrs);
       };
 
+      const talkEventAttrs = (evt: TalkDiagnosticEvent): Record<string, string> => ({
+        "openclaw.talk.brain": lowCardinalityAttr(evt.brain),
+        "openclaw.talk.event_type": lowCardinalityAttr(evt.talkEventType),
+        "openclaw.talk.mode": lowCardinalityAttr(evt.mode),
+        "openclaw.talk.provider": lowCardinalityAttr(evt.provider),
+        "openclaw.talk.transport": lowCardinalityAttr(evt.transport),
+      });
+
+      const recordTalkEvent = (evt: TalkDiagnosticEvent, metadata: DiagnosticEventMetadata) => {
+        if (!metadata.trusted) {
+          return;
+        }
+        const attrs = talkEventAttrs(evt);
+        talkEventCounter.add(1, attrs);
+        if (typeof evt.durationMs === "number") {
+          talkEventDurationHistogram.record(evt.durationMs, attrs);
+        }
+        if (typeof evt.byteLength === "number") {
+          talkAudioBytesHistogram.record(evt.byteLength, attrs);
+        }
+      };
+
       const recordRunAttempt = (evt: Extract<DiagnosticEventPayload, { type: "run.attempt" }>) => {
         runAttemptCounter.add(1, { "openclaw.attempt": evt.attempt });
       };
@@ -1630,6 +1666,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.channel) {
           attrs["openclaw.channel"] = evt.channel;
         }
+        if (evt.blockedBy) {
+          attrs["openclaw.blocked_by"] = lowCardinalityAttr(evt.blockedBy, "unknown");
+        }
         durationHistogram.record(evt.durationMs, attrs);
         if (!tracesEnabled) {
           return;
@@ -1638,6 +1677,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.outcome": evt.outcome,
         };
         addRunAttrs(spanAttrs, evt);
+        if (evt.blockedBy) {
+          spanAttrs["openclaw.blocked_by"] = lowCardinalityAttr(evt.blockedBy, "unknown");
+        }
         if (evt.errorCategory) {
           spanAttrs["openclaw.errorCategory"] = lowCardinalityAttr(evt.errorCategory, "other");
         }
@@ -1797,6 +1839,44 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.context.reserve_tokens"] = evt.reserveTokens;
         }
         const span = spanWithDuration("openclaw.context.assembled", spanAttrs, 0, {
+          parentContext: activeTrustedParentContext(evt, metadata),
+          endTimeMs: evt.ts,
+        });
+        span.end(evt.ts);
+      };
+
+      const recordModelFailover = (
+        evt: ModelFailoverDiagnosticEvent,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          "openclaw.failover.reason": lowCardinalityAttr(evt.reason, "unknown"),
+        };
+        if (evt.fromProvider) {
+          spanAttrs["openclaw.provider"] = evt.fromProvider;
+        }
+        if (evt.fromModel) {
+          spanAttrs["openclaw.model"] = evt.fromModel;
+        }
+        if (evt.toProvider) {
+          spanAttrs["openclaw.failover.to_provider"] = evt.toProvider;
+        }
+        if (evt.toModel) {
+          spanAttrs["openclaw.failover.to_model"] = evt.toModel;
+        }
+        if (evt.lane) {
+          spanAttrs["openclaw.lane"] = lowCardinalityAttr(evt.lane, "unknown");
+        }
+        if (evt.suspended !== undefined) {
+          spanAttrs["openclaw.failover.suspended"] = evt.suspended;
+        }
+        if (evt.cascadeDepth !== undefined) {
+          spanAttrs["openclaw.failover.cascade_depth"] = evt.cascadeDepth;
+        }
+        const span = spanWithDuration("openclaw.model.failover", spanAttrs, 0, {
           parentContext: activeTrustedParentContext(evt, metadata),
           endTimeMs: evt.ts,
         });
@@ -2283,6 +2363,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             case "message.delivery.error":
               recordMessageDeliveryError(evt);
               return;
+            case "talk.event":
+              recordTalkEvent(evt, metadata);
+              return;
             case "queue.lane.enqueue":
               recordLaneEnqueue(evt);
               return;
@@ -2376,6 +2459,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordTelemetryExporter(evt, metadata);
               return;
             case "payload.large":
+              return;
+            case "model.failover":
+              recordModelFailover(evt, metadata);
               return;
           }
         } catch (err) {

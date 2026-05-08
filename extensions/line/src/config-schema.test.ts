@@ -9,7 +9,9 @@ describe("LineConfigSchema", () => {
       dmPolicy: "open",
     });
 
-    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("Expected config validation to fail");
+    }
     expect(result.error.issues).toEqual([
       expect.objectContaining({
         path: ["allowFrom"],
@@ -40,7 +42,9 @@ describe("LineConfigSchema", () => {
       },
     });
 
-    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("Expected account config validation to fail");
+    }
     expect(result.error.issues).toEqual([
       expect.objectContaining({
         path: ["accounts", "work", "allowFrom"],

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
@@ -43,6 +44,20 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   };
   costUsd?: number;
   durationMs?: number;
+};
+
+export type DiagnosticFailoverEvent = DiagnosticBaseEvent & {
+  type: "model.failover";
+  sessionId?: string;
+  sessionKey?: string;
+  lane?: string;
+  fromProvider?: string;
+  fromModel?: string;
+  toProvider?: string;
+  toModel?: string;
+  reason: string;
+  cascadeDepth?: number;
+  suspended?: boolean;
 };
 
 export type DiagnosticWebhookReceivedEvent = DiagnosticBaseEvent & {
@@ -112,6 +127,21 @@ export type DiagnosticMessageDeliveryErrorEvent = DiagnosticMessageDeliveryBaseE
   type: "message.delivery.error";
   durationMs: number;
   errorCategory: string;
+};
+
+export type DiagnosticTalkEvent = DiagnosticBaseEvent & {
+  type: "talk.event";
+  sessionId?: string;
+  turnId?: string;
+  captureId?: string;
+  talkEventType: TalkEventType;
+  mode: TalkMode;
+  transport: TalkTransport;
+  brain: TalkBrain;
+  provider?: string;
+  final?: boolean;
+  durationMs?: number;
+  byteLength?: number;
 };
 
 export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
@@ -372,8 +402,9 @@ export type DiagnosticRunStartedEvent = DiagnosticRunBaseEvent & {
 export type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
   type: "run.completed";
   durationMs: number;
-  outcome: "completed" | "aborted" | "error";
+  outcome: "completed" | "aborted" | "blocked" | "error";
   errorCategory?: string;
+  blockedBy?: string;
 };
 
 export type DiagnosticHarnessRunPhase = "prepare" | "start" | "send" | "resolve" | "cleanup";
@@ -548,6 +579,7 @@ export type DiagnosticEventPayload =
   | DiagnosticMessageDeliveryStartedEvent
   | DiagnosticMessageDeliveryCompletedEvent
   | DiagnosticMessageDeliveryErrorEvent
+  | DiagnosticTalkEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionLongRunningEvent
   | DiagnosticSessionStalledEvent
@@ -580,7 +612,8 @@ export type DiagnosticEventPayload =
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent
   | DiagnosticLogRecordEvent
-  | DiagnosticTelemetryExporterEvent;
+  | DiagnosticTelemetryExporterEvent
+  | DiagnosticFailoverEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
@@ -623,6 +656,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "message.delivery.started",
   "message.delivery.completed",
   "message.delivery.error",
+  "talk.event",
   "model.call.started",
   "model.call.completed",
   "model.call.error",
@@ -824,6 +858,13 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
 
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, true);
+}
+
+export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "ts" | "type">) {
+  emitTrustedDiagnosticEvent({
+    type: "model.failover",
+    ...event,
+  });
 }
 
 export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): () => void {

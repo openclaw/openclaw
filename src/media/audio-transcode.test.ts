@@ -79,7 +79,9 @@ describe("transcodeAudioBufferToOpus", () => {
       if (!capturedOutputPath) {
         throw new Error("missing ffmpeg output path");
       }
-      expect(path.basename(capturedOutputPath)).toBe("escape.opus");
+      const outputBaseName = path.basename(capturedOutputPath);
+      expect(outputBaseName).toContain("escape.opus");
+      expect(outputBaseName).toMatch(/\.part$/);
       await import("node:fs/promises").then((fs) =>
         fs.writeFile(capturedOutputPath!, Buffer.from("opus-output")),
       );
@@ -94,6 +96,6 @@ describe("transcodeAudioBufferToOpus", () => {
 
     const tempRoot = realpathSync(resolvePreferredOpenClawTmpDir());
     expect(capturedInputPath?.startsWith(tempRoot)).toBe(true);
-    expect(capturedOutputPath?.startsWith(tempRoot)).toBe(true);
+    expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
   });
 });

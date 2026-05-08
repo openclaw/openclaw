@@ -10,10 +10,12 @@ type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
 
 type SafeNpmInstallArgsOptions = {
   ignoreWorkspaces?: boolean;
+  legacyPeerDeps?: boolean;
   loglevel?: "error" | "silent";
   noAudit?: boolean;
   noFund?: boolean;
   omitDev?: boolean;
+  omitPeer?: boolean;
 };
 
 export function createSafeNpmInstallEnv(
@@ -47,6 +49,8 @@ export function createSafeNpmInstallArgs(options: SafeNpmInstallArgsOptions = {}
   return [
     "install",
     ...(options.omitDev ? ["--omit=dev"] : []),
+    ...(options.omitPeer ? ["--omit=peer"] : []),
+    ...(options.legacyPeerDeps ? ["--legacy-peer-deps"] : []),
     ...(options.loglevel ? [`--loglevel=${options.loglevel}`] : []),
     "--ignore-scripts",
     ...(options.ignoreWorkspaces ? ["--workspaces=false"] : []),

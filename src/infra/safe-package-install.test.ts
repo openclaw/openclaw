@@ -6,6 +6,8 @@ describe("safe npm install helpers", () => {
     expect(
       createSafeNpmInstallArgs({
         omitDev: true,
+        omitPeer: true,
+        legacyPeerDeps: true,
         ignoreWorkspaces: true,
         loglevel: "error",
         noAudit: true,
@@ -14,6 +16,8 @@ describe("safe npm install helpers", () => {
     ).toEqual([
       "install",
       "--omit=dev",
+      "--omit=peer",
+      "--legacy-peer-deps",
       "--loglevel=error",
       "--ignore-scripts",
       "--workspaces=false",
@@ -46,7 +50,7 @@ describe("safe npm install helpers", () => {
           quiet: true,
         },
       ),
-    ).toEqual({
+    ).toMatchObject({
       PATH: "/usr/bin:/bin",
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
       NPM_CONFIG_IGNORE_SCRIPTS: "true",

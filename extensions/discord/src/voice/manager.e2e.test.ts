@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
@@ -9,10 +10,13 @@ const {
   joinVoiceChannelMock,
   entersStateMock,
   createAudioPlayerMock,
+  createAudioResourceMock,
   resolveAgentRouteMock,
   agentCommandMock,
   transcribeAudioFileMock,
+  textToSpeechStreamMock,
   textToSpeechMock,
+  logVerboseMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -93,6 +97,7 @@ const {
     entersStateMock: vi.fn(async (_target?: unknown, _state?: string, _timeoutMs?: number) => {
       return undefined;
     }),
+    createAudioResourceMock: vi.fn(),
     createAudioPlayerMock: vi.fn(() => ({
       on: vi.fn(),
       off: vi.fn(),
@@ -103,7 +108,11 @@ const {
     resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
     agentCommandMock: vi.fn(async (_opts?: unknown, _runtime?: unknown) => ({ payloads: [] })),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    textToSpeechStreamMock: vi.fn(
+      async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
+    ),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
+    logVerboseMock: vi.fn(),
   };
 });
 
@@ -120,7 +129,7 @@ vi.mock("./sdk-runtime.js", () => ({
       Connecting: "connecting",
     },
     createAudioPlayer: createAudioPlayerMock,
-    createAudioResource: vi.fn(),
+    createAudioResource: createAudioResourceMock,
     entersState: entersStateMock,
     getVoiceConnection: getVoiceConnectionMock,
     joinVoiceChannel: joinVoiceChannelMock,
@@ -147,12 +156,23 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
+  };
+});
+
 vi.mock("../runtime.js", () => ({
   getDiscordRuntime: () => ({
     mediaUnderstanding: {
       transcribeAudioFile: transcribeAudioFileMock,
     },
     tts: {
+      textToSpeechStream: textToSpeechStreamMock,
       textToSpeech: textToSpeechMock,
     },
   }),
@@ -206,8 +226,12 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock.mockResolvedValue({ payloads: [] });
     transcribeAudioFileMock.mockReset();
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
+    textToSpeechStreamMock.mockReset();
+    textToSpeechStreamMock.mockResolvedValue({ success: false, error: "stream unavailable" });
     textToSpeechMock.mockReset();
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
+    logVerboseMock.mockClear();
+    createAudioResourceMock.mockClear();
   });
 
   const createManager = (
@@ -239,9 +263,29 @@ describe("DiscordVoiceManager", () => {
     ]);
   };
 
+  const getSessionEntry = (
+    manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+    guildId = "g1",
+  ) => {
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get(guildId);
+    if (!entry) {
+      throw new Error(`expected Discord voice session for guild ${guildId}`);
+    }
+    return entry;
+  };
+
+  const getLastAudioPlayer = () => {
+    const player = createAudioPlayerMock.mock.results.at(-1)?.value as
+      | { state: { status: string }; stop: ReturnType<typeof vi.fn> }
+      | undefined;
+    if (!player) {
+      throw new Error("expected Discord voice audio player to be created");
+    }
+    return player;
+  };
+
   const emitDecryptFailure = (manager: InstanceType<typeof managerModule.DiscordVoiceManager>) => {
-    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
-    expect(entry).toBeDefined();
+    const entry = getSessionEntry(manager);
     (
       manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
     ).handleReceiveError(
@@ -345,6 +389,29 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1001");
   });
 
+  it("autoJoin uses the last configured channel for duplicate guild entries", async () => {
+    const manager = createManager({
+      voice: {
+        enabled: true,
+        autoJoin: [
+          { guildId: "g1", channelId: "1001" },
+          { guildId: "g1", channelId: "1002" },
+        ],
+      },
+    });
+
+    await manager.autoJoin();
+
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(joinVoiceChannelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guildId: "g1",
+        channelId: "1002",
+      }),
+    );
+    expectConnectedStatus(manager, "1002");
+  });
+
   it("does not throw when stale tracked voice connections are already destroyed", async () => {
     const staleConnection = createConnectionMock();
     staleConnection.state.status = "destroyed";
@@ -391,6 +458,27 @@ describe("DiscordVoiceManager", () => {
     expect(connection.off).toHaveBeenCalledWith("disconnected", expect.any(Function));
     expect(connection.off).toHaveBeenCalledWith("destroyed", expect.any(Function));
     expect(player.off).toHaveBeenCalledWith("error", expect.any(Function));
+  });
+
+  it("ignores new capture while playback is running", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const player = getLastAudioPlayer();
+    const entry = getSessionEntry(manager);
+    player.state.status = "playing";
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u1");
+
+    expect(player.stop).not.toHaveBeenCalled();
+    expect(connection.receiver.subscribe).not.toHaveBeenCalled();
   });
 
   it("passes DAVE options to joinVoiceChannel", async () => {
@@ -520,29 +608,24 @@ describe("DiscordVoiceManager", () => {
 
       await manager.join({ guildId: "g1", channelId: "1001" });
 
-      const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get(
-        "g1",
-      ) as
-        | {
-            guildId: string;
-            channelId: string;
-            capture: {
-              activeSpeakers: Set<string>;
-              activeCaptureStreams: Map<
-                string,
-                { generation: number; stream: { destroy: () => void } }
-              >;
-              captureFinalizeTimers: Map<string, unknown>;
-              captureGenerations: Map<string, number>;
-            };
-          }
-        | undefined;
-      expect(entry).toBeDefined();
+      const entry = getSessionEntry(manager) as {
+        guildId: string;
+        channelId: string;
+        capture: {
+          activeSpeakers: Set<string>;
+          activeCaptureStreams: Map<
+            string,
+            { generation: number; stream: { destroy: () => void } }
+          >;
+          captureFinalizeTimers: Map<string, unknown>;
+          captureGenerations: Map<string, number>;
+        };
+      };
 
       const firstStream = { destroy: vi.fn() };
-      entry?.capture.activeSpeakers.add("u1");
-      entry?.capture.captureGenerations.set("u1", 1);
-      entry?.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
+      entry.capture.activeSpeakers.add("u1");
+      entry.capture.captureGenerations.set("u1", 1);
+      entry.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
 
       (
         manager as unknown as {
@@ -550,7 +633,7 @@ describe("DiscordVoiceManager", () => {
         }
       ).scheduleCaptureFinalize(entry, "u1", "test");
 
-      await vi.advanceTimersByTimeAsync(1_200);
+      await vi.advanceTimersByTimeAsync(2_500);
 
       expect(firstStream.destroy).toHaveBeenCalledTimes(1);
       expect(entry?.capture.activeSpeakers.has("u1")).toBe(false);
@@ -572,6 +655,44 @@ describe("DiscordVoiceManager", () => {
         "u1",
         expect.objectContaining({ end: { behavior: "Manual" } }),
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses configured silence grace before finalizing voice capture", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createManager({
+        voice: {
+          enabled: true,
+          captureSilenceGraceMs: 4_000,
+        },
+      });
+      const stream = { destroy: vi.fn() };
+      const entry = {
+        guildId: "g1",
+        channelId: "1001",
+        capture: createVoiceCaptureState(),
+      };
+      entry.capture.activeSpeakers.add("u1");
+      entry.capture.captureGenerations.set("u1", 1);
+      entry.capture.activeCaptureStreams.set("u1", {
+        generation: 1,
+        stream: stream as unknown as Readable,
+      });
+
+      (
+        manager as unknown as {
+          scheduleCaptureFinalize: (entry: unknown, userId: string, reason: string) => void;
+        }
+      ).scheduleCaptureFinalize(entry, "u1", "test");
+
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(stream.destroy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stream.destroy).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -679,12 +800,84 @@ describe("DiscordVoiceManager", () => {
     expect(commandArgs?.messageChannel).toBe("discord");
     expect(commandArgs?.messageProvider).toBe("discord-voice");
     expect(commandArgs?.message).toContain("Do not call the tts tool");
+    expect(commandArgs?.message).toContain("repair obvious transcription artifacts");
     expect(textToSpeechMock).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "discord",
         text: "hello back",
       }),
     );
+  });
+
+  it("logs a bounded inbound transcript preview for voice debugging", async () => {
+    transcribeAudioFileMock.mockResolvedValueOnce({
+      text: `hello from voice\n\n${"x".repeat(700)}`,
+    });
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Debug Speaker",
+      user: {
+        id: "u-debug",
+        username: "debug",
+        globalName: "Debug",
+        discriminator: "0001",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open" }, client, {
+      commands: { useAccessGroups: false },
+    });
+
+    await processVoiceSegment(manager, "u-debug");
+
+    const transcriptLog = logVerboseMock.mock.calls
+      .map((call) => String(call[0]))
+      .find((message) => message.includes("transcript from Debug Speaker (u-debug)"));
+    expect(transcriptLog).toContain("hello from voice ");
+    expect(transcriptLog).not.toContain("\n");
+    expect(transcriptLog?.length).toBeLessThan(650);
+  });
+
+  it("plays streaming TTS audio before falling back to a synthesized file", async () => {
+    const release = vi.fn(async () => undefined);
+    textToSpeechStreamMock.mockResolvedValue({
+      success: true,
+      audioStream: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        },
+      }),
+      release,
+    });
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello back" }],
+    } as never);
+
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open" }, client, {
+      commands: { useAccessGroups: false },
+    });
+    await processVoiceSegment(manager, "u-guest");
+
+    expect(textToSpeechStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        disableFallback: true,
+        text: "hello back",
+      }),
+    );
+    expect(textToSpeechMock).not.toHaveBeenCalled();
+    expect(createAudioResourceMock).toHaveBeenCalledWith(expect.anything());
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
   });
 
   it("passes per-channel system prompt overrides to voice agent runs", async () => {

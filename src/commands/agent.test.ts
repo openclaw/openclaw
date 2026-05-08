@@ -26,11 +26,18 @@ const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
 }));
+const pluginRegistryMocks = vi.hoisted(() => ({
+  ensurePluginRegistryLoaded: vi.fn(),
+}));
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: configIoMocks.loadConfig,
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
+}));
+
+vi.mock("../plugins/runtime/runtime-registry-loader.js", () => ({
+  ensurePluginRegistryLoaded: pluginRegistryMocks.ensurePluginRegistryLoaded,
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => {
@@ -234,7 +241,11 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
 const runtime = createThrowingTestRuntime();
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-agent-", skipSessionCleanup: true });
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-agent-",
+    skipHomeCleanup: true,
+    skipSessionCleanup: true,
+  });
 }
 
 function mockConfig(
@@ -325,6 +336,61 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it("enables the Codex runtime plugin for one-shot OpenAI model overrides", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      mockConfig(home, storePath, { models: undefined });
+
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "main",
+          model: "openai/gpt-5.2",
+          allowModelOverride: true,
+        },
+        runtime,
+      );
+
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+        scope: "all",
+        config: expect.any(Object),
+        activationSourceConfig: expect.any(Object),
+        workspaceDir: path.join(home, "openclaw"),
+        onlyPluginIds: ["codex"],
+      });
+      expectLastRunProviderModel("openai", "gpt-5.2");
+    });
+  });
+
+  it("does not enable Codex for one-shot OpenAI overrides when the provider forces PI", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, storePath, { models: undefined });
+      cfg.models = {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "pi" },
+            models: [],
+          },
+        },
+      };
+
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "main",
+          model: "openai/gpt-5.2",
+          allowModelOverride: true,
+        },
+        runtime,
+      );
+
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+      expectLastRunProviderModel("openai", "gpt-5.2");
+    });
+  });
+
   it("enforces ingress trust flags", async () => {
     await expect(
       // Runtime guard for non-TS callers; TS callsites are statically typed.
@@ -414,6 +480,48 @@ describe("agentCommand", () => {
       expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
       expect(persistArgs?.body).toBe("hello from user");
       expect(persistArgs?.result.meta?.executionTrace?.runner).toBe("embedded");
+    });
+  });
+
+  it("gap-fills Telegram-visible embedded replies without a runner trace", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const sendMessageTelegram = vi.fn(async () => undefined);
+      const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        ...base,
+        meta: {
+          ...base.meta,
+          finalAssistantVisibleText: "assistant-visible",
+        },
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "call a tool then answer",
+          agentId: "main",
+          to: "+1222",
+          channel: "telegram",
+          messageChannel: "telegram",
+          deliver: true,
+          senderIsOwner: false,
+          allowModelOverride: false,
+        },
+        runtime,
+        { sendMessageTelegram },
+      );
+
+      expect(sendMessageTelegram).toHaveBeenCalledWith(
+        "+1222",
+        "assistant-visible",
+        expect.objectContaining({ verbose: false }),
+      );
+      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
+      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
+      expect(persistArgs?.body).toBe("call a tool then answer");
     });
   });
 

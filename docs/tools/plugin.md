@@ -13,7 +13,7 @@ agent harnesses, tools, skills, speech, realtime transcription, realtime
 voice, media-understanding, image generation, video generation, web fetch, web
 search, and more. Some plugins are **core** (shipped with OpenClaw), others
 are **external**. Most external plugins are published and discovered through
-[ClawHub](/tools/clawhub). Npm remains supported for direct installs and for a
+[ClawHub](/clawhub). Npm remains supported for direct installs and for a
 temporary set of OpenClaw-owned plugin packages while that migration finishes.
 
 ## Quick start
@@ -38,6 +38,7 @@ For copy-paste install, list, uninstall, update, and publishing examples, see
 
     # From npm
     openclaw plugins install npm:@acme/openclaw-plugin
+    openclaw plugins install npm-pack:./openclaw-plugin-1.2.3.tgz
 
     # From git
     openclaw plugins install git:github.com/acme/openclaw-plugin@v1.0.0
@@ -92,8 +93,8 @@ If you prefer chat-native control, enable `commands.plugins: true` and use:
 ```
 
 The install path uses the same resolver as the CLI: local path/archive, explicit
-`clawhub:<pkg>`, explicit `npm:<pkg>`, explicit `git:<repo>`, or bare package
-spec through npm.
+`clawhub:<pkg>`, explicit `npm:<pkg>`, explicit `npm-pack:<path.tgz>`,
+explicit `git:<repo>`, or bare package spec through npm.
 
 If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
@@ -161,6 +162,9 @@ managed npm root. After npm finishes, OpenClaw verifies the installed
 `package-lock.json` entry still matches the resolved version and integrity. If
 npm writes different package metadata, the install fails and the managed package
 is rolled back instead of accepting a different plugin artifact.
+Managed npm roots also inherit OpenClaw's package-level npm `overrides`, so
+security pins that protect the packaged host also apply to hoisted external
+plugin dependencies.
 
 Source checkouts are pnpm workspaces. If you clone OpenClaw to hack on bundled
 plugins, run `pnpm install`; OpenClaw then loads bundled plugins from
@@ -231,7 +235,6 @@ current OpenClaw or a local checkout until a newer npm package is published.
 
 | Plugin          | Package                    | Docs                                       |
 | --------------- | -------------------------- | ------------------------------------------ |
-| BlueBubbles     | `@openclaw/bluebubbles`    | [BlueBubbles](/channels/bluebubbles)       |
 | Discord         | `@openclaw/discord`        | [Discord](/channels/discord)               |
 | Feishu          | `@openclaw/feishu`         | [Feishu](/channels/feishu)                 |
 | Matrix          | `@openclaw/matrix`         | [Matrix](/channels/matrix)                 |
@@ -276,7 +279,7 @@ current OpenClaw or a local checkout until a newer npm package is published.
   </Accordion>
 </AccordionGroup>
 
-Looking for third-party plugins? See [Community Plugins](/plugins/community).
+Looking for third-party plugins? See [ClawHub](/clawhub).
 
 ## Configuration
 
@@ -388,8 +391,8 @@ even when source overlay mounts are present.
   re-enable plugins before running doctor cleanup if you want stale ids removed
 - OpenAI-family Codex routes keep separate plugin boundaries:
   `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
-  app-server plugin is selected by `agentRuntime.id: "codex"` or legacy
-  `codex/*` model refs
+  app-server plugin is selected by canonical `openai/*` agent refs, explicit
+  provider/model `agentRuntime.id: "codex"`, or legacy `codex/*` model refs
 
 ## Troubleshooting runtime hooks
 
@@ -402,8 +405,9 @@ do not run in live chat traffic, check these first:
   containers, PID 1 may only be a supervisor; restart or signal the child
   `openclaw gateway run` process.
 - Use `openclaw plugins inspect <id> --runtime --json` to confirm hook registrations and
-  diagnostics. Non-bundled conversation hooks such as `llm_input`,
-  `llm_output`, `before_agent_finalize`, and `agent_end` need
+  diagnostics. Non-bundled conversation hooks such as `before_model_resolve`,
+  `before_agent_reply`, `before_agent_run`, `llm_input`, `llm_output`,
+  `before_agent_finalize`, and `agent_end` need
   `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 - For model switching, prefer `before_model_resolve`. It runs before model
   resolution for agent turns; `llm_output` only runs after a model attempt
@@ -573,6 +577,11 @@ top-level `installRecords` and rebuildable manifest metadata in `plugins`. If
 the registry is missing, stale, or invalid, `openclaw plugins registry
 --refresh` rebuilds its manifest view from install records, config policy, and
 manifest/package metadata without loading plugin runtime modules.
+
+In Nix mode (`OPENCLAW_NIX_MODE=1`), plugin lifecycle mutators are disabled.
+Manage plugin package selection and config through the Nix source for the
+install instead; for nix-openclaw, start with the agent-first
+[Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name
 back to the tracked plugin record and records the new spec for future updates.
@@ -719,4 +728,4 @@ For full typed hook behavior, see [SDK overview](/plugins/sdk-overview#hook-deci
 - [Plugin manifest](/plugins/manifest) - manifest schema
 - [Registering tools](/plugins/building-plugins#registering-agent-tools) - add agent tools in a plugin
 - [Plugin internals](/plugins/architecture) - capability model and load pipeline
-- [Community plugins](/plugins/community) - third-party listings
+- [ClawHub](/clawhub) - third-party plugin discovery

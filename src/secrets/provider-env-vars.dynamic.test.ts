@@ -6,6 +6,7 @@ import {
   listKnownSecretEnvVarNames,
   PROVIDER_AUTH_ENV_VAR_CANDIDATES,
   PROVIDER_ENV_VARS,
+  resolveProviderAuthEnvVarCandidates,
   resolveProviderAuthEvidence,
 } from "./provider-env-vars.js";
 
@@ -41,6 +42,7 @@ const pluginRegistryMocks = vi.hoisted(() => {
     diagnostics: [],
   }));
   return {
+    getCurrentPluginMetadataSnapshot: vi.fn(),
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
     loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
@@ -60,6 +62,10 @@ const pluginRegistryMocks = vi.hoisted(() => {
     }),
   };
 });
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: pluginRegistryMocks.getCurrentPluginMetadataSnapshot,
+}));
 
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex:
@@ -85,11 +91,13 @@ describe("provider env vars dynamic manifest metadata", () => {
     });
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReset();
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
     __testing.resetProviderEnvVarCachesForTests();
   });
 
-  it("includes later-installed plugin env vars without a bundled generated map", async () => {
+  it("includes later-installed plugin env vars without a bundled generated map", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
@@ -112,7 +120,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
   });
 
-  it("includes setup provider env vars without loading setup runtime", async () => {
+  it("includes setup provider env vars without loading setup runtime", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
@@ -136,7 +144,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(listKnownSecretEnvVarNames()).toContain("MODEL_STUDIO_API_KEY");
   });
 
-  it("includes setup provider auth evidence without loading setup runtime", async () => {
+  it("includes setup provider auth evidence without loading setup runtime", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [
         {
@@ -177,7 +185,98 @@ describe("provider env vars dynamic manifest metadata", () => {
     });
   });
 
-  it("excludes untrusted workspace plugin auth evidence by default", async () => {
+  it("reuses the current compatible metadata snapshot for workspace auth evidence", () => {
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({
+      index: {
+        plugins: [
+          {
+            pluginId: "external-cloud",
+            origin: "global",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "external-cloud",
+          origin: "global",
+          setup: {
+            providers: [
+              {
+                id: "external-cloud",
+                authEvidence: [
+                  {
+                    type: "local-file-with-env",
+                    fileEnvVar: "EXTERNAL_CLOUD_CREDENTIALS",
+                    credentialMarker: "external-cloud-local-credentials",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(
+      resolveProviderAuthEvidence({
+        config: {},
+        workspaceDir: "/workspace",
+      })["external-cloud"],
+    ).toEqual([
+      {
+        type: "local-file-with-env",
+        fileEnvVar: "EXTERNAL_CLOUD_CREDENTIALS",
+        credentialMarker: "external-cloud-local-credentials",
+      },
+    ]);
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a load-path current snapshot for default provider env lookups", () => {
+    const staleSnapshot = {
+      index: {
+        plugins: [
+          {
+            pluginId: "load-path-provider",
+            origin: "global",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "load-path-provider",
+          origin: "global",
+          providerAuthEnvVars: {
+            "load-path-provider": ["LOAD_PATH_PROVIDER_API_KEY"],
+          },
+        },
+      ],
+    };
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
+      (params: { config?: unknown; requireDefaultDiscoveryContext?: boolean }) => {
+        if (params.config || params.requireDefaultDiscoveryContext) {
+          return undefined;
+        }
+        return staleSnapshot;
+      },
+    );
+
+    expect(
+      resolveProviderAuthEnvVarCandidates({ config: {} })["load-path-provider"],
+    ).toBeUndefined();
+    expect(pluginRegistryMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+      env: process.env,
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalled();
+  });
+
+  it("excludes untrusted workspace plugin auth evidence by default", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [
         {
@@ -207,7 +306,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     ).toBeUndefined();
   });
 
-  it("keeps explicitly trusted workspace plugin auth evidence", async () => {
+  it("keeps explicitly trusted workspace plugin auth evidence", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [
         {
@@ -249,7 +348,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     ]);
   });
 
-  it("appends setup provider env vars after explicit provider auth env vars", async () => {
+  it("appends setup provider env vars after explicit provider auth env vars", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
@@ -274,7 +373,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_API_KEY", "FIREWORKS_SETUP_KEY"]);
   });
 
-  it("keeps lazy manifest-backed exports cold until accessed and resolves them once", async () => {
+  it("keeps lazy manifest-backed exports cold until accessed and resolves them once", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
@@ -302,7 +401,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     );
   });
 
-  it("reuses the lazy default lookup cache for repeated provider env var reads", async () => {
+  it("reuses the lazy default lookup cache for repeated provider env var reads", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {

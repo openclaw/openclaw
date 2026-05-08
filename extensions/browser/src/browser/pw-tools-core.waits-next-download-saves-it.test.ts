@@ -78,7 +78,9 @@ describe("pw-tools-core", () => {
     suggestedFilename: string;
   }) {
     const harness = createDownloadEventHarness();
-    const saveAs = vi.fn(async () => {});
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "download-content", "utf8");
+    });
 
     const p = mod.waitForDownloadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -130,20 +132,16 @@ describe("pw-tools-core", () => {
   async function expectAtomicDownloadSave(params: {
     saveAs: ReturnType<typeof vi.fn>;
     targetPath: string;
-    tempDir: string;
     content: string;
   }) {
     const savedPath = params.saveAs.mock.calls[0]?.[0];
     expect(typeof savedPath).toBe("string");
     expect(savedPath).not.toBe(params.targetPath);
-    const [savedDirReal, tempDirReal] = await Promise.all([
-      fs.realpath(path.dirname(String(savedPath))).catch(() => path.dirname(String(savedPath))),
-      fs.realpath(params.tempDir).catch(() => params.tempDir),
-    ]);
-    expect(savedDirReal).toBe(tempDirReal);
-    expect(path.basename(String(savedPath))).toContain(".openclaw-output-");
-    expect(path.basename(String(savedPath))).toContain(".part");
+    expect(path.basename(path.dirname(String(savedPath)))).toContain("fs-safe-output");
+    expect(path.basename(String(savedPath))).toContain(path.basename(params.targetPath));
+    expect(path.basename(String(savedPath))).toMatch(/\.part$/);
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
+    await expect(fs.access(String(savedPath))).rejects.toThrow();
   }
 
   it("waits for the next download and atomically finalizes explicit output paths", async () => {
@@ -172,8 +170,41 @@ describe("pw-tools-core", () => {
       harness.trigger(download);
 
       const res = await p;
-      await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "file-content" });
+      await expectAtomicDownloadSave({ saveAs, targetPath, content: "file-content" });
       await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
+    });
+  });
+
+  it("creates missing explicit download output parents through the safe output directory path", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const targetPath = path.join(tempDir, "nested", "deeper", "file.bin");
+
+      const saveAs = vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, "nested-content", "utf8");
+      });
+
+      const p = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        path: targetPath,
+        timeoutMs: 1000,
+      });
+
+      await Promise.resolve();
+      harness.expectArmed();
+      harness.trigger({
+        url: () => "https://example.com/file.bin",
+        suggestedFilename: () => "file.bin",
+        saveAs,
+      });
+
+      await p;
+      await expectAtomicDownloadSave({
+        saveAs,
+        targetPath,
+        content: "nested-content",
+      });
     });
   });
 
@@ -194,7 +225,9 @@ describe("pw-tools-core", () => {
     harness.trigger({
       url: () => "https://example.com/file.bin",
       suggestedFilename: () => "file.bin",
-      saveAs: vi.fn(async () => {}),
+      saveAs: vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, "file-content", "utf8");
+      }),
     });
 
     await p;
@@ -233,7 +266,7 @@ describe("pw-tools-core", () => {
       harness.trigger(download);
 
       const res = await p;
-      await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "report-content" });
+      await expectAtomicDownloadSave({ saveAs, targetPath, content: "report-content" });
       await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
     });
   });
@@ -284,8 +317,10 @@ describe("pw-tools-core", () => {
       path.join(path.sep, "tmp", "openclaw-preferred", "downloads"),
     );
     const expectedDownloadsTail = `${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`;
-    expect(path.dirname(outPath)).toBe(expectedRootedDownloadsDir);
-    expect(path.basename(outPath)).toMatch(/-file\.bin$/);
+    expect(path.dirname(outPath)).not.toBe(expectedRootedDownloadsDir);
+    expect(path.basename(outPath)).toContain(path.basename(res.path));
+    expect(path.basename(outPath)).toMatch(/\.part$/);
+    await expect(fs.readFile(res.path, "utf8")).resolves.toBe("download-content");
     expect(path.normalize(res.path)).toContain(path.normalize(expectedDownloadsTail));
     expect(tmpDirMocks.resolvePreferredOpenClawTmpDir).toHaveBeenCalled();
   });
@@ -297,14 +332,51 @@ describe("pw-tools-core", () => {
       suggestedFilename: "../../../../etc/passwd",
     });
     expect(typeof outPath).toBe("string");
-    expect(path.dirname(outPath)).toBe(
+    expect(path.dirname(outPath)).not.toBe(
       path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
     );
-    expect(path.basename(outPath)).toMatch(/-passwd$/);
+    expect(path.basename(outPath)).toContain(path.basename(res.path));
+    expect(path.basename(outPath)).toMatch(/\.part$/);
+    await expect(fs.readFile(res.path, "utf8")).resolves.toBe("download-content");
     expect(path.normalize(res.path)).toContain(
       path.normalize(`${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`),
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects implicit downloads when the output directory is a symlink",
+    async () => {
+      await withTempDir(async (tempDir) => {
+        const outsideDir = path.join(tempDir, "outside");
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.symlink(outsideDir, path.join(tempDir, "downloads"));
+        tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue(tempDir);
+
+        const harness = createDownloadEventHarness();
+        const saveAs = vi.fn(async (outPath: string) => {
+          await fs.writeFile(outPath, "should-not-write", "utf8");
+        });
+
+        const p = mod.waitForDownloadViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "T1",
+          timeoutMs: 1000,
+        });
+
+        await Promise.resolve();
+        harness.expectArmed();
+        harness.trigger({
+          url: () => "https://example.com/file.bin",
+          suggestedFilename: () => "file.bin",
+          saveAs,
+        });
+
+        await expect(p).rejects.toThrow(/output directory/i);
+        expect(saveAs).not.toHaveBeenCalled();
+        await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+      });
+    },
+  );
   it("waits for a matching response and returns its body", async () => {
     let responseHandler: ((resp: unknown) => void) | undefined;
     const on = vi.fn((event: string, handler: (resp: unknown) => void) => {
@@ -331,8 +403,10 @@ describe("pw-tools-core", () => {
     });
 
     await Promise.resolve();
-    expect(responseHandler).toBeDefined();
-    responseHandler?.(resp);
+    if (!responseHandler) {
+      throw new Error("expected Playwright response handler");
+    }
+    responseHandler(resp);
 
     const res = await p;
     expect(res.url).toBe("https://example.com/api/data");
