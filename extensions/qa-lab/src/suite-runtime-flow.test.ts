@@ -22,6 +22,7 @@ const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
 const readSkillStatus = vi.hoisted(() => vi.fn());
 const readRawQaSessionEntries = vi.hoisted(() => vi.fn());
+const seedQaSessionTranscript = vi.hoisted(() => vi.fn());
 const runQaCli = vi.hoisted(() => vi.fn());
 const extractMediaPathFromText = vi.hoisted(() => vi.fn());
 const resolveGeneratedImagePath = vi.hoisted(() => vi.fn());
@@ -87,6 +88,7 @@ vi.mock("./suite-runtime-agent.js", () => ({
   readEffectiveTools,
   readSkillStatus,
   readRawQaSessionEntries,
+  seedQaSessionTranscript,
   runQaCli,
   extractMediaPathFromText,
   resolveGeneratedImagePath,

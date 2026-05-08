@@ -1,3 +1,9 @@
+import {
+  createSqliteSessionTranscriptLocator,
+  CURRENT_SESSION_VERSION,
+  replaceSqliteSessionTranscriptEvents,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/config-runtime";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
   QaRawSessionEntry,
@@ -25,6 +31,78 @@ async function createSession(
     throw new Error("sessions.create returned no key");
   }
   return sessionKey;
+}
+
+async function seedQaSessionTranscript(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  params: {
+    agentId?: string;
+    sessionId: string;
+    sessionKey?: string;
+    messages: Array<{ role: string; content: unknown; timestamp?: number | string }>;
+    now?: number;
+    originLabel?: string;
+  },
+) {
+  const agentId = params.agentId?.trim() || "qa";
+  const now = params.now ?? Date.now();
+  const sessionId = params.sessionId.trim();
+  if (!sessionId) {
+    throw new Error("seedQaSessionTranscript requires sessionId");
+  }
+  const sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
+  const sessionKey = params.sessionKey?.trim() || `agent:${agentId}:seed-${sessionId}`;
+  let parentId: string | null = null;
+  const messageEvents = params.messages.map((message, index) => {
+    const id = `qa-seed-${index + 1}`;
+    const timestampMs = now - Math.max(1, params.messages.length - index) * 30_000;
+    const event = {
+      type: "message" as const,
+      id,
+      parentId,
+      timestamp: new Date(timestampMs).toISOString(),
+      message: {
+        ...message,
+        timestamp:
+          typeof message.timestamp === "number" || typeof message.timestamp === "string"
+            ? message.timestamp
+            : timestampMs,
+      },
+    };
+    parentId = id;
+    return event;
+  });
+  replaceSqliteSessionTranscriptEvents({
+    agentId,
+    sessionId,
+    transcriptPath: sessionFile,
+    env: env.gateway.runtimeEnv,
+    events: [
+      {
+        type: "session",
+        id: sessionId,
+        version: CURRENT_SESSION_VERSION,
+        timestamp: new Date(now - 120_000).toISOString(),
+        cwd: env.gateway.workspaceDir,
+      },
+      ...messageEvents,
+    ],
+    now: () => now,
+  });
+  upsertSessionEntry({
+    agentId,
+    env: env.gateway.runtimeEnv,
+    sessionKey,
+    entry: {
+      sessionId,
+      updatedAt: now,
+      sessionFile,
+      origin: {
+        label: params.originLabel ?? "QA seeded SQLite transcript",
+      },
+    },
+  });
+  return { agentId, sessionId, sessionKey, sessionFile };
 }
 
 async function readEffectiveTools(
@@ -115,4 +193,10 @@ async function readRawQaSessionEntries(env: Pick<QaSuiteRuntimeEnv, "gateway">) 
   );
 }
 
-export { createSession, readEffectiveTools, readRawQaSessionEntries, readSkillStatus };
+export {
+  createSession,
+  readEffectiveTools,
+  readRawQaSessionEntries,
+  readSkillStatus,
+  seedQaSessionTranscript,
+};
