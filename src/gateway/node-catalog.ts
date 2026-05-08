@@ -47,13 +47,16 @@ type KnownNodeCatalog = {
   entriesById: Map<string, KnownNodeEntry>;
 };
 
-function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
+function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
   const values = new Set<string>();
   for (const item of items) {
-    if (!item) {
+    if (!Array.isArray(item)) {
       continue;
     }
     for (const value of item) {
+      if (typeof value !== "string") {
+        continue;
+      }
       const trimmed = value.trim();
       if (trimmed) {
         values.add(trimmed);
