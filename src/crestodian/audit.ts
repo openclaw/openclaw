@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import {
   createCorePluginStateKeyedStore,
   type PluginStateEntry,
@@ -26,13 +24,6 @@ const crestodianAuditStore = createCorePluginStateKeyedStore<CrestodianAuditEntr
   maxEntries: CRESTODIAN_AUDIT_MAX_ENTRIES,
 });
 
-export function resolveCrestodianAuditPath(
-  env: NodeJS.ProcessEnv = process.env,
-  stateDir = resolveStateDir(env),
-): string {
-  return path.join(stateDir, "audit", "crestodian.jsonl");
-}
-
 function resolveCrestodianAuditKey(entry: CrestodianAuditEntry): string {
   const suffix = randomUUID();
   return `${entry.timestamp}:${suffix}`;
@@ -40,7 +31,6 @@ function resolveCrestodianAuditKey(entry: CrestodianAuditEntry): string {
 
 export async function appendCrestodianAuditEntry(
   entry: Omit<CrestodianAuditEntry, "timestamp">,
-  _opts: { env?: NodeJS.ProcessEnv; auditPath?: string } = {},
 ): Promise<string> {
   const record = {
     timestamp: new Date().toISOString(),

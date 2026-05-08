@@ -1,6 +1,7 @@
 export {
   createSession,
   readEffectiveTools,
+  readQaCrestodianAuditEntries,
   readRawQaSessionEntries,
   readSkillStatus,
   setQaActiveMemorySessionDisabled,
