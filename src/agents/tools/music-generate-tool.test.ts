@@ -207,7 +207,7 @@ describe("createMusicGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected music_generate tool");
     }
@@ -277,7 +277,7 @@ describe("createMusicGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected music_generate tool");
     }

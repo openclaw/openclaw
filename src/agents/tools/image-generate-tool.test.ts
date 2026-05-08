@@ -113,7 +113,7 @@ function stubImageGenerationProviders() {
 }
 
 function requireImageGenerateTool(tool: ReturnType<typeof createImageGenerateTool>) {
-  expect(tool).not.toBeNull();
+  expect(typeof tool?.execute).toBe("function");
   if (!tool) {
     throw new Error("expected image_generate tool");
   }
