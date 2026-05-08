@@ -86,6 +86,59 @@ describe("realtime voice agent talkback queue", () => {
     vi.useRealTimers();
   });
 
+  it("keeps active pending questions split by metadata", async () => {
+    vi.useFakeTimers();
+    const logger = makeLogger();
+    const ownerMetadata = { senderIsOwner: true };
+    const guestMetadata = { senderIsOwner: false };
+    let finishFirst: ((value: { text: string }) => void) | undefined;
+    const consult = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ text: string }>((resolve) => {
+            finishFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ text: "owner-answer" })
+      .mockResolvedValueOnce({ text: "guest-answer" });
+    const deliver = vi.fn();
+    const queue = createRealtimeVoiceAgentTalkbackQueue({
+      debounceMs: 10,
+      isStopped: () => false,
+      logger,
+      logPrefix: "[test]",
+      responseStyle: "brief",
+      fallbackText: "fallback",
+      consult,
+      deliver,
+    });
+
+    queue.enqueue("first");
+    await vi.advanceTimersByTimeAsync(10);
+    queue.enqueue("owner", ownerMetadata);
+    queue.enqueue("guest", guestMetadata);
+    await vi.advanceTimersByTimeAsync(10);
+    finishFirst?.({ text: "first-answer" });
+    await vi.runAllTimersAsync();
+
+    expect(consult).toHaveBeenNthCalledWith(2, {
+      question: "owner",
+      metadata: ownerMetadata,
+      responseStyle: "brief",
+      signal: expect.any(AbortSignal),
+    });
+    expect(consult).toHaveBeenNthCalledWith(3, {
+      question: "guest",
+      metadata: guestMetadata,
+      responseStyle: "brief",
+      signal: expect.any(AbortSignal),
+    });
+    expect(deliver).toHaveBeenCalledWith("owner-answer");
+    expect(deliver).toHaveBeenCalledWith("guest-answer");
+    vi.useRealTimers();
+  });
+
   it("delivers fallback text when consult fails", async () => {
     vi.useFakeTimers();
     const logger = makeLogger();

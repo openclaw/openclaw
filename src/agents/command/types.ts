@@ -83,6 +83,8 @@ export type AgentCommandOpts = {
   senderIsOwner?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
+  /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
+  toolsAllow?: string[];
   /** Group/spawn metadata for subagent policy inheritance and routing context. */
   groupId?: SpawnedRunMetadata["groupId"];
   groupChannel?: SpawnedRunMetadata["groupChannel"];
