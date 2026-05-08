@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
+import type { MSTeamsActivityHandler, MSTeamsMessageHandlerDeps } from "./monitor-handler.js";
 import type { MSTeamsPollStore } from "./polls.js";
 
 type FakeServer = EventEmitter & {
@@ -36,11 +37,9 @@ type ResolveMSTeamsUserAllowlistMock = (params: {
 }) => Promise<MSTeamsUserResolution[]>;
 
 type RegisterMSTeamsHandlersMock = (
-  handler: unknown,
-  deps: unknown,
-) => {
-  run: () => Promise<void>;
-};
+  handler: MSTeamsActivityHandler,
+  deps: MSTeamsMessageHandlerDeps,
+) => MSTeamsActivityHandler;
 
 const expressControl = vi.hoisted(() => ({
   mode: { value: "listening" as "listening" | "error" },
@@ -124,9 +123,7 @@ vi.mock("express", () => {
 });
 
 const registerMSTeamsHandlers = vi.hoisted(() =>
-  vi.fn<RegisterMSTeamsHandlersMock>(() => ({
-    run: vi.fn(async () => {}),
-  })),
+  vi.fn<RegisterMSTeamsHandlersMock>((handler) => handler),
 );
 const createMSTeamsAdapter = vi.hoisted(() =>
   vi.fn(() => ({
@@ -148,8 +145,7 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
 );
 
 vi.mock("./monitor-handler.js", () => ({
-  registerMSTeamsHandlers: (handler: unknown, deps: unknown) =>
-    registerMSTeamsHandlers(handler, deps),
+  registerMSTeamsHandlers,
 }));
 
 const resolveAllowlistMocks = vi.hoisted(() => ({
@@ -302,7 +298,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(app.use).toHaveBeenCalledTimes(4);
 
     const jsonMiddleware = vi.mocked((await import("express")).json).mock.results[0]?.value;
-    expect(jsonMiddleware).toEqual(expect.any(Function));
+    if (typeof jsonMiddleware !== "function") {
+      throw new Error("expected Express JSON middleware");
+    }
     expect(app.use.mock.calls[1]?.[0]).not.toBe(jsonMiddleware);
     expect(app.use.mock.calls[2]?.[0]).toBe(jsonMiddleware);
 

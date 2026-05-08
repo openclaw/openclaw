@@ -166,7 +166,6 @@ describe("feishu_doc image fetch hardening", () => {
     if (!tool) {
       throw new Error("expected Feishu doc tool");
     }
-    expect(tool.execute).toEqual(expect.any(Function));
     return tool;
   }
 
