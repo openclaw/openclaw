@@ -123,9 +123,9 @@ describe("persistPluginInstall", () => {
 
     expect(next).toEqual(enabledConfig);
     expect(refreshPluginRegistry).toHaveBeenCalled();
-    expect(
-      runtimeLogs.some((line) => line.includes("Plugin runtime cache invalidation failed")),
-    ).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Plugin runtime cache invalidation failed")]),
+    );
   });
 
   it("removes a replaced managed install directory before refreshing the registry", async () => {
