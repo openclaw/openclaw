@@ -173,6 +173,55 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toMatch(/attachments_invalid_name/);
   });
 
+  it("passes attachments as initial SQLite VFS seed entries for worker runs", async () => {
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-1", status: "accepted", acceptedAt: 1000 };
+      }
+      return { ok: true };
+    });
+
+    const { spawnSubagentDirect } = subagentSpawnModule;
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [
+          {
+            name: "file.txt",
+            content: Buffer.from("hello").toString("base64"),
+            encoding: "base64",
+            mimeType: "text/plain",
+          },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = calls.find((entry) => entry.method === "agent");
+    const initialVfsEntries = agentCall?.params?.initialVfsEntries;
+    expect(initialVfsEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: expect.stringMatching(/^\.openclaw\/attachments\/[^/]+\/file\.txt$/),
+          contentBase64: Buffer.from("hello").toString("base64"),
+          metadata: expect.objectContaining({
+            source: "subagent-attachment",
+            name: "file.txt",
+            mimeType: "text/plain",
+          }),
+        }),
+        expect.objectContaining({
+          path: expect.stringMatching(/^\.openclaw\/attachments\/[^/]+\/\.manifest\.json$/),
+          metadata: { source: "subagent-attachment-manifest" },
+        }),
+      ]),
+    );
+  });
+
   it("removes materialized attachments when lineage patching fails", async () => {
     const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
     sessionStore = {};

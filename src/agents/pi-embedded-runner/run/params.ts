@@ -18,6 +18,7 @@ import type {
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "../../pi-embedded-subscribe.shared-types.js";
+import type { PreparedAgentRunInitialVfsEntry } from "../../runtime-backend.js";
 import type { SkillSnapshot } from "../../skills.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
@@ -120,6 +121,8 @@ export type RunEmbeddedPiAgentParams = {
    * legacy disk-backed compatibility paths.
    */
   agentFilesystem?: AgentFilesystem;
+  /** Files to seed into the worker SQLite VFS before tools start. */
+  initialVfsEntries?: PreparedAgentRunInitialVfsEntry[];
   provider?: string;
   model?: string;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */

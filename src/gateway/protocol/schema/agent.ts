@@ -36,6 +36,15 @@ export const AgentEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentInitialVfsEntrySchema = Type.Object(
+  {
+    path: NonEmptyString,
+    contentBase64: Type.String(),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  },
+  { additionalProperties: false },
+);
+
 export const MessageActionToolContextSchema = Type.Object(
   {
     currentChannelId: Type.Optional(Type.String()),
@@ -171,6 +180,7 @@ export const AgentParamsSchema = Type.Object(
     acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
+    initialVfsEntries: Type.Optional(Type.Array(AgentInitialVfsEntrySchema)),
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),

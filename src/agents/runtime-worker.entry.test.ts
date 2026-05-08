@@ -13,19 +13,23 @@ function createTempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-worker-entry-"));
 }
 
-function createPreparedRun(filesystemMode: AgentFilesystemMode): PreparedAgentRun {
+function createPreparedRun(
+  filesystemMode: AgentFilesystemMode,
+  overrides: Partial<PreparedAgentRun> = {},
+): PreparedAgentRun {
   return {
     runtimeId: "test",
     runId: `run-${filesystemMode}`,
     agentId: "main",
     sessionId: "session-worker",
     sessionKey: "agent:main:main",
-    sessionFile: "/tmp/session-worker.jsonl",
+    sessionFile: "sqlite-transcript://main/session-worker.jsonl",
     workspaceDir: "/tmp/workspace",
     prompt: "hello",
     timeoutMs: 1000,
     filesystemMode,
     deliveryPolicy: { emitToolResult: false, emitToolOutput: false },
+    ...overrides,
   };
 }
 
@@ -93,6 +97,30 @@ describe("agent runtime worker entry filesystem", () => {
 
     expect(filesystem.workspace).toBeUndefined();
     expect(filesystem.scratch.readFile("/only.txt").toString("utf8")).toBe("vfs");
+  });
+
+  it("seeds initial files into the SQLite VFS before vfs-only tools run", async () => {
+    process.env.OPENCLAW_STATE_DIR = createTempStateDir();
+
+    const filesystem = await createWorkerFilesystem(
+      createPreparedRun("vfs-only", {
+        initialVfsEntries: [
+          {
+            path: ".openclaw/attachments/seed/file.txt",
+            contentBase64: Buffer.from("seeded").toString("base64"),
+            metadata: { source: "test" },
+          },
+        ],
+      }),
+    );
+
+    expect(
+      filesystem.scratch.readFile("/.openclaw/attachments/seed/file.txt").toString("utf8"),
+    ).toBe("seeded");
+    expect(filesystem.scratch.stat("/.openclaw/attachments/seed/file.txt")).toMatchObject({
+      metadata: { source: "test" },
+      size: 6,
+    });
   });
 });
 
