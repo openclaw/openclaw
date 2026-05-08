@@ -141,7 +141,6 @@ function requireCommandArgMenu(
   params: Parameters<typeof resolveCommandArgMenu>[0],
 ): NonNullable<ReturnType<typeof resolveCommandArgMenu>> {
   const menu = resolveCommandArgMenu(params);
-  expect(menu).not.toBeNull();
   if (!menu) {
     throw new Error(`Expected arg menu for ${params.command.key}`);
   }
@@ -157,7 +156,6 @@ function requireSeenChoice(
     argName: string;
   } | null,
 ) {
-  expect(seen).not.toBeNull();
   if (!seen) {
     throw new Error("Expected command choice context");
   }
@@ -602,7 +600,7 @@ describe("commands registry args", () => {
       { label: "low", value: "low" },
       { label: "high", value: "high" },
     ]);
-    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
+    expect(formatCommandArgMenuTitle({ command, menu })).toBe(
       "Choose level for /think.\nOptions: low, high.",
     );
     const seenChoice = requireSeenChoice(seen);
@@ -641,7 +639,7 @@ describe("commands registry args", () => {
       "high",
       "max",
     ]);
-    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
+    expect(formatCommandArgMenuTitle({ command, menu })).toBe(
       "Choose level for /think.\nOptions: off, low, medium, high, max.",
     );
   });
@@ -673,7 +671,7 @@ describe("commands registry args", () => {
     });
 
     expect(menu.choices.map((choice) => choice.value)).toContain("xhigh");
-    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toContain("xhigh");
+    expect(formatCommandArgMenuTitle({ command, menu })).toContain("xhigh");
   });
 
   it("does not show menus when args were provided as raw text only", () => {
