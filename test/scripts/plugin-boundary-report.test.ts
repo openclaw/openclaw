@@ -7,7 +7,6 @@ function requirePluginSdkSummary(summary: {
     unusedReservedCount?: unknown;
   };
 }) {
-  expect(summary.pluginSdk).toBeDefined();
   if (!summary.pluginSdk) {
     throw new Error("Expected plugin SDK summary");
   }

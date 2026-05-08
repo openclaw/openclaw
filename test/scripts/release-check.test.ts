@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { writePackedBundledPluginActivationConfig } from "../../scripts/release-check.ts";
 
 function requirePluginEntries(config: { plugins?: { entries?: Record<string, unknown> } }) {
-  expect(config.plugins?.entries).toBeDefined();
   if (!config.plugins?.entries) {
     throw new Error("Expected plugin entries in packaged activation config");
   }
