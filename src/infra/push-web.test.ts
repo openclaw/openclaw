@@ -14,6 +14,8 @@ import {
   sendWebPushNotification,
 } from "./push-web.js";
 
+type WebPushSubscription = NonNullable<Awaited<ReturnType<typeof loadWebPushSubscription>>>;
+
 // Stub resolveStateDir so tests use a temp directory.
 let tmpDir: string;
 vi.mock("../config/paths.js", () => ({
@@ -31,6 +33,16 @@ vi.mock("web-push", () => ({
     sendNotification: vi.fn().mockResolvedValue({ statusCode: 201 }),
   },
 }));
+
+function expectLoadedSubscription(
+  loaded: Awaited<ReturnType<typeof loadWebPushSubscription>>,
+): WebPushSubscription {
+  expect(loaded).toEqual(expect.objectContaining({ endpoint: expect.any(String) }));
+  if (loaded === null) {
+    throw new Error("Expected loaded web push subscription");
+  }
+  return loaded;
+}
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "push-web-test-"));
@@ -118,8 +130,7 @@ describe("subscription CRUD", () => {
       baseDir: tmpDir,
     });
     const loaded = await loadWebPushSubscription(sub.subscriptionId, tmpDir);
-    expect(loaded).not.toBeNull();
-    expect(loaded!.endpoint).toBe(endpoint);
+    expect(expectLoadedSubscription(loaded).endpoint).toBe(endpoint);
   });
 
   it("returns null for unknown subscription ID", async () => {

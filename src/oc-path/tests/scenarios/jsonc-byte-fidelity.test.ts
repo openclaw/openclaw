@@ -34,8 +34,11 @@ function rt(raw: string): string {
  */
 function assertParseable(raw: string): JsoncValue {
   const result = parseJsonc(raw);
-  expect(result.ast.root).not.toBeNull();
-  return result.ast.root as JsoncValue;
+  expect(result.ast.root).toEqual(expect.any(Object));
+  if (result.ast.root === null) {
+    throw new Error("Expected parseable JSONC root");
+  }
+  return result.ast.root;
 }
 
 /**

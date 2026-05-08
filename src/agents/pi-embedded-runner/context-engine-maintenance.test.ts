@@ -201,7 +201,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
           { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
         ],
       });
-      expect(rewritePromise).toEqual(expect.any(Promise));
+      expect(rewritePromise?.then).toBeTypeOf("function");
 
       await flushAsyncWork();
       expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();

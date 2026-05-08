@@ -344,9 +344,7 @@ describe("applyJobPatch", () => {
       to: "https://example.invalid/original",
     });
 
-    expect(() =>
-      applyJobPatch(job, { delivery: { mode: "webhook", to: "  https://example.invalid/trim  " } }),
-    ).not.toThrow();
+    applyJobPatch(job, { delivery: { mode: "webhook", to: "  https://example.invalid/trim  " } });
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/trim" });
   });
 
@@ -470,7 +468,7 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
 
   it("allows isolated session job for non-default agents", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
-    expect(() =>
+    expect(
       createJob(state, {
         name: "isolated-job",
         enabled: true,
@@ -480,7 +478,10 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
         payload: { kind: "agentTurn", message: "do it" },
         agentId: "custom-agent",
       }),
-    ).not.toThrow();
+    ).toMatchObject({
+      agentId: "custom-agent",
+      sessionTarget: "isolated",
+    });
   });
 
   it("rejects custom session targets with path separators", () => {
@@ -924,7 +925,7 @@ describe("recomputeNextRuns", () => {
     expect(job.state.nextRunAtMs).toBe(expected);
   });
 
-  it("does not throw while probing malformed cron schedules with future nextRunAtMs", () => {
+  it("keeps future nextRunAtMs while probing malformed cron schedules", () => {
     const now = Date.parse("2026-05-05T12:00:00.000Z");
     const future = Date.parse("2026-05-12T16:00:00.000Z");
     const job: CronJob = {

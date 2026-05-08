@@ -2,13 +2,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveSTTConfig, transcribeAudio } from "./stt.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
+
+import { resolveSTTConfig, transcribeAudio } from "./stt.js";
 
 describe("engine/utils/stt", () => {
   afterEach(() => {
@@ -102,8 +103,8 @@ describe("engine/utils/stt", () => {
     expect(transcript).toBe("hello from audio");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        auditContext: "qqbot-stt",
         url: "https://api.example.test/v1/audio/transcriptions",
+        auditContext: "qqbot-stt",
         init: expect.objectContaining({
           method: "POST",
           headers: { Authorization: "Bearer secret" },
@@ -112,21 +113,5 @@ describe("engine/utils/stt", () => {
       }),
     );
     expect(release).toHaveBeenCalledTimes(1);
-    const [{ init }] = fetchWithSsrFGuardMock.mock.calls[0] as [
-      {
-        init: {
-          body: FormData;
-          headers: Record<string, string>;
-          method: string;
-        };
-      },
-    ];
-    expect(init).toEqual(
-      expect.objectContaining({
-        method: "POST",
-        headers: { Authorization: "Bearer secret" },
-        body: expect.any(FormData),
-      }),
-    );
   });
 });

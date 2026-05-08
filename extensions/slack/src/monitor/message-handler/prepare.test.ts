@@ -2103,8 +2103,9 @@ describe("prepareSlackMessage sender prefix", () => {
 
     const result = await prepareSenderPrefixMessage(ctx, "<@BOT> /new", "1700000000.0002");
 
-    expect(result).not.toBeNull();
-    expect(result?.ctxPayload.CommandAuthorized).toBe(true);
+    expect(result).toMatchObject({
+      ctxPayload: { CommandAuthorized: true },
+    });
   });
 });
 

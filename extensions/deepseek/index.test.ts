@@ -141,9 +141,10 @@ describe("deepseek provider plugin", () => {
     expect(provider.label).toBe("DeepSeek");
     expect(provider.envVars).toEqual(["DEEPSEEK_API_KEY"]);
     expect(provider.auth).toHaveLength(1);
-    expect(resolved).not.toBeNull();
-    expect(resolved?.provider.id).toBe("deepseek");
-    expect(resolved?.method.id).toBe("api-key");
+    expect(resolved).toMatchObject({
+      provider: { id: "deepseek" },
+      method: { id: "api-key" },
+    });
   });
 
   it("builds the static DeepSeek model catalog", async () => {

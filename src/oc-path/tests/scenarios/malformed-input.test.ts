@@ -23,7 +23,10 @@ describe("wave-11 malformed-input", () => {
   });
 
   it("M-03 only `---` (single fence, no content)", () => {
-    expect(() => parseMd("---\n")).not.toThrow();
+    const { ast, diagnostics } = parseMd("---\n");
+    expect(diagnostics.map((diagnostic) => diagnostic.code)).toContain("OC_FRONTMATTER_UNCLOSED");
+    expect(ast.frontmatter).toEqual([]);
+    expect(ast.preamble).toBe("---\n");
   });
 
   it("M-04 only `---\\n---`", () => {
@@ -33,7 +36,9 @@ describe("wave-11 malformed-input", () => {
 
   it("M-05 binary-ish bytes (non-ASCII control chars)", () => {
     const raw = "## H\n\x00\x01\x02\n";
-    expect(() => parseMd(raw)).not.toThrow();
+    const { ast, diagnostics } = parseMd(raw);
+    expect(diagnostics).toEqual([]);
+    expect(ast.blocks[0]?.bodyText).toBe("\x00\x01\x02\n");
   });
 
   it("M-06 very long single line (10k chars)", () => {
@@ -60,17 +65,20 @@ describe("wave-11 malformed-input", () => {
 
   it("M-09 unclosed code fence", () => {
     const raw = "## H\n```\nbody\n";
-    expect(() => parseMd(raw)).not.toThrow();
+    const { ast } = parseMd(raw);
+    expect(ast.blocks[0]?.bodyText).toBe("```\nbody\n");
   });
 
   it("M-10 mismatched fence (open with ``` close with ~~~)", () => {
     const raw = "## H\n```\nbody\n~~~\n";
-    expect(() => parseMd(raw)).not.toThrow();
+    const { ast } = parseMd(raw);
+    expect(ast.blocks[0]?.bodyText).toBe("```\nbody\n~~~\n");
   });
 
   it("M-11 nested fences (treated linearly, not nested)", () => {
     const raw = "## H\n```\n```\nstill-in-second\n```\n";
-    expect(() => parseMd(raw)).not.toThrow();
+    const { ast } = parseMd(raw);
+    expect(ast.blocks[0]?.bodyText).toBe("```\n```\nstill-in-second\n```\n");
   });
 
   it("M-12 empty file", () => {
@@ -94,7 +102,8 @@ describe("wave-11 malformed-input", () => {
 
   it("M-15 file with mixed indentation extremes (tabs, spaces, mixed)", () => {
     const raw = "## H\n\t- tabbed\n  - spaced\n\t  - mixed\n";
-    expect(() => parseMd(raw)).not.toThrow();
+    const { ast } = parseMd(raw);
+    expect(ast.blocks[0]?.bodyText).toBe("\t- tabbed\n  - spaced\n\t  - mixed\n");
   });
 
   it("M-16 frontmatter with frontmatter-shaped content inside (---)", () => {
@@ -119,7 +128,10 @@ describe("wave-11 malformed-input", () => {
   });
 
   it("M-19 file with just whitespace", () => {
-    expect(() => parseMd("     \n\t\n   \n")).not.toThrow();
+    const { ast, diagnostics } = parseMd("     \n\t\n   \n");
+    expect(diagnostics).toEqual([]);
+    expect(ast.preamble).toBe("     \n\t\n   \n");
+    expect(ast.blocks).toEqual([]);
   });
 
   it("M-20 file with only BOM", () => {
@@ -129,16 +141,18 @@ describe("wave-11 malformed-input", () => {
 
   it("M-21 file mixing BOM + frontmatter + body + sections", () => {
     const raw = "﻿---\nk: v\n---\n\nbody\n## Section\n- item\n";
-    expect(() => parseMd(raw)).not.toThrow();
     const { ast } = parseMd(raw);
     expect(ast.frontmatter[0]?.value).toBe("v");
     expect(ast.blocks[0]?.heading).toBe("Section");
+    expect(ast.blocks[0]?.items[0]?.text).toBe("item");
   });
 
   it("M-22 line endings: legacy CR-only (Mac classic)", () => {
     // Our regex /\r?\n/ doesn't split on CR-only. Treats whole as one line.
     const raw = "line1\rline2\r## Heading\r";
-    expect(() => parseMd(raw)).not.toThrow();
+    const { ast } = parseMd(raw);
+    expect(ast.preamble).toBe(raw);
+    expect(ast.blocks).toEqual([]);
   });
 
   it("M-23 100 KB file", () => {
@@ -150,6 +164,9 @@ describe("wave-11 malformed-input", () => {
       }
     }
     const raw = lines.join("\n");
-    expect(() => parseMd(raw)).not.toThrow();
+    const { ast, diagnostics } = parseMd(raw);
+    expect(diagnostics).toEqual([]);
+    expect(ast.blocks).toHaveLength(1000);
+    expect(ast.blocks[999]?.items).toHaveLength(5);
   });
 });

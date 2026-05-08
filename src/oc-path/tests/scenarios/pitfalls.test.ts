@@ -55,7 +55,9 @@ describe("wave-23 pitfalls — encoding", () => {
   it("P-003 allows whitespace inside predicate values (content)", () => {
     // Spaces inside a predicate value are legitimate — they're filtering
     // against actual content.
-    expect(() => parseOcPath("oc://X/[name=hello world]")).not.toThrow();
+    const path = parseOcPath("oc://X/[name=hello world]");
+    expect(path.file).toBe("X");
+    expect(path.section).toBe("[name=hello world]");
   });
 
   it("P-004 / P-011 rejects control characters and null bytes", () => {
@@ -159,7 +161,6 @@ describe("wave-23 pitfalls — sentinels & collisions", () => {
       ast,
       parseOcPath("oc://config/channels.telegram.groups.-5028303500.requireMention"),
     );
-    expect(m).not.toBeNull();
     expect(m?.kind).toBe("leaf");
     if (m?.kind === "leaf") {
       expect(m.valueText).toBe("false");
@@ -396,7 +397,7 @@ describe("wave-23 pitfalls — performance & limits", () => {
 
   it("P-032 path at the cap parses cleanly", () => {
     const justUnder = "oc://X/" + "a".repeat(MAX_PATH_LENGTH - "oc://X/".length);
-    expect(() => parseOcPath(justUnder)).not.toThrow();
+    expect(parseOcPath(justUnder).section).toBe("a".repeat(MAX_PATH_LENGTH - "oc://X/".length));
   });
 
   it("P-032 formatOcPath enforces the same cap on output", () => {
@@ -477,7 +478,9 @@ describe("wave-23 pitfalls — reserved characters", () => {
     // the first `?` as the query split.
     expect(parseOcPath("oc://X/foo?session=s").section).toBe("foo");
     // Empty key after `?` (no `=`): query parser silently ignores.
-    expect(() => parseOcPath("oc://X/foo?")).not.toThrow();
+    const path = parseOcPath("oc://X/foo?");
+    expect(path.section).toBe("foo");
+    expect(path.session).toBeUndefined();
   });
 
   it("P-040 negative-index magnitude is bounded", () => {
@@ -488,28 +491,18 @@ describe("wave-23 pitfalls — reserved characters", () => {
   });
 });
 
-// ---------- Sentinel-redaction pitfall (P-036) ---------------------------
-
-describe("wave-23 pitfalls — redaction sentinel", () => {
-  // P-036 is fully covered by wave-21-sentinel-cross-kind. This is a
-  // smoke test asserting the link is intact.
-  it("P-036 sentinel guard activates at emit time (covered by wave-21)", () => {
-    expect(true).toBe(true);
-  });
-});
-
 // ---------- DEFERRED — documented limits ---------------------------------
 
 describe("wave-23 pitfalls — deferred (v0 limits)", () => {
-  it.skip("P-005 slash literal in key — v1: quoted segments", () => {});
-  it.skip("P-006 dot literal in key — v1: quoted segments", () => {});
-  it.skip("P-017 nested unions {a,{b,c}} — v1: parser stack", () => {});
-  it.skip("P-019 wildcard inside wildcard — v1: pattern composition", () => {});
-  it.skip("P-025 leading-zero numeric `01` — v1: explicit form", () => {});
-  it.skip("P-027 `&` in segments — v1: percent-encoding", () => {});
-  it.skip("P-028 percent-encoded segments — v1: rfc3986 layer", () => {});
-  it.skip("P-034 ast mutation between resolve & consume — caller invariant", () => {});
-  it.skip("P-035 stale paths from prior find — caller invariant", () => {});
+  it.todo("P-005 slash literal in key — v1: quoted segments");
+  it.todo("P-006 dot literal in key — v1: quoted segments");
+  it.todo("P-017 nested unions {a,{b,c}} — v1: parser stack");
+  it.todo("P-019 wildcard inside wildcard — v1: pattern composition");
+  it.todo("P-025 leading-zero numeric `01` — v1: explicit form");
+  it.todo("P-027 `&` in segments — v1: percent-encoding");
+  it.todo("P-028 percent-encoded segments — v1: rfc3986 layer");
+  it.todo("P-034 ast mutation between resolve & consume — caller invariant");
+  it.todo("P-035 stale paths from prior find — caller invariant");
 });
 
 // ---------- Injection pitfalls (C12 / W12) -------------------------------

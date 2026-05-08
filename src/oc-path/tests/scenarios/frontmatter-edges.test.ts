@@ -2,8 +2,8 @@
  * Wave 2 — frontmatter edges.
  *
  * Substrate guarantee: frontmatter is parsed as `key: value` entries
- * with quote-stripping; malformed frontmatter doesn't crash the parser
- * (soft-error policy: emit diagnostic, recover).
+ * with quote-stripping; malformed frontmatter follows the soft-error
+ * policy by emitting diagnostics and recovering.
  */
 import { describe, expect, it } from "vitest";
 import { parseMd } from "../../parse.js";

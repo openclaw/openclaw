@@ -74,10 +74,11 @@ describe("waitForAgentJob", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       const snapshot = await snapshotPromise;
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.status).toBe("timeout");
-      expect(snapshot?.startedAt).toBe(100);
-      expect(snapshot?.endedAt).toBe(200);
+      expect(snapshot).toMatchObject({
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -89,10 +90,11 @@ describe("waitForAgentJob", () => {
       startedAt: 300,
       endedAt: 400,
     });
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("ok");
-    expect(snapshot?.startedAt).toBe(300);
-    expect(snapshot?.endedAt).toBe(400);
+    expect(snapshot).toMatchObject({
+      status: "ok",
+      startedAt: 300,
+      endedAt: 400,
+    });
   });
 
   it("ignores transient aborted end events when the same run later succeeds", async () => {
@@ -119,10 +121,11 @@ describe("waitForAgentJob", () => {
     });
 
     const snapshot = await waitPromise;
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("ok");
-    expect(snapshot?.startedAt).toBe(500);
-    expect(snapshot?.endedAt).toBe(700);
+    expect(snapshot).toMatchObject({
+      status: "ok",
+      startedAt: 500,
+      endedAt: 700,
+    });
   });
 
   it("lets a later aborted timeout replace a pending lifecycle error", async () => {
@@ -149,10 +152,11 @@ describe("waitForAgentJob", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       const snapshot = await waitPromise;
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.status).toBe("timeout");
-      expect(snapshot?.startedAt).toBe(800);
-      expect(snapshot?.endedAt).toBe(1_000);
+      expect(snapshot).toMatchObject({
+        status: "timeout",
+        startedAt: 800,
+        endedAt: 1_000,
+      });
       expect(snapshot?.error).toBeUndefined();
     } finally {
       vi.useRealTimers();
@@ -183,11 +187,12 @@ describe("waitForAgentJob", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       const snapshot = await waitPromise;
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.status).toBe("error");
-      expect(snapshot?.startedAt).toBe(1_100);
-      expect(snapshot?.endedAt).toBe(1_300);
-      expect(snapshot?.error).toBe("final error");
+      expect(snapshot).toMatchObject({
+        status: "error",
+        startedAt: 1_100,
+        endedAt: 1_300,
+        error: "final error",
+      });
     } finally {
       vi.useRealTimers();
     }

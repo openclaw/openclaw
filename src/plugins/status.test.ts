@@ -151,8 +151,7 @@ function expectInspectReport(
   pluginId: string,
 ): NonNullable<ReturnType<typeof buildPluginInspectReport>> {
   const inspect = buildPluginInspectReport({ id: pluginId });
-  expect(inspect).not.toBeNull();
-  if (!inspect) {
+  if (inspect === null) {
     throw new Error(`expected inspect report for ${pluginId}`);
   }
   return inspect;

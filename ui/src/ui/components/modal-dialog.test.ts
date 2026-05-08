@@ -60,12 +60,18 @@ async function renderModal() {
     container,
   );
   const modal = container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
-  expect(modal).not.toBeNull();
-  await modal!.updateComplete;
+  expect(modal).toBeInstanceOf(HTMLElement);
+  if (!modal) {
+    throw new Error("Expected openclaw-modal-dialog");
+  }
+  await modal.updateComplete;
   await nextFrame();
-  const dialog = modal!.shadowRoot?.querySelector("dialog");
-  expect(dialog).not.toBeNull();
-  return { modal: modal!, dialog: dialog! };
+  const dialog = modal.shadowRoot?.querySelector("dialog");
+  expect(dialog).toBeInstanceOf(HTMLDialogElement);
+  if (!(dialog instanceof HTMLDialogElement)) {
+    throw new Error("Expected rendered dialog");
+  }
+  return { modal, dialog };
 }
 
 describe("openclaw-modal-dialog", () => {
@@ -112,21 +118,24 @@ describe("openclaw-modal-dialog", () => {
     const { dialog } = await renderModal();
     const first = container.querySelector<HTMLButtonElement>("#first-action");
     const last = container.querySelector<HTMLButtonElement>("#last-action");
-    expect(first).not.toBeNull();
-    expect(last).not.toBeNull();
+    expect(first?.id).toBe("first-action");
+    expect(last?.id).toBe("last-action");
+    if (!first || !last) {
+      throw new Error("expected modal focus trap actions");
+    }
 
-    last!.focus();
+    last.focus();
     const tab = new KeyboardEvent("keydown", {
       key: "Tab",
       bubbles: true,
       cancelable: true,
       composed: true,
     });
-    last!.dispatchEvent(tab);
+    last.dispatchEvent(tab);
     expect(tab.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(first);
 
-    first!.focus();
+    first.focus();
     const shiftTab = new KeyboardEvent("keydown", {
       key: "Tab",
       shiftKey: true,
@@ -134,7 +143,7 @@ describe("openclaw-modal-dialog", () => {
       cancelable: true,
       composed: true,
     });
-    first!.dispatchEvent(shiftTab);
+    first.dispatchEvent(shiftTab);
     expect(shiftTab.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(last);
     expect(dialog.open).toBe(true);

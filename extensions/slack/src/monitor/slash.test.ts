@@ -910,7 +910,7 @@ describe("Slack native command argument menus", () => {
     );
   });
 
-  it("treats malformed percent-encoding as an invalid button (no throw)", async () => {
+  it("treats malformed percent-encoding as an invalid button", async () => {
     await runArgMenuAction(argMenuHandler, {
       action: { value: "cmdarg|%E0%A4%A|mode|on|U1" },
       includeRespond: false,
@@ -1226,7 +1226,8 @@ describe("slack slash command session metadata", () => {
     };
     expect(call.ctx?.OriginatingChannel).toBe("slack");
     expect(call.ctx?.GroupSpace).toBe("T1");
-    expect(call.sessionKey).toEqual(expect.any(String));
+    expect(call.sessionKey).toBeTypeOf("string");
+    expect(call.sessionKey).not.toBe("");
   });
 
   it("awaits session metadata persistence before dispatch", async () => {

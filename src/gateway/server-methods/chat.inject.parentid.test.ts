@@ -18,7 +18,7 @@ describe("gateway chat.inject transcript writes", () => {
         message: "hello",
       });
       expect(appended.ok).toBe(true);
-      expect(appended.messageId).toEqual(expect.any(String));
+      expect(appended.messageId).toBeTypeOf("string");
       const messageId = appended.messageId;
       if (!messageId) {
         throw new Error("expected appended message id");
@@ -65,7 +65,7 @@ describe("gateway chat.inject transcript writes", () => {
         message: "hello",
       });
       expect(appended.ok).toBe(true);
-      expect(appended.messageId).toEqual(expect.any(String));
+      expect(appended.messageId).toBeTypeOf("string");
       const messageId = appended.messageId;
       if (!messageId) {
         throw new Error("expected appended message id");

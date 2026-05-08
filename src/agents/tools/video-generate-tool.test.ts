@@ -309,7 +309,7 @@ describe("createVideoGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected video_generate tool");
     }
@@ -589,7 +589,7 @@ describe("createVideoGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected video_generate tool");
     }

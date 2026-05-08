@@ -328,11 +328,11 @@ describe("TUI shutdown safety", () => {
   });
 
   it("swallows only ignorable stop errors", () => {
-    expect(() => {
+    expect(
       stopTuiSafely(() => {
         throw new Error("setRawMode EBADF");
-      });
-    }).not.toThrow();
+      }),
+    ).toBeUndefined();
   });
 
   it("rethrows non-ignorable stop errors", () => {
@@ -395,7 +395,11 @@ describe("resolveCodexCliBin", () => {
 
   it("returns null or a valid path (never throws)", () => {
     const result = resolveCodexCliBin();
-    expect(result === null || typeof result === "string").toBe(true);
+    if (result === null) {
+      expect(result).toBeNull();
+    } else {
+      expect(typeof result).toBe("string");
+    }
   });
 });
 

@@ -473,9 +473,10 @@ describe("checkTokenDrift", () => {
 
   it("detects drift when config has token but service has different token", () => {
     const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
-    expect(result).not.toBeNull();
-    expect(result?.code).toBe(SERVICE_AUDIT_CODES.gatewayTokenDrift);
-    expect(result?.message).toContain("differs from service token");
+    expect(result).toMatchObject({
+      code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
+      message: expect.stringContaining("differs from service token"),
+    });
   });
 
   it("returns null when config has token but service has no token", () => {
