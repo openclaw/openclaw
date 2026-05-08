@@ -177,6 +177,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Android/chat: wait for an in-flight model selection update before sending the next message, preventing immediate sends from racing the selected model. (#70993) Thanks @Svetznaniy33.
 - fix(discord): gate user allowlist name resolution [AI]. (#79002) Thanks @pgondhi987.
 - fix(msteams): gate startup user allowlist resolution [AI]. (#79003) Thanks @pgondhi987.
 - Harden macOS shell wrapper allowlist parsing [AI]. (#78518) Thanks @pgondhi987.

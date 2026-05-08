@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.ui.mobileCardSurface
@@ -143,6 +144,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val showDiagnostics = !isConnected && gatewayStatusHasDiagnostics(statusText)
   val pairingRequired = !isConnected && gatewayStatusLooksLikePairing(statusText)
   val statusLabel = gatewayStatusForDisplay(statusText)
+  val buildLabel = remember { "Build ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})" }
 
   PairingAutoRetryEffect(enabled = pairingRequired) {
     viewModel.refreshGatewayConnection()
@@ -158,6 +160,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
         if (isConnected) "Your gateway is active and ready." else "Connect to your gateway to get started.",
         style = mobileCallout,
         color = mobileTextSecondary,
+      )
+      Text(
+        buildLabel,
+        style = mobileCaption1.copy(fontWeight = FontWeight.Medium),
+        color = mobileTextTertiary,
       )
     }
 
@@ -544,11 +551,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               colors = outlinedColors(),
             )
 
-            Text(
-              "Password (optional)",
-              style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-              color = mobileTextSecondary,
-            )
+            Text("Password (optional)", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
             OutlinedTextField(
               value = passwordInput,
               onValueChange = { passwordInput = it },

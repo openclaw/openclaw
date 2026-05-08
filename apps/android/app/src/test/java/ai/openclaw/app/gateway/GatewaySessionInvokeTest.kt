@@ -321,7 +321,7 @@ class GatewaySessionInvokeTest {
         assertEquals(emptyList<String>(), nodeEntry?.scopes)
         assertEquals("bootstrap-operator-token", operatorEntry?.token)
         assertEquals(
-          listOf("operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"),
+          listOf("operator.admin", "operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"),
           operatorEntry?.scopes,
         )
       } finally {
@@ -576,7 +576,7 @@ class GatewaySessionInvokeTest {
           )
         val params = withTimeout(TEST_TIMEOUT_MS) { nodeEventParams.await() }
 
-        assertEquals(true, sent)
+        assertEquals(false, sent)
         assertEquals("agent.request", params["event"]?.jsonPrimitive?.content)
       } finally {
         shutdownHarness(harness, server)

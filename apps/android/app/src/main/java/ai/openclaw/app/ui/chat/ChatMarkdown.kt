@@ -101,13 +101,15 @@ fun ChatMarkdown(
   val inlineStyles =
     InlineStyles(inlineCodeBg = mobileCodeBg, inlineCodeColor = mobileCodeText, linkColor = mobileAccent, baseCallout = mobileCallout)
 
-  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    RenderMarkdownBlocks(
-      start = document.firstChild,
-      textColor = textColor,
-      inlineStyles = inlineStyles,
-      listDepth = 0,
-    )
+  SelectionContainer {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      RenderMarkdownBlocks(
+        start = document.firstChild,
+        textColor = textColor,
+        inlineStyles = inlineStyles,
+        listDepth = 0,
+      )
+    }
   }
 }
 
