@@ -39,6 +39,22 @@ function restoreShowModalDescriptor() {
   delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).showModal;
 }
 
+function expectPaletteInput(): HTMLInputElement {
+  const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error("Expected command palette input");
+  }
+  return input;
+}
+
+function expectPaletteDialog(): HTMLDialogElement {
+  const dialog = container.querySelector<HTMLDialogElement>("dialog.cmd-palette-overlay");
+  if (!(dialog instanceof HTMLDialogElement)) {
+    throw new Error("Expected command palette dialog");
+  }
+  return dialog;
+}
+
 function createProps(overrides: Partial<CommandPaletteProps> = {}): CommandPaletteProps {
   return {
     open: true,
@@ -172,7 +188,7 @@ describe("command palette", () => {
     const onToggle = vi.fn();
 
     await renderPalette({ onToggle });
-    const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
+    const input = expectPaletteInput();
     expect(document.activeElement).toBe(input);
 
     const tab = new KeyboardEvent("keydown", {
@@ -180,8 +196,7 @@ describe("command palette", () => {
       bubbles: true,
       cancelable: true,
     });
-    expect(input).toBeInstanceOf(HTMLInputElement);
-    input!.dispatchEvent(tab);
+    input.dispatchEvent(tab);
     expect(tab.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(input);
 
@@ -190,7 +205,7 @@ describe("command palette", () => {
       bubbles: true,
       cancelable: true,
     });
-    input!.dispatchEvent(escape);
+    input.dispatchEvent(escape);
     expect(escape.defaultPrevented).toBe(true);
     expect(onToggle).toHaveBeenCalledTimes(1);
 
@@ -202,20 +217,18 @@ describe("command palette", () => {
   it("does not toggle twice when Escape is followed by dialog cancel", async () => {
     const onToggle = vi.fn();
     await renderPalette({ onToggle });
-    const dialog = container.querySelector<HTMLDialogElement>("dialog.cmd-palette-overlay");
-    const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
-    expect(dialog?.open).toBe(true);
-    expect(input).toBeInstanceOf(HTMLInputElement);
+    const dialog = expectPaletteDialog();
+    const input = expectPaletteInput();
+    expect(dialog.open).toBe(true);
 
-    input!.dispatchEvent(
+    input.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Escape",
         bubbles: true,
         cancelable: true,
       }),
     );
-    expect(dialog).toBeInstanceOf(HTMLDialogElement);
-    dialog!.dispatchEvent(new Event("cancel", { cancelable: true }));
+    dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
 
     expect(onToggle).toHaveBeenCalledTimes(1);
   });
