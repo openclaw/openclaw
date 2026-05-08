@@ -76,6 +76,15 @@ const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
   "Be accurate, brief, and speakable.",
 ].join(" ");
 
+const BACKGROUND_CONSULT_SYSTEM_PROMPT = [
+  "You are a background research agent. The caller's question could not be answered in real time and the result will be sent by email.",
+  "Do NOT give a brief or partial answer. Use every available tool to gather complete, accurate data.",
+  "Execute all necessary queries, calculations, and lookups before composing your answer.",
+  "Your response must contain the full, final answer — not a plan or summary of what you will do.",
+  "Format the answer clearly for an email body: use tables, lists, or structured text as appropriate.",
+  "Do not print secret values or dump environment variables.",
+].join(" ");
+
 /** Timeout for background consult runs (email-first and timeout-exceeded paths). */
 const BACKGROUND_CONSULT_TIMEOUT_MS = 3_600_000;
 
@@ -431,6 +440,7 @@ export async function createVoiceCallRuntime(params: {
             const consultPromise = consultRealtimeVoiceAgent({
               ...consultParams,
               timeoutMs: BACKGROUND_CONSULT_TIMEOUT_MS,
+              extraSystemPrompt: BACKGROUND_CONSULT_SYSTEM_PROMPT,
             });
             consultPromise
               .then((result: { text: string }) => {
@@ -469,6 +479,7 @@ export async function createVoiceCallRuntime(params: {
             const consultPromise = consultRealtimeVoiceAgent({
               ...consultParams,
               timeoutMs: BACKGROUND_CONSULT_TIMEOUT_MS,
+              extraSystemPrompt: BACKGROUND_CONSULT_SYSTEM_PROMPT,
             });
             const result = await Promise.race([
               consultPromise.then((r: { text: string }) => ({ kind: "result" as const, value: r })),
