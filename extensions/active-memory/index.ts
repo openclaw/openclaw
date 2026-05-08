@@ -523,6 +523,13 @@ function resolvePersistentTranscriptBaseDir(api: OpenClawPluginApi, agentId: str
   );
 }
 
+function requireTransientWorkspaceDir(tempDir: string | undefined): string {
+  if (!tempDir) {
+    throw new Error("Active memory transient workspace was not initialized.");
+  }
+  return tempDir;
+}
+
 function resolveCanonicalSessionKeyFromSessionId(params: {
   api: OpenClawPluginApi;
   agentId: string;
@@ -2475,9 +2482,10 @@ async function runRecallSubagent(params: {
         params.config.transcriptDir,
       )
     : undefined;
-  const sessionFile = params.config.persistTranscripts
-    ? path.join(persistedDir!, `${subagentSessionId}.jsonl`)
-    : path.join(tempDir!, "session.jsonl");
+  const sessionFile =
+    persistedDir !== undefined
+      ? path.join(persistedDir, `${subagentSessionId}.jsonl`)
+      : path.join(requireTransientWorkspaceDir(tempDir), "session.jsonl");
   params.onSessionFile?.(sessionFile);
   if (persistedDir) {
     await fs.mkdir(persistedDir, { recursive: true, mode: 0o700 });
