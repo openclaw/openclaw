@@ -524,20 +524,23 @@ describe("scoped vitest configs", () => {
   });
 
   it("normalizes zalo extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionZaloConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionZaloConfig.test?.include).toEqual(
+    const testConfig = requireTestConfig(defaultExtensionZaloConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(
       expect.arrayContaining(["zalo/**/*.test.ts", "zalouser/**/*.test.ts"]),
     );
   });
 
   it("normalizes voice-call extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionVoiceCallConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionVoiceCallConfig.test?.include).toEqual(["voice-call/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultExtensionVoiceCallConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(["voice-call/**/*.test.ts"]);
   });
 
   it("normalizes memory extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionMemoryConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionMemoryConfig.test?.include).toEqual(
+    const testConfig = requireTestConfig(defaultExtensionMemoryConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(
       expect.arrayContaining(["memory-core/**/*.test.ts", "memory-lancedb/**/*.test.ts"]),
     );
   });
