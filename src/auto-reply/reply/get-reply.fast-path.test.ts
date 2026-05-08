@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { upsertSessionEntry } from "../../config/sessions/store.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   buildFastReplyCommandContext,
   initFastReplySessionState,
@@ -120,6 +122,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
   });
 
   afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
     vi.unstubAllEnvs();
   });
 
@@ -140,7 +143,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         },
       },
       channels: { telegram: { allowFrom: ["*"] } },
-      session: { store: path.join(home, "sessions.json") },
+      session: {},
     } as OpenClawConfig);
 
     await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
@@ -179,7 +182,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
   });
 
   it("marks configs through withFastReplyConfig()", async () => {
-    const cfg = withFastReplyConfig({ session: { store: "/tmp/sessions.json" } } as OpenClawConfig);
+    const cfg = withFastReplyConfig({
+      session: {},
+    } as OpenClawConfig);
 
     await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
       text: "ok",
@@ -470,7 +475,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         CommandSource: "native",
         CommandTargetSessionKey: "agent:main:main",
       }),
-      cfg: { session: { store: "/tmp/sessions.json" } } as OpenClawConfig,
+      cfg: {
+        session: {},
+      } as OpenClawConfig,
       agentId: "main",
       commandAuthorized: true,
       workspaceDir: "/tmp/workspace",
@@ -506,18 +513,16 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
   it("keeps the existing session for /reset newline soft during fast bootstrap", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-newline-soft-"));
-    const storePath = path.join(home, "sessions.json");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
     const sessionKey = "agent:main:telegram:123";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "existing-fast-reset-newline-soft",
-          updatedAt: Date.now(),
-        },
-      }),
-      "utf8",
-    );
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: {
+        sessionId: "existing-fast-reset-newline-soft",
+        updatedAt: Date.now(),
+      },
+    });
 
     const result = initFastReplySessionState({
       ctx: buildGetReplyCtx({
@@ -526,7 +531,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         CommandBody: "/reset \nsoft",
         SessionKey: sessionKey,
       }),
-      cfg: { session: { store: storePath } } as OpenClawConfig,
+      cfg: { session: {} } as OpenClawConfig,
       agentId: "main",
       commandAuthorized: true,
       workspaceDir: home,
@@ -539,18 +544,16 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
   it("keeps the existing session for /reset: soft during fast bootstrap", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-colon-soft-"));
-    const storePath = path.join(home, "sessions.json");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
     const sessionKey = "agent:main:telegram:123";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "existing-fast-reset-colon-soft",
-          updatedAt: Date.now(),
-        },
-      }),
-      "utf8",
-    );
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: {
+        sessionId: "existing-fast-reset-colon-soft",
+        updatedAt: Date.now(),
+      },
+    });
 
     const result = initFastReplySessionState({
       ctx: buildGetReplyCtx({
@@ -559,7 +562,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         CommandBody: "/reset: soft",
         SessionKey: sessionKey,
       }),
-      cfg: { session: { store: storePath } } as OpenClawConfig,
+      cfg: { session: {} } as OpenClawConfig,
       agentId: "main",
       commandAuthorized: true,
       workspaceDir: home,
