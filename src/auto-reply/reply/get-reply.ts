@@ -19,6 +19,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
+import { stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -50,6 +51,10 @@ import {
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
+
+function isHeartbeatPendingFinalDeliveryEffectivelyEmpty(text: string): boolean {
+  return stripHeartbeatToken(text, { mode: "heartbeat" }).shouldSkip;
+}
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
   () => import("./session-reset-model.runtime.js"),
@@ -371,29 +376,58 @@ export async function getReplyFromConfig(
     // If it's a user message, we deliver the lost reply first, then continue.
     // For now, let's just return the lost reply if it's a heartbeat.
     if (opts?.isHeartbeat) {
-      const updatedAt = Date.now();
-      const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-      sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
-      sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
-      sessionEntry.pendingFinalDeliveryLastError = null;
-      sessionEntry.updatedAt = updatedAt;
-      if (sessionKey && sessionStore) {
-        sessionStore[sessionKey] = sessionEntry;
+      if (isHeartbeatPendingFinalDeliveryEffectivelyEmpty(text)) {
+        sessionEntry.pendingFinalDelivery = undefined;
+        sessionEntry.pendingFinalDeliveryText = undefined;
+        sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
+        sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
+        sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
+        sessionEntry.pendingFinalDeliveryLastError = undefined;
+        sessionEntry.pendingFinalDeliveryContext = undefined;
+        if (sessionKey && sessionStore) {
+          sessionStore[sessionKey] = sessionEntry;
+        }
+        if (sessionKey && storePath) {
+          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              pendingFinalDelivery: undefined,
+              pendingFinalDeliveryText: undefined,
+              pendingFinalDeliveryCreatedAt: undefined,
+              pendingFinalDeliveryLastAttemptAt: undefined,
+              pendingFinalDeliveryAttemptCount: undefined,
+              pendingFinalDeliveryLastError: undefined,
+              pendingFinalDeliveryContext: undefined,
+            }),
+          });
+        }
+      } else {
+        const updatedAt = Date.now();
+        const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+        sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
+        sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
+        sessionEntry.pendingFinalDeliveryLastError = null;
+        sessionEntry.updatedAt = updatedAt;
+        if (sessionKey && sessionStore) {
+          sessionStore[sessionKey] = sessionEntry;
+        }
+        if (sessionKey && storePath) {
+          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              pendingFinalDeliveryLastAttemptAt: updatedAt,
+              pendingFinalDeliveryAttemptCount: attemptCount,
+              pendingFinalDeliveryLastError: null,
+              updatedAt,
+            }),
+          });
+        }
+        return { text };
       }
-      if (sessionKey && storePath) {
-        const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-        await updateSessionStoreEntry({
-          storePath,
-          sessionKey,
-          update: async () => ({
-            pendingFinalDeliveryLastAttemptAt: updatedAt,
-            pendingFinalDeliveryAttemptCount: attemptCount,
-            pendingFinalDeliveryLastError: null,
-            updatedAt,
-          }),
-        });
-      }
-      return { text };
     }
   }
 

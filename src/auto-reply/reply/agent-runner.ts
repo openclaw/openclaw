@@ -42,6 +42,7 @@ import {
   buildFallbackNotice,
   resolveFallbackTransition,
 } from "../fallback-state.js";
+import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
@@ -830,6 +831,16 @@ function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
     .map((payload) => payload.text)
     .filter((text): text is string => Boolean(text))
     .join("\n\n");
+}
+
+function shouldSkipHeartbeatPendingFinalDelivery(params: {
+  isHeartbeat: boolean;
+  pendingText: string;
+}): boolean {
+  if (!params.isHeartbeat) {
+    return false;
+  }
+  return stripHeartbeatToken(params.pendingText, { mode: "heartbeat" }).shouldSkip;
 }
 
 function enqueueCommitmentExtractionForTurn(params: {
@@ -1911,7 +1922,13 @@ export async function runReplyAgent(params: {
       const pendingText = sourceReplyPolicy.suppressDelivery
         ? ""
         : buildPendingFinalDeliveryText(finalPayloads);
-      if (pendingText) {
+      if (
+        pendingText &&
+        !shouldSkipHeartbeatPendingFinalDelivery({
+          isHeartbeat,
+          pendingText,
+        })
+      ) {
         await updateSessionStoreEntry({
           storePath,
           sessionKey,
