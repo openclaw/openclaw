@@ -116,26 +116,26 @@ export async function resolveSessionTranscriptFile(params: {
   let sessionFile = resolveSessionFilePath(params.sessionId, params.sessionEntry, sessionPathOpts);
   let sessionEntry = params.sessionEntry;
 
+  const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
+  const fallbackSessionFile = !sessionEntry?.sessionFile
+    ? resolveSessionTranscriptPath(
+        params.sessionId,
+        params.agentId,
+        params.threadId ?? threadIdFromSessionKey,
+      )
+    : undefined;
+  const resolvedSessionFile = await resolveAndPersistSessionFile({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionEntry,
+    agentId: sessionPathOpts?.agentId,
+    sessionsDir: sessionPathOpts?.sessionsDir,
+    fallbackSessionFile,
+  });
+  sessionFile = resolvedSessionFile.sessionFile;
+  sessionEntry = resolvedSessionFile.sessionEntry;
   if (params.sessionStore) {
-    const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
-    const fallbackSessionFile = !sessionEntry?.sessionFile
-      ? resolveSessionTranscriptPath(
-          params.sessionId,
-          params.agentId,
-          params.threadId ?? threadIdFromSessionKey,
-        )
-      : undefined;
-    const resolvedSessionFile = await resolveAndPersistSessionFile({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionStore: params.sessionStore,
-      sessionEntry,
-      agentId: sessionPathOpts?.agentId,
-      sessionsDir: sessionPathOpts?.sessionsDir,
-      fallbackSessionFile,
-    });
-    sessionFile = resolvedSessionFile.sessionFile;
-    sessionEntry = resolvedSessionFile.sessionEntry;
+    params.sessionStore[params.sessionKey] = sessionEntry;
   }
 
   return {
@@ -253,14 +253,12 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
-  const store: Record<string, SessionEntry> = { [normalizedKey]: entry };
 
   let sessionFile: string;
   try {
     const resolvedSessionFile = await resolveAndPersistSessionFile({
       sessionId: entry.sessionId,
       sessionKey: normalizedKey,
-      sessionStore: store,
       sessionEntry: entry,
       agentId,
     });

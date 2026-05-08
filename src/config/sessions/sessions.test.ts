@@ -611,7 +611,6 @@ describe("resolveAndPersistSessionFile", () => {
     const result = await resolveAndPersistSessionFile({
       sessionId,
       sessionKey,
-      sessionStore,
       sessionEntry: sessionStore[sessionKey],
       agentId: "main",
       fallbackSessionFile,
@@ -632,7 +631,6 @@ describe("resolveAndPersistSessionFile", () => {
     const result = await resolveAndPersistSessionFile({
       sessionId,
       sessionKey,
-      sessionStore,
       agentId: "main",
       fallbackSessionFile,
     });
@@ -668,7 +666,6 @@ describe("resolveAndPersistSessionFile", () => {
     const result = await resolveAndPersistSessionFile({
       sessionId: nextSessionId,
       sessionKey,
-      sessionStore,
       sessionEntry: sessionStore[sessionKey],
       agentId: "main",
       sessionsDir: fixture.sessionsDir(),
