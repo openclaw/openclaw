@@ -169,6 +169,8 @@ The remaining cleanup is mostly consolidation and deletion:
   `sqlite-transcript://<agent>/<session>.jsonl` locators. Legacy absolute
   JSONL paths are normalized during normal row updates instead of being kept as
   active runtime identity.
+- Gateway transcript-key lookup compares canonical transcript locators directly
+  and no longer realpaths or stats transcript filenames.
 - Automatic compaction transcript rotation writes successor transcript rows
   directly through the SQLite transcript store. The retained `.jsonl` path is
   metadata for legacy/export callers, not a durable file write.

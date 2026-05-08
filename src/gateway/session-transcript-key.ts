@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,22 +13,12 @@ import {
 const TRANSCRIPT_SESSION_KEY_CACHE = new Map<string, string>();
 const TRANSCRIPT_SESSION_KEY_CACHE_MAX = 256;
 
-function resolveTranscriptPathForComparison(value: string | undefined): string | undefined {
+function resolveTranscriptIdentityForComparison(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
-  const resolved = path.resolve(trimmed);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    try {
-      return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
-    } catch {
-      // Fall through to the resolved path when neither the file nor parent exists.
-    }
-    return resolved;
-  }
+  return trimmed;
 }
 
 function sessionKeyMatchesTranscriptPath(params: {
@@ -54,7 +42,7 @@ function sessionKeyMatchesTranscriptPath(params: {
     entry.sessionId,
     entry.sessionFile,
     sessionAgentId,
-  ).some((candidate) => resolveTranscriptPathForComparison(candidate) === params.targetPath);
+  ).some((candidate) => resolveTranscriptIdentityForComparison(candidate) === params.targetPath);
 }
 
 export function clearSessionTranscriptKeyCacheForTests(): void {
@@ -62,7 +50,7 @@ export function clearSessionTranscriptKeyCacheForTests(): void {
 }
 
 export function resolveSessionKeyForTranscriptFile(sessionFile: string): string | undefined {
-  const targetPath = resolveTranscriptPathForComparison(sessionFile);
+  const targetPath = resolveTranscriptIdentityForComparison(sessionFile);
   if (!targetPath) {
     return undefined;
   }
