@@ -706,6 +706,16 @@ export const id: TranslationMap = {
       today: "Hari ini",
       last7d: "7h",
       last30d: "30h",
+      last90d: "90h",
+      last1y: "1th",
+      all: "Semua",
+    },
+    scope: {
+      instance: "Instans saat ini",
+      instanceHint: "Tampilkan hanya id sesi aktif untuk setiap sesi logis.",
+      family: "Garis keturunan historis",
+      familyHint: "Gabungkan id sesi berbasis transkrip yang diketahui telah dirotasi.",
+      familyIncluded: "Garis keturunan historis mencakup {count} instans sesi.",
     },
     filters: {
       title: "Filter",

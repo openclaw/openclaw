@@ -13,6 +13,13 @@ export { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
 export type IMessageProbe = BaseProbeResult & {
   fatal?: boolean;
+  privateApi?: {
+    available: boolean;
+    v2Ready: boolean;
+    selectors: Record<string, boolean>;
+    rpcMethods: string[];
+    error?: string;
+  };
 };
 
 export type IMessageProbeOptions = {
@@ -28,7 +35,21 @@ type RpcSupportResult = {
   fatal?: boolean;
 };
 
-const rpcSupportCache = new Map<string, RpcSupportResult>();
+// 5-minute TTL on the rpc-support cache lets us cope with `brew upgrade imsg`
+// happening mid-process without forcing a gateway restart.
+const RPC_SUPPORT_CACHE_TTL_MS = 5 * 60 * 1000;
+// 10-second negative TTL on the private-api status cache lets a flurry of
+// agent actions during a bridge outage avoid serializing on probe RPC.
+const PRIVATE_API_NEGATIVE_TTL_MS = 10 * 1000;
+
+type RpcSupportCacheEntry = { result: RpcSupportResult; expiresAt: number };
+type PrivateApiCacheEntry = {
+  status: NonNullable<IMessageProbe["privateApi"]>;
+  expiresAt: number;
+};
+
+const rpcSupportCache = new Map<string, RpcSupportCacheEntry>();
+const bridgeStatusCache = new Map<string, PrivateApiCacheEntry>();
 
 function isDefaultLocalIMessageCliPath(cliPath: string): boolean {
   const trimmed = cliPath.trim();
@@ -47,8 +68,8 @@ export function resolveIMessageNonMacHostError(
 
 async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcSupportResult> {
   const cached = rpcSupportCache.get(cliPath);
-  if (cached) {
-    return cached;
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.result;
   }
   try {
     const result = await runCommandWithTimeout([cliPath, "rpc", "--help"], { timeoutMs });
@@ -60,12 +81,18 @@ async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcS
         fatal: true,
         error: 'imsg CLI does not support the "rpc" subcommand (update imsg)',
       };
-      rpcSupportCache.set(cliPath, fatal);
+      rpcSupportCache.set(cliPath, {
+        result: fatal,
+        expiresAt: Date.now() + RPC_SUPPORT_CACHE_TTL_MS,
+      });
       return fatal;
     }
     if (result.code === 0) {
       const supported = { supported: true };
-      rpcSupportCache.set(cliPath, supported);
+      rpcSupportCache.set(cliPath, {
+        result: supported,
+        expiresAt: Date.now() + RPC_SUPPORT_CACHE_TTL_MS,
+      });
       return supported;
     }
     return {
@@ -74,6 +101,172 @@ async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcS
     };
   } catch (err) {
     return { supported: false, error: String(err) };
+  }
+}
+
+function parseStatusPayload(stdout: string): {
+  payload: Record<string, unknown> | null;
+  firstLineSnippet?: string;
+} {
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines.toReversed()) {
+    try {
+      const value = JSON.parse(line);
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        return { payload: value as Record<string, unknown> };
+      }
+    } catch {
+      // Continue scanning earlier JSONL records.
+    }
+  }
+  // No JSONL line parsed. Surface a small snippet of the first non-empty
+  // line so the operator can grep imsg release notes if the status output
+  // schema has shifted.
+  const snippet = lines[0]?.slice(0, 120);
+  return { payload: null, firstLineSnippet: snippet };
+}
+
+function selectorsFromPayload(payload: Record<string, unknown>): Record<string, boolean> {
+  const raw = payload.selectors;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+  const selectors: Record<string, boolean> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "boolean") {
+      selectors[key] = value;
+    }
+  }
+  return selectors;
+}
+
+function rpcMethodsFromPayload(payload: Record<string, unknown>): string[] {
+  const raw = payload.rpc_methods;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.filter((entry): entry is string => typeof entry === "string");
+}
+
+// Methods that have always existed on imsg's rpc surface, before the
+// `rpc_methods` capability list was added. An older imsg build that
+// reports `available: true` but ships no rpc_methods array is assumed to
+// support these — gating them off would silently break the integration
+// for everyone who hasn't upgraded yet.
+const FOUNDATIONAL_RPC_METHODS = new Set<string>([
+  "chats.list",
+  "messages.history",
+  "watch.subscribe",
+  "watch.unsubscribe",
+  "send",
+]);
+
+export function imessageRpcSupportsMethod(
+  status: IMessageProbe["privateApi"] | undefined,
+  method: string,
+): boolean {
+  if (!status?.available) {
+    return false;
+  }
+  if (status.rpcMethods.length === 0) {
+    // Older imsg builds (pre-rpc_methods): assume the foundational set,
+    // gate every newer method off until the user upgrades. This keeps
+    // chats.list/send/watch working while making typing/read/group.* etc.
+    // explicit-upgrade-required.
+    return FOUNDATIONAL_RPC_METHODS.has(method);
+  }
+  return status.rpcMethods.includes(method);
+}
+
+export function getCachedIMessagePrivateApiStatus(
+  cliPath?: string | null,
+): IMessageProbe["privateApi"] | undefined {
+  const key = cliPath?.trim() || "imsg";
+  const entry = bridgeStatusCache.get(key);
+  if (!entry) {
+    return undefined;
+  }
+  // Negative cache entries expire so a flurry of agent actions during a
+  // bridge outage don't all serialize on a re-probe.
+  if (entry.expiresAt > 0 && entry.expiresAt < Date.now()) {
+    bridgeStatusCache.delete(key);
+    return undefined;
+  }
+  return entry.status;
+}
+
+export function clearIMessagePrivateApiCache(cliPath?: string): void {
+  if (cliPath) {
+    const key = cliPath.trim() || "imsg";
+    bridgeStatusCache.delete(key);
+    rpcSupportCache.delete(key);
+  } else {
+    bridgeStatusCache.clear();
+    rpcSupportCache.clear();
+  }
+}
+
+export async function probeIMessagePrivateApi(
+  cliPath: string,
+  timeoutMs: number,
+  options: { forceRefresh?: boolean } = {},
+): Promise<NonNullable<IMessageProbe["privateApi"]>> {
+  const key = cliPath.trim() || "imsg";
+  if (!options.forceRefresh) {
+    const entry = bridgeStatusCache.get(key);
+    if (entry) {
+      if (entry.status.available) {
+        return entry.status;
+      }
+      if (entry.expiresAt > Date.now()) {
+        return entry.status;
+      }
+    }
+  }
+  try {
+    const result = await runCommandWithTimeout([key, "status", "--json"], { timeoutMs });
+    const combined = `${result.stdout}\n${result.stderr}`.trim();
+    const { payload, firstLineSnippet } = parseStatusPayload(result.stdout);
+    const selectors = payload ? selectorsFromPayload(payload) : {};
+    const rpcMethods = payload ? rpcMethodsFromPayload(payload) : [];
+    const advancedFeatures = payload?.advanced_features === true;
+    const v2Ready = payload?.v2_ready === true;
+    const status: NonNullable<IMessageProbe["privateApi"]> = {
+      available: result.code === 0 && advancedFeatures && v2Ready,
+      v2Ready,
+      selectors,
+      rpcMethods,
+      ...(result.code === 0
+        ? !payload && firstLineSnippet
+          ? {
+              error:
+                `imsg status --json returned no parseable JSONL ` +
+                `(first line: "${firstLineSnippet}") — output schema may have changed`,
+            }
+          : {}
+        : { error: combined || `imsg status --json failed (code ${String(result.code)})` }),
+    };
+    bridgeStatusCache.set(key, {
+      status,
+      expiresAt: status.available ? 0 : Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
+    });
+    return status;
+  } catch (err) {
+    const status: NonNullable<IMessageProbe["privateApi"]> = {
+      available: false,
+      v2Ready: false,
+      selectors: {},
+      rpcMethods: [],
+      error: String(err),
+    };
+    bridgeStatusCache.set(key, {
+      status,
+      expiresAt: Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
+    });
+    return status;
   }
 }
 
@@ -112,6 +305,8 @@ export async function probeIMessage(
     };
   }
 
+  const privateApi = await probeIMessagePrivateApi(cliPath, effectiveTimeout);
+
   const client = await createIMessageRpcClient({
     cliPath,
     dbPath,
@@ -119,9 +314,9 @@ export async function probeIMessage(
   });
   try {
     await client.request("chats.list", { limit: 1 }, { timeoutMs: effectiveTimeout });
-    return { ok: true };
+    return { ok: true, privateApi };
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, error: String(err), privateApi };
   } finally {
     await client.stop();
   }

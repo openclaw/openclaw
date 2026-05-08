@@ -897,6 +897,30 @@ describe("subagent announce formatting", () => {
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
+  it("retries direct agent announce on fallback cooldown exhaustion", async () => {
+    agentSpy
+      .mockRejectedValueOnce(
+        new Error(
+          "All models failed (1): anthropic/claude-opus-4-7: Provider anthropic is in cooldown (all profiles unavailable) (overloaded)",
+        ),
+      )
+      .mockResolvedValueOnce(visibleAgentResponse());
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-agent-fallback-summary-retry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:C123", accountId: "default" },
+      ...defaultOutcomeAnnounce,
+      roundOneReply: "worker result",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(2);
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
   it("delivers completion-mode announces immediately even when sibling runs are still active", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
