@@ -202,7 +202,6 @@ describe("buildLineMessageContext", () => {
       commandAuthorized: false,
     });
 
-    expect(context).not.toBeNull();
     expect(context?.ctxPayload.CommandAuthorized).toBe(false);
   });
 
@@ -280,9 +279,8 @@ describe("buildLineMessageContext", () => {
       account,
       commandAuthorized: true,
     });
-    expect(context).not.toBeNull();
-    expect(context!.route.agentId).toBe("line-group-agent");
-    expect(context!.route.matchedBy).toBe("binding.peer");
+    expect(context?.route.agentId).toBe("line-group-agent");
+    expect(context?.route.matchedBy).toBe("binding.peer");
   });
 
   it("room peer binding matches raw roomId without prefix (#21907)", async () => {
@@ -318,9 +316,8 @@ describe("buildLineMessageContext", () => {
       account,
       commandAuthorized: true,
     });
-    expect(context).not.toBeNull();
-    expect(context!.route.agentId).toBe("line-room-agent");
-    expect(context!.route.matchedBy).toBe("binding.peer");
+    expect(context?.route.agentId).toBe("line-room-agent");
+    expect(context?.route.matchedBy).toBe("binding.peer");
   });
 
   it("normalizes LINE ACP binding conversation ids through the plugin bindings surface", () => {
@@ -393,9 +390,8 @@ describe("buildLineMessageContext", () => {
       commandAuthorized: true,
     });
 
-    expect(context).not.toBeNull();
-    expect(context!.route.agentId).toBe("codex");
-    expect(context!.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
-    expect(context!.route.matchedBy).toBe("binding.channel");
+    expect(context?.route.agentId).toBe("codex");
+    expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
+    expect(context?.route.matchedBy).toBe("binding.channel");
   });
 });
