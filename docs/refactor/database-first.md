@@ -380,6 +380,10 @@ The remaining cleanup is mostly consolidation and deletion:
   snapshots `*.sqlite` databases with `VACUUM INTO`, omits live WAL/SHM
   sidecars, records snapshot metadata in the archive manifest, and records
   completed backup runs in SQLite with the archive manifest.
+- Plain setup and onboarding workspace preparation no longer create
+  `agents/<agentId>/sessions/` directories. They create config/workspace only;
+  SQLite session rows and transcript rows are created on demand in the
+  per-agent database.
 - Security permission repair now targets the global and per-agent SQLite
   databases plus WAL/SHM sidecars instead of `sessions.json` and transcript
   JSONL files.

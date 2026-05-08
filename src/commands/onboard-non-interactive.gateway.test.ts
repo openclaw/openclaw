@@ -9,7 +9,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { createThrowingRuntime } from "./onboard-non-interactive.test-helpers.js";
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
-const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
+const ensureWorkspaceReadyMock = vi.fn(async (..._args: unknown[]) => {});
 const testConfigStore = new Map<string, OpenClawConfig>();
 type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
@@ -115,7 +115,7 @@ vi.mock("./onboard-helpers.js", () => {
   return {
     DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
     applyWizardMetadata: (cfg: unknown) => cfg,
-    ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
+    ensureWorkspaceReady: ensureWorkspaceReadyMock,
     normalizeGatewayTokenInput,
     randomToken: () => "tok_generated_gateway_test_token",
     resolveControlUiLinks: ({ port }: { port: number }) => ({
@@ -335,7 +335,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   afterEach(() => {
     waitForGatewayReachableMock = undefined;
     testConfigStore.clear();
-    ensureWorkspaceAndSessionsMock.mockClear();
+    ensureWorkspaceReadyMock.mockClear();
     installGatewayDaemonNonInteractiveMock.mockClear();
     createPreMigrationBackupMock.mockClear();
     migrationProviderMock.plan.mockReset();
@@ -382,7 +382,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   }, 60_000);
 
   it("persists skipBootstrap and skips workspace bootstrap creation", async () => {
-    ensureWorkspaceAndSessionsMock.mockClear();
+    ensureWorkspaceReadyMock.mockClear();
     await withStateDir("state-skip-bootstrap-", async (stateDir) => {
       const workspace = path.join(stateDir, "openclaw");
 
@@ -405,7 +405,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       expect(cfg.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg.agents?.defaults?.skipBootstrap).toBe(true);
-      expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledWith(
+      expect(ensureWorkspaceReadyMock).toHaveBeenCalledWith(
         workspace,
         runtime,
         expect.objectContaining({ skipBootstrap: true }),
@@ -486,7 +486,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         planned,
       );
       expect(readTestConfig().agents?.defaults?.workspace).toBe(workspace);
-      expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
+      expect(ensureWorkspaceReadyMock).not.toHaveBeenCalled();
       expect(healthCommandMock).not.toHaveBeenCalled();
     });
   }, 60_000);

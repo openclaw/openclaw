@@ -18,8 +18,6 @@ function createSetupDeps(home: string) {
         runtime.log(`Updated ${opts.path}${suffix}`);
       },
     ),
-    mkdir: vi.fn(async () => {}),
-    resolveSessionTranscriptsDir: vi.fn(() => path.join(home, ".openclaw", "sessions")),
     replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: unknown }) => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, JSON.stringify(nextConfig, null, 2));
@@ -60,9 +58,7 @@ describe("setupCommand", () => {
       await setupCommand(undefined, runtime, deps);
 
       const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
-      expect(logs).toContain(
-        "Setup complete: local config, workspace, and session directories are ready.",
-      );
+      expect(logs).toContain("Setup complete: local config and workspace are ready.");
       expect(logs).toContain("openclaw configure");
       expect(logs).toContain("openclaw setup --wizard");
     });

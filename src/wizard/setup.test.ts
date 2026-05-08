@@ -107,7 +107,7 @@ function providerPluginStub(
   };
 }
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
-const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
+const ensureWorkspaceReady = vi.hoisted(() => vi.fn(async () => {}));
 const replaceConfigFile = vi.hoisted(() => vi.fn(async () => ({ config: {} })));
 const resolveGatewayPort = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
@@ -232,7 +232,7 @@ vi.mock("../commands/onboard-helpers.js", () => ({
     error: null,
   }),
   validateGatewayPasswordInput: () => ({ ok: true, error: null }),
-  ensureWorkspaceAndSessions,
+  ensureWorkspaceReady,
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
   openUrl: vi.fn(async () => true),
   printWizardHeader: vi.fn(),
@@ -463,7 +463,7 @@ describe("runSetupWizard", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
-    ensureWorkspaceAndSessions.mockClear();
+    ensureWorkspaceReady.mockClear();
     replaceConfigFile.mockClear();
 
     const workspaceDir = await makeCaseDir("skip-bootstrap-");
@@ -501,7 +501,7 @@ describe("runSetupWizard", () => {
         writeOptions: expect.objectContaining({ allowConfigSizeDrop: true }),
       }),
     );
-    expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+    expect(ensureWorkspaceReady).toHaveBeenCalledWith(
       workspaceDir,
       runtime,
       expect.objectContaining({ skipBootstrap: true }),

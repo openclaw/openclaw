@@ -161,7 +161,7 @@ function resolveSshTargetHint(): string {
   return `${user}@${host}`;
 }
 
-export async function ensureWorkspaceAndSessions(
+export async function ensureWorkspaceReady(
   workspaceDir: string,
   runtime: RuntimeEnv,
   options?: {
@@ -176,9 +176,6 @@ export async function ensureWorkspaceAndSessions(
     skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
-  await fs.mkdir(sessionsDir, { recursive: true });
-  runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }
 
 export function resolveNodeManagerOptions(): Array<{

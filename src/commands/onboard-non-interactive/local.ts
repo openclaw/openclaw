@@ -10,7 +10,7 @@ import { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } from "../onb
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  ensureWorkspaceAndSessions,
+  ensureWorkspaceReady,
   resolveControlUiLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
@@ -211,7 +211,7 @@ export async function runNonInteractiveLocalSetup(params: {
   });
   logConfigUpdated(runtime);
 
-  await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+  await ensureWorkspaceReady(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
