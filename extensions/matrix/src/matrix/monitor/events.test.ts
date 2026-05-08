@@ -148,6 +148,9 @@ function createHarness(params?: {
         }),
   } as unknown as MatrixClient;
 
+  const dmPolicy = params?.dmPolicy ?? "open";
+  const allowFrom = params?.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
+
   registerMatrixMonitorEvents({
     cfg: params?.cfg ?? { channels: { matrix: {} } },
     client,
@@ -155,9 +158,9 @@ function createHarness(params?: {
       accountId: params?.accountId ?? "default",
       encryption: params?.authEncryption ?? true,
     } as MatrixAuth,
-    allowFrom: params?.allowFrom ?? [],
+    allowFrom,
     dmEnabled: params?.dmEnabled ?? true,
-    dmPolicy: params?.dmPolicy ?? "open",
+    dmPolicy,
     readStoreAllowFrom,
     directTracker: {
       invalidateRoom,
@@ -279,7 +282,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("invalidates direct-room membership cache on room member events", async () => {
+  it("invalidates direct-room membership cache on room member events", () => {
     const { invalidateRoom, roomEventListener } = createHarness();
 
     roomEventListener("!room:example.org", {
@@ -296,7 +299,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
   });
 
-  it("remembers invite provenance on room invites", async () => {
+  it("remembers invite provenance on room invites", () => {
     const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
     if (!roomInviteListener) {
       throw new Error("room.invite listener was not registered");
@@ -318,7 +321,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(rememberInvite).toHaveBeenCalledWith("!room:example.org", "@alice:example.org");
   });
 
-  it("ignores lifecycle-only invite events emitted with self sender ids", async () => {
+  it("ignores lifecycle-only invite events emitted with self sender ids", () => {
     const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
     if (!roomInviteListener) {
       throw new Error("room.invite listener was not registered");
@@ -339,7 +342,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(rememberInvite).not.toHaveBeenCalled();
   });
 
-  it("remembers invite provenance even when Matrix omits the direct invite hint", async () => {
+  it("remembers invite provenance even when Matrix omits the direct invite hint", () => {
     const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
     if (!roomInviteListener) {
       throw new Error("room.invite listener was not registered");
@@ -360,7 +363,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(rememberInvite).toHaveBeenCalledWith("!room:example.org", "@alice:example.org");
   });
 
-  it("does not synthesize invite provenance from room joins", async () => {
+  it("does not synthesize invite provenance from room joins", () => {
     const { invalidateRoom, rememberInvite, roomJoinListener } = createHarness();
     if (!roomJoinListener) {
       throw new Error("room.join listener was not registered");
@@ -590,8 +593,10 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
     await flushTasks();
     const bodies = getSentNoticeBodies(sendMessage);
-    expect(bodies.some((body) => body.includes("SAS emoji:"))).toBe(true);
-    expect(bodies.some((body) => body.includes("SAS decimal: 6158 1986 3513"))).toBe(true);
+    expect(bodies).toEqual(expect.arrayContaining([expect.stringContaining("SAS emoji:")]));
+    expect(bodies).toEqual(
+      expect.arrayContaining([expect.stringContaining("SAS decimal: 6158 1986 3513")]),
+    );
   });
 
   it("rehydrates an in-progress DM verification before resolving SAS notices", async () => {
@@ -958,7 +963,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
       await vi.waitFor(() => {
         const bodies = getSentNoticeBodies(sendMessage);
-        expect(bodies.some((body) => body.includes("SAS emoji:"))).toBe(true);
+        expect(bodies).toEqual(expect.arrayContaining([expect.stringContaining("SAS emoji:")]));
       });
     } finally {
       vi.useRealTimers();
@@ -1212,11 +1217,13 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await flushTasks();
-    expect(
-      getSentNoticeBodies(sendMessage).some((body) => body.includes("SAS decimal: 6158 1986 3513")),
-    ).toBe(true);
+    expect(getSentNoticeBodies(sendMessage)).toEqual(
+      expect.arrayContaining([expect.stringContaining("SAS decimal: 6158 1986 3513")]),
+    );
     const bodies = getSentNoticeBodies(sendMessage);
-    expect(bodies.some((body) => body.includes("SAS decimal: 1111 2222 3333"))).toBe(false);
+    expect(bodies).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("SAS decimal: 1111 2222 3333")]),
+    );
   });
 
   it("preserves strict-room SAS fallback when active DM inspection cannot resolve a room", async () => {
@@ -1318,11 +1325,13 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     await flushTasks();
-    expect(
-      getSentNoticeBodies(sendMessage).some((body) => body.includes("SAS decimal: 6158 1986 3513")),
-    ).toBe(true);
+    expect(getSentNoticeBodies(sendMessage)).toEqual(
+      expect.arrayContaining([expect.stringContaining("SAS decimal: 6158 1986 3513")]),
+    );
     const bodies = getSentNoticeBodies(sendMessage);
-    expect(bodies.some((body) => body.includes("SAS decimal: 1111 2222 3333"))).toBe(false);
+    expect(bodies).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("SAS decimal: 1111 2222 3333")]),
+    );
   });
 
   it("does not emit SAS notices for cancelled verification events", async () => {
@@ -1800,7 +1809,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     }
   });
 
-  it("does not throw when getUserId fails during decrypt guidance lookup", async () => {
+  it("logs decrypt guidance when getUserId fails during lookup", async () => {
     const { logger, logVerboseMessage, failedDecryptListener } = createHarness({
       accountId: "ops",
       selfUserIdError: new Error("lookup failed"),

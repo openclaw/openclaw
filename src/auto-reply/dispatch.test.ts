@@ -236,7 +236,9 @@ describe("withReplyDispatcher", () => {
     });
 
     const dispatcherOptions = hoisted.createReplyDispatcherMock.mock.calls[0]?.[0];
-    expect(dispatcherOptions?.beforeDeliver).toEqual(expect.any(Function));
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
 
     const payload = await dispatcherOptions.beforeDeliver(
       { text: "original reply" },
@@ -280,6 +282,36 @@ describe("withReplyDispatcher", () => {
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+    });
+  });
+
+  it("reconciles queuedFinal and counts after dispatcher-side delivery failure", async () => {
+    const dispatcher = {
+      sendToolResult: () => true,
+      sendBlockReply: () => true,
+      sendFinalReply: () => true,
+      getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      getCancelledCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      getFailedCounts: () => ({ tool: 0, block: 0, final: 1 }),
+      markComplete: () => undefined,
+      waitForIdle: async () => undefined,
+    } satisfies ReplyDispatcher;
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+
+    const result = await dispatchInboundMessage({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      failedCounts: { tool: 0, block: 0, final: 1 },
     });
   });
 

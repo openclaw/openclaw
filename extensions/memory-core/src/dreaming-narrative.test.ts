@@ -29,6 +29,7 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
+const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -98,6 +99,16 @@ describe("extractNarrativeText", () => {
       },
     ];
     expect(extractNarrativeText(messages)).toBe("First paragraph.\nSecond paragraph.");
+  });
+
+  it("extracts from OpenAI output_text assistant parts", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "The light phase found a diary thread." }],
+      },
+    ];
+    expect(extractNarrativeText(messages)).toBe("The light phase found a diary thread.");
   });
 
   it("returns null when no assistant message exists", () => {
@@ -394,7 +405,9 @@ describe("appendNarrativeEntry", () => {
     });
 
     const stat = await fs.stat(dreamsPath);
-    expect(stat.mode & 0o777).toBe(0o600);
+    if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
+      expect(stat.mode & 0o777).toBe(0o600);
+    }
   });
 
   it("dedupes only exact diary duplicates while keeping distinct timestamps", async () => {
@@ -966,7 +979,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
     const sessionFiles = await fs.readdir(sessionsDir);
-    expect(sessionFiles.some((name) => name.startsWith("orphan.jsonl.deleted."))).toBe(true);
+    expect(sessionFiles).toContainEqual(expect.stringMatching(/^orphan\.jsonl\.deleted\./));
     expect(sessionFiles).toContain("still-live.jsonl");
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("dreaming cleanup scrubbed"));
   });

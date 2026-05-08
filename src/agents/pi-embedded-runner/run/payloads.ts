@@ -1,5 +1,9 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import {
+  createHeartbeatToolResponsePayload,
+  type HeartbeatToolResponse,
+} from "../../../auto-reply/heartbeat-tool-response.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
@@ -23,7 +27,6 @@ import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.
 import {
   extractAssistantThinking,
   extractAssistantVisibleText,
-  formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
@@ -127,6 +130,7 @@ function shouldIncludeToolErrorDetails(params: {
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
+  hasUserFacingErrorReply: boolean;
   hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
@@ -152,7 +156,7 @@ function resolveToolErrorWarningPolicy(params: {
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
     return {
-      showWarning: !params.hasUserFacingFailureAcknowledgement,
+      showWarning: !params.hasUserFacingErrorReply && !params.hasUserFacingFailureAcknowledgement,
       includeDetails,
     };
   }
@@ -183,6 +187,7 @@ export function buildEmbeddedRunPayloads(params: {
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
+  heartbeatToolResponse?: HeartbeatToolResponse;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -193,7 +198,12 @@ export function buildEmbeddedRunPayloads(params: {
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
+  channelData?: Record<string, unknown>;
 }> {
+  if (params.heartbeatToolResponse) {
+    return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
+  }
+
   const replyItems: Array<{
     text: string;
     media?: string[];
@@ -272,7 +282,7 @@ export function buildEmbeddedRunPayloads(params: {
   const reasoningText = suppressAssistantArtifacts
     ? ""
     : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
-      ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
+      ? extractAssistantThinking(params.lastAssistant)
       : "";
   if (reasoningText) {
     replyItems.push({ text: reasoningText, isReasoning: true });
@@ -363,6 +373,7 @@ export function buildEmbeddedRunPayloads(params: {
       ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
+  const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {
     const {
@@ -394,6 +405,7 @@ export function buildEmbeddedRunPayloads(params: {
     const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
+      hasUserFacingErrorReply,
       hasUserFacingFailureAcknowledgement,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,

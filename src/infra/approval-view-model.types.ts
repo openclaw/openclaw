@@ -1,5 +1,6 @@
 import type { InteractiveReplyButton } from "../interactive/payload.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
+import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -21,7 +22,7 @@ export type ApprovalMetadataView = {
   value: string;
 };
 
-export type ApprovalViewBase = {
+type ApprovalViewBase = {
   approvalId: string;
   approvalKind: ChannelApprovalKind;
   phase: ApprovalPhase;
@@ -34,6 +35,8 @@ export type ExecApprovalViewBase = ApprovalViewBase & {
   approvalKind: "exec";
   ask?: string | null;
   agentId?: string | null;
+  warningText?: string | null;
+  commandAnalysis?: CommandExplanationSummary | null;
   commandText: string;
   commandPreview?: string | null;
   cwd?: string | null;

@@ -26,6 +26,9 @@ export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
   reasoning?: boolean;
+  compat?: {
+    supportedReasoningEfforts?: readonly string[] | null;
+  } | null;
 };
 
 export const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
@@ -39,12 +42,6 @@ export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
   xhigh: 60,
   max: 70,
 };
-const NO_THINKING_LEVELS: ThinkLevel[] = [...BASE_THINKING_LEVELS];
-
-export function isBinaryThinkingProvider(provider?: string | null): boolean {
-  void provider;
-  return false;
-}
 
 // Normalize user-provided thinking level strings to the canonical enum.
 export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
@@ -84,28 +81,6 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
     return "minimal";
   }
   return undefined;
-}
-
-export function listThinkingLevels(
-  _provider?: string | null,
-  _model?: string | null,
-): ThinkLevel[] {
-  return [...NO_THINKING_LEVELS];
-}
-
-export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
-  if (isBinaryThinkingProvider(provider)) {
-    return ["off", "on"];
-  }
-  return listThinkingLevels(provider, model);
-}
-
-export function formatThinkingLevels(
-  provider?: string | null,
-  model?: string | null,
-  separator = ", ",
-): string {
-  return listThinkingLevelLabels(provider, model).join(separator);
 }
 
 export function formatXHighModelHint(): string {

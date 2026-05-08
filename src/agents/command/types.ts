@@ -17,6 +17,9 @@ export type { AgentStreamParams } from "./shared-types.js";
 export type AgentCommandResultMetaOverrides = {
   transport?: "embedded";
   fallbackFrom?: "gateway";
+  fallbackReason?: "gateway_timeout";
+  fallbackSessionId?: string;
+  fallbackSessionKey?: string;
 };
 
 export type AcpTurnSource = "manual_spawn";
@@ -68,6 +71,8 @@ export type AgentCommandOpts = {
   threadId?: string | number;
   /** Message channel context. */
   messageChannel?: string;
+  /** Tool-policy/output surface context. Defaults to messageChannel. */
+  messageProvider?: string;
   /** Delivery channel. */
   channel?: string;
   /** Account ID for multi-account channel routing. */
@@ -78,6 +83,8 @@ export type AgentCommandOpts = {
   senderIsOwner?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
+  /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
+  toolsAllow?: string[];
   /** Group/spawn metadata for subagent policy inheritance and routing context. */
   groupId?: SpawnedRunMetadata["groupId"];
   groupChannel?: SpawnedRunMetadata["groupChannel"];

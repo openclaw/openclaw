@@ -2,9 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  collectRootPackageExcludedExtensionDirs,
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+
+function expectNoPrefixMatches(values: string[], prefix: string) {
+  expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
+}
+
+function expectSomePrefixMatch(values: string[], prefix: string) {
+  expect(values.filter((value) => value.startsWith(prefix)).length).toBeGreaterThan(0);
+}
 
 describe("bundled plugin build entries", () => {
   const bundledChannelEntrySources = ["index.ts", "channel-entry.ts", "setup-entry.ts"];
@@ -68,7 +77,7 @@ describe("bundled plugin build entries", () => {
   });
 
   it("packs the Matrix packaged runtime shim", () => {
-    const artifacts = listBundledPluginPackArtifacts();
+    const artifacts = listBundledPluginPackArtifacts({ includeRootPackageExcludedDirs: true });
 
     expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
   });
@@ -76,19 +85,26 @@ describe("bundled plugin build entries", () => {
   it("keeps private QA bundles out of required npm pack artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-channel/"))).toBe(
-      false,
-    );
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-lab/"))).toBe(
-      false,
-    );
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-matrix/"))).toBe(
-      false,
-    );
+    expectNoPrefixMatches(artifacts, "dist/extensions/qa-channel/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/qa-lab/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/qa-matrix/");
+  });
+
+  it("keeps explicitly downloadable plugins out of bundled package artifacts", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["acpx", "googlechat", "line"]) {
+      expectSomePrefixMatch(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+    expectNoPrefixMatches(Object.keys(entries), "extensions/qqbot/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/qqbot/");
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
+    const excludedPackageDirs = collectRootPackageExcludedExtensionDirs();
     const offenders: string[] = [];
     const secretBackedPluginIds = new Set<string>();
 
@@ -106,6 +122,9 @@ describe("bundled plugin build entries", () => {
     expect(offenders).toEqual([]);
 
     for (const pluginId of [...secretBackedPluginIds].toSorted()) {
+      if (excludedPackageDirs.has(pluginId)) {
+        continue;
+      }
       const secretApiPath = path.join("extensions", pluginId, "secret-contract-api.ts");
       expect(fs.readFileSync(secretApiPath, "utf8")).toContain("channelSecrets");
       expect(artifacts).toContain(`dist/extensions/${pluginId}/secret-contract-api.js`);

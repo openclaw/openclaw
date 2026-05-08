@@ -1,8 +1,13 @@
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
+import {
+  resolveThreadBindingSpawnPolicy,
+  supportsAutomaticThreadBindingSpawn,
+} from "../../channels/thread-bindings-policy.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -43,11 +48,12 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
 
 type AcpSpawnModule = typeof import("../acp-spawn.js");
 
-let acpSpawnModulePromise: Promise<AcpSpawnModule> | undefined;
+const acpSpawnModuleLoader = createLazyImportLoader<AcpSpawnModule>(
+  () => import("../acp-spawn.js"),
+);
 
 async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {
-  acpSpawnModulePromise ??= import("../acp-spawn.js");
-  return await acpSpawnModulePromise;
+  return await acpSpawnModuleLoader.load();
 }
 
 function summarizeError(err: unknown): string {
@@ -100,7 +106,45 @@ async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
   }
 }
 
-function createSessionsSpawnToolSchema(params: { acpAvailable: boolean }) {
+type SessionsSpawnThreadAvailability = {
+  subagent: boolean;
+  acp: boolean;
+};
+
+function hasAnyThreadAvailability(availability: SessionsSpawnThreadAvailability): boolean {
+  return availability.subagent || availability.acp;
+}
+
+function resolveSessionsSpawnThreadAvailability(opts?: {
+  config?: OpenClawConfig;
+  agentChannel?: GatewayMessageChannel;
+  agentAccountId?: string;
+}): SessionsSpawnThreadAvailability {
+  const channel = opts?.agentChannel;
+  const cfg = opts?.config;
+  if (!channel || !cfg || !supportsAutomaticThreadBindingSpawn(channel)) {
+    return { subagent: false, acp: false };
+  }
+  const resolve = (kind: "subagent" | "acp") => {
+    const policy = resolveThreadBindingSpawnPolicy({
+      cfg,
+      channel,
+      accountId: opts?.agentAccountId,
+      kind,
+    });
+    return policy.enabled && policy.spawnEnabled;
+  };
+  return {
+    subagent: resolve("subagent"),
+    acp: resolve("acp"),
+  };
+}
+
+function createSessionsSpawnToolSchema(params: {
+  acpAvailable: boolean;
+  threadAvailable: boolean;
+}) {
+  const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
     task: Type.String(),
     label: Type.Optional(Type.String()),
@@ -114,8 +158,17 @@ function createSessionsSpawnToolSchema(params: { acpAvailable: boolean }) {
     runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
     // Back-compat: older callers used timeoutSeconds for this tool.
     timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-    thread: Type.Optional(Type.Boolean()),
-    mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
+    ...(params.threadAvailable
+      ? {
+          thread: Type.Optional(
+            Type.Boolean({
+              description:
+                'Bind the spawned session to a new chat thread when the current channel/account supports thread-bound session spawns. `thread=true` defaults mode to "session".',
+            }),
+          ),
+        }
+      : {}),
+    mode: optionalStringEnum(spawnModes),
     cleanup: optionalStringEnum(["delete", "keep"] as const),
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
     context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
@@ -194,14 +247,16 @@ export function createSessionsSpawnTool(
     config: opts?.config,
     sandboxed: opts?.sandboxed,
   });
+  const threadAvailability = resolveSessionsSpawnThreadAvailability(opts);
+  const threadAvailable = hasAnyThreadAvailability(threadAvailability);
   return {
     label: "Sessions",
     name: "sessions_spawn",
     displaySummary: acpAvailable
       ? SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY
       : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSpawnTool({ acpAvailable }),
-    parameters: createSessionsSpawnToolSchema({ acpAvailable }),
+    description: describeSessionsSpawnTool({ acpAvailable, threadAvailable }),
+    parameters: createSessionsSpawnToolSchema({ acpAvailable, threadAvailable }),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
@@ -334,6 +389,9 @@ export function createSessionsSpawnTool(
             to: opts?.agentTo,
             threadId: opts?.agentThreadId,
           });
+          const shouldExpectCompletionMessage = result.inlineDelivery
+            ? false
+            : expectsCompletionMessage;
           try {
             registerSubagentRun({
               runId: childRunId,
@@ -345,7 +403,7 @@ export function createSessionsSpawnTool(
               cleanup: trackedCleanup,
               label: label || undefined,
               runTimeoutSeconds,
-              expectsCompletionMessage,
+              expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
             });
           } catch (err) {

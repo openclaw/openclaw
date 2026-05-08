@@ -58,9 +58,9 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         autoPriority: { image: 10, audio: 10 },
       },
       "openai-codex": {
-        capabilities: ["image"],
-        defaultModels: { image: "gpt-5.5" },
-        autoPriority: { image: 20 },
+        capabilities: ["image", "audio"],
+        defaultModels: { image: "gpt-5.5", audio: "gpt-4o-transcribe" },
+        autoPriority: { image: 20, audio: 20 },
       },
       opencode: { capabilities: ["image"], defaultModels: { image: "gpt-5-nano" } },
       "opencode-go": { capabilities: ["image"], defaultModels: { image: "kimi-k2.6" } },
@@ -77,6 +77,24 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     plugins: mediaMetadataPlugins,
     diagnostics: [],
   }),
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
+}));
+
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: () => ({
+    index: { plugins: [] },
+    plugins: mediaMetadataPlugins,
+  }),
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => ({
+    plugins: mediaMetadataPlugins,
+  }),
 }));
 
 import {
@@ -89,6 +107,9 @@ describe("resolveDefaultMediaModel", () => {
   it("resolves bundled audio defaults from provider metadata", () => {
     expect(resolveDefaultMediaModel({ providerId: "mistral", capability: "audio" })).toBe(
       "voxtral-mini-latest",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "audio" })).toBe(
+      "gpt-4o-transcribe",
     );
   });
 
@@ -118,6 +139,7 @@ describe("resolveAutoMediaKeyProviders", () => {
   it("keeps the bundled audio fallback order", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
       "openai",
+      "openai-codex",
       "xai",
       "google",
       "mistral",

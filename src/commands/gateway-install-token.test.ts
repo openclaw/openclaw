@@ -30,7 +30,6 @@ const secretRefKeyMock = vi.hoisted(() => vi.fn(() => "env:default:OPENCLAW_GATE
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 
 vi.mock("./gateway-install-token.persist.runtime.js", () => ({
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
   readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
   replaceConfigFile: replaceConfigFileMock,
 }));
@@ -119,7 +118,9 @@ describe("resolveGatewayInstallToken", () => {
     expect(result.token).toBeUndefined();
     expect(result.tokenRefConfigured).toBe(true);
     expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings.some((message) => message.includes("SecretRef-managed"))).toBeTruthy();
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("SecretRef-managed")]),
+    );
   });
 
   it("returns unavailable reason when token SecretRef is unresolved in token mode", async () => {
@@ -173,9 +174,9 @@ describe("resolveGatewayInstallToken", () => {
 
     expect(result.token).toBe("generated-token");
     expect(result.unavailableReason).toBeUndefined();
-    expect(
-      result.warnings.some((message) => message.includes("without saving to config")),
-    ).toBeTruthy();
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("without saving to config")]),
+    );
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
@@ -189,7 +190,9 @@ describe("resolveGatewayInstallToken", () => {
       persistGeneratedToken: true,
     });
 
-    expect(result.warnings.some((message) => message.includes("saving to config"))).toBeTruthy();
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("saving to config")]),
+    );
     expect(replaceConfigFileMock).toHaveBeenCalledWith(
       expect.objectContaining({
         nextConfig: expect.objectContaining({
@@ -236,9 +239,9 @@ describe("resolveGatewayInstallToken", () => {
     });
 
     expect(result.token).toBeUndefined();
-    expect(
-      result.warnings.some((message) => message.includes("skipping plaintext token persistence")),
-    ).toBeTruthy();
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("skipping plaintext token persistence")]),
+    );
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
@@ -265,7 +268,7 @@ describe("resolveGatewayInstallToken", () => {
 
     expect(result.token).toBeUndefined();
     expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings.some((message) => message.includes("Auto-generated"))).toBe(false);
+    expect(result.warnings.filter((message) => message.includes("Auto-generated"))).toEqual([]);
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
@@ -297,7 +300,7 @@ describe("resolveGatewayInstallToken", () => {
     });
     expect(result.token).toBeUndefined();
     expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings.some((message) => message.includes("Auto-generated"))).toBe(false);
+    expect(result.warnings.filter((message) => message.includes("Auto-generated"))).toEqual([]);
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 

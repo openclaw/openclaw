@@ -5,24 +5,24 @@ import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
 describe("agent defaults schema", () => {
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expect(
+      AgentDefaultsSchema.safeParse({
         subagents: {
           archiveAfterMinutes: 0,
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it("accepts videoGenerationModel", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expect(
+      AgentDefaultsSchema.safeParse({
         videoGenerationModel: {
           primary: "qwen/wan2.6-t2v",
           fallbacks: ["minimax/video-01"],
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it("accepts imageGenerationModel timeoutMs", () => {
@@ -48,11 +48,11 @@ describe("agent defaults schema", () => {
   });
 
   it("accepts mediaGenerationAutoProviderFallback", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expect(
+      AgentDefaultsSchema.safeParse({
         mediaGenerationAutoProviderFallback: false,
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it("accepts experimental.localModelLean", () => {
@@ -83,6 +83,25 @@ describe("agent defaults schema", () => {
     expect(() => AgentDefaultsSchema.parse({ contextInjection: "unknown" })).toThrow();
   });
 
+  it("accepts supported optional bootstrap filenames", () => {
+    const result = AgentDefaultsSchema.parse({
+      skipOptionalBootstrapFiles: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"],
+    })!;
+    expect(result.skipOptionalBootstrapFiles).toEqual([
+      "SOUL.md",
+      "USER.md",
+      "HEARTBEAT.md",
+      "IDENTITY.md",
+    ]);
+  });
+
+  it("rejects unsupported optional bootstrap filenames", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({ skipOptionalBootstrapFiles: ["AGENTS.md"] }),
+    ).toThrow();
+    expect(() => AgentDefaultsSchema.parse({ skipOptionalBootstrapFiles: ["SOUL.MD"] })).toThrow();
+  });
+
   it("accepts embeddedPi.executionContract", () => {
     const result = AgentDefaultsSchema.parse({
       embeddedPi: {
@@ -101,6 +120,19 @@ describe("agent defaults schema", () => {
     })!;
     expect(result.compaction?.truncateAfterCompaction).toBe(true);
     expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
+  });
+
+  it("accepts compaction.midTurnPrecheck.enabled", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        mode: "safeguard",
+        midTurnPrecheck: {
+          enabled: true,
+        },
+      },
+    })!;
+
+    expect(result.compaction?.midTurnPrecheck?.enabled).toBe(true);
   });
 
   it("accepts focused contextLimits on defaults and agent entries", () => {
@@ -131,15 +163,17 @@ describe("agent defaults schema", () => {
 
   it("accepts positive heartbeat timeoutSeconds on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
-      heartbeat: { timeoutSeconds: 45 },
+      heartbeat: { timeoutSeconds: 45, skipWhenBusy: true },
     })!;
     const agent = AgentEntrySchema.parse({
       id: "ops",
-      heartbeat: { timeoutSeconds: 45 },
+      heartbeat: { timeoutSeconds: 45, skipWhenBusy: true },
     });
 
     expect(defaults.heartbeat?.timeoutSeconds).toBe(45);
+    expect(defaults.heartbeat?.skipWhenBusy).toBe(true);
     expect(agent.heartbeat?.timeoutSeconds).toBe(45);
+    expect(agent.heartbeat?.skipWhenBusy).toBe(true);
   });
 
   it("accepts per-agent TTS overrides", () => {

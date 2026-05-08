@@ -76,6 +76,7 @@ describe("matrix qa config", () => {
       replyToMode: "off",
       threadReplies: "inbound",
     });
+    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
   });
 
   it("applies room-keyed Matrix QA config overrides", () => {
@@ -121,7 +122,7 @@ describe("matrix qa config", () => {
         threadBindings: {
           enabled: true,
           idleHours: 1,
-          spawnSubagentSessions: true,
+          spawnSessions: true,
         },
         threadReplies: "always",
         toolProfile: "coding",
@@ -181,7 +182,7 @@ describe("matrix qa config", () => {
       threadBindings: {
         enabled: true,
         idleHours: 1,
-        spawnSubagentSessions: true,
+        spawnSessions: true,
       },
       threadReplies: "always",
     });

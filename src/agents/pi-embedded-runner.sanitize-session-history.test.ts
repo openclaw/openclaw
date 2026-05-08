@@ -30,9 +30,7 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => ({
   __testing: {},
-  clearProviderRuntimeHookCache: vi.fn(),
   prepareProviderExtraParams: vi.fn(() => undefined),
-  resetProviderRuntimeHookCacheForTest: vi.fn(),
   resolveProviderHookPlugin: vi.fn(() => undefined),
   resolveProviderPluginsForHooks: vi.fn(() => []),
   resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
@@ -272,6 +270,25 @@ describe("sanitizeSessionHistory", () => {
       | undefined;
   };
 
+  const expectAssistantUsageSnapshot = (assistant: unknown) => {
+    expect(assistant).toMatchObject({
+      usage: {
+        input: expect.any(Number),
+        output: expect.any(Number),
+        cacheRead: expect.any(Number),
+        cacheWrite: expect.any(Number),
+        totalTokens: expect.any(Number),
+        cost: {
+          input: expect.any(Number),
+          output: expect.any(Number),
+          cacheRead: expect.any(Number),
+          cacheWrite: expect.any(Number),
+          total: expect.any(Number),
+        },
+      },
+    });
+  };
+
   beforeAll(async () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     sanitizeSessionHistory = harness.sanitizeSessionHistory;
@@ -474,8 +491,9 @@ describe("sanitizeSessionHistory", () => {
     const staleAssistant = result.find((message) => message.role === "assistant") as
       | (AgentMessage & { usage?: unknown })
       | undefined;
-    expect(staleAssistant).toBeDefined();
-    expect(staleAssistant?.usage).toEqual(makeZeroUsageSnapshot());
+    expect(staleAssistant).toMatchObject({
+      usage: makeZeroUsageSnapshot(),
+    });
   });
 
   it("preserves fresh assistant usage snapshots created after latest compaction summary", async () => {
@@ -499,7 +517,7 @@ describe("sanitizeSessionHistory", () => {
     const assistants = getAssistantMessages(result);
     expect(assistants).toHaveLength(2);
     expect(assistants[0]?.usage).toEqual(makeZeroUsageSnapshot());
-    expect(assistants[1]?.usage).toBeDefined();
+    expectAssistantUsageSnapshot(assistants[1]);
   });
 
   it("adds a zeroed assistant usage snapshot when usage is missing", async () => {
@@ -657,7 +675,7 @@ describe("sanitizeSessionHistory", () => {
       JSON.stringify(message.content).includes("fresh answer"),
     );
     expect(keptAssistant?.usage).toEqual(makeZeroUsageSnapshot());
-    expect(freshAssistant?.usage).toBeDefined();
+    expectAssistantUsageSnapshot(freshAssistant);
   });
 
   it("keeps reasoning-only assistant messages for openai-responses", async () => {
@@ -983,7 +1001,7 @@ describe("sanitizeSessionHistory", () => {
 
     expect(result).toEqual([
       {
-        ...(messages[0] as Record<string, unknown>),
+        ...(messages[0] as unknown as Record<string, unknown>),
         usage: makeZeroUsageSnapshot(),
       },
     ]);
@@ -1130,6 +1148,51 @@ describe("sanitizeSessionHistory", () => {
 
     expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
       { type: "text", text: "Pong" },
+    ]);
+  });
+
+  it("drops metadata-only assistant replay turns before provider validation", async () => {
+    setNonGoogleModelApi();
+
+    const metadataOnlyText = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"channel:123","sender":"OpenClaw"}',
+      "```",
+    ].join("\n");
+    const messages = castAgentMessages([
+      makeUserMessage("First"),
+      makeAssistantMessage([{ type: "text", text: metadataOnlyText }]),
+      makeUserMessage("Second"),
+    ]);
+
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+    expect(sanitized.map((msg) => msg.role)).toEqual(["user", "user"]);
+    expect(JSON.stringify(sanitized)).not.toContain("assistant copied inbound metadata omitted");
+
+    const validated = await validateReplayTurns({
+      messages: sanitized,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionId: TEST_SESSION_ID,
+    });
+    expect(validated).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "First" },
+          { type: "text", text: "Second" },
+        ],
+        timestamp: expect.any(Number),
+      },
     ]);
   });
 

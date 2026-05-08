@@ -67,14 +67,23 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(container.querySelector(".qs-card--model")).not.toBeNull();
-    expect(container.querySelector(".qs-card--channels")).not.toBeNull();
-    expect(container.querySelector(".qs-card--security")).not.toBeNull();
-    expect(container.querySelector(".qs-card--appearance")).not.toBeNull();
-    expect(container.querySelector(".qs-card--automations")).not.toBeNull();
-    expect(container.querySelector(".qs-side-stack .qs-card--appearance")).not.toBeNull();
-    expect(container.querySelector(".qs-side-stack .qs-card--automations")).not.toBeNull();
-    expect(container.querySelector(".qs-card--personal")).not.toBeNull();
+    expect(
+      Array.from(container.querySelectorAll(".qs-card"))
+        .map((card) =>
+          Array.from(card.classList).find(
+            (className) => className.startsWith("qs-card--") && className !== "qs-card--span-all",
+          ),
+        )
+        .filter(Boolean),
+    ).toEqual([
+      "qs-card--model",
+      "qs-card--channels",
+      "qs-card--security",
+      "qs-card--personal",
+      "qs-card--appearance",
+      "qs-card--automations",
+    ]);
+    expect(container.querySelectorAll(".qs-side-stack .qs-card")).toHaveLength(2);
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
   });
 
@@ -203,9 +212,9 @@ describe("renderQuickSettings", () => {
       const input = inputs.find((node) =>
         node.closest(".qs-identity-card--assistant"),
       ) as HTMLInputElement | null;
-      expect(input).not.toBeNull();
+      expect(input?.type).toBe("file");
       if (!input) {
-        return;
+        throw new Error("expected assistant avatar file input");
       }
 
       Object.defineProperty(input, "files", {
@@ -247,10 +256,46 @@ describe("renderQuickSettings", () => {
     const clear = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Clear override",
     );
-    expect(clear).not.toBeUndefined();
-    clear?.dispatchEvent(new Event("click"));
+    expect(clear).toBeInstanceOf(HTMLButtonElement);
+    clear!.dispatchEvent(new Event("click"));
 
     expect(onAssistantAvatarClearOverride).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the browser-local assistant avatar override stale missing IDENTITY.md metadata", () => {
+    const dataUrl = "data:image/png;base64,bG9jYWwtYXNzaXN0YW50";
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: null,
+          assistantAvatarSource: "avatars/missing.png",
+          assistantAvatarStatus: "none",
+          assistantAvatarReason: "missing",
+          assistantAvatarOverride: dataUrl,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(dataUrl);
+    expect(container.querySelector(".qs-identity-card__source")?.textContent).toContain(
+      "UI override",
+    );
+    expect(container.querySelector(".qs-identity-card__issue")).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll("label.btn")).some(
+        (label) => label.textContent?.trim() === "Replace image",
+      ),
+    ).toBe(true);
+    expect(
+      Array.from(container.querySelectorAll("button")).some(
+        (button) => button.textContent?.trim() === "Clear override",
+      ),
+    ).toBe(true);
   });
 
   it("rejects oversized avatar uploads before reading them", () => {
@@ -265,18 +310,15 @@ describe("renderQuickSettings", () => {
       const input = Array.from(container.querySelectorAll('input[type="file"]')).find(
         (node) => !node.closest(".qs-identity-card--assistant"),
       ) as HTMLInputElement | null;
-      expect(input).not.toBeNull();
-      if (!input) {
-        return;
-      }
+      expect(input).toBeInstanceOf(HTMLInputElement);
 
       const file = new File([new Uint8Array(1_500_001)], "avatar.png", { type: "image/png" });
-      Object.defineProperty(input, "files", {
+      Object.defineProperty(input!, "files", {
         configurable: true,
         value: [file],
       });
 
-      input.dispatchEvent(new Event("change"));
+      input!.dispatchEvent(new Event("change"));
 
       expect(fileReader).not.toHaveBeenCalled();
       expect(onUserAvatarChange).not.toHaveBeenCalled();
@@ -316,7 +358,8 @@ describe("renderQuickSettings", () => {
     const customButton = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Import",
     );
-    customButton?.click();
+    expect(customButton).toBeInstanceOf(HTMLButtonElement);
+    customButton!.click();
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
     expect(setTheme).not.toHaveBeenCalled();
@@ -343,7 +386,8 @@ describe("renderQuickSettings", () => {
     const customButton = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Light Green",
     );
-    customButton?.click();
+    expect(customButton).toBeInstanceOf(HTMLButtonElement);
+    customButton!.click();
 
     expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
     expect(onOpenCustomThemeImport).not.toHaveBeenCalled();

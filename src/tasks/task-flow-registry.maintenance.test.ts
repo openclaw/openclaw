@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRunningTaskRun } from "./task-executor.js";
 import {
+  createFlowRecord,
   createManagedTaskFlow,
   getTaskFlowById,
   listTaskFlowRecords,
@@ -9,6 +10,7 @@ import {
   resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
 import {
+  getInspectableTaskFlowAuditSummary,
   previewTaskFlowRegistryMaintenance,
   runTaskFlowRegistryMaintenance,
 } from "./task-flow-registry.maintenance.js";
@@ -106,6 +108,36 @@ describe("task-flow-registry maintenance", () => {
         pruned: 1,
       });
       expect(getTaskFlowById(oldFlow.flowId)).toBeUndefined();
+    });
+  });
+
+  it("repairs terminal mirrored flows whose delivery updates outlived endedAt", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const flow = createFlowRecord({
+        syncMode: "task_mirrored",
+        ownerKey: "agent:main:main",
+        goal: "Failed ACP task",
+        status: "failed",
+        createdAt: 100,
+        updatedAt: 250,
+        endedAt: 200,
+      });
+
+      expect(getInspectableTaskFlowAuditSummary().byCode.inconsistent_timestamps).toBe(1);
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        pruned: 0,
+      });
+
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        pruned: 0,
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        endedAt: 200,
+        updatedAt: 200,
+      });
+      expect(getInspectableTaskFlowAuditSummary().byCode.inconsistent_timestamps).toBe(0);
     });
   });
 

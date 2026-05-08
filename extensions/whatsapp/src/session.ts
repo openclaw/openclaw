@@ -130,7 +130,10 @@ async function printTerminalQr(qr: string): Promise<void> {
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
-  opts: { authDir?: string; onQr?: (qr: string) => void } & WhatsAppSocketTimingOptions = {},
+  opts: {
+    authDir?: string;
+    onQr?: (qr: string) => void;
+  } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
@@ -189,7 +192,7 @@ export async function createWaSocket(
         if (qr) {
           opts.onQr?.(qr);
           if (printQr) {
-            console.log("Scan this QR in WhatsApp (Linked Devices):");
+            console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
             void printTerminalQr(qr).catch((err) => {
               sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
             });

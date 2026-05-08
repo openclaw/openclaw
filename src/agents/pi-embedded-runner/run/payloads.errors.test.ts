@@ -77,7 +77,40 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.some((payload) => payload.text === errorJson)).toBe(false);
+    expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
+  });
+
+  it("suppresses mutating tool warnings when an assistant error reply already covers the turn", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [errorJson],
+      lastAssistant: makeAssistant({}),
+      lastToolError: { toolName: "edit", error: "file missing" },
+      sessionKey: "agent:main:telegram:direct:u123",
+    });
+
+    expectOverloadedFallback(payloads);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("Edit")]),
+    );
+    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("missing")]),
+    );
+  });
+
+  it("keeps mutating tool warnings when assistant error artifacts are not user-facing", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [errorJson],
+      lastAssistant: makeAssistant({}),
+      lastToolError: { toolName: "edit", error: "file missing" },
+      didSendDeterministicApprovalPrompt: true,
+      sessionKey: "agent:main:telegram:direct:u123",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Edit",
+      absentDetail: "missing",
+    });
   });
 
   it("suppresses pretty-printed error JSON that differs from the errorMessage", () => {
@@ -89,7 +122,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.some((payload) => payload.text === errorJsonPretty)).toBe(false);
+    expect(payloads.map((payload) => payload.text)).not.toContain(errorJsonPretty);
   });
 
   it("suppresses raw error JSON from fallback assistant text", () => {
@@ -98,7 +131,9 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
+    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("request_id")]),
+    );
   });
 
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
@@ -152,7 +187,9 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
+    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("request_id")]),
+    );
   });
 
   it("does not suppress error-shaped JSON when the assistant did not error", () => {
@@ -422,7 +459,7 @@ describe("buildEmbeddedRunPayloads", () => {
       },
     });
     const warningText = seed[0]?.text;
-    expect(warningText).toBeTruthy();
+    expect(warningText).toBe("⚠️ ✍️ Write failed");
 
     const payloads = buildPayloads({
       assistantTexts: [warningText ?? ""],

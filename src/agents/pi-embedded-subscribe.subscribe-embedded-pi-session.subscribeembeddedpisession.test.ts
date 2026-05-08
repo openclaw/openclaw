@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import * as agentEvents from "../infra/agent-events.js";
 import {
   THINKING_TAG_CASES,
   createSubscribedSessionHarness,
@@ -216,7 +217,7 @@ describe("subscribeEmbeddedPiSession", () => {
       const streamTexts = onReasoningStream.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
-      expect(streamTexts.at(-1)).toBe("Reasoning:\n_Because it helps_");
+      expect(streamTexts.at(-1)).toBe("Because it helps");
 
       expect(assistantMessage.content).toEqual([
         { type: "thinking", thinking: "Because it helps" },
@@ -424,6 +425,86 @@ describe("subscribeEmbeddedPiSession", () => {
     );
   });
 
+  it("does not attach generated image media to an early streamed chunk before explicit MEDIA", async () => {
+    const onToolResult = vi.fn();
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      onBlockReply,
+      verboseLevel: "full",
+      blockReplyBreak: "text_end",
+      blockReplyChunking: { minChars: 5, maxChars: 200, breakPreference: "newline" },
+      builtinToolNames: new Set(["image_generate"]),
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "image_generate",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+          },
+        ],
+        details: {
+          media: {
+            mediaUrls: ["/tmp/generated.png"],
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalled();
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "Generated 1 image.\n");
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Generated 1 image.",
+      }),
+    );
+    const earlyMediaPayloads = onBlockReply.mock.calls
+      .map(([payload]) => payload)
+      .filter((payload) => payload.mediaUrls?.length);
+    expect(earlyMediaPayloads).toEqual([]);
+
+    emitAssistantTextDelta(emit, "MEDIA:/tmp/generated.png");
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: "Generated 1 image.\nMEDIA:/tmp/generated.png",
+      },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Generated 1 image.\nMEDIA:/tmp/generated.png",
+          },
+        ],
+      },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    const mediaPayloads = onBlockReply.mock.calls
+      .map(([payload]) => payload)
+      .filter((payload) => payload.mediaUrls?.includes("/tmp/generated.png"));
+    expect(mediaPayloads).toHaveLength(1);
+  });
+
   it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
     const onBlockReply = vi.fn();
     const { emit } = createSubscribedHarness({
@@ -468,6 +549,107 @@ describe("subscribeEmbeddedPiSession", () => {
       }),
     );
   });
+
+  it.each([
+    {
+      label: "music",
+      source: "music_generation" as const,
+      childSessionKey: "music_generate:task-123",
+      announceType: "music generation task",
+      taskLabel: "launch anthem",
+      result: "Generated 1 track.\nMEDIA:/tmp/launch-anthem.mp3",
+      mediaUrl: "/tmp/launch-anthem.mp3",
+      firstChunk: "Generated 1 track.\n",
+      finalText: "Generated 1 track.\nMEDIA:/tmp/launch-anthem.mp3",
+    },
+    {
+      label: "video",
+      source: "video_generation" as const,
+      childSessionKey: "video_generate:task-123",
+      announceType: "video generation task",
+      taskLabel: "launch reel",
+      result: "Generated 1 video.\nMEDIA:/tmp/launch-reel.mp4",
+      mediaUrl: "/tmp/launch-reel.mp4",
+      firstChunk: "Generated 1 video.\n",
+      finalText: "Generated 1 video.\nMEDIA:/tmp/launch-reel.mp4",
+    },
+  ])(
+    "does not attach $label internal completion media to an early streamed chunk before explicit MEDIA",
+    async ({
+      source,
+      childSessionKey,
+      announceType,
+      taskLabel,
+      result,
+      mediaUrl,
+      firstChunk,
+      finalText,
+    }) => {
+      const onBlockReply = vi.fn();
+      const { emit } = createSubscribedHarness({
+        runId: "run",
+        onBlockReply,
+        blockReplyBreak: "text_end",
+        blockReplyChunking: { minChars: 5, maxChars: 200, breakPreference: "newline" },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source,
+            childSessionKey,
+            announceType,
+            taskLabel,
+            status: "ok",
+            statusLabel: "completed successfully",
+            result,
+            mediaUrls: [mediaUrl],
+            replyInstruction: "Reply normally.",
+          },
+        ],
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, firstChunk);
+
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: firstChunk.trim(),
+        }),
+      );
+      const earlyMediaPayloads = onBlockReply.mock.calls
+        .map(([payload]) => payload)
+        .filter((payload) => payload.mediaUrls?.length);
+      expect(earlyMediaPayloads).toEqual([]);
+
+      emitAssistantTextDelta(emit, `MEDIA:${mediaUrl}`);
+      emit({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: {
+          type: "text_end",
+          content: finalText,
+        },
+      });
+      emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: finalText,
+            },
+          ],
+        },
+      });
+      emit({ type: "agent_end" });
+      await flushBlockReplyCallbacks();
+
+      const mediaPayloads = onBlockReply.mock.calls
+        .map(([payload]) => payload)
+        .filter((payload) => payload.mediaUrls?.includes(mediaUrl));
+      expect(mediaPayloads).toHaveLength(1);
+    },
+  );
 
   it("keeps orphaned tool media available for non-block final payload assembly", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
@@ -576,8 +758,50 @@ describe("subscribeEmbeddedPiSession", () => {
     const streamTexts = onReasoningStream.mock.calls
       .map((call) => call[0]?.text)
       .filter((value): value is string => typeof value === "string");
-    expect(streamTexts.at(-1)).toBe("Reasoning:\n_Checking files done_");
+    expect(streamTexts.at(-1)).toBe("Checking files done");
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("extracts correct reasoning delta for incremental stream updates", () => {
+    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      reasoningMode: "stream",
+      onReasoningStream: vi.fn(),
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Step 1" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "Step 1",
+      },
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Step 1 and Step 2" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: " and Step 2",
+      },
+    });
+
+    const thinkingEvents = emitAgentEventSpy.mock.calls
+      .map((call) => call[0])
+      .filter((evt) => evt?.stream === "thinking");
+
+    expect(thinkingEvents.length).toBe(2);
+    expect(thinkingEvents[0]?.data?.delta).toBe("Step 1");
+    expect(thinkingEvents[1]?.data?.delta).toBe(" and Step 2");
+    emitAgentEventSpy.mockRestore();
   });
 
   it("emits reasoning end once when native and tagged reasoning end overlap", () => {
@@ -793,7 +1017,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getLastToolError()?.toolName).toBe("session_status");
   });
 
-  it("emits lifecycle:error event on agent_end when last assistant message was an error", async () => {
+  it("emits lifecycle:error event on agent_end when last assistant message was an error", () => {
     const { emit, onAgentEvent } = createAgentEventHarness({
       runId: "run-error",
       sessionKey: "test-session",
@@ -807,8 +1031,9 @@ describe("subscribeEmbeddedPiSession", () => {
     // Look for lifecycle:error event
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
 
-    expect(lifecycleError).toBeDefined();
-    expect(lifecycleError?.data?.error).toContain("API rate limit reached");
+    expect(lifecycleError).toMatchObject({
+      data: { error: expect.stringContaining("API rate limit reached") },
+    });
   });
 
   it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {

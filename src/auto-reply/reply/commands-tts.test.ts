@@ -315,6 +315,7 @@ describe("handleTtsCommands status fallback reporting", () => {
     const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1, sessionFile };
     const sessionStore = { "session-key": sessionEntry };
 
+    const beforeTtsRead = Date.now();
     const result = await handleTtsCommands(
       buildTtsParams("/tts latest", {}, undefined, { sessionEntry, sessionStore }),
       true,
@@ -330,7 +331,7 @@ describe("handleTtsCommands status fallback reporting", () => {
       expect.objectContaining({ text: "latest visible reply" }),
     );
     expect(sessionEntry.lastTtsReadLatestHash).toMatch(/^[a-f0-9]{64}$/);
-    expect(sessionEntry.lastTtsReadLatestAt).toEqual(expect.any(Number));
+    expect(sessionEntry.lastTtsReadLatestAt).toBeGreaterThanOrEqual(beforeTtsRead);
   });
 
   it("does not resend /tts latest for the same assistant reply", async () => {

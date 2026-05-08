@@ -13,6 +13,11 @@ const automaticGroupReplyConfig = {
     },
   },
 } as const satisfies OpenClawConfig;
+const globalToolOnlyReplyConfig = {
+  messages: {
+    visibleReplies: "message_tool",
+  },
+} as const satisfies OpenClawConfig;
 
 describe("resolveSourceReplyDeliveryMode", () => {
   it("defaults groups and channels to message-tool-only delivery", () => {
@@ -43,13 +48,115 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("automatic");
   });
 
-  it("treats native commands as explicit replies in groups", () => {
+  it("allows message-tool-only delivery for any source chat via global config", () => {
+    for (const ChatType of ["direct", "group", "channel"] as const) {
+      expect(
+        resolveSourceReplyDeliveryMode({ cfg: globalToolOnlyReplyConfig, ctx: { ChatType } }),
+      ).toBe("message_tool_only");
+    }
+  });
+
+  it("allows harnesses to default direct chats to message-tool-only delivery", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "direct" },
+        defaultVisibleReplies: "message_tool",
+      }),
+    ).toBe("message_tool_only");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: { messages: { visibleReplies: "automatic" } },
+        ctx: { ChatType: "direct" },
+        defaultVisibleReplies: "message_tool",
+      }),
+    ).toBe("automatic");
+  });
+
+  it("lets group/channel config override the global visible reply mode", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: {
+          messages: {
+            visibleReplies: "message_tool",
+            groupChat: { visibleReplies: "automatic" },
+          },
+        },
+        ctx: { ChatType: "channel" },
+      }),
+    ).toBe("automatic");
+  });
+
+  it("treats native and authorized text commands as explicit replies in groups", () => {
     expect(
       resolveSourceReplyDeliveryMode({
         cfg: emptyConfig,
         ctx: { ChatType: "group", CommandSource: "native" },
       }),
     ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: {
+          ChatType: "group",
+          CommandSource: "text",
+          CommandAuthorized: true,
+          CommandBody: "/status",
+        },
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: {
+          ChatType: "group",
+          CommandSource: "text",
+          CommandAuthorized: false,
+          CommandBody: "/status",
+        },
+      }),
+    ).toBe("message_tool_only");
+  });
+
+  it("falls back to automatic when message tool is unavailable", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group" },
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: { ChatType: "direct" },
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "message_tool_only",
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
+  });
+
+  it("keeps message-tool-only delivery when message tool availability is unknown", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group" },
+        messageToolAvailable: true,
+      }),
+    ).toBe("message_tool_only");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+      }),
+    ).toBe("message_tool_only");
   });
 });
 
@@ -92,20 +199,30 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     });
   });
 
-  it("keeps native command replies visible in groups", () => {
-    expect(
-      resolveSourceReplyVisibilityPolicy({
-        cfg: emptyConfig,
-        ctx: { ChatType: "group", CommandSource: "native" },
-        sendPolicy: "allow",
-      }),
-    ).toMatchObject({
-      sourceReplyDeliveryMode: "automatic",
-      suppressAutomaticSourceDelivery: false,
-      suppressDelivery: false,
-      suppressHookReplyLifecycle: false,
-      suppressTyping: false,
-    });
+  it("keeps native and authorized text command replies visible in groups", () => {
+    for (const ctx of [
+      { ChatType: "group", CommandSource: "native" },
+      {
+        ChatType: "group",
+        CommandSource: "text",
+        CommandAuthorized: true,
+        CommandBody: "/status",
+      },
+    ] as const) {
+      expect(
+        resolveSourceReplyVisibilityPolicy({
+          cfg: emptyConfig,
+          ctx,
+          sendPolicy: "allow",
+        }),
+      ).toMatchObject({
+        sourceReplyDeliveryMode: "automatic",
+        suppressAutomaticSourceDelivery: false,
+        suppressDelivery: false,
+        suppressHookReplyLifecycle: false,
+        suppressTyping: false,
+      });
+    }
   });
 
   it("keeps configured automatic group delivery visible", () => {
@@ -191,6 +308,36 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       suppressHookUserDelivery: true,
       suppressHookReplyLifecycle: true,
       suppressTyping: false,
+    });
+  });
+  it("keeps delivery automatic when message-tool-only mode cannot send visibly", () => {
+    expect(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group" },
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+      }),
+    ).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      suppressAutomaticSourceDelivery: false,
+      suppressDelivery: false,
+      suppressHookUserDelivery: false,
+      deliverySuppressionReason: "",
+    });
+    expect(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "message_tool_only",
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+      }),
+    ).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      suppressAutomaticSourceDelivery: false,
+      suppressDelivery: false,
+      deliverySuppressionReason: "",
     });
   });
 });

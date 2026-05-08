@@ -107,7 +107,11 @@ describe("task-registry store runtime", () => {
       },
     });
 
-    expect(findTaskByRunId("run-restored")).toBeTruthy();
+    expect(findTaskByRunId("run-restored")).toMatchObject({
+      runId: "run-restored",
+      taskId: "task-restored",
+      task: "Restored task",
+    });
     const created = createTaskRecord({
       runtime: "acp",
       ownerKey: "agent:main:main",
@@ -461,14 +465,18 @@ describe("task-registry store runtime", () => {
 
         resetTaskRegistryForTests({ persist: false });
 
-        expect(() =>
+        expect(
           markTaskLostById({
             taskId: "legacy-session-task",
             endedAt: 200,
             lastEventAt: 200,
             error: "session missing",
           }),
-        ).not.toThrow();
+        ).toMatchObject({
+          taskId: "legacy-session-task",
+          status: "lost",
+          error: "session missing",
+        });
         expect(findTaskByRunId("legacy-session-run")).toMatchObject({
           taskId: "legacy-session-task",
           status: "lost",

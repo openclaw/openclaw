@@ -93,6 +93,7 @@ vi.mock("../pi-tools.abort.js", () => ({
 }));
 
 vi.mock("../auth-profiles.js", () => ({
+  externalCliDiscoveryForProviderAuth: () => undefined,
   ensureAuthProfileStore: (agentDir?: string) => {
     if (!agentDir) {
       return { version: 1, profiles: {} };
@@ -532,7 +533,7 @@ async function expectImageToolExecOk(
 }
 
 function requireImageTool<T>(tool: T | null | undefined): T {
-  expect(tool).not.toBeNull();
+  expect(typeof (tool as { execute?: unknown } | null | undefined)?.execute).toBe("function");
   if (!tool) {
     throw new Error("expected image tool");
   }
@@ -627,6 +628,38 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("defers implicit image model discovery during hot-path tool registration", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
+      const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
+      __testing.setProviderDepsForTest({
+        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          imageProviderHarness.buildProviderRegistry(overrides),
+        getMediaUnderstandingProvider: (
+          id: string,
+          registry: Map<string, MediaUnderstandingProvider>,
+        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+        resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
+        resolveAutoMediaKeyProviders: resolveAutoMediaKeyProvidersSpy,
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      };
+
+      const tool = createImageTool({
+        config: cfg,
+        agentDir,
+        deferAutoModelResolution: true,
+      });
+
+      expect(typeof tool?.execute).toBe("function");
+      expect(resolveDefaultMediaModelSpy).not.toHaveBeenCalled();
+      expect(resolveAutoMediaKeyProvidersSpy).not.toHaveBeenCalled();
+    });
+  });
+
   it("pairs minimax primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
@@ -640,7 +673,7 @@ describe("image tool implicit imageModel config", () => {
         ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
         fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -667,7 +700,7 @@ describe("image tool implicit imageModel config", () => {
         ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
         fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -768,7 +801,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("minimax-portal/MiniMax-VL-01"),
       );
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -781,7 +814,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "opencode/gpt-5-nano",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -794,7 +827,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "opencode-go/kimi-k2.6",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -809,7 +842,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("zai/glm-4.6v"),
       );
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -838,7 +871,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "acme/vision-1",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -900,7 +933,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "amazon-bedrock/vision-1",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -1065,7 +1098,7 @@ describe("image tool implicit imageModel config", () => {
         primary: "openai/gpt-5.4-mini",
       });
       const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
-      expect(tool).not.toBeNull();
+      expect(typeof tool?.execute).toBe("function");
       expect(tool?.description).toContain(
         "Only use this tool when images were NOT already provided",
       );

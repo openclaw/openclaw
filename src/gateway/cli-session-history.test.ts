@@ -12,6 +12,18 @@ import {
 
 const ORIGINAL_HOME = process.env.HOME;
 
+type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
+
+function requireFallbackSeed(
+  seed: ReturnType<typeof readClaudeCliFallbackSeed>,
+  label: string,
+): ClaudeCliFallbackSeed {
+  if (!seed) {
+    throw new Error(`expected ${label} fallback seed`);
+  }
+  return seed;
+}
+
 function createClaudeHistoryLines(sessionId: string) {
   return [
     JSON.stringify({
@@ -256,6 +268,73 @@ describe("cli session history", () => {
     });
   });
 
+  it("augments anthropic-routed chat history when a Claude CLI binding has local messages", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
+      const messages = augmentChatHistoryWithCliSessionImports({
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId,
+            },
+          },
+        },
+        provider: "anthropic",
+        localMessages: [
+          {
+            role: "assistant",
+            content: "local assistant turn",
+            timestamp: Date.parse("2026-03-26T16:29:57.000Z"),
+          },
+        ],
+        homeDir,
+      });
+
+      expect(messages).toHaveLength(4);
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: "local assistant turn",
+        }),
+      );
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "user",
+          __openclaw: expect.objectContaining({ cliSessionId: sessionId }),
+        }),
+      );
+    });
+  });
+
+  it("does not import stale Claude CLI history for unrelated providers with local messages", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
+      const localMessages = [
+        {
+          role: "assistant",
+          content: "local OpenAI turn",
+          timestamp: Date.parse("2026-03-26T16:29:57.000Z"),
+        },
+      ];
+      const messages = augmentChatHistoryWithCliSessionImports({
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId,
+            },
+          },
+        },
+        provider: "openai",
+        localMessages,
+        homeDir,
+      });
+
+      expect(messages).toBe(localMessages);
+    });
+  });
+
   it("falls back to legacy cliSessionIds when bindings are absent", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
       const messages = augmentChatHistoryWithCliSessionImports({
@@ -356,11 +435,11 @@ describe("readClaudeCliFallbackSeed", () => {
     ]);
 
     const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
-    expect(seed).toBeDefined();
-    expect(seed?.summaryText).toBeUndefined();
-    expect(seed?.recentTurns).toHaveLength(3);
-    expect(seed?.recentTurns[0]).toMatchObject({ role: "user" });
-    expect(seed?.recentTurns[2]).toMatchObject({ role: "user" });
+    const fallbackSeed = requireFallbackSeed(seed, "uncompacted session");
+    expect(fallbackSeed.summaryText).toBeUndefined();
+    expect(fallbackSeed.recentTurns).toHaveLength(3);
+    expect(fallbackSeed.recentTurns[0]).toMatchObject({ role: "user" });
+    expect(fallbackSeed.recentTurns[2]).toMatchObject({ role: "user" });
   });
 
   it("uses the explicit /compact summary and drops pre-boundary turns", async () => {
@@ -406,12 +485,12 @@ describe("readClaudeCliFallbackSeed", () => {
     ]);
 
     const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
-    expect(seed).toBeDefined();
-    expect(seed?.summaryText).toBe(
+    const fallbackSeed = requireFallbackSeed(seed, "compacted session");
+    expect(fallbackSeed.summaryText).toBe(
       "User asked about deployment; agent recommended a blue-green strategy.",
     );
-    expect(seed?.recentTurns).toHaveLength(2);
-    const recentText = JSON.stringify(seed?.recentTurns);
+    expect(fallbackSeed.recentTurns).toHaveLength(2);
+    const recentText = JSON.stringify(fallbackSeed.recentTurns);
     expect(recentText).toContain("POST-COMPACT user follow-up");
     expect(recentText).toContain("POST-COMPACT assistant reply");
     expect(recentText).not.toContain("PRE-COMPACT");
@@ -438,12 +517,12 @@ describe("readClaudeCliFallbackSeed", () => {
     ]);
 
     const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
-    expect(seed).toBeDefined();
+    const fallbackSeed = requireFallbackSeed(seed, "compact boundary session");
     // Falls back to the boundary's content so the seed at least labels
     // that compaction happened, instead of replaying nothing.
-    expect(seed?.summaryText).toBe("Conversation compacted");
-    expect(seed?.recentTurns).toHaveLength(1);
-    expect(JSON.stringify(seed?.recentTurns)).toContain("post-boundary user turn");
+    expect(fallbackSeed.summaryText).toBe("Conversation compacted");
+    expect(fallbackSeed.recentTurns).toHaveLength(1);
+    expect(JSON.stringify(fallbackSeed.recentTurns)).toContain("post-boundary user turn");
   });
 
   it("prefers the most recent summary when the session has been compacted multiple times", async () => {
@@ -536,11 +615,11 @@ describe("readClaudeCliFallbackSeed", () => {
     ]);
 
     const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
-    expect(seed).toBeDefined();
-    expect(seed?.summaryText).toBe("Conversation compacted (2)");
-    expect(seed?.summaryText).not.toBe("FIRST compact summary");
-    expect(seed?.recentTurns).toHaveLength(1);
-    expect(JSON.stringify(seed?.recentTurns)).toContain("post-second-compact turn");
+    const fallbackSeed = requireFallbackSeed(seed, "latest boundary session");
+    expect(fallbackSeed.summaryText).toBe("Conversation compacted (2)");
+    expect(fallbackSeed.summaryText).not.toBe("FIRST compact summary");
+    expect(fallbackSeed.recentTurns).toHaveLength(1);
+    expect(JSON.stringify(fallbackSeed.recentTurns)).toContain("post-second-compact turn");
   });
 
   it("uses a trailing summary that has no following compact_boundary marker", async () => {

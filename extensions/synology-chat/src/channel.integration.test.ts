@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildChannelTurnContextMock,
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContextMock,
   registerPluginHttpRouteMock,
@@ -35,6 +36,7 @@ describe("Synology channel wiring integration", () => {
   beforeEach(() => {
     registerPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    buildChannelTurnContextMock.mockClear();
     finalizeInboundContextMock.mockClear();
     resolveAgentRouteMock.mockClear();
     setSynologyRuntimeConfigForTest({});
@@ -67,7 +69,6 @@ describe("Synology channel wiring integration", () => {
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
 
     const firstCall = registerPluginHttpRouteMock.mock.calls[0];
-    expect(firstCall).toBeTruthy();
     if (!firstCall) {
       throw new Error("Expected registerPluginHttpRoute to be called");
     }
@@ -109,6 +110,7 @@ describe("Synology channel wiring integration", () => {
               incomingUrl: "https://nas.example.com/incoming-alpha",
               webhookPath: "/webhook/synology-alpha",
               dmPolicy: "open",
+              allowedUserIds: ["*"],
             },
             beta: {
               enabled: true,
@@ -116,6 +118,7 @@ describe("Synology channel wiring integration", () => {
               incomingUrl: "https://nas.example.com/incoming-beta",
               webhookPath: "/webhook/synology-beta",
               dmPolicy: "open",
+              allowedUserIds: ["*"],
             },
           },
         },

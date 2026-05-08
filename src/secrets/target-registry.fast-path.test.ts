@@ -53,13 +53,11 @@ describe("secret target registry fast path", () => {
   it("resolves bundled channel targets by explicit channel id without manifest scans", () => {
     const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
 
-    expect(target).not.toBeNull();
     expect(target?.entry.id).toBe("channels.googlechat.serviceAccount");
     expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "googlechat",
       artifactBasename: "secret-contract-api.js",
-      installRuntimeDeps: false,
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });

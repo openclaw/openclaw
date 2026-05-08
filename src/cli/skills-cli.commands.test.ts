@@ -59,6 +59,9 @@ const mocks = vi.hoisted(() => {
       runtimeStdout.push(JSON.stringify(value, null, space > 0 ? space : undefined));
     }),
     exit: vi.fn((code: number) => {
+      if (code === 0) {
+        return;
+      }
       throw new Error(`__exit__:${code}`);
     }),
   };
@@ -142,7 +145,16 @@ describe("skills cli commands", () => {
     return program;
   };
 
-  const runCommand = (argv: string[]) => createProgram().parseAsync(argv, { from: "user" });
+  const runCommand = async (argv: string[]) => {
+    try {
+      await createProgram().parseAsync(argv, { from: "user" });
+    } catch (error) {
+      if (error instanceof Error && error.message === "__exit__:0") {
+        return;
+      }
+      throw error;
+    }
+  };
 
   beforeEach(() => {
     runtimeLogs.length = 0;
@@ -208,7 +220,9 @@ describe("skills cli commands", () => {
       query: "calendar",
       limit: undefined,
     });
-    expect(runtimeLogs.some((line) => line.includes("calendar v1.2.3  Calendar"))).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("calendar v1.2.3  Calendar")]),
+    );
   });
 
   it("installs a skill from ClawHub into the active workspace", async () => {
@@ -323,8 +337,8 @@ describe("skills cli commands", () => {
       slug: undefined,
       logger: expect.any(Object),
     });
-    expect(runtimeLogs.some((line) => line.includes("Updated calendar: 1.2.2 -> 1.2.3"))).toBe(
-      true,
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Updated calendar: 1.2.2 -> 1.2.3")]),
     );
     expect(runtimeErrors).toEqual([]);
   });
@@ -414,9 +428,10 @@ describe("skills cli commands", () => {
   ])("routes skills $label JSON output through stdout", async ({ argv, assert }) => {
     await runCommand(argv);
 
-    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace", {
-      config: {},
-    });
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith(
+      "/tmp/workspace",
+      expect.objectContaining({ config: {} }),
+    );
     expect(
       defaultRuntime.writeStdout.mock.calls.length + defaultRuntime.writeJson.mock.calls.length,
     ).toBeGreaterThan(0);
@@ -441,9 +456,10 @@ describe("skills cli commands", () => {
       await runCommand(argv);
     });
 
-    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace-writer", {
-      config: {},
-    });
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith(
+      "/tmp/workspace-writer",
+      expect.objectContaining({ config: {} }),
+    );
   });
 
   it.each([
@@ -460,9 +476,10 @@ describe("skills cli commands", () => {
     });
 
     expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
-    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace-writer", {
-      config: {},
-    });
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith(
+      "/tmp/workspace-writer",
+      expect.objectContaining({ config: {} }),
+    );
   });
 
   it("falls back to the default agent outside configured workspaces", async () => {
@@ -476,9 +493,10 @@ describe("skills cli commands", () => {
 
     expect(resolveAgentIdByWorkspacePathMock).toHaveBeenCalledWith({}, "/tmp/unrelated");
     expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith({});
-    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace-main", {
-      config: {},
-    });
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith(
+      "/tmp/workspace-main",
+      expect.objectContaining({ config: {} }),
+    );
   });
 
   it("keeps non-JSON skills list output on stdout with human-readable formatting", async () => {

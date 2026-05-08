@@ -4,6 +4,7 @@ import {
   analyzeBootstrapBudget,
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
+  buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
   buildBootstrapTruncationSignature,
   formatBootstrapTruncationWarningLines,
@@ -136,6 +137,18 @@ describe("bootstrap prompt warnings", () => {
     ).toBe(heartbeatPrompt);
   });
 
+  it("builds a concise agent notice without raw truncation diagnostics", () => {
+    const notice = buildBootstrapPromptWarningNotice([
+      "AGENTS.md: 200 raw -> 0 injected",
+      "If unintentional, raise agents.defaults.bootstrapMaxChars.",
+    ]);
+
+    expect(notice).toContain("[Bootstrap truncation warning]");
+    expect(notice).toContain("Treat Project Context as partial");
+    expect(notice).not.toContain("raw ->");
+    expect(notice).not.toContain("bootstrapMaxChars");
+  });
+
   it("resolves seen signatures from report history or legacy single signature", () => {
     expect(
       resolveBootstrapWarningSignaturesSeen({
@@ -198,7 +211,20 @@ describe("bootstrap prompt warnings", () => {
       mode: "once",
     });
     expect(first.warningShown).toBe(true);
-    expect(first.signature).toBeTruthy();
+    expect(first.signature).toBeTypeOf("string");
+    expect(first.signature).not.toBe("");
+    expect(JSON.parse(first.signature ?? "{}")).toMatchObject({
+      bootstrapMaxChars: 120,
+      bootstrapTotalMaxChars: 200,
+      files: [
+        {
+          path: "/tmp/AGENTS.md",
+          rawChars: 150,
+          injectedChars: 100,
+          causes: ["per-file-limit"],
+        },
+      ],
+    });
     expect(first.lines.join("\n")).toContain("AGENTS.md");
 
     const second = buildBootstrapPromptWarning({
@@ -423,8 +449,8 @@ describe("bootstrap prompt warnings", () => {
     expect(meta.warningShown).toBe(true);
     expect(meta.truncatedFiles).toBe(1);
     expect(meta.nearLimitFiles).toBeGreaterThanOrEqual(1);
-    expect(meta.promptWarningSignature).toBeTruthy();
-    expect(meta.warningSignaturesSeen?.length).toBeGreaterThan(0);
+    expect(meta.promptWarningSignature).toBe(warning.signature);
+    expect(meta.warningSignaturesSeen).toEqual([warning.signature]);
   });
 
   it("improves cache-relevant system prompt stability versus legacy warning injection", () => {

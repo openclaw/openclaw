@@ -3,7 +3,14 @@ import { expect, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../types.js";
 
-export function createLifecycleConfig(params: {
+function resolveLifecycleAllowFrom(params: {
+  dmPolicy: "open" | "pairing";
+  allowFrom?: string[];
+}): string[] | undefined {
+  return params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
+}
+
+function createLifecycleConfig(params: {
   accountId: string;
   dmPolicy: "open" | "pairing";
   allowFrom?: string[];
@@ -12,6 +19,7 @@ export function createLifecycleConfig(params: {
 }): OpenClawConfig {
   const webhookUrl = params.webhookUrl ?? "https://example.com/hooks/zalo";
   const webhookSecret = params.webhookSecret ?? "supersecret";
+  const allowFrom = resolveLifecycleAllowFrom(params);
   return {
     channels: {
       zalo: {
@@ -22,7 +30,7 @@ export function createLifecycleConfig(params: {
             webhookUrl,
             webhookSecret, // pragma: allowlist secret
             dmPolicy: params.dmPolicy,
-            ...(params.allowFrom ? { allowFrom: params.allowFrom } : {}),
+            ...(allowFrom ? { allowFrom } : {}),
           },
         },
       },
@@ -30,7 +38,7 @@ export function createLifecycleConfig(params: {
   } as OpenClawConfig;
 }
 
-export function createLifecycleAccount(params: {
+function createLifecycleAccount(params: {
   accountId: string;
   dmPolicy: "open" | "pairing";
   allowFrom?: string[];
@@ -39,6 +47,7 @@ export function createLifecycleAccount(params: {
 }): ResolvedZaloAccount {
   const webhookUrl = params.webhookUrl ?? "https://example.com/hooks/zalo";
   const webhookSecret = params.webhookSecret ?? "supersecret";
+  const allowFrom = resolveLifecycleAllowFrom(params);
   return {
     accountId: params.accountId,
     enabled: true,
@@ -48,7 +57,7 @@ export function createLifecycleAccount(params: {
       webhookUrl,
       webhookSecret, // pragma: allowlist secret
       dmPolicy: params.dmPolicy,
-      ...(params.allowFrom ? { allowFrom: params.allowFrom } : {}),
+      ...(allowFrom ? { allowFrom } : {}),
     },
   } as ResolvedZaloAccount;
 }
@@ -113,6 +122,50 @@ export function createImageUpdate(params?: {
 
 export function createImageLifecycleCore() {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
+  const buildChannelTurnContextMock = vi.fn(
+    (params: {
+      channel: string;
+      accountId?: string;
+      messageId?: string;
+      timestamp?: number;
+      from: string;
+      sender: { id: string; name?: string };
+      conversation: { kind: string; label?: string };
+      route: {
+        accountId?: string;
+        routeSessionKey: string;
+        dispatchSessionKey?: string;
+      };
+      reply: { to: string; originatingTo: string };
+      message: { body?: string; rawBody: string; bodyForAgent?: string; commandBody?: string };
+      media?: Array<{ path?: string; url?: string; contentType?: string }>;
+      extra?: Record<string, unknown>;
+    }) =>
+      finalizeInboundContextMock({
+        Body: params.message.body ?? params.message.rawBody,
+        BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
+        RawBody: params.message.rawBody,
+        CommandBody: params.message.commandBody ?? params.message.rawBody,
+        From: params.from,
+        To: params.reply.to,
+        SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
+        AccountId: params.route.accountId ?? params.accountId,
+        ChatType: params.conversation.kind,
+        ConversationLabel: params.conversation.label,
+        SenderName: params.sender.name,
+        SenderId: params.sender.id,
+        Provider: params.channel,
+        Surface: params.channel,
+        MessageSid: params.messageId,
+        Timestamp: params.timestamp,
+        MediaPath: params.media?.[0]?.path,
+        MediaType: params.media?.[0]?.contentType,
+        MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
+        OriginatingChannel: params.channel,
+        OriginatingTo: params.reply.originatingTo,
+        ...params.extra,
+      }),
+  );
   const recordInboundSessionMock = vi.fn(async () => undefined);
   const fetchRemoteMediaMock = vi.fn(async () => ({
     buffer: Buffer.from("image-bytes"),
@@ -177,6 +230,66 @@ export function createImageLifecycleCore() {
         dispatchReplyWithBufferedBlockDispatcher: vi.fn(
           async () => undefined,
         ) as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
+      },
+      turn: {
+        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+          const input = await params.adapter.ingest(params.raw);
+          if (!input) {
+            return {
+              admission: { kind: "drop" as const, reason: "ingest-null" },
+              dispatched: false,
+            };
+          }
+          const resolved = await params.adapter.resolveTurn(
+            input,
+            {
+              kind: "message",
+              canStartAgentTurn: true,
+            },
+            {},
+          );
+          await resolved.recordInboundSession({
+            storePath: resolved.storePath,
+            sessionKey: resolved.ctxPayload.SessionKey ?? resolved.routeSessionKey,
+            ctx: resolved.ctxPayload,
+            groupResolution: resolved.record?.groupResolution,
+            createIfMissing: resolved.record?.createIfMissing,
+            updateLastRoute: resolved.record?.updateLastRoute,
+            onRecordError: resolved.record?.onRecordError ?? (() => undefined),
+          });
+          if ("runDispatch" in resolved) {
+            const dispatchResult = await resolved.runDispatch();
+            return {
+              admission: { kind: "dispatch" as const },
+              dispatched: true,
+              ctxPayload: resolved.ctxPayload,
+              routeSessionKey: resolved.routeSessionKey,
+              dispatchResult,
+            };
+          }
+          const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
+            ctx: resolved.ctxPayload,
+            cfg: resolved.cfg,
+            dispatcherOptions: {
+              ...resolved.dispatcherOptions,
+              deliver: async (...args: Parameters<typeof resolved.delivery.deliver>) => {
+                await resolved.delivery.deliver(...args);
+              },
+              onError: resolved.delivery.onError,
+            },
+            replyOptions: resolved.replyOptions,
+            replyResolver: resolved.replyResolver,
+          });
+          return {
+            admission: { kind: "dispatch" as const },
+            dispatched: true,
+            ctxPayload: resolved.ctxPayload,
+            routeSessionKey: resolved.routeSessionKey,
+            dispatchResult,
+          };
+        }) as unknown as PluginRuntime["channel"]["turn"]["run"],
+        buildContext:
+          buildChannelTurnContextMock as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(
@@ -246,7 +359,7 @@ export async function settleAsyncWork(): Promise<void> {
   }
 }
 
-export async function postWebhookUpdate(params: {
+async function postWebhookUpdate(params: {
   baseUrl: string;
   path: string;
   secret: string;

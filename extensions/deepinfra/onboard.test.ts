@@ -44,8 +44,7 @@ describe("DeepInfra provider config", () => {
     it("sets DeepInfra alias on the provided model ref", () => {
       const result = applyDeepInfraProviderConfig(emptyCfg, DEEPINFRA_DEFAULT_MODEL_REF);
       const agentModel = result.agents?.defaults?.models?.[DEEPINFRA_DEFAULT_MODEL_REF];
-      expect(agentModel).toBeDefined();
-      expect(agentModel?.alias).toBe("DeepInfra");
+      expect(agentModel).toMatchObject({ alias: "DeepInfra" });
     });
 
     it("attaches the alias to a non-default model ref when provided", () => {
@@ -116,9 +115,10 @@ describe("DeepInfra provider config", () => {
 
       try {
         const result = resolveEnvApiKey("deepinfra");
-        expect(result).not.toBeNull();
-        expect(result?.apiKey).toBe("test-deepinfra-key");
-        expect(result?.source).toContain("DEEPINFRA_API_KEY");
+        expect(result).toMatchObject({
+          apiKey: "test-deepinfra-key",
+          source: expect.stringContaining("DEEPINFRA_API_KEY"),
+        });
       } finally {
         envSnapshot.restore();
       }

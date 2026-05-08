@@ -100,7 +100,7 @@ describe("diagnostic-trace-context", () => {
 
     expect(isValidDiagnosticTraceId(context.traceId)).toBe(true);
     expect(isValidDiagnosticSpanId(context.spanId)).toBe(true);
-    expect(formatDiagnosticTraceparent(context)).toBeDefined();
+    expect(formatDiagnosticTraceparent(context)).toBe(`00-${context.traceId}-${context.spanId}-01`);
   });
 
   it("creates child contexts without retaining parent references or self-parenting", () => {
@@ -147,7 +147,7 @@ describe("diagnostic-trace-context", () => {
 
     await runWithDiagnosticTraceContext(outer, async () => {
       expect(getActiveDiagnosticTraceContext()).toEqual(outer);
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await Promise.resolve();
       expect(getActiveDiagnosticTraceContext()).toEqual(outer);
 
       runWithDiagnosticTraceContext(inner, () => {

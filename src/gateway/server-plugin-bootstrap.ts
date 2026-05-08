@@ -1,7 +1,6 @@
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { BundledRuntimeDepsInstallParams } from "../plugins/bundled-runtime-deps.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
@@ -25,6 +24,10 @@ type GatewayPluginBootstrapLog = {
   debug: (msg: string) => void;
 };
 
+type GatewayStartupTrace = {
+  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+};
+
 type GatewayPluginBootstrapParams = {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -38,7 +41,7 @@ type GatewayPluginBootstrapParams = {
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
   logDiagnostics?: boolean;
-  bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
+  startupTrace?: GatewayStartupTrace;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
 };
 
@@ -104,7 +107,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     pluginLookUpTable: params.pluginLookUpTable,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
-    bundledRuntimeDepsInstaller: params.bundledRuntimeDepsInstaller,
+    startupTrace: params.startupTrace,
   });
   params.beforePrimeRegistry?.(loaded.pluginRegistry);
   primeConfiguredBindingRegistry({ cfg: resolvedConfig });
