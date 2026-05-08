@@ -16,6 +16,7 @@ import {
 } from "./diagnostic-events.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import {
+  importLegacyVoiceWakeRoutingConfigFileToSqlite,
   loadVoiceWakeRoutingConfig,
   normalizeVoiceWakeTriggerWord,
   resolveVoiceWakeRouteByTrigger,
@@ -23,6 +24,7 @@ import {
 } from "./voicewake-routing.js";
 import {
   defaultVoiceWakeTriggers,
+  importLegacyVoiceWakeConfigFileToSqlite,
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
 } from "./voicewake.js";
@@ -54,7 +56,7 @@ describe("infra store", () => {
   describe("state migrations fs", () => {
     it("treats array session stores as invalid", async () => {
       await withTempDir("openclaw-session-store-", async (dir) => {
-        const storePath = path.join(dir, "sessions.json");
+        const storePath = path.join(dir, "legacy-session-store.json5");
         await fs.writeFile(storePath, "[]", "utf-8");
 
         const result = readSessionStoreJson5(storePath);
@@ -65,7 +67,7 @@ describe("infra store", () => {
 
     it("parses JSON5 object session stores", async () => {
       await withTempDir("openclaw-session-store-", async (dir) => {
-        const storePath = path.join(dir, "sessions.json");
+        const storePath = path.join(dir, "legacy-session-store.json5");
         await fs.writeFile(
           storePath,
           "{\n  // comment allowed in JSON5\n  main: { sessionId: 's1', updatedAt: 123 },\n}\n",
@@ -109,7 +111,7 @@ describe("infra store", () => {
       });
     });
 
-    it("sanitizes malformed persisted config values", async () => {
+    it("imports malformed legacy config values through migration", async () => {
       await withTempDir("openclaw-voicewake-", async (baseDir) => {
         await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
         await fs.writeFile(
@@ -121,6 +123,7 @@ describe("infra store", () => {
           "utf-8",
         );
 
+        await importLegacyVoiceWakeConfigFileToSqlite(baseDir);
         const loaded = await loadVoiceWakeConfig(baseDir);
         expect(loaded.triggers).toEqual(["wake"]);
         expect(loaded.updatedAtMs).toBe(0);
@@ -144,6 +147,23 @@ describe("infra store", () => {
       expect(saved.routes).toEqual([{ trigger: "hello bot", target: { agentId: "main" } }]);
       expect(saved.updatedAtMs).toBeGreaterThan(0);
 
+      const loaded = await loadVoiceWakeRoutingConfig(baseDir);
+      expect(loaded.routes).toEqual([{ trigger: "hello bot", target: { agentId: "main" } }]);
+    });
+
+    it("imports legacy routing config through migration", async () => {
+      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-routing-"));
+      await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
+      await fs.writeFile(
+        path.join(baseDir, "settings", "voicewake-routing.json"),
+        JSON.stringify({
+          defaultTarget: { mode: "current" },
+          routes: [{ trigger: "  Hello   Bot  ", target: { agentId: "main" } }],
+        }),
+        "utf-8",
+      );
+
+      await importLegacyVoiceWakeRoutingConfigFileToSqlite(baseDir);
       const loaded = await loadVoiceWakeRoutingConfig(baseDir);
       expect(loaded.routes).toEqual([{ trigger: "hello bot", target: { agentId: "main" } }]);
     });

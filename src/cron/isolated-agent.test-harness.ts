@@ -55,14 +55,7 @@ export async function seedCronSessionRows(
   }
 }
 
-export function makeCfg(
-  home: string,
-  storePathOrOverrides: string | Partial<OpenClawConfig> = {},
-  overrides: Partial<OpenClawConfig> = {},
-): OpenClawConfig {
-  const storePath = typeof storePathOrOverrides === "string" ? storePathOrOverrides : undefined;
-  const resolvedOverrides =
-    typeof storePathOrOverrides === "string" ? overrides : storePathOrOverrides;
+export function makeCfg(home: string, overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
   const base: OpenClawConfig = {
     agents: {
       defaults: {
@@ -74,7 +67,7 @@ export function makeCfg(
       mainKey: "main",
     },
   } as OpenClawConfig;
-  return { ...base, ...resolvedOverrides };
+  return { ...base, ...overrides };
 }
 
 export function makeJob(payload: CronJob["payload"]): CronJob {
