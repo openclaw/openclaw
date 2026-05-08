@@ -15,9 +15,9 @@ import {
   appendSqliteSessionTranscriptMessage,
   deleteSqliteSessionTranscript,
   exportSqliteSessionTranscriptJsonl,
-  importJsonlTranscriptToSqlite,
   loadSqliteSessionTranscriptEvents,
   recordSqliteSessionTranscriptSnapshot,
+  replaceSqliteSessionTranscriptEvents,
 } from "./transcript-store.sqlite.js";
 
 function createTempDir(): string {
@@ -227,28 +227,21 @@ describe("SQLite session transcript store", () => {
     ).toEqual({ count: 0 });
   });
 
-  it("imports legacy JSONL transcript files and renders JSONL from SQLite", () => {
+  it("renders JSONL from SQLite for explicit transcript export", () => {
     const stateDir = createTempDir();
     const sourcePath = path.join(stateDir, "source.jsonl");
-    fs.writeFileSync(
-      sourcePath,
-      [
-        JSON.stringify({ type: "session", id: "session-1" }),
-        JSON.stringify({ type: "message", id: "m1", message: { role: "user", content: "hi" } }),
-        "",
-      ].join("\n"),
-      { mode: 0o600 },
-    );
 
-    expect(
-      importJsonlTranscriptToSqlite({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        agentId: "main",
-        sessionId: "session-1",
-        transcriptPath: sourcePath,
-        now: () => 300,
-      }),
-    ).toEqual({ imported: 2, transcriptPath: sourcePath });
+    replaceSqliteSessionTranscriptEvents({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      agentId: "main",
+      sessionId: "session-1",
+      transcriptPath: sourcePath,
+      events: [
+        { type: "session", id: "session-1" },
+        { type: "message", id: "m1", message: { role: "user", content: "hi" } },
+      ],
+      now: () => 300,
+    });
 
     expect(
       exportSqliteSessionTranscriptJsonl({

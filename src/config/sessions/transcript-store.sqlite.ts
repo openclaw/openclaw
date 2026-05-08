@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import type { Insertable } from "kysely";
 import { sql } from "kysely";
@@ -52,11 +51,6 @@ export type AppendSqliteSessionTranscriptMessageOptions = SqliteSessionTranscrip
 export type ReplaceSqliteSessionTranscriptEventsOptions = SqliteSessionTranscriptStoreOptions & {
   events: unknown[];
   transcriptPath?: string;
-  now?: () => number;
-};
-
-export type ImportJsonlTranscriptToSqliteOptions = SqliteSessionTranscriptStoreOptions & {
-  transcriptPath: string;
   now?: () => number;
 };
 
@@ -814,36 +808,4 @@ export function exportSqliteSessionTranscriptJsonl(
     JSON.stringify(entry.event),
   );
   return lines.length > 0 ? `${lines.join("\n")}\n` : "";
-}
-
-export function importJsonlTranscriptToSqlite(options: ImportJsonlTranscriptToSqliteOptions): {
-  imported: number;
-  transcriptPath: string;
-} {
-  const raw = fs.readFileSync(options.transcriptPath, "utf-8");
-  const events = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, index) => {
-      try {
-        return JSON.parse(line);
-      } catch (error) {
-        throw new Error(
-          `Invalid transcript JSONL at line ${index + 1}: ${options.transcriptPath}`,
-          {
-            cause: error,
-          },
-        );
-      }
-    });
-  replaceSqliteSessionTranscriptEvents({
-    ...options,
-    events,
-    transcriptPath: options.transcriptPath,
-  });
-  return {
-    imported: events.length,
-    transcriptPath: options.transcriptPath,
-  };
 }

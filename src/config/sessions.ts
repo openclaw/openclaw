@@ -1,6 +1,5 @@
 export * from "./sessions/combined-session-entries-gateway.js";
 export * from "./sessions/group.js";
-export * from "./sessions/artifacts.js";
 export * from "./sessions/metadata.js";
 export * from "./sessions/main-session.js";
 export * from "./sessions/main-session.runtime.js";
