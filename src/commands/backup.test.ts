@@ -210,12 +210,11 @@ describe("backup commands", () => {
       expect(result.archivePath).toBe(
         path.join(backupDir, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
       );
-      expect(capturedManifest).not.toBeNull();
-      expect(capturedOnWriteEntry).not.toBeNull();
-      const manifest = capturedManifest as unknown as {
-        assets: Array<{ kind: string; archivePath: string }>;
-      };
-      const onWriteEntry = capturedOnWriteEntry as unknown as (entry: { path: string }) => void;
+      if (capturedManifest === null || capturedOnWriteEntry === null) {
+        throw new Error("Expected backup manifest and archive entry callback");
+      }
+      const manifest = capturedManifest;
+      const onWriteEntry = capturedOnWriteEntry;
       expect(manifest.assets).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ kind: "state" }),
