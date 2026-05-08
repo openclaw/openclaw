@@ -132,6 +132,44 @@ function providerFilterList(): string[] | undefined {
     : undefined;
 }
 
+function providerListFromExplicitModelFilter(params: {
+  modelFilter: Set<string> | null;
+  providerFilter: Set<string> | null;
+}): string[] | undefined {
+  if (!params.modelFilter || params.modelFilter.size === 0) {
+    return undefined;
+  }
+  const providers = new Set<string>();
+  for (const raw of params.modelFilter) {
+    const ref = parseExplicitLiveModelRef(raw, params.providerFilter);
+    if (!ref) {
+      return undefined;
+    }
+    providers.add(ref.provider);
+  }
+  return providers.size > 0
+    ? [...providers].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
+}
+
+function providerScopedModelRegistryProviders(params: {
+  providerList: string[] | undefined;
+  useExplicit: boolean;
+  modelFilter: Set<string> | null;
+  providerFilter: Set<string> | null;
+}): string[] | undefined {
+  if (params.providerList) {
+    return params.providerList;
+  }
+  if (!params.useExplicit) {
+    return undefined;
+  }
+  return providerListFromExplicitModelFilter({
+    modelFilter: params.modelFilter,
+    providerFilter: params.providerFilter,
+  });
+}
+
 function shouldSuppressGatewayLiveOllamaWarnings(): boolean {
   return PROVIDERS !== null && !PROVIDERS.has("ollama");
 }
@@ -687,6 +725,41 @@ describe("resolveExplicitLiveModelCandidates", () => {
         targetMatcher: matcher,
       }),
     ).toBeNull();
+  });
+});
+
+describe("providerScopedModelRegistryProviders", () => {
+  it("uses explicit provider-qualified model refs without enumerating the full registry", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["openai/gpt-5.2", "anthropic/claude-sonnet-4-6"]),
+        providerFilter: null,
+      }),
+    ).toEqual(["anthropic", "openai"]);
+  });
+
+  it("uses a single provider filter for explicit model-only refs", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["gpt-5.2"]),
+        providerFilter: new Set(["openai"]),
+      }),
+    ).toEqual(["openai"]);
+  });
+
+  it("falls back to the full registry for ambiguous explicit model-only refs", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["gpt-5.2"]),
+        providerFilter: null,
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -1257,7 +1330,10 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
     try {
       const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
       expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile).toBeDefined();
+      expect(sanitized.profiles.codexProfile).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+      });
       expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
       expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
       expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });
@@ -2551,14 +2627,19 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
         const useExplicit = Boolean(rawModels) && !useModern;
         const filter = useExplicit ? parseFilter(rawModels) : null;
-        const useProviderScopedBuiltIns = Array.isArray(providerList) && !useExplicit;
+        const providerScopedModelProviders = providerScopedModelRegistryProviders({
+          providerList,
+          useExplicit,
+          modelFilter: filter,
+          providerFilter: PROVIDERS,
+        });
         let authProfileStore: AuthProfileStore | undefined;
         let modelRegistry: LiveModelRegistry;
         let all: Array<Model<Api>>;
-        if (useProviderScopedBuiltIns) {
+        if (providerScopedModelProviders) {
           logProgress("[all-models] loading provider-scoped model refs");
           all = await withGatewayLiveSetupTimeout(
-            loadProviderScopedModels({ agentDir, providerList }),
+            loadProviderScopedModels({ agentDir, providerList: providerScopedModelProviders }),
             "[all-models] load provider-scoped model refs",
           );
           modelRegistry = createStaticLiveModelRegistry(all);
@@ -2687,6 +2768,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
           );
         }
+        expect(selectedCandidates.length).toBeGreaterThan(0);
         const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
         if (imageCandidates.length === 0) {
           logProgress("[all-models] no image-capable models selected; image probe will be skipped");
