@@ -622,10 +622,13 @@ async function emitToolResultOutput(params: {
   if (!mediaReply) {
     return;
   }
-  const pendingMediaUrls =
-    emittedToolOutputMediaUrls.length === 0
-      ? mediaUrls
-      : mediaUrls.filter((url) => !emittedToolOutputMediaUrls.includes(url));
+  // Keep structured tool media queued for the final outbound reply even when the
+  // tool text itself contained a MEDIA: directive. Plain external channels may
+  // strip tool-output MEDIA from the transcript without actually delivering the
+  // attachment, so treating emitted tool-output media as already sent can drop
+  // generated images before the channel adapter sees them. Downstream reply
+  // merging still de-duplicates identical media URLs.
+  const pendingMediaUrls = mediaUrls;
   if (pendingMediaUrls.length === 0) {
     return;
   }
