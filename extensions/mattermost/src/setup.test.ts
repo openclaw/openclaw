@@ -391,8 +391,13 @@ describe("mattermost setup", () => {
       ([params]) => (params as { message: string }).message,
     );
     expect(textMessages).toEqual(["Enter Mattermost bot token", "Enter Mattermost base URL"]);
-    expect(result.cfg.channels?.mattermost?.botToken).toBe("bot-token");
-    expect(result.cfg.channels?.mattermost?.baseUrl).toBe("https://chat.example.com");
+    const mattermostConfig = result.cfg.channels?.mattermost;
+    expect(mattermostConfig).toBeDefined();
+    if (!mattermostConfig) {
+      throw new Error("expected Mattermost config");
+    }
+    expect(mattermostConfig.botToken).toBe("bot-token");
+    expect(mattermostConfig.baseUrl).toBe("https://chat.example.com");
     expect(result.accountId).toBe(DEFAULT_ACCOUNT_ID);
   });
 });

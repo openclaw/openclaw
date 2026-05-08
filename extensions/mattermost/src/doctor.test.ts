@@ -30,16 +30,17 @@ describe("mattermost doctor", () => {
       } as never,
     });
 
-    expect(result.config.channels?.mattermost?.network).toEqual({
+    const mattermostConfig = result.config.channels?.mattermost;
+    expect(mattermostConfig).toBeDefined();
+    if (!mattermostConfig) {
+      throw new Error("expected normalized Mattermost config");
+    }
+    expect(mattermostConfig.network).toEqual({
       dangerouslyAllowPrivateNetwork: true,
     });
-    expect(
-      (
-        result.config.channels?.mattermost?.accounts?.work as
-          | { network?: Record<string, unknown> }
-          | undefined
-      )?.network,
-    ).toEqual({
+    const workAccount = mattermostConfig.accounts?.work as { network?: Record<string, unknown> };
+    expect(workAccount).toBeDefined();
+    expect(workAccount.network).toEqual({
       dangerouslyAllowPrivateNetwork: false,
     });
   });
