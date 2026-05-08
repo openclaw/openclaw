@@ -1809,7 +1809,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     }
   });
 
-  it("does not throw when getUserId fails during decrypt guidance lookup", async () => {
+  it("logs decrypt guidance when getUserId fails during lookup", async () => {
     const { logger, logVerboseMessage, failedDecryptListener } = createHarness({
       accountId: "ops",
       selfUserIdError: new Error("lookup failed"),
