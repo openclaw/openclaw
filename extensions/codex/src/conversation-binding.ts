@@ -11,6 +11,7 @@ import {
   codexSandboxPolicyForTurn,
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerApprovalPolicy,
+  type CodexAppServerEffectiveApprovalPolicy,
   type CodexAppServerPermissionSources,
   type CodexAppServerRuntimeOptions,
   type CodexAppServerSandboxMode,
@@ -249,7 +250,7 @@ async function attachExistingThread(params: {
         authProfileId: params.authProfileId,
         modelProvider: response.modelProvider ?? params.modelProvider,
       }),
-      approvalPolicy: permissions.approvalPolicy,
+      approvalPolicy: bindingApprovalPolicy(permissions.approvalPolicy),
       sandbox: permissions.sandbox,
       permissionSources: permissions.permissionSources,
       serviceTier: params.serviceTier ?? runtime.serviceTier,
@@ -296,7 +297,7 @@ async function createThread(params: {
       cwd: params.workspaceDir,
       ...(params.model ? { model: params.model } : {}),
       ...(modelProvider ? { modelProvider } : {}),
-      approvalPolicy: permissions.approvalPolicy,
+      approvalPolicy: bindingApprovalPolicy(permissions.approvalPolicy),
       approvalsReviewer: runtime.approvalsReviewer,
       sandbox: permissions.sandbox,
       ...((params.serviceTier ?? runtime.serviceTier)
@@ -321,7 +322,7 @@ async function createThread(params: {
         authProfileId: params.authProfileId,
         modelProvider: response.modelProvider ?? params.modelProvider,
       }),
-      approvalPolicy: permissions.approvalPolicy,
+      approvalPolicy: bindingApprovalPolicy(permissions.approvalPolicy),
       sandbox: permissions.sandbox,
       permissionSources: permissions.permissionSources,
       serviceTier: params.serviceTier ?? runtime.serviceTier,
@@ -488,7 +489,7 @@ function resolveRequestedThreadPermissions(params: {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
 }): {
-  approvalPolicy: CodexAppServerApprovalPolicy;
+  approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
   permissionSources: CodexAppServerPermissionSources;
 } {
@@ -513,7 +514,7 @@ async function resolveBoundTurnPermissions(params: {
   binding: NonNullable<Awaited<ReturnType<typeof readCodexAppServerBinding>>>;
   runtime: CodexAppServerRuntimeOptions;
 }): Promise<{
-  approvalPolicy: CodexAppServerApprovalPolicy;
+  approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
 }> {
   const approvalPolicy = params.binding.approvalPolicy ?? params.runtime.approvalPolicy;
@@ -524,7 +525,7 @@ async function resolveBoundTurnPermissions(params: {
   if (isLegacyDefaultYoloBinding(params.binding)) {
     await writeCodexAppServerBinding(params.sessionFile, {
       ...params.binding,
-      approvalPolicy: params.runtime.approvalPolicy,
+      approvalPolicy: bindingApprovalPolicy(params.runtime.approvalPolicy),
       sandbox: params.runtime.sandbox,
       permissionSources: params.runtime.permissionSources,
     });
@@ -540,6 +541,12 @@ async function resolveBoundTurnPermissions(params: {
       "the persisted Codex app-server thread binding requests a sandbox forbidden by the workspace policy",
   });
   return { approvalPolicy, sandbox };
+}
+
+function bindingApprovalPolicy(
+  policy: CodexAppServerEffectiveApprovalPolicy,
+): CodexAppServerApprovalPolicy | undefined {
+  return typeof policy === "string" ? policy : undefined;
 }
 
 function isLegacyDefaultYoloBinding(binding: {

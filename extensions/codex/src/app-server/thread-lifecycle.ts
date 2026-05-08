@@ -8,7 +8,12 @@ import {
 } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
-import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import {
+  codexSandboxPolicyForTurn,
+  type CodexAppServerApprovalPolicy,
+  type CodexAppServerEffectiveApprovalPolicy,
+  type CodexAppServerRuntimeOptions,
+} from "./config.js";
 import {
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
@@ -157,7 +162,7 @@ export async function startOrResumeThread(params: {
             authProfileId: boundAuthProfileId,
             model: params.params.modelId,
             modelProvider: response.modelProvider ?? fallbackModelProvider,
-            approvalPolicy: params.appServer.approvalPolicy,
+            approvalPolicy: bindingApprovalPolicy(params.appServer.approvalPolicy),
             sandbox: params.appServer.sandbox,
             permissionSources: params.appServer.permissionSources,
             dynamicToolsFingerprint,
@@ -179,7 +184,7 @@ export async function startOrResumeThread(params: {
           authProfileId: boundAuthProfileId,
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? fallbackModelProvider,
-          approvalPolicy: params.appServer.approvalPolicy,
+          approvalPolicy: bindingApprovalPolicy(params.appServer.approvalPolicy),
           sandbox: params.appServer.sandbox,
           permissionSources: params.appServer.permissionSources,
           dynamicToolsFingerprint,
@@ -232,7 +237,7 @@ export async function startOrResumeThread(params: {
         authProfileId: params.params.authProfileId,
         model: response.model ?? params.params.modelId,
         modelProvider: response.modelProvider ?? modelProvider,
-        approvalPolicy: params.appServer.approvalPolicy,
+        approvalPolicy: bindingApprovalPolicy(params.appServer.approvalPolicy),
         sandbox: params.appServer.sandbox,
         permissionSources: params.appServer.permissionSources,
         dynamicToolsFingerprint,
@@ -256,7 +261,7 @@ export async function startOrResumeThread(params: {
     authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? modelProvider,
-    approvalPolicy: params.appServer.approvalPolicy,
+    approvalPolicy: bindingApprovalPolicy(params.appServer.approvalPolicy),
     sandbox: params.appServer.sandbox,
     permissionSources: params.appServer.permissionSources,
     dynamicToolsFingerprint,
@@ -266,6 +271,12 @@ export async function startOrResumeThread(params: {
     createdAt,
     updatedAt: createdAt,
   };
+}
+
+function bindingApprovalPolicy(
+  policy: CodexAppServerEffectiveApprovalPolicy,
+): CodexAppServerApprovalPolicy | undefined {
+  return typeof policy === "string" ? policy : undefined;
 }
 
 function shouldRecheckRecoverablePluginBinding(params: {

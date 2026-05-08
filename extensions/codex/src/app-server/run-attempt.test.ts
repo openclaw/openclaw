@@ -4078,6 +4078,11 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "workspace-write",
+      permissionSources: {
+        approvalPolicy: "default",
+        sandbox: "default",
+        approvalsReviewer: "default",
+      },
     });
     const second = __testing.resolveCodexPluginAppCacheEndpoint({
       start: {
@@ -4093,6 +4098,11 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "workspace-write",
+      permissionSources: {
+        approvalPolicy: "default",
+        sandbox: "default",
+        approvalsReviewer: "default",
+      },
     });
 
     expect(first).not.toEqual(second);
