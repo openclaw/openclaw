@@ -572,7 +572,11 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     bumpIdleClose(session);
     session.orphanedLineCount += 1;
     const nowMs = Date.now();
-    if (nowMs - session.lastOrphanLogAtMs >= CLAUDE_LIVE_ORPHAN_LOG_THROTTLE_MS) {
+    // The throttle window also re-fires immediately if the wall clock jumps
+    // backwards (NTP step) so a malicious or unlucky time skew cannot silence
+    // this signal indefinitely.
+    const elapsed = nowMs - session.lastOrphanLogAtMs;
+    if (elapsed < 0 || elapsed >= CLAUDE_LIVE_ORPHAN_LOG_THROTTLE_MS) {
       session.lastOrphanLogAtMs = nowMs;
       const lineType = typeof parsed.type === "string" ? parsed.type : "unknown";
       cliBackendLog.warn(
