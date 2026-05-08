@@ -1,6 +1,4 @@
-import { readFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
-import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
+import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import type { MSTeamsDelegatedTokens } from "./oauth.shared.js";
 import { refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
@@ -9,7 +7,6 @@ import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "./secret-input.js";
-import { resolveMSTeamsCredentialFilePath } from "./storage.js";
 
 // ── Credential types ───────────────────────────────────────────────────────
 
@@ -142,24 +139,56 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
 // Delegated token storage / resolution
 // ---------------------------------------------------------------------------
 
-const DELEGATED_TOKEN_FILENAME = "msteams-delegated.json";
+export const MSTEAMS_DELEGATED_TOKEN_FILENAME = "msteams-delegated.json";
+export const MSTEAMS_DELEGATED_TOKEN_NAMESPACE = "delegated-tokens";
+const MSTEAMS_PLUGIN_ID = "msteams";
+const MSTEAMS_DELEGATED_TOKEN_KEY = "current";
 
-function resolveDelegatedTokenPath(): string {
-  return resolveMSTeamsCredentialFilePath({ filename: DELEGATED_TOKEN_FILENAME });
+const delegatedTokenStore = createPluginStateSyncKeyedStore<MSTeamsDelegatedTokens>(
+  MSTEAMS_PLUGIN_ID,
+  {
+    namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+    maxEntries: 8,
+  },
+);
+
+export function parseMSTeamsDelegatedTokens(value: unknown): MSTeamsDelegatedTokens | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const tokens = value as Partial<MSTeamsDelegatedTokens>;
+  if (
+    typeof tokens.accessToken !== "string" ||
+    !tokens.accessToken ||
+    typeof tokens.refreshToken !== "string" ||
+    !tokens.refreshToken ||
+    typeof tokens.expiresAt !== "number" ||
+    !Number.isFinite(tokens.expiresAt) ||
+    !Array.isArray(tokens.scopes) ||
+    tokens.scopes.some((scope) => typeof scope !== "string" || !scope)
+  ) {
+    return null;
+  }
+  return {
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    expiresAt: tokens.expiresAt,
+    scopes: [...tokens.scopes],
+    ...(typeof tokens.userPrincipalName === "string" && tokens.userPrincipalName
+      ? { userPrincipalName: tokens.userPrincipalName }
+      : {}),
+  };
 }
 
 export function loadDelegatedTokens(): MSTeamsDelegatedTokens | undefined {
-  try {
-    const content = readFileSync(resolveDelegatedTokenPath(), "utf8");
-    return JSON.parse(content) as MSTeamsDelegatedTokens;
-  } catch {
-    return undefined;
-  }
+  return (
+    parseMSTeamsDelegatedTokens(delegatedTokenStore.lookup(MSTEAMS_DELEGATED_TOKEN_KEY)) ??
+    undefined
+  );
 }
 
 export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): void {
-  const tokenPath = resolveDelegatedTokenPath();
-  privateFileStoreSync(dirname(tokenPath)).writeJson(basename(tokenPath), tokens);
+  delegatedTokenStore.register(MSTEAMS_DELEGATED_TOKEN_KEY, tokens);
 }
 
 export async function resolveDelegatedAccessToken(params: {
