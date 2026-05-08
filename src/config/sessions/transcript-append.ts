@@ -45,7 +45,13 @@ export async function appendSessionTranscriptMessage(params: {
     agentId: scope.agentId,
     sessionId: scope.sessionId,
     sessionVersion,
-    ...(params.transcriptPath ? { transcriptPath: path.resolve(params.transcriptPath) } : {}),
+    ...(params.transcriptPath
+      ? {
+          transcriptPath: isSqliteSessionTranscriptLocator(params.transcriptPath)
+            ? params.transcriptPath
+            : path.resolve(params.transcriptPath),
+        }
+      : {}),
     cwd: params.cwd,
     message,
     now: () => params.now ?? Date.now(),
