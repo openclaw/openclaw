@@ -224,14 +224,14 @@ describe("normalizeAgentCommandReplyPayloads", () => {
   });
 
   it("reports successful requested delivery", async () => {
-    deliverOutboundPayloadsMock.mockResolvedValue([]);
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "m1" }]);
 
     const delivered = await deliverMediaReplyForTest({
       key: "agent:tester:slack:direct:alice",
       agentId: "tester",
     } as never);
 
-    expect(delivered.deliverySucceeded).toBe(true);
+    expect(delivered.deliveryStatus?.succeeded).toBe(true);
   });
 
   it("does not report success when best-effort delivery records an error", async () => {
@@ -265,7 +265,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       result: createResult(),
     });
 
-    expect(delivered.deliverySucceeded).toBe(false);
+    expect(delivered.deliveryStatus?.succeeded).toBe(false);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("send failed"));
   });
 
