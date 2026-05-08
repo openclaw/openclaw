@@ -28,6 +28,7 @@ describe("guardSessionManager transcript updates", () => {
 
     const guarded = guardSessionManager(sm, {
       agentId: "main",
+      sessionId: "worker",
       sessionKey: "agent:main:worker",
     });
     const appendMessage = guarded.appendMessage.bind(guarded) as unknown as (

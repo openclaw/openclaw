@@ -472,6 +472,9 @@ export function installSessionToolResultGuard(
   opts?: {
     /** Optional session key for transcript update broadcasts. */
     sessionKey?: string;
+    /** Optional agent/session identity for SQLite-backed transcript broadcasts. */
+    agentId?: string;
+    sessionId?: string;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -682,6 +685,8 @@ export function installSessionToolResultGuard(
     ).getSessionFile?.();
     if (sessionFile) {
       emitSessionTranscriptUpdate({
+        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+        ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
         sessionFile,
         sessionKey: opts?.sessionKey,
         message: finalMessage,
