@@ -59,6 +59,7 @@ import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registr
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
+const TASK_RUNNING_MAX_STALE_MS = 24 * 60 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
@@ -288,9 +289,98 @@ function isTerminalTask(task: TaskRecord): boolean {
   return !isActiveTask(task);
 }
 
+function getTaskActivityReferenceAt(task: TaskRecord): number {
+  return task.lastEventAt ?? task.startedAt ?? task.createdAt;
+}
+
 function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
+  return now - getTaskActivityReferenceAt(task) >= TASK_RECONCILE_GRACE_MS;
+}
+
+function hasRunningStaleAgeExpired(task: TaskRecord, now: number): boolean {
+  return (
+    task.status === "running" && now - getTaskActivityReferenceAt(task) >= TASK_RUNNING_MAX_STALE_MS
+  );
+}
+
+function hasRecentActivityAt(value: number | undefined, now: number): boolean {
+  return (
+    typeof value === "number" && Number.isFinite(value) && now - value < TASK_RUNNING_MAX_STALE_MS
+  );
+}
+
+function hasFreshSessionActivity(entry: SessionEntry | undefined, now: number): boolean {
+  return (
+    hasRecentActivityAt(entry?.updatedAt, now) ||
+    hasRecentActivityAt(entry?.lastInteractionAt, now) ||
+    hasRecentActivityAt(entry?.acp?.lastActivityAt, now)
+  );
+}
+
+function hasActiveTaskRunContext(task: TaskRecord): boolean {
+  const candidateRunIds = [task.runId, task.sourceId];
+  for (const candidate of candidateRunIds) {
+    const runId = candidate?.trim();
+    if (runId && taskRegistryMaintenanceRuntime.getAgentRunContext(runId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasFreshActiveWorkEvidence(
+  task: TaskRecord,
+  now: number,
+  context?: BackingSessionLookupContext,
+): boolean {
+  if (task.runtime === "cron") {
+    if (!taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()) {
+      return true;
+    }
+    const jobId = task.sourceId?.trim();
+    return Boolean(jobId && taskRegistryMaintenanceRuntime.isCronJobActive(jobId));
+  }
+
+  if (task.runtime === "cli") {
+    return hasActiveCliRun(task);
+  }
+
+  if (task.runtime === "subagent") {
+    if (hasActiveTaskRunContext(task)) {
+      return true;
+    }
+    return hasFreshSessionActivity(findTaskSessionEntry(task, context), now);
+  }
+
+  if (task.runtime === "acp") {
+    const childSessionKey = task.childSessionKey?.trim();
+    if (!childSessionKey) {
+      return false;
+    }
+    const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
+      sessionKey: childSessionKey,
+    });
+    if (!acpEntry || acpEntry.storeReadFailed) {
+      return true;
+    }
+    return acpEntry.acp?.state === "running" && hasFreshSessionActivity(acpEntry.entry, now);
+  }
+
+  return false;
+}
+
+function shouldMarkLostDueToStaleRunningAge(
+  task: TaskRecord,
+  now: number,
+  context?: BackingSessionLookupContext,
+): boolean {
+  return hasRunningStaleAgeExpired(task, now) && !hasFreshActiveWorkEvidence(task, now, context);
+}
+
+function getStaleRunningTaskLostError(task: TaskRecord, now: number): string {
   const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
-  return now - referenceAt >= TASK_RECONCILE_GRACE_MS;
+  const ageHours = Math.floor(Math.max(0, now - referenceAt) / 3_600_000);
+  return `running task exceeded ${ageHours}h without fresh active-work evidence`;
 }
 
 function parseCronExecutionId(task: TaskRecord): CronExecutionId | undefined {
@@ -490,7 +580,14 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
   return true;
 }
 
-function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
+function resolveTaskLostError(
+  task: TaskRecord,
+  context?: BackingSessionLookupContext,
+  override?: string,
+): string {
+  if (override) {
+    return override;
+  }
   if (task.runtime === "subagent") {
     const entry = findTaskSessionEntry(task, context);
     if (entry && isSubagentRecoveryWedgedEntry(entry)) {
@@ -511,7 +608,10 @@ function shouldMarkLost(
   if (!hasLostGraceExpired(task, now)) {
     return false;
   }
-  return !hasBackingSession(task, context);
+  if (!hasBackingSession(task, context)) {
+    return true;
+  }
+  return shouldMarkLostDueToStaleRunningAge(task, now, context);
 }
 
 function hasTaskLostDecisionInputChanged(before: TaskRecord, after: TaskRecord): boolean {
@@ -730,6 +830,7 @@ function markTaskLost(
   task: TaskRecord,
   now: number,
   context?: BackingSessionLookupContext,
+  error?: string,
 ): TaskRecord {
   const cleanupAfter =
     task.cleanupAfter ?? resolveCleanupAfter({ ...task, endedAt: task.endedAt ?? now });
@@ -738,7 +839,7 @@ function markTaskLost(
       taskId: task.taskId,
       endedAt: task.endedAt ?? now,
       lastEventAt: now,
-      error: task.error ?? resolveTaskLostError(task, context),
+      error: task.error ?? resolveTaskLostError(task, context, error),
       cleanupAfter,
     }) ?? task;
   void taskRegistryMaintenanceRuntime.maybeDeliverTaskTerminalUpdate(updated.taskId);
@@ -785,12 +886,15 @@ function projectTaskLost(
   now: number,
   context?: BackingSessionLookupContext,
 ): TaskRecord {
+  const staleRunningError = shouldMarkLostDueToStaleRunningAge(task, now, context)
+    ? getStaleRunningTaskLostError(task, now)
+    : undefined;
   const projected: TaskRecord = {
     ...task,
     status: "lost",
     endedAt: task.endedAt ?? now,
     lastEventAt: now,
-    error: task.error ?? resolveTaskLostError(task, context),
+    error: task.error ?? resolveTaskLostError(task, context, staleRunningError),
   };
   return {
     ...projected,
@@ -1026,7 +1130,10 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
         }
         continue;
       }
-      const next = markTaskLost(freshAfterHook, now, lostContext);
+      const staleRunningError = shouldMarkLostDueToStaleRunningAge(freshAfterHook, now, lostContext)
+        ? getStaleRunningTaskLostError(freshAfterHook, now)
+        : undefined;
+      const next = markTaskLost(freshAfterHook, now, lostContext, staleRunningError);
       if (next.status === "lost") {
         reconciled += 1;
       }

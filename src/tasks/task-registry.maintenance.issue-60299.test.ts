@@ -21,6 +21,7 @@ import {
 import type { TaskRecord } from "./task-registry.types.js";
 
 const GRACE_EXPIRED_MS = 10 * 60_000;
+const MULTI_DAY_STALE_MS = 2 * 24 * 60 * 60_000;
 
 function makeStaleTask(overrides: Partial<TaskRecord>): TaskRecord {
   const now = Date.now();
@@ -321,6 +322,104 @@ describe("task-registry maintenance issue #60299", () => {
       status: "lost",
       error: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
     });
+  });
+
+  it("marks multi-day running subagent tasks lost when only a stale child session row remains", async () => {
+    const old = Date.now() - MULTI_DAY_STALE_MS;
+    const childSessionKey = "agent:main:subagent:multi-day-stale-child";
+    const task = makeStaleTask({
+      taskId: "task-subagent-multi-day-stale",
+      runtime: "subagent",
+      runId: "run-subagent-multi-day-stale",
+      childSessionKey,
+      createdAt: old,
+      startedAt: old,
+      lastEventAt: old,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: {
+        [childSessionKey]: {
+          sessionId: "session-subagent-multi-day-stale",
+          updatedAt: old,
+          status: "running",
+        },
+      },
+    });
+
+    expect(reconcileInspectableTasks()).toEqual([
+      expect.objectContaining({
+        taskId: task.taskId,
+        status: "lost",
+        error: expect.stringContaining("without fresh active-work evidence"),
+      }),
+    ]);
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+      error: expect.stringContaining("without fresh active-work evidence"),
+    });
+  });
+
+  it("keeps multi-day subagent tasks live when their run context is still active", async () => {
+    const old = Date.now() - MULTI_DAY_STALE_MS;
+    const childSessionKey = "agent:main:subagent:multi-day-live-child";
+    const task = makeStaleTask({
+      taskId: "task-subagent-multi-day-live",
+      runtime: "subagent",
+      runId: "run-subagent-multi-day-live",
+      childSessionKey,
+      createdAt: old,
+      startedAt: old,
+      lastEventAt: old,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      activeRunIds: ["run-subagent-multi-day-live"],
+      sessionStore: {
+        [childSessionKey]: {
+          sessionId: "session-subagent-multi-day-live",
+          updatedAt: old,
+          status: "running",
+        },
+      },
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("keeps old subagent tasks live when the child session has recent activity", async () => {
+    const old = Date.now() - MULTI_DAY_STALE_MS;
+    const childSessionKey = "agent:main:subagent:recently-active-child";
+    const task = makeStaleTask({
+      taskId: "task-subagent-recent-session",
+      runtime: "subagent",
+      runId: "run-subagent-recent-session",
+      childSessionKey,
+      createdAt: old,
+      startedAt: old,
+      lastEventAt: old,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: {
+        [childSessionKey]: {
+          sessionId: "session-subagent-recent-session",
+          updatedAt: Date.now() - 60_000,
+          status: "running",
+        },
+      },
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
   });
 
   it("does not mark cron tasks lost when the current process is not the cron runtime authority", async () => {

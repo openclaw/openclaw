@@ -249,6 +249,7 @@ openclaw tasks notify <lookup> state_changes
 
     - ACP/subagent tasks check their backing child session.
     - Subagent tasks whose child session has a restart-recovery tombstone are marked lost instead of being treated as recoverable backing sessions.
+    - Running tasks older than 24 hours are marked lost unless maintenance can still see fresh activity, such as a live run context, an active cron job, or a recently updated child session.
     - Cron tasks check whether the cron runtime still owns the job, then recover terminal status from persisted cron run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory cron active-job set; offline CLI audit uses durable history but does not mark a cron task lost solely because that local Set is empty.
     - CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows.
 
@@ -317,7 +318,7 @@ A sweeper runs every **60 seconds** and handles four things:
 
 <Steps>
   <Step title="Reconciliation">
-    Checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and CLI tasks with run identity use the owning run context. If that backing state is gone for more than 5 minutes, the task is marked `lost`.
+    Checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and CLI tasks with run identity use the owning run context. If that backing state is gone for more than 5 minutes, or a running task is older than 24 hours without fresh active-work evidence, the task is marked `lost`.
   </Step>
   <Step title="ACP session repair">
     Closes terminal or orphaned parent-owned one-shot ACP sessions, and closes stale terminal or orphaned persistent ACP sessions only when no active conversation binding remains.
