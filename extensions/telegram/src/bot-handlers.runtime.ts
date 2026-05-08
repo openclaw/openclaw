@@ -60,6 +60,7 @@ import {
   resolveInboundMediaFileId,
 } from "./bot-handlers.media.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
+import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
 import {
   parseTelegramNativeCommandCallbackData,
   RegisterTelegramHandlerParams,
@@ -102,6 +103,13 @@ import {
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { dispatchTelegramPluginInteractiveHandler } from "./interactive-dispatch.js";
+import {
+  buildTelegramReplyChain,
+  createTelegramMessageCache,
+  resolveTelegramMessageCachePath,
+  type TelegramCachedMessageNode,
+  type TelegramReplyChainEntry,
+} from "./message-cache.js";
 import {
   buildModelsKeyboard,
   buildProviderKeyboard,
@@ -158,9 +166,15 @@ export const registerTelegramHandlers = ({
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
+  const messageCache = createTelegramMessageCache({
+    persistedPath: resolveTelegramMessageCachePath(
+      telegramDeps.resolveStorePath(cfg.session?.store),
+    ),
+  });
 
   type TextFragmentEntry = {
     key: string;
+    threadId?: number;
     messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
     timer: ReturnType<typeof setTimeout>;
   };
@@ -179,6 +193,7 @@ export const registerTelegramHandlers = ({
     debounceKey: string | null;
     debounceLane: TelegramDebounceLane;
     botUsername?: string;
+    threadId?: number;
   };
   const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane => {
     const forwardMeta = msg as {
@@ -248,17 +263,10 @@ export const registerTelegramHandlers = ({
         return;
       }
       if (entries.length === 1) {
-        const replyMedia = await resolveReplyMediaForMessage(last.ctx, last.msg);
-        await processMessage(
-          last.ctx,
-          last.allMedia,
-          last.storeAllowFrom,
-          {
-            receivedAtMs: last.receivedAtMs,
-            ingressBuffer: "inbound-debounce",
-          },
-          replyMedia,
-        );
+        await processMessageWithReplyChain(last.ctx, last.msg, last.allMedia, last.storeAllowFrom, {
+          receivedAtMs: last.receivedAtMs,
+          ingressBuffer: "inbound-debounce",
+        });
         return;
       }
       const combinedText = entries
@@ -278,9 +286,9 @@ export const registerTelegramHandlers = ({
       });
       const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
       const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
-      const replyMedia = await resolveReplyMediaForMessage(baseCtx, syntheticMessage);
-      await processMessage(
+      await processMessageWithReplyChain(
         syntheticCtx,
+        syntheticMessage,
         combinedMedia,
         first.storeAllowFrom,
         {
@@ -288,7 +296,6 @@ export const registerTelegramHandlers = ({
           receivedAtMs: first.receivedAtMs,
           ingressBuffer: "inbound-debounce",
         },
-        replyMedia,
       );
     },
     onError: (err, items) => {
@@ -442,8 +449,12 @@ export const registerTelegramHandlers = ({
       }
 
       const storeAllowFrom = await loadStoreAllowFrom();
-      const replyMedia = await resolveReplyMediaForMessage(primaryEntry.ctx, primaryEntry.msg);
-      await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom, undefined, replyMedia);
+      await processMessageWithReplyChain(
+        primaryEntry.ctx,
+        primaryEntry.msg,
+        allMedia,
+        storeAllowFrom,
+      );
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
     }
@@ -473,7 +484,8 @@ export const registerTelegramHandlers = ({
       const storeAllowFrom = await loadStoreAllowFrom();
       const baseCtx = first.ctx;
 
-      await processMessage(buildSyntheticContext(baseCtx, syntheticMessage), [], storeAllowFrom, {
+      const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
+      await processMessageWithReplyChain(syntheticCtx, syntheticMessage, [], storeAllowFrom, {
         messageIdOverride: String(last.msg.message_id),
         receivedAtMs: first.receivedAtMs,
         ingressBuffer: "text-fragment",
@@ -507,42 +519,88 @@ export const registerTelegramHandlers = ({
   const loadStoreAllowFrom = async () =>
     telegramDeps.readChannelAllowFromStore("telegram", process.env, accountId).catch(() => []);
 
-  const resolveReplyMediaForMessage = async (
+  const recordMessageForReplyChain = (msg: Message, threadId?: number) =>
+    messageCache.record({
+      accountId,
+      chatId: msg.chat.id,
+      msg,
+      ...(threadId != null ? { threadId } : {}),
+    });
+
+  const buildReplyChainForMessage = (msg: Message) =>
+    buildTelegramReplyChain({
+      cache: messageCache,
+      accountId,
+      chatId: msg.chat.id,
+      msg,
+    });
+
+  const toReplyChainEntry = (
+    node: TelegramCachedMessageNode,
+    media?: TelegramMediaRef,
+  ): TelegramReplyChainEntry => {
+    const { sourceMessage: _sourceMessage, ...entry } = node;
+    return {
+      ...entry,
+      ...(media?.path ? { mediaPath: media.path } : {}),
+      ...(media?.contentType ? { mediaType: media.contentType } : {}),
+    };
+  };
+
+  const resolveReplyMediaForChain = async (
+    ctx: TelegramContext,
+    chain: TelegramCachedMessageNode[],
+  ): Promise<{ replyMedia: TelegramMediaRef[]; replyChain: TelegramReplyChainEntry[] }> => {
+    const replyMedia: TelegramMediaRef[] = [];
+    const replyChain: TelegramReplyChainEntry[] = [];
+    for (const node of chain) {
+      const replyFileId = resolveInboundMediaFileId(node.sourceMessage);
+      if (!replyFileId || !hasInboundMedia(node.sourceMessage)) {
+        replyChain.push(toReplyChainEntry(node));
+        continue;
+      }
+      try {
+        const media = await resolveMedia({
+          ctx: {
+            message: node.sourceMessage,
+            me: ctx.me,
+            getFile: async () => await bot.api.getFile(replyFileId),
+          },
+          maxBytes: mediaMaxBytes,
+          ...mediaRuntimeOptions,
+        });
+        if (!media) {
+          replyChain.push(toReplyChainEntry(node));
+          continue;
+        }
+        const mediaRef: TelegramMediaRef = {
+          path: media.path,
+          ...(media.contentType ? { contentType: media.contentType } : {}),
+          ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
+        };
+        replyMedia.push(mediaRef);
+        replyChain.push(toReplyChainEntry(node, mediaRef));
+      } catch (err) {
+        logger.warn(
+          { chatId: ctx.message.chat.id, error: String(err) },
+          "reply media fetch failed",
+        );
+        replyChain.push(toReplyChainEntry(node));
+      }
+    }
+    return { replyMedia, replyChain };
+  };
+
+  const processMessageWithReplyChain = async (
     ctx: TelegramContext,
     msg: Message,
-  ): Promise<TelegramMediaRef[]> => {
-    const replyMessage = msg.reply_to_message;
-    if (!replyMessage || !hasInboundMedia(replyMessage)) {
-      return [];
-    }
-    const replyFileId = resolveInboundMediaFileId(replyMessage);
-    if (!replyFileId) {
-      return [];
-    }
-    try {
-      const media = await resolveMedia({
-        ctx: {
-          message: replyMessage,
-          me: ctx.me,
-          getFile: async () => await bot.api.getFile(replyFileId),
-        },
-        maxBytes: mediaMaxBytes,
-        ...mediaRuntimeOptions,
-      });
-      if (!media) {
-        return [];
-      }
-      return [
-        {
-          path: media.path,
-          contentType: media.contentType,
-          stickerMetadata: media.stickerMetadata,
-        },
-      ];
-    } catch (err) {
-      logger.warn({ chatId: msg.chat.id, error: String(err) }, "reply media fetch failed");
-      return [];
-    }
+    allMedia: TelegramMediaRef[],
+    storeAllowFrom: string[],
+    options?: TelegramMessageContextOptions,
+  ) => {
+    const replyChainNodes = buildReplyChainForMessage(msg);
+    const { replyMedia, replyChain } = await resolveReplyMediaForChain(ctx, replyChainNodes);
+    await processMessage(ctx, allMedia, storeAllowFrom, options, replyMedia, replyChain);
   };
 
   const isAllowlistAuthorized = (
@@ -1783,7 +1841,8 @@ export const registerTelegramHandlers = ({
         from: callback.from,
         text: nativeCallbackCommand ?? data,
       });
-      await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
+      const syntheticCtx = buildSyntheticContext(ctx, syntheticMessage);
+      await processMessageWithReplyChain(syntheticCtx, syntheticMessage, [], storeAllowFrom, {
         ...(nativeCallbackCommand ? { commandSource: "native" as const } : {}),
         forceWasMentioned: true,
         messageIdOverride: callback.id,
@@ -1943,6 +2002,7 @@ export const registerTelegramHandlers = ({
         }
       }
 
+      recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId);
       await processInboundMessage({
         ctx: event.ctx,
         msg: event.msg,
