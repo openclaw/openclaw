@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import {
   appendSqliteSessionTranscriptEvent,
   hasSqliteSessionTranscriptEvents,
@@ -256,7 +257,10 @@ export async function ensureSessionHeader(params: {
   agentId?: string;
   env?: OpenClawStateDatabaseOptions["env"];
 }) {
-  const transcriptPath = path.resolve(params.sessionFile);
+  const trimmedSessionFile = params.sessionFile.trim();
+  const transcriptPath = isSqliteSessionTranscriptLocator(trimmedSessionFile)
+    ? trimmedSessionFile
+    : path.resolve(trimmedSessionFile);
   const existingScope = resolveSqliteSessionTranscriptScopeForPath({
     transcriptPath,
     env: params.env,

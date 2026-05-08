@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
+  createSqliteSessionTranscriptLocator,
+  isSqliteSessionTranscriptLocator,
+} from "../../config/sessions.js";
+import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
@@ -358,6 +362,15 @@ function resolveSuccessorTranscriptPath(params: {
   sessionId: string;
   timestamp: string;
 }): string {
+  if (isSqliteSessionTranscriptLocator(params.transcriptPath)) {
+    const existing = resolveSqliteSessionTranscriptScopeForPath({
+      transcriptPath: params.transcriptPath,
+    });
+    return createSqliteSessionTranscriptLocator({
+      agentId: existing?.agentId,
+      sessionId: params.sessionId,
+    });
+  }
   const fileTimestamp = params.timestamp.replace(/[:.]/g, "-");
   return path.join(
     path.dirname(params.transcriptPath),
