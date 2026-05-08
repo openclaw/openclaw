@@ -89,7 +89,7 @@ describe("Matrix IndexedDB persistence", () => {
 
   it("returns false and logs a warning for malformed snapshots", async () => {
     const snapshot = snapshotPath("bad-snapshot.json");
-    const store = createPluginBlobStore<Record<string, unknown>>("matrix", {
+    const store = createPluginBlobStore("matrix", {
       namespace: MATRIX_IDB_SNAPSHOT_NAMESPACE,
       maxEntries: 1_000,
     });
@@ -110,7 +110,7 @@ describe("Matrix IndexedDB persistence", () => {
 
   it("returns false for empty snapshot payloads without restoring databases", async () => {
     const snapshot = snapshotPath("empty-snapshot.json");
-    const store = createPluginBlobStore<Record<string, unknown>>("matrix", {
+    const store = createPluginBlobStore("matrix", {
       namespace: MATRIX_IDB_SNAPSHOT_NAMESPACE,
       maxEntries: 1_000,
     });

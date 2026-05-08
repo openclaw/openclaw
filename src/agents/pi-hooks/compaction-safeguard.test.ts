@@ -8,11 +8,11 @@ import {
   clearCompactionProviders,
   registerCompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import type { ExtensionAPI, ExtensionContext } from "../agent-extension-contract.js";
 import * as compactionModule from "../compaction.js";
 import type { Api, Model } from "../pi-ai-contract.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
-import type { ExtensionAPI, ExtensionContext } from "../transcript/session-transcript-contract.js";
 import {
   consumeCompactionSafeguardCancelReason,
   getCompactionSafeguardRuntime,

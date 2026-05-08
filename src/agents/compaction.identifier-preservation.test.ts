@@ -1,7 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionContext } from "./agent-extension-contract.js";
 import * as piCodingAgent from "./pi-coding-agent-contract.js";
-import type { ExtensionContext } from "./transcript/session-transcript-contract.js";
 
 vi.mock("./pi-coding-agent-contract.js", async () => {
   const actual = await vi.importActual<typeof piCodingAgent>("./pi-coding-agent-contract.js");

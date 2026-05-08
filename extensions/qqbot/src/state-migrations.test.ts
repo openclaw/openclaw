@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-} from "../../../src/state/openclaw-state-db.js";
-import { createTrackedTempDirs } from "../../../src/test-utils/tracked-temp-dirs.js";
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { createTrackedTempDirs } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it } from "vitest";
 import { detectQQBotLegacyStateMigrations } from "./state-migrations.js";
 
 const tempDirs = createTrackedTempDirs();

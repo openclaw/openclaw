@@ -8,7 +8,7 @@ import type {
   SessionContext,
   SessionEntry,
   SessionHeader,
-} from "./session-transcript-contract.js";
+} from "./session-transcript-types.js";
 
 export const CURRENT_SESSION_VERSION = 3;
 

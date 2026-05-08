@@ -1,24 +1,24 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { isSqliteSessionTranscriptLocator } from "../../config/sessions.js";
+import { isSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   appendSqliteSessionTranscriptEvent,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
 } from "../../config/sessions/transcript-store.sqlite.js";
+import {
+  buildSessionContext,
+  CURRENT_SESSION_VERSION,
+  migrateSessionEntries,
+} from "./session-transcript-format.js";
 import type {
   FileEntry,
   SessionContext,
   SessionEntry,
   SessionHeader,
   SessionTreeNode,
-} from "./session-transcript-contract.js";
-import {
-  buildSessionContext,
-  CURRENT_SESSION_VERSION,
-  migrateSessionEntries,
-} from "./session-transcript-format.js";
+} from "./session-transcript-types.js";
 
 type BranchSummaryEntry = Extract<SessionEntry, { type: "branch_summary" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
