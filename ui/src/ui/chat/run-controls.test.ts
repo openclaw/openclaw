@@ -134,9 +134,8 @@ describe("chat run controls", () => {
     );
 
     const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
-    expect(stopButton).not.toBeNull();
     expect(stopButton?.disabled).toBe(false);
-    stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    stopButton?.click();
     expect(onAbort).toHaveBeenCalledTimes(1);
   });
 });
