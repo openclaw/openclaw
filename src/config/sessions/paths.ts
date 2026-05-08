@@ -63,6 +63,7 @@ export function parseSqliteSessionTranscriptLocator(locator: string):
   | {
       agentId: string;
       sessionId: string;
+      topicId?: string;
     }
   | undefined {
   const trimmed = locator.trim();
@@ -77,11 +78,13 @@ export function parseSqliteSessionTranscriptLocator(locator: string):
       return undefined;
     }
     const withoutExt = fileName.slice(0, -".jsonl".length);
-    const topicIndex = withoutExt.indexOf("-topic-");
+    const topicIndex = withoutExt.lastIndexOf("-topic-");
     const sessionId = topicIndex > 0 ? withoutExt.slice(0, topicIndex) : withoutExt;
+    const topicId = topicIndex > 0 ? withoutExt.slice(topicIndex + "-topic-".length) : undefined;
     return {
       agentId: normalizeAgentId(agentId),
       sessionId: validateSessionId(sessionId),
+      ...(topicId ? { topicId } : {}),
     };
   } catch {
     return undefined;
