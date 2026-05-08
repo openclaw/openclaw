@@ -263,8 +263,8 @@ function expectCandidateSource(
 }
 
 function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>) {
-  expect(diagnostics.some((entry) => entry.message.includes("escapes package directory"))).toBe(
-    true,
+  expect(diagnostics.map((entry) => entry.message)).toEqual(
+    expect.arrayContaining([expect.stringContaining("escapes package directory")]),
   );
 }
 
@@ -1671,8 +1671,8 @@ describe("discoverOpenClawPlugins", () => {
     const result = await discoverWithStateDir(stateDir, {});
 
     expect(result.candidates).toHaveLength(0);
-    expect(result.diagnostics.some((diag) => diag.message.includes("world-writable path"))).toBe(
-      true,
+    expect(result.diagnostics.map((diag) => diag.message)).toEqual(
+      expect.arrayContaining([expect.stringContaining("world-writable path")]),
     );
   });
 
@@ -1694,11 +1694,14 @@ describe("discoverOpenClawPlugins", () => {
       );
 
       expect(result.candidates.some((candidate) => candidate.idHint === "demo-pack")).toBe(true);
-      expect(
-        result.diagnostics.some(
-          (diag) => diag.source === packDir && diag.message.includes("world-writable path"),
-        ),
-      ).toBe(false);
+      expect(result.diagnostics).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            source: packDir,
+            message: expect.stringContaining("world-writable path"),
+          }),
+        ]),
+      );
       expect(fs.statSync(packDir).mode & 0o777).toBe(0o755);
     },
   );
@@ -1719,8 +1722,10 @@ describe("discoverOpenClawPlugins", () => {
       const result = await discoverWithStateDir(stateDir, { ownershipUid: actualUid + 1 });
       const shouldBlockForMismatch = actualUid !== 0;
       expect(result.candidates).toHaveLength(shouldBlockForMismatch ? 0 : 1);
-      expect(result.diagnostics.some((diag) => diag.message.includes("suspicious ownership"))).toBe(
-        shouldBlockForMismatch,
+      expect(result.diagnostics.map((diag) => diag.message)).toEqual(
+        shouldBlockForMismatch
+          ? expect.arrayContaining([expect.stringContaining("suspicious ownership")])
+          : expect.not.arrayContaining([expect.stringContaining("suspicious ownership")]),
       );
       if (shouldBlockForMismatch) {
         expect(result.diagnostics).toContainEqual(
