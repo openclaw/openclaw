@@ -185,6 +185,38 @@ describe("TranscriptSessionManager", () => {
     });
   });
 
+  it("allocates a fresh sqlite transcript locator when starting a new persisted session", async () => {
+    await makeTempSessionFile();
+    const sessionManager = openTranscriptSessionManager({
+      sessionFile: createSqliteSessionTranscriptLocator({
+        agentId: "main",
+        sessionId: "first-session",
+      }),
+      sessionId: "first-session",
+      cwd: "/tmp/workspace",
+    });
+    sessionManager.appendMessage({ role: "user", content: "first", timestamp: 1 });
+
+    const firstSessionFile = sessionManager.getSessionFile();
+    const secondSessionFile = sessionManager.newSession({ id: "second-session" });
+    sessionManager.appendMessage({ role: "user", content: "second", timestamp: 2 });
+
+    expect(secondSessionFile).toBe(
+      createSqliteSessionTranscriptLocator({
+        agentId: "main",
+        sessionId: "second-session",
+      }),
+    );
+    expect(secondSessionFile).not.toBe(firstSessionFile);
+    expect(
+      readSessionEntries(firstSessionFile!).map((entry) => (entry as { id?: string }).id),
+    ).toEqual(["first-session", expect.any(String)]);
+    expect(readSessionEntries(secondSessionFile!)).toMatchObject([
+      { type: "session", id: "second-session" },
+      { type: "message", message: { role: "user", content: "second" } },
+    ]);
+  });
+
   it("preserves non-main agent scope for virtual sqlite branches and forks", async () => {
     await makeTempSessionFile();
     const sessionFile = createSqliteSessionTranscriptLocator({
