@@ -9,7 +9,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSqliteSessionTranscriptEvents } from "../../../../src/config/sessions/transcript-store.sqlite.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
@@ -381,6 +385,50 @@ describe("memory index", () => {
     } finally {
       await manager.close?.();
     }
+  });
+
+  it("stores the default memory index inside the per-agent database", async () => {
+    const stateDir = path.join(workspaceDir, "managed-memory-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const agentDbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const agentDb = openOpenClawAgentDatabase({ agentId: "main" });
+    agentDb.db
+      .prepare("INSERT INTO session_entries (session_key, entry_json, updated_at) VALUES (?, ?, ?)")
+      .run("agent:main:test", JSON.stringify({ sessionId: "keep-me", updatedAt: 1 }), 1);
+    closeOpenClawAgentDatabasesForTest();
+
+    const cfg: TestCfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { vector: { enabled: false } },
+            chunking: { tokens: 4000, overlap: 0 },
+            sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: { minScore: 0, hybrid: { enabled: false } },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test", force: true });
+      expect(manager.status().dbPath).toBe(agentDbPath);
+    } finally {
+      await manager.close?.();
+    }
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "main" });
+    expect(
+      reopened.db
+        .prepare("SELECT entry_json FROM session_entries WHERE session_key = ?")
+        .get("agent:main:test"),
+    ).toEqual({
+      entry_json: JSON.stringify({ sessionId: "keep-me", updatedAt: 1 }),
+    });
   });
 
   it("indexes multimodal image and audio files from extra paths with Gemini structured inputs", async () => {

@@ -1,7 +1,4 @@
-import os from "node:os";
-import path from "node:path";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import {
   isMemoryMultimodalEnabled,
@@ -9,6 +6,7 @@ import {
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
@@ -49,6 +47,7 @@ export type ResolvedMemorySearchConfig = {
   store: {
     driver: "sqlite";
     path: string;
+    managedAgentDatabase: boolean;
     fts: {
       tokenizer: "unicode61" | "trigram";
     };
@@ -138,14 +137,24 @@ function normalizeSources(
   return Array.from(normalized);
 }
 
-function resolveMemoryStorePath(agentId: string, raw?: string): string {
-  const stateDir = resolveStateDir(process.env, os.homedir);
-  const fallback = path.join(stateDir, "memory", `${agentId}.sqlite`);
+function resolveMemoryStore(
+  agentId: string,
+  raw?: string,
+): {
+  path: string;
+  managedAgentDatabase: boolean;
+} {
   if (!raw) {
-    return fallback;
+    return {
+      path: resolveOpenClawAgentSqlitePath({ agentId, env: process.env }),
+      managedAgentDatabase: true,
+    };
   }
   const withToken = raw.includes("{agentId}") ? raw.replaceAll("{agentId}", agentId) : raw;
-  return resolveUserPath(withToken);
+  return {
+    path: resolveUserPath(withToken),
+    managedAgentDatabase: false,
+  };
 }
 
 function getConfiguredMemoryEmbeddingProvider(
@@ -256,9 +265,14 @@ function mergeConfig(
   const fts = {
     tokenizer: overrides?.store?.fts?.tokenizer ?? defaults?.store?.fts?.tokenizer ?? "unicode61",
   };
+  const resolvedStore = resolveMemoryStore(
+    agentId,
+    overrides?.store?.path ?? defaults?.store?.path,
+  );
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
-    path: resolveMemoryStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
+    path: resolvedStore.path,
+    managedAgentDatabase: resolvedStore.managedAgentDatabase,
     fts,
     vector,
   };

@@ -1,9 +1,7 @@
-import os from "node:os";
-import path from "node:path";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import {
   resolveSharedMemoryStatusSnapshot,
@@ -20,7 +18,7 @@ function loadStatusScanDepsRuntimeModule() {
 }
 
 export function resolveDefaultMemoryStorePath(agentId: string): string {
-  return path.join(resolveStateDir(process.env, os.homedir), "memory", `${agentId}.sqlite`);
+  return resolveOpenClawAgentSqlitePath({ agentId });
 }
 
 export async function resolveStatusMemoryStatusSnapshot(params: {

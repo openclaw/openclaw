@@ -948,8 +948,9 @@ export abstract class MemoryManagerSyncOps {
       reason: params?.reason,
       progress: progress ?? undefined,
       useUnsafeReindex:
-        process.env.OPENCLAW_TEST_FAST === "1" &&
-        process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1",
+        this.settings.store.managedAgentDatabase ||
+        (process.env.OPENCLAW_TEST_FAST === "1" &&
+          process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1"),
       dirtySessionTranscripts: this.dirtySessionTranscripts,
       syncSessionTranscripts: async (targetedParams) => {
         await this.syncSessionTranscripts(targetedParams);
@@ -1245,8 +1246,10 @@ export abstract class MemoryManagerSyncOps {
     force?: boolean;
     progress?: MemorySyncProgressState;
   }): Promise<void> {
-    // Perf: for test runs, skip atomic temp-db swapping. The index is isolated
-    // under the per-test HOME anyway, and this cuts substantial fs+sqlite churn.
+    // Managed per-agent DBs cannot use whole-file swaps because the same
+    // database also owns sessions, VFS rows, and runtime state. Reset only the
+    // memory tables in place; explicit custom store paths still use the safer
+    // sidecar DB swap above.
     this.resetIndex();
 
     const shouldSyncMemory = this.sources.has("memory");

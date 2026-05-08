@@ -57,7 +57,8 @@ proceed with these assumptions:
 
 The current branch is already past the proof-of-concept stage. The shared
 database exists, Node `node:sqlite` is wired through a small runtime helper, and
-several former sidecars now write to `state/openclaw.sqlite`.
+former sidecars now write to `state/openclaw.sqlite` or the owning
+`openclaw-agent.sqlite` database.
 
 The remaining work is not choosing SQLite; it is deleting compatibility-shaped
 interfaces that still look like the old file world:
@@ -599,6 +600,9 @@ Move these into the global database:
   the shared database; legacy sidecar import remains.
 - Plugin state from `plugin-state/state.sqlite`. Runtime writes now use the
   shared database; legacy sidecar import remains.
+- Builtin memory search no longer defaults to `memory/<agentId>.sqlite`; its
+  index tables live in the owning agent database unless `memorySearch.store.path`
+  explicitly asks for a sidecar.
 - Sandbox container/browser registries from monolithic and sharded JSON. Runtime
   writes now use the shared database; legacy JSON import remains.
 - Cron job definitions, schedule state, and run history now use shared SQLite;
@@ -885,6 +889,9 @@ is newer than the backup.
      writes; doctor imports the legacy sidecar.
    - Move Task Flow tables into the global database. Done for runtime writes;
      doctor imports the legacy sidecar.
+   - Move builtin memory-search tables into each agent database by default.
+     Done for the default path; explicit custom `memorySearch.store.path`
+     remains a sidecar opt-in.
    - Delete duplicate database openers, WAL setup, permission helpers, and
      close paths from those subsystems.
 
