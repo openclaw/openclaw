@@ -60,6 +60,10 @@ describe("pi SessionManager memory retention", () => {
       appendAssistant(manager, `stale assistant ${index}`);
     }
 
+    const thinkingEntryId = manager.appendThinkingLevelChange("high");
+    const modelEntryId = manager.appendModelChange("anthropic", "claude-sonnet");
+    const sessionInfoEntryId = manager.appendSessionInfo("Memory leak repro");
+    const customEntryId = manager.appendCustomEntry("openclaw:test-state", { current: true });
     const firstKeptEntryId = appendUser(manager, "kept user");
     manager.appendLabelChange(firstKeptEntryId, "kept marker");
     appendAssistant(manager, "kept assistant");
@@ -78,11 +82,18 @@ describe("pi SessionManager memory retention", () => {
     const entryIds = new Set(entries.map((entry) => entry.id));
     expect(entries.length).toBeLessThan(80);
     expect(entryIds.has(staleEntryId)).toBe(false);
+    expect(entryIds.has(thinkingEntryId)).toBe(true);
+    expect(entryIds.has(modelEntryId)).toBe(true);
+    expect(entryIds.has(sessionInfoEntryId)).toBe(true);
+    expect(entryIds.has(customEntryId)).toBe(true);
     expect(entryIds.has(firstKeptEntryId)).toBe(true);
     expect(entryIds.has(compactionEntryId)).toBe(true);
     expect(manager.getLabel(firstKeptEntryId)).toBe("kept marker");
+    expect(manager.getSessionName()).toBe("Memory leak repro");
 
-    const contextText = JSON.stringify(manager.buildSessionContext().messages);
+    const sessionContext = manager.buildSessionContext();
+    expect(sessionContext.thinkingLevel).toBe("high");
+    const contextText = JSON.stringify(sessionContext.messages);
     expect(contextText).toContain("Summary of stale messages.");
     expect(contextText).toContain("kept user");
     expect(contextText).toContain("post-compaction assistant 19");

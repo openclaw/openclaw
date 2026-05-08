@@ -109,12 +109,9 @@ describe("ports helpers", () => {
     expect(messages.join("\n")).toContain("another OpenClaw instance is already running");
   });
 
-  it("prints an intra-process plugin conflict hint when the owning PID is the current process", async () => {
-    // Simulate the Manifest/clawrouter EADDRINUSE retry loop: the embedded
-    // plugin tries to bind ports 2099/2100 that the gateway parent process
-    // (process.pid) already owns. inspectPortUsage returns a listener with
-    // pid === process.pid, which triggers the intra-process diagnostic path.
-    // See https://github.com/openclaw/openclaw/issues/73655 Bug 1.
+  it("prints a generic intra-process conflict hint when the owning PID is current", async () => {
+    // Simulate an embedded runtime trying to bind a port that the gateway
+    // parent process (process.pid) already owns.
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = Array.isArray(argv) ? argv[0] : undefined;
       if (typeof command === "string" && command.includes("lsof")) {
@@ -153,7 +150,9 @@ describe("ports helpers", () => {
     // Should identify this as an intra-process conflict, not a cross-process one.
     expect(joined).toContain("already bound by this gateway process");
     expect(joined).toContain(`pid ${process.pid}`);
-    expect(joined).toContain("73655");
+    expect(joined).toContain("embedded runtime");
+    expect(joined).toContain("parent listener");
+    expect(joined).not.toContain("MANIFEST_DISABLE_BUILTIN_PORT");
     // Should NOT say "another OpenClaw instance is running" — that's the wrong diagnosis.
     expect(joined).not.toContain("another OpenClaw instance is already running");
     expect(runtime.exit).toHaveBeenCalledWith(1);
