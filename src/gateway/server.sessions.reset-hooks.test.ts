@@ -1,6 +1,10 @@
 import path from "node:path";
 import { expect, test } from "vitest";
-import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
+import {
+  createSqliteSessionTranscriptLocator,
+  getSessionEntry,
+  upsertSessionEntry,
+} from "../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { embeddedRunMock, seedGatewaySessionEntries, testState } from "./test-helpers.js";
 import {
@@ -221,7 +225,9 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
     sessionKey: "agent:main:main",
     reason: "new",
   });
-  expect((endEvent as { sessionFile?: string } | undefined)?.sessionFile).toBe(transcriptPath);
+  expect((endEvent as { sessionFile?: string } | undefined)?.sessionFile).toBe(
+    createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "sess-main" }),
+  );
   expect((endEvent as { nextSessionId?: string } | undefined)?.nextSessionId).toBe(
     (startEvent as { sessionId?: string } | undefined)?.sessionId,
   );

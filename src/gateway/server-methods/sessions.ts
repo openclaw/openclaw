@@ -16,8 +16,7 @@ import {
   listSessionEntries,
   patchSessionEntry,
   resolveMainSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
+  createSqliteSessionTranscriptLocator,
   type SessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions.js";
@@ -411,13 +410,10 @@ function ensureSessionTranscriptFile(params: {
   agentId: string;
 }): { ok: true; transcriptPath: string } | { ok: false; error: string } {
   try {
-    const transcriptPath = resolveSessionFilePath(
-      params.sessionId,
-      params.sessionFile ? { sessionFile: params.sessionFile } : undefined,
-      resolveSessionFilePathOptions({
-        agentId: params.agentId,
-      }),
-    );
+    const transcriptPath = createSqliteSessionTranscriptLocator({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    });
     if (
       !hasSqliteSessionTranscriptEvents({ agentId: params.agentId, sessionId: params.sessionId })
     ) {

@@ -12,7 +12,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -1318,16 +1318,12 @@ function resolveTranscriptPath(params: {
   sessionFile?: string;
   agentId?: string;
 }): string | null {
-  const { sessionId, sessionFile, agentId } = params;
-  if (!agentId && !sessionFile) {
+  const { sessionId, agentId } = params;
+  if (!agentId && !params.sessionFile) {
     return null;
   }
   try {
-    return resolveSessionFilePath(
-      sessionId,
-      sessionFile ? { sessionFile } : undefined,
-      agentId ? { agentId } : undefined,
-    );
+    return createSqliteSessionTranscriptLocator({ agentId, sessionId });
   } catch {
     return null;
   }
