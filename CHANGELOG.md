@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 - macOS/LaunchAgent install: tighten LaunchAgent directory and plist permissions during install so launchd bootstrap does not fail when the target home path or generated plist inherited group/world-writable modes.
 - Gateway/Control UI: keep dashboard auth tokens in session-scoped browser storage so same-tab refreshes preserve remote token auth without restoring long-lived localStorage token persistence, while scoping tokens to the selected gateway URL and fragment-only bootstrap flow. (#40892) thanks @velvet-shark.
+- Auto-reply/inbound metadata: fix <session-recap> block stripping to require both open and close tags, preserving the original message when the close tag is missing. Fix mid-message recap tags not altering user-authored blank lines in the fast-return path. (#41013)
 
 ## 2026.3.8
 

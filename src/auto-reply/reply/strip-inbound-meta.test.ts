@@ -168,6 +168,16 @@ Hello from user`;
     const input = `${block}\n\nUser text`;
     expect(stripInboundMetadata(input)).toBe("User text");
   });
+
+  it("preserves message when <session-recap> close tag is missing", () => {
+    const input = `<session-recap>\n<summary>no close tag\n\nReal user message`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("does not trim blank lines when <session-recap> is mid-message", () => {
+    const input = `User preamble\n\n${SESSION_RECAP_BLOCK}\n\nUser postamble`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
 });
 
 describe("extractInboundSenderLabel", () => {

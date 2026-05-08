@@ -129,7 +129,9 @@ function stripLeadingSessionRecapBlock(lines: string[]): string[] {
   i++;
   // Consume all lines until (and including) the closing </session-recap> tag.
   while (i < lines.length && !SESSION_RECAP_CLOSE_LINE_RE.test(lines[i] ?? "")) i++;
-  if (i < lines.length) i++; // consume the closing tag line itself
+  // If no close tag found, preserve original text unchanged.
+  if (i >= lines.length) return lines;
+  i++; // consume the closing tag line itself
   // Skip blank lines after the closing tag.
   while (i < lines.length && lines[i]?.trim() === "") i++;
   return lines.slice(i);
@@ -166,7 +168,14 @@ export function stripInboundMetadata(text: string): string {
   // Strip a leading <session-recap> block first so the remaining logic can
   // operate on a clean prefix.
   if (hasSessionRecap) {
+    const originalLength = lines.length;
     lines = stripLeadingSessionRecapBlock(lines);
+    // If the recap block wasn't actually stripped (e.g. missing close tag,
+    // mid-message tag), and there are no standard sentinels, return the
+    // original text unchanged so we don't alter user-authored blank lines.
+    if (!hasStandardSentinels && lines.length === originalLength) {
+      return text;
+    }
   }
 
   if (!hasStandardSentinels) {
@@ -237,7 +246,13 @@ export function stripLeadingInboundMetadata(text: string): string {
 
   // Strip a leading <session-recap> block first.
   if (hasSessionRecap) {
+    const originalLength = lines.length;
     lines = stripLeadingSessionRecapBlock(lines);
+    // If nothing was actually stripped, and there are no standard sentinels,
+    // return the original text unchanged.
+    if (!hasStandardSentinels && lines.length === originalLength) {
+      return text;
+    }
   }
 
   if (!hasStandardSentinels) {
