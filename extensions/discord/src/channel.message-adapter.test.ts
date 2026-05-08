@@ -26,7 +26,9 @@ describe("discord channel message adapter", () => {
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {
     const adapter = discordPlugin.message;
-    expect(adapter).toBeDefined();
+    if (!adapter) {
+      throw new Error("Expected discord plugin to expose a channel message adapter");
+    }
 
     const proveText = async () => {
       resetDiscordOutboundMocks(hoisted);

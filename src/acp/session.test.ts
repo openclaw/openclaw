@@ -132,7 +132,7 @@ describe("acp session manager", () => {
 
       expect(third.sessionId).toBe("third");
       expect(boundedStore.getSession(first.sessionId)).toBeUndefined();
-      expect(boundedStore.getSession(second.sessionId)).toBeDefined();
+      expect(boundedStore.getSession(second.sessionId)).toMatchObject({ sessionId: "second" });
     } finally {
       boundedStore.clearAllSessionsForTest();
     }

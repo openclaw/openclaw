@@ -177,7 +177,7 @@ describe("validateTalkClientCreateParams", () => {
     ).toBe(true);
   });
 
-  it("rejects request-time instruction overrides", () => {
+  it("rejects request-time instruction overrides for Talk client creation", () => {
     expect(
       validateTalkClientCreateParams({
         sessionKey: "agent:main:main",
@@ -311,7 +311,7 @@ describe("validateTalkSession", () => {
     ).toBe(true);
   });
 
-  it("rejects request-time instruction overrides", () => {
+  it("rejects request-time instruction overrides for Talk session creation", () => {
     expect(
       validateTalkSessionCreateParams({
         sessionKey: "agent:main:main",

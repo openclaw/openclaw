@@ -154,7 +154,7 @@ function getDispatcherFromUndiciCall(nth: number) {
     throw new Error(`missing undici fetch call #${nth}`);
   }
   const init = call[1] as (RequestInit & { dispatcher?: unknown }) | undefined;
-  return init?.dispatcher as
+  const dispatcher = init?.dispatcher as
     | {
         options?: {
           allowH2?: boolean;
@@ -164,6 +164,10 @@ function getDispatcherFromUndiciCall(nth: number) {
         };
       }
     | undefined;
+  if (!dispatcher) {
+    throw new Error(`missing dispatcher for undici fetch call #${nth}`);
+  }
+  return dispatcher;
 }
 
 function buildFetchFallbackError(code: string) {
@@ -334,7 +338,7 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).not.toHaveBeenCalled();
   });
 
-  it("does not double-wrap an already wrapped proxy fetch", async () => {
+  it("does not double-wrap an already wrapped proxy fetch", () => {
     const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
     const wrapped = resolveFetch(proxyFetch);
 
@@ -359,15 +363,14 @@ describe("resolveTelegramFetch", () => {
     expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
 
     const dispatcher = getDispatcherFromUndiciCall(1);
-    expect(dispatcher).toBeDefined();
     expectHttp1OnlyDispatcher(dispatcher);
     expect(dispatcher?.options?.connect).toEqual(
       expect.objectContaining({
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
+        lookup: expect.any(Function),
       }),
     );
-    expect(typeof dispatcher?.options?.connect?.lookup).toBe("function");
   });
 
   it("emits default transport decisions at debug level", () => {
@@ -576,7 +579,7 @@ describe("resolveTelegramFetch", () => {
       },
     });
 
-    expect(transport.sourceFetch).toBeDefined();
+    expect(transport.sourceFetch).toEqual(expect.any(Function));
     expect(transport.fetch).not.toBe(transport.sourceFetch);
     expect(transport.dispatcherAttempts).toHaveLength(3);
 
@@ -814,12 +817,6 @@ describe("resolveTelegramFetch", () => {
     const seventhDispatcher = getDispatcherFromUndiciCall(7);
     const eighthDispatcher = getDispatcherFromUndiciCall(8);
 
-    expect(firstDispatcher).toBeDefined();
-    expect(secondDispatcher).toBeDefined();
-    expect(sixthDispatcher).toBeDefined();
-    expect(seventhDispatcher).toBeDefined();
-    expect(eighthDispatcher).toBeDefined();
-
     expect(firstDispatcher).not.toBe(secondDispatcher);
     expect(secondDispatcher).toBe(sixthDispatcher);
     expect(seventhDispatcher).toBe(firstDispatcher);
@@ -1034,8 +1031,6 @@ describe("resolveTelegramFetch", () => {
     const dispatcherA = getDispatcherFromUndiciCall(1);
     const dispatcherB = getDispatcherFromUndiciCall(2);
 
-    expect(dispatcherA).toBeDefined();
-    expect(dispatcherB).toBeDefined();
     expect(dispatcherA).not.toBe(dispatcherB);
 
     expect(dispatcherA?.options?.connect).toEqual(

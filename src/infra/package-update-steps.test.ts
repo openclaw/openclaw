@@ -479,8 +479,10 @@ describe("runGlobalPackageUpdateSteps", () => {
         }),
       ).rejects.toThrow("install crashed");
 
-      expect(stagePrefix).toBeDefined();
-      await expect(fs.access(stagePrefix ?? "")).rejects.toMatchObject({ code: "ENOENT" });
+      if (stagePrefix === undefined) {
+        throw new Error("expected staged install prefix");
+      }
+      await expect(fs.access(stagePrefix)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });

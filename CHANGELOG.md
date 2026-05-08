@@ -14,10 +14,13 @@ Docs: https://docs.openclaw.ai
 - Slack: route handled top-level channel turns in implicit-conversation channels to thread-scoped sessions when Slack reply threading is enabled, keeping the root turn and later thread replies on one OpenClaw session. (#78522) Thanks @zeroth-blip.
 - Telegram: re-probe the primary fetch transport after repeated sticky fallback success so transient IPv4 or pinned-IP fallback promotion can recover without a gateway restart. Fixes #77088. (#77157) Thanks @MkDev11.
 - Runtime/install: raise the supported Node 22 floor to `22.16+` so native SQLite query handling can rely on the `node:sqlite` statement metadata API while continuing to recommend Node 24. (#78921)
+- Discord/voice: make duplicate same-guild auto-join entries resolve to the last configured channel so moving an agent between voice channels does not keep joining the stale channel.
 - Discord/voice: include a bounded one-line STT transcript preview in verbose voice logs so live voice debugging shows what speakers said before the agent reply.
 - Codex app-server: pin the managed Codex harness and Codex CLI smoke package to `@openai/codex@0.129.0`, defer OpenClaw integration dynamic tools behind Codex tool search by default, and accept current Codex service-tier values so legacy `fast` settings survive the stable harness upgrade as `priority`.
+- Codex app-server: default implicit local stdio app-server permissions to guardian when Codex system requirements disallow the YOLO approval, reviewer, or sandbox value, including hostname-scoped remote sandbox entries, avoiding turn-start failures on managed hosts that permit only reviewed approval or narrower sandboxes.
 - Discord/voice: stream ElevenLabs TTS directly into Discord playback and send ElevenLabs latency optimization as the documented query parameter so spoken replies can start sooner.
 - Discord/voice: keep TTS playback running when another user starts speaking, ignore new capture during playback to avoid feedback loops, and downgrade expected receive-stream aborts to verbose diagnostics.
+- iMessage: expose native private-API message actions through `imsg rpc` for reactions, edits, unsends, replies, rich sends, attachments, and group management when `imsg status --json` reports the required bridge capabilities.
 - Telegram: treat successful same-chat `message` tool outbound sends during an inbound telegram turn as delivered when deciding whether to emit the rewritten silent reply fallback (#78685). Thanks @neeravmakwana.
 - Gateway/tasks: reconcile stale CLI run-context tasks whose live run context disappeared even when a child session row remains, and apply the default bounded reload deferral timeout to channel hot reloads so stale task records cannot block Discord/Slack/Telegram reloads forever.
 - Gateway/sessions: keep session-store index writes atomic while skipping durable fsync inside the writer lock, reducing cron and channel-turn starvation on slow filesystems and addressing the session-store strand of #73655. Thanks @mmartoccia.
@@ -169,6 +172,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Harden macOS shell wrapper allowlist parsing [AI]. (#78518) Thanks @pgondhi987.
+- Gateway/macOS: `openclaw gateway stop` now uses `launchctl bootout` by default instead of unconditionally calling `launchctl disable`, so KeepAlive auto-recovery still works after unexpected crashes; use the new `--disable` flag to opt into the persistent-disable behavior when a manual stop should survive reboots. Fixes #77934. Thanks @bmoran1022.
+- Gateway/macOS: `repairLaunchAgentBootstrap` no longer kickstarts an already-running LaunchAgent, preventing unnecessary service restarts and session disconnects when repair runs against a healthy gateway. Fixes #77428. Thanks @ramitrkar-hash.
+- Gateway/macOS: `openclaw gateway stop --disable` now persists the LaunchAgent disable bit even after a previous bootout left the service not loaded, keeping the explicit stay-down path reliable. (#78412) Thanks @wdeveloper16.
 - Control UI/chat: hide retired and non-public Google Gemini model IDs from chat model catalogs and route the bare `gemini-3-pro` alias to Gemini 3.1 Pro Preview instead of the shut-down Gemini 3 Pro Preview. Thanks @BunsDev.
 - CLI/install: refuse state-mutating OpenClaw CLI runs as root by default, keep an explicit `OPENCLAW_ALLOW_ROOT=1` escape hatch for intentional root/container use, and update DigitalOcean setup guidance to run OpenClaw as a non-root user. Fixes #67478. Thanks @Jerry-Xin and @natechicago.
 - Gateway/watch: leave `OPENCLAW_TRACE_SYNC_IO` disabled by default in `pnpm gateway:watch:raw` so watch mode avoids noisy Node sync-I/O stack traces unless explicitly requested.
@@ -600,6 +607,7 @@ Docs: https://docs.openclaw.ai
 - Managed proxy/security: classify raw socket callsites and proxy runtime mutations in boundary checks so new direct egress or unmanaged proxy-state changes cannot land without explicit review. (#77126) Thanks @jesse-merhi.
 - Channels/iMessage: surface the silent group-allowlist drop at default log level by emitting a one-time `warn` per account at monitor startup when `channels.imessage.groupPolicy: "allowlist"` is set without a `channels.imessage.groups` block, plus a one-time `warn` per `chat_id` when the runtime gate drops a specific group, naming the exact `channels.imessage.groups[...]` key to add to allow it. Fixes #78749. (#79190) Thanks @omarshahine.
 - WhatsApp: stop Gateway-originated outbound echoes from advancing inbound activity in `openclaw channels status`, so outbound self-sends no longer look like handled inbound messages. Fixes #79056. (#79057) Thanks @ai-hpc and @bittoby.
+- Gateway/nodes: preserve the live node registry session and invoke ownership when an older same-node WebSocket closes after reconnecting. (#78351) Thanks @samzong.
 
 ## 2026.5.3-1
 

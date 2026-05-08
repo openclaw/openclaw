@@ -143,6 +143,13 @@ async function makeStorePath(prefix: string): Promise<string> {
 const createStorePath = makeStorePath;
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai-codex:secondary@example.test";
 
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 async function writeSessionStoreFast(
   storePath: string,
   store: Record<string, SessionEntry | Record<string, unknown>>,
@@ -379,13 +386,12 @@ describe("initSessionState thread forking", () => {
 
     expect(result.sessionKey).toBe(threadSessionKey);
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
-    expect(result.sessionEntry.sessionFile).toBeTruthy();
     expect(result.sessionEntry.displayName).toBe(threadLabel);
 
-    const newSessionFile = result.sessionEntry.sessionFile;
-    if (!newSessionFile) {
-      throw new Error("Missing session file for forked thread");
-    }
+    const newSessionFile = requireString(
+      result.sessionEntry.sessionFile,
+      "forked thread session file",
+    );
     const headerLine = (await fs.readFile(newSessionFile, "utf-8"))
       .split(/\r?\n/)
       .find((line) => line.trim().length > 0);
@@ -632,11 +638,8 @@ describe("initSessionState thread forking", () => {
       commandAuthorized: true,
     });
 
-    const sessionFile = result.sessionEntry.sessionFile;
-    expect(sessionFile).toBeTruthy();
-    expect(path.basename(sessionFile ?? "")).toBe(
-      `${result.sessionEntry.sessionId}-topic-456.jsonl`,
-    );
+    const sessionFile = requireString(result.sessionEntry.sessionFile, "topic session file");
+    expect(path.basename(sessionFile)).toBe(`${result.sessionEntry.sessionId}-topic-456.jsonl`);
   });
 
   it("records topic-specific session files from SessionKey when MessageThreadId is absent", async () => {
@@ -658,11 +661,8 @@ describe("initSessionState thread forking", () => {
         commandAuthorized: true,
       });
 
-      const sessionFile = result.sessionEntry.sessionFile;
-      expect(sessionFile).toBeTruthy();
-      expect(path.basename(sessionFile ?? "")).toBe(
-        `${result.sessionEntry.sessionId}-topic-456.jsonl`,
-      );
+      const sessionFile = requireString(result.sessionEntry.sessionFile, "topic session file");
+      expect(path.basename(sessionFile)).toBe(`${result.sessionEntry.sessionId}-topic-456.jsonl`);
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -2842,8 +2842,8 @@ describe("drainFormattedSystemEvents", () => {
         isNewSession: false,
       });
 
-      expect(expectedTimestamp).toBeDefined();
-      expect(result).toContain(`System: [${expectedTimestamp}] Model switched.`);
+      const expectedTimestampText = requireString(expectedTimestamp, "formatted timestamp");
+      expect(result).toContain(`System: [${expectedTimestampText}] Model switched.`);
     } finally {
       resetSystemEventsForTest();
       vi.useRealTimers();

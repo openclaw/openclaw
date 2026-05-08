@@ -352,7 +352,7 @@ describe("buildButtonAttachments", () => {
     expect(ctx.tweet_id).toBe("123");
     expect(ctx.batch).toBe(true);
     expect(ctx.action_id).toBe("btn");
-    expect(ctx._token).toBeDefined();
+    expect(ctx._token).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("passes callback URL to each button integration", () => {

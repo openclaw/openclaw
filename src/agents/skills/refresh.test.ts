@@ -55,7 +55,7 @@ describe("ensureSkillsWatcher", () => {
     await refreshModule.resetSkillsRefreshForTest();
   });
 
-  it("watches skill roots and filters non-skill churn", async () => {
+  it("watches skill roots and filters non-skill churn", () => {
     refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
 
     expect(watchMock).toHaveBeenCalledTimes(1);

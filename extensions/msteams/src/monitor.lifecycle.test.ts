@@ -244,15 +244,17 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     const app = expressControl.apps.at(-1);
-    expect(app).toBeDefined();
-    expect(app!.use).toHaveBeenCalledTimes(4);
+    if (!app) {
+      throw new Error("expected Express app to be created");
+    }
+    expect(app.use).toHaveBeenCalledTimes(4);
 
     const jsonMiddleware = vi.mocked((await import("express")).json).mock.results[0]?.value;
-    expect(jsonMiddleware).toBeDefined();
-    expect(app!.use.mock.calls[1]?.[0]).not.toBe(jsonMiddleware);
-    expect(app!.use.mock.calls[2]?.[0]).toBe(jsonMiddleware);
+    expect(jsonMiddleware).toEqual(expect.any(Function));
+    expect(app.use.mock.calls[1]?.[0]).not.toBe(jsonMiddleware);
+    expect(app.use.mock.calls[2]?.[0]).toBe(jsonMiddleware);
 
-    const jwtMiddleware = app!.use.mock.calls[1]?.[0] as (
+    const jwtMiddleware = app.use.mock.calls[1]?.[0] as (
       req: Request,
       res: Response,
       next: (err?: unknown) => void,

@@ -806,7 +806,7 @@ describe("buildNodeServiceEnvironment", () => {
   });
 });
 
-describe("shared Node TLS env defaults", () => {
+describe("shared Node TLS env defaults matrix", () => {
   const builders = [
     {
       name: "gateway service env",
@@ -908,7 +908,7 @@ describe("resolveLinuxSystemCaBundle", () => {
   });
 });
 
-describe("shared Node TLS env defaults", () => {
+describe("shared Node TLS env defaults focused", () => {
   it("sets macOS TLS defaults for gateway services", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/Users/test" },
