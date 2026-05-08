@@ -22,8 +22,8 @@
  * @module @openclaw/oc-path/emit
  */
 
-import type { FrontmatterEntry, MdAst } from "./ast.js";
-import { guardSentinel } from "./sentinel.js";
+import type { FrontmatterEntry, MdAst } from './ast.js';
+import { guardSentinel } from './sentinel.js';
 
 /**
  * Emit options. `mode: 'roundtrip'` (default) returns `ast.raw` if
@@ -31,7 +31,7 @@ import { guardSentinel } from "./sentinel.js";
  * re-renders.
  */
 export interface EmitOptions {
-  readonly mode?: "roundtrip" | "render";
+  readonly mode?: 'roundtrip' | 'render';
   /**
    * When provided, the emitter walks every emitted leaf string through
    * `guardSentinel(value, ocPath)`. Default uses the file name
@@ -55,17 +55,17 @@ export interface EmitOptions {
  * `acceptPreExistingSentinel: false`).
  */
 export function emitMd(ast: MdAst, opts: EmitOptions = {}): string {
-  const mode = opts.mode ?? "roundtrip";
-  const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : "oc://";
+  const mode = opts.mode ?? 'roundtrip';
+  const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : 'oc://';
   const acceptPreExisting = opts.acceptPreExistingSentinel ?? true;
 
-  if (mode === "roundtrip") {
+  if (mode === 'roundtrip') {
     // Round-trip trusts parsed bytes — see emit-policy comment in
     // jsonc/emit.ts. A markdown file legitimately containing the
     // sentinel literal (in a code block, in a pasted error log) would
     // otherwise become a workspace-wide emit DoS.
-    if (!acceptPreExisting && ast.raw.includes("__OPENCLAW_REDACTED__")) {
-      guardSentinel("__OPENCLAW_REDACTED__", `${guardPath}/[raw]`);
+    if (!acceptPreExisting && ast.raw.includes('__OPENCLAW_REDACTED__')) {
+      guardSentinel('__OPENCLAW_REDACTED__', `${guardPath}/[raw]`);
     }
     return ast.raw;
   }
@@ -76,26 +76,22 @@ export function emitMd(ast: MdAst, opts: EmitOptions = {}): string {
   const parts: string[] = [];
 
   if (ast.frontmatter.length > 0) {
-    parts.push("---");
+    parts.push('---');
     for (const fm of ast.frontmatter) {
       guardSentinel(fm.value, `${guardPath}/[frontmatter]/${fm.key}`);
       parts.push(`${fm.key}: ${formatFrontmatterValue(fm.value)}`);
     }
-    parts.push("---");
+    parts.push('---');
   }
 
   if (ast.preamble.length > 0) {
     guardSentinel(ast.preamble, `${guardPath}/[preamble]`);
-    if (parts.length > 0) {
-      parts.push("");
-    }
+    if (parts.length > 0) {parts.push('');}
     parts.push(ast.preamble);
   }
 
   for (const block of ast.blocks) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
+    if (parts.length > 0) {parts.push('');}
     parts.push(`## ${block.heading}`);
     if (block.bodyText.length > 0) {
       // Walk items + frontmatter-key value strings for sentinels;
@@ -111,15 +107,13 @@ export function emitMd(ast: MdAst, opts: EmitOptions = {}): string {
     }
   }
 
-  return parts.join("\n");
+  return parts.join('\n');
 }
 
 function formatFrontmatterValue(value: string): string {
   // Quote values containing characters that would confuse a YAML
   // parser; otherwise emit bare.
-  if (value.length === 0) {
-    return '""';
-  }
+  if (value.length === 0) {return '""';}
   if (/[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) {
     return JSON.stringify(value);
   }

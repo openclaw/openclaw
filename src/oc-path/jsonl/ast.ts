@@ -15,11 +15,11 @@
  * @module @openclaw/oc-path/jsonl/ast
  */
 
-import type { JsoncValue } from "../jsonc/ast.js";
+import type { JsoncValue } from '../jsonc/ast.js';
 
 /** The root JSONL AST. `raw` round-trips byte-identical via emit. */
 export interface JsonlAst {
-  readonly kind: "jsonl";
+  readonly kind: 'jsonl';
   readonly raw: string;
   readonly lines: readonly JsonlLine[];
   /**
@@ -29,7 +29,7 @@ export interface JsonlAst {
    * ASTs that don't track this — render mode falls back to LF when
    * undefined.
    */
-  readonly lineEnding?: "\r\n" | "\n";
+  readonly lineEnding?: '\r\n' | '\n';
 }
 
 /**
@@ -39,11 +39,11 @@ export interface JsonlAst {
  */
 export type JsonlLine =
   | {
-      readonly kind: "value";
+      readonly kind: 'value';
       readonly line: number;
       readonly value: JsoncValue;
       /** The original line text (without trailing newline). */
       readonly raw: string;
     }
-  | { readonly kind: "blank"; readonly line: number; readonly raw: string }
-  | { readonly kind: "malformed"; readonly line: number; readonly raw: string };
+  | { readonly kind: 'blank'; readonly line: number; readonly raw: string }
+  | { readonly kind: 'malformed'; readonly line: number; readonly raw: string };

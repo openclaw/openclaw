@@ -17,11 +17,11 @@
  * @module @openclaw/oc-path/yaml/ast
  */
 
-import type { Document, LineCounter } from "yaml";
+import type { Document, LineCounter } from 'yaml';
 
 /** The root YAML AST. `raw` round-trips byte-identical via emit. */
 export interface YamlAst {
-  readonly kind: "yaml";
+  readonly kind: 'yaml';
   readonly raw: string;
   /**
    * Parsed `yaml.Document` — wraps the comment-preserving CST model.

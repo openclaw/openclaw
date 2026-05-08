@@ -22,7 +22,7 @@
  * was supposed to drop the redacted view, not pass it through to the
  * writer.
  */
-export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+export const REDACTED_SENTINEL = '__OPENCLAW_REDACTED__';
 
 /**
  * Thrown when emit detects a `"__OPENCLAW_REDACTED__"` literal in any
@@ -36,12 +36,12 @@ export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
  * key, section/item slug, etc.) or just the file name.
  */
 export class OcEmitSentinelError extends Error {
-  readonly code = "OC_EMIT_SENTINEL";
+  readonly code = 'OC_EMIT_SENTINEL';
   readonly path: string;
 
   constructor(path: string) {
     super(`emit refused to write "${REDACTED_SENTINEL}" sentinel literal at ${path}`);
-    this.name = "OcEmitSentinelError";
+    this.name = 'OcEmitSentinelError';
     this.path = path;
   }
 }
@@ -57,7 +57,7 @@ export class OcEmitSentinelError extends Error {
  * No-op for any non-string input. Used by every leaf-write boundary.
  */
 export function guardSentinel(value: unknown, ocPath: string): void {
-  if (typeof value === "string" && value.includes(REDACTED_SENTINEL)) {
+  if (typeof value === 'string' && value.includes(REDACTED_SENTINEL)) {
     throw new OcEmitSentinelError(ocPath);
   }
 }

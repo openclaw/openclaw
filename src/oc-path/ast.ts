@@ -26,7 +26,7 @@
 export interface Diagnostic {
   readonly line: number;
   readonly message: string;
-  readonly severity: "info" | "warning" | "error";
+  readonly severity: 'info' | 'warning' | 'error';
   readonly code?: string;
 }
 
@@ -109,7 +109,7 @@ export interface AstBlock {
  * (`AGENTS_TOOLS_SECTION_EMPTY`, etc.) ride in lint rules, not here.
  */
 export interface MdAst {
-  readonly kind: "md";
+  readonly kind: 'md';
   readonly raw: string;
   readonly frontmatter: readonly FrontmatterEntry[];
   readonly preamble: string;

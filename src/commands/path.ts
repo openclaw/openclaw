@@ -211,11 +211,21 @@ export async function pathResolveCommand(
     throw err;
   }
   if (match === null) {
-    emit(runtime, mode, { resolved: false, ocPath: pathStr }, () => `not found: ${pathStr}`);
+    emit(
+      runtime,
+      mode,
+      { resolved: false, ocPath: pathStr },
+      () => `not found: ${pathStr}`,
+    );
     runtime.exit(1);
     return;
   }
-  emit(runtime, mode, { resolved: true, ocPath: pathStr, match }, () => formatMatchHuman(match));
+  emit(
+    runtime,
+    mode,
+    { resolved: true, ocPath: pathStr, match },
+    () => formatMatchHuman(match),
+  );
 }
 
 export async function pathSetCommand(
@@ -254,7 +264,12 @@ export async function pathSetCommand(
     result = setOcPath(ast, ocPath, value);
   } catch (err) {
     if (err instanceof OcEmitSentinelError) {
-      emitError(runtime, mode, `set refused: ${err.message}`, "OC_EMIT_SENTINEL");
+      emitError(
+        runtime,
+        mode,
+        `set refused: ${err.message}`,
+        "OC_EMIT_SENTINEL",
+      );
       runtime.exit(1);
       return;
     }
@@ -266,7 +281,8 @@ export async function pathSetCommand(
       runtime,
       mode,
       { ok: false, reason: result.reason, detail },
-      () => `set failed: ${result.reason}${detail !== undefined ? ` — ${detail}` : ""}`,
+      () =>
+        `set failed: ${result.reason}${detail !== undefined ? ` — ${detail}` : ""}`,
     );
     runtime.exit(1);
     return;
@@ -284,7 +300,12 @@ export async function pathSetCommand(
     newBytes = emitForKind(result.ast, ocPath.file);
   } catch (err) {
     if (err instanceof OcEmitSentinelError) {
-      emitError(runtime, mode, `emit refused: ${err.message}`, "OC_EMIT_SENTINEL");
+      emitError(
+        runtime,
+        mode,
+        `emit refused: ${err.message}`,
+        "OC_EMIT_SENTINEL",
+      );
       runtime.exit(1);
       return;
     }
@@ -497,7 +518,12 @@ export async function pathEmitCommand(
     bytes = emitForKind(ast, fileName);
   } catch (err) {
     if (err instanceof OcEmitSentinelError) {
-      emitError(runtime, mode, `emit refused: ${err.message}`, "OC_EMIT_SENTINEL");
+      emitError(
+        runtime,
+        mode,
+        `emit refused: ${err.message}`,
+        "OC_EMIT_SENTINEL",
+      );
       runtime.exit(1);
       return;
     }

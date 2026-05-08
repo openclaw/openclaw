@@ -25,11 +25,11 @@
  * @module @openclaw/oc-path/find
  */
 
-import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
-import type { MdAst } from "./ast.js";
-import type { JsoncValue } from "./jsonc/ast.js";
-import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
-import type { OcPath } from "./oc-path.js";
+import { isMap, isScalar, isSeq, type Node, type Pair } from 'yaml';
+import type { JsoncValue } from './jsonc/ast.js';
+import type { JsonlAst, JsonlLine } from './jsonl/ast.js';
+import type { MdAst } from './ast.js';
+import type { OcPath } from './oc-path.js';
 import {
   MAX_TRAVERSAL_DEPTH,
   OcPathError,
@@ -48,10 +48,10 @@ import {
   resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
-} from "./oc-path.js";
-import type { PredicateSpec } from "./oc-path.js";
-import type { OcAst, OcMatch } from "./universal.js";
-import { resolveOcPath } from "./universal.js";
+} from './oc-path.js';
+import type { PredicateSpec } from './oc-path.js';
+import type { OcAst, OcMatch } from './universal.js';
+import { resolveOcPath } from './universal.js';
 
 // ---------- Public types ---------------------------------------------------
 
@@ -67,7 +67,7 @@ export interface OcPathMatch {
  * shape (a `*` in the `item` slot produces a path with the matched
  * value in `item`, not joined into `section`).
  */
-type Slot = "section" | "item" | "field";
+type Slot = 'section' | 'item' | 'field';
 interface SlotSub {
   readonly slot: Slot;
   readonly value: string;
@@ -116,9 +116,7 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
   const out: OcPathMatch[] = [];
   for (const concrete of concretePaths) {
     const m = resolveOcPath(ast, concrete);
-    if (m !== null) {
-      out.push({ path: concrete, match: m });
-    }
+    if (m !== null) {out.push({ path: concrete, match: m });}
   }
   return out;
 }
@@ -130,19 +128,13 @@ function patternSubs(pattern: OcPath): readonly PatternSub[] {
   // Bracket-aware split so dots inside `[k=1.0]` or `{a.b,c}` aren't
   // treated as sub-segment delimiters (P-012/P-013).
   if (pattern.section !== undefined) {
-    for (const v of splitRespectingBrackets(pattern.section, ".")) {
-      out.push({ slot: "section", value: v });
-    }
+    for (const v of splitRespectingBrackets(pattern.section, '.')) {out.push({ slot: 'section', value: v });}
   }
   if (pattern.item !== undefined) {
-    for (const v of splitRespectingBrackets(pattern.item, ".")) {
-      out.push({ slot: "item", value: v });
-    }
+    for (const v of splitRespectingBrackets(pattern.item, '.')) {out.push({ slot: 'item', value: v });}
   }
   if (pattern.field !== undefined) {
-    for (const v of splitRespectingBrackets(pattern.field, ".")) {
-      out.push({ slot: "field", value: v });
-    }
+    for (const v of splitRespectingBrackets(pattern.field, '.')) {out.push({ slot: 'field', value: v });}
   }
   return out;
 }
@@ -152,19 +144,15 @@ function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
   const itemSubs: string[] = [];
   const fieldSubs: string[] = [];
   for (const s of slotSubs) {
-    if (s.slot === "section") {
-      sectionSubs.push(s.value);
-    } else if (s.slot === "item") {
-      itemSubs.push(s.value);
-    } else {
-      fieldSubs.push(s.value);
-    }
+    if (s.slot === 'section') {sectionSubs.push(s.value);}
+    else if (s.slot === 'item') {itemSubs.push(s.value);}
+    else {fieldSubs.push(s.value);}
   }
   return {
     file: pattern.file,
-    ...(sectionSubs.length > 0 ? { section: sectionSubs.join(".") } : {}),
-    ...(itemSubs.length > 0 ? { item: itemSubs.join(".") } : {}),
-    ...(fieldSubs.length > 0 ? { field: fieldSubs.join(".") } : {}),
+    ...(sectionSubs.length > 0 ? { section: sectionSubs.join('.') } : {}),
+    ...(itemSubs.length > 0 ? { item: itemSubs.join('.') } : {}),
+    ...(fieldSubs.length > 0 ? { field: fieldSubs.join('.') } : {}),
     ...(pattern.session !== undefined ? { session: pattern.session } : {}),
   };
 }
@@ -180,18 +168,16 @@ function expand(ast: OcAst, subs: readonly PatternSub[], pattern: OcPath): reado
     concretePaths.push(repackSlotSubs(pattern, slotSubs));
   };
   switch (ast.kind) {
-    case "yaml":
+    case 'yaml':
       walkYaml(ast.doc.contents as Node | null, subs, 0, [], onMatch);
       break;
-    case "jsonc":
-      if (ast.root !== null) {
-        walkJsonc(ast.root, subs, 0, [], onMatch);
-      }
+    case 'jsonc':
+      if (ast.root !== null) {walkJsonc(ast.root, subs, 0, [], onMatch);}
       break;
-    case "jsonl":
+    case 'jsonl':
       walkJsonl(ast, subs, 0, [], onMatch);
       break;
-    case "md":
+    case 'md':
       walkMd(ast, subs, 0, [], onMatch);
       break;
   }
@@ -216,8 +202,8 @@ function walkYaml(
   if (walked.length > MAX_TRAVERSAL_DEPTH) {
     throw new OcPathError(
       `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a cycle or pathological pattern`,
-      "",
-      "OC_PATH_DEPTH_EXCEEDED",
+      '',
+      'OC_PATH_DEPTH_EXCEEDED',
     );
   }
   // Out of pattern → emit at whatever node we landed on.
@@ -225,18 +211,14 @@ function walkYaml(
     onMatch(walked);
     return;
   }
-  if (node === null) {
-    return;
-  }
+  if (node === null) {return;}
   let cur = subs[i];
 
   // Union `{a,b,c}` — fan out into one walk per alternative. Each
   // alternative replaces `cur.value` with the chosen literal.
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
-    if (alts === null) {
-      return;
-    }
+    if (alts === null) {return;}
     for (const alt of alts) {
       const altSubs = subs.slice();
       altSubs[i] = { slot: cur.slot, value: alt };
@@ -249,33 +231,19 @@ function walkYaml(
   // whose `key` field matches the predicate.
   if (isPredicateSeg(cur.value)) {
     const pred = parsePredicateSeg(cur.value);
-    if (pred === null) {
-      return;
-    }
+    if (pred === null) {return;}
     if (isMap(node)) {
       for (const pair of (node as { items: Pair[] }).items) {
         const k = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
         const childVal = pair.value as Node;
         if (yamlChildMatchesPredicate(childVal, pred)) {
-          walkYaml(
-            childVal,
-            subs,
-            i + 1,
-            [...walked, { slot: cur.slot, value: quoteSeg(k) }],
-            onMatch,
-          );
+          walkYaml(childVal, subs, i + 1, [...walked, { slot: cur.slot, value: quoteSeg(k) }], onMatch);
         }
       }
     } else if (isSeq(node)) {
       (node as { items: Node[] }).items.forEach((child, idx) => {
         if (yamlChildMatchesPredicate(child, pred)) {
-          walkYaml(
-            child,
-            subs,
-            i + 1,
-            [...walked, { slot: cur.slot, value: String(idx) }],
-            onMatch,
-          );
+          walkYaml(child, subs, i + 1, [...walked, { slot: cur.slot, value: String(idx) }], onMatch);
         }
       });
     }
@@ -288,9 +256,7 @@ function walkYaml(
   // emitted paths carry the resolved index/key.
   if (isPositionalSeg(cur.value)) {
     const concrete = positionalForYamlNode(node, cur.value);
-    if (concrete === null) {
-      return;
-    }
+    if (concrete === null) {return;}
     cur = { slot: cur.slot, value: concrete };
   }
 
@@ -302,13 +268,7 @@ function walkYaml(
     if (isMap(node)) {
       for (const pair of (node as { items: Pair[] }).items) {
         const k = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
-        walkYaml(
-          pair.value as Node,
-          subs,
-          i,
-          [...walked, { slot: cur.slot, value: quoteSeg(k) }],
-          onMatch,
-        );
+        walkYaml(pair.value as Node, subs, i, [...walked, { slot: cur.slot, value: quoteSeg(k) }], onMatch);
       }
     } else if (isSeq(node)) {
       (node as { items: Node[] }).items.forEach((child, idx) => {
@@ -323,13 +283,7 @@ function walkYaml(
     if (isMap(node)) {
       for (const pair of (node as { items: Pair[] }).items) {
         const k = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
-        walkYaml(
-          pair.value as Node,
-          subs,
-          i + 1,
-          [...walked, { slot: cur.slot, value: quoteSeg(k) }],
-          onMatch,
-        );
+        walkYaml(pair.value as Node, subs, i + 1, [...walked, { slot: cur.slot, value: quoteSeg(k) }], onMatch);
       }
     } else if (isSeq(node)) {
       (node as { items: Node[] }).items.forEach((child, idx) => {
@@ -347,9 +301,7 @@ function walkYaml(
       const k = isScalar(p.key) ? String(p.key.value) : String(p.key);
       return k === literal;
     });
-    if (pair === undefined) {
-      return;
-    }
+    if (pair === undefined) {return;}
     walkYaml(
       pair.value as Node,
       subs,
@@ -361,9 +313,7 @@ function walkYaml(
   }
   if (isSeq(node)) {
     const idx = Number(literal);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= (node as { items: Node[] }).items.length) {
-      return;
-    }
+    if (!Number.isInteger(idx) || idx < 0 || idx >= (node as { items: Node[] }).items.length) {return;}
     walkYaml(
       (node as { items: Node[] }).items[idx],
       subs,
@@ -387,8 +337,8 @@ function walkJsonc(
   if (walked.length > MAX_TRAVERSAL_DEPTH) {
     throw new OcPathError(
       `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological pattern`,
-      "",
-      "OC_PATH_DEPTH_EXCEEDED",
+      '',
+      'OC_PATH_DEPTH_EXCEEDED',
     );
   }
   if (i >= subs.length) {
@@ -399,9 +349,7 @@ function walkJsonc(
 
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
-    if (alts === null) {
-      return;
-    }
+    if (alts === null) {return;}
     for (const alt of alts) {
       const altSubs = subs.slice();
       altSubs[i] = { slot: cur.slot, value: alt };
@@ -412,31 +360,17 @@ function walkJsonc(
 
   if (isPredicateSeg(cur.value)) {
     const pred = parsePredicateSeg(cur.value);
-    if (pred === null) {
-      return;
-    }
-    if (node.kind === "object") {
+    if (pred === null) {return;}
+    if (node.kind === 'object') {
       for (const e of node.entries) {
         if (jsoncChildMatchesPredicate(e.value, pred)) {
-          walkJsonc(
-            e.value,
-            subs,
-            i + 1,
-            [...walked, { slot: cur.slot, value: quoteSeg(e.key) }],
-            onMatch,
-          );
+          walkJsonc(e.value, subs, i + 1, [...walked, { slot: cur.slot, value: quoteSeg(e.key) }], onMatch);
         }
       }
-    } else if (node.kind === "array") {
+    } else if (node.kind === 'array') {
       node.items.forEach((child, idx) => {
         if (jsoncChildMatchesPredicate(child, pred)) {
-          walkJsonc(
-            child,
-            subs,
-            i + 1,
-            [...walked, { slot: cur.slot, value: String(idx) }],
-            onMatch,
-          );
+          walkJsonc(child, subs, i + 1, [...walked, { slot: cur.slot, value: String(idx) }], onMatch);
         }
       });
     }
@@ -445,25 +379,17 @@ function walkJsonc(
 
   if (isPositionalSeg(cur.value)) {
     const concrete = positionalForJsoncNode(node, cur.value);
-    if (concrete === null) {
-      return;
-    }
+    if (concrete === null) {return;}
     cur = { slot: cur.slot, value: concrete };
   }
 
   if (cur.value === WILDCARD_RECURSIVE) {
     walkJsonc(node, subs, i + 1, walked, onMatch);
-    if (node.kind === "object") {
+    if (node.kind === 'object') {
       for (const e of node.entries) {
-        walkJsonc(
-          e.value,
-          subs,
-          i,
-          [...walked, { slot: cur.slot, value: quoteSeg(e.key) }],
-          onMatch,
-        );
+        walkJsonc(e.value, subs, i, [...walked, { slot: cur.slot, value: quoteSeg(e.key) }], onMatch);
       }
-    } else if (node.kind === "array") {
+    } else if (node.kind === 'array') {
       node.items.forEach((child, idx) => {
         walkJsonc(child, subs, i, [...walked, { slot: cur.slot, value: String(idx) }], onMatch);
       });
@@ -472,17 +398,11 @@ function walkJsonc(
   }
 
   if (cur.value === WILDCARD_SINGLE) {
-    if (node.kind === "object") {
+    if (node.kind === 'object') {
       for (const e of node.entries) {
-        walkJsonc(
-          e.value,
-          subs,
-          i + 1,
-          [...walked, { slot: cur.slot, value: quoteSeg(e.key) }],
-          onMatch,
-        );
+        walkJsonc(e.value, subs, i + 1, [...walked, { slot: cur.slot, value: quoteSeg(e.key) }], onMatch);
       }
-    } else if (node.kind === "array") {
+    } else if (node.kind === 'array') {
       node.items.forEach((child, idx) => {
         walkJsonc(child, subs, i + 1, [...walked, { slot: cur.slot, value: String(idx) }], onMatch);
       });
@@ -490,7 +410,7 @@ function walkJsonc(
     return;
   }
 
-  if (node.kind === "object") {
+  if (node.kind === 'object') {
     // `cur.value` may be a quoted segment (e.g. `"a/b"`); AST entry
     // keys are already unquoted. Strip the quotes before comparing
     // so the find-expansion walker matches `resolveJsoncOcPath`'s
@@ -498,24 +418,14 @@ function walkJsonc(
     // flagged on PR #78678.
     const lookupKey = isQuotedSeg(cur.value) ? unquoteSeg(cur.value) : cur.value;
     const e = node.entries.find((entry) => entry.key === lookupKey);
-    if (e === undefined) {
-      return;
-    }
+    if (e === undefined) {return;}
     walkJsonc(e.value, subs, i + 1, [...walked, { slot: cur.slot, value: cur.value }], onMatch);
     return;
   }
-  if (node.kind === "array") {
+  if (node.kind === 'array') {
     const idx = Number(cur.value);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {
-      return;
-    }
-    walkJsonc(
-      node.items[idx],
-      subs,
-      i + 1,
-      [...walked, { slot: cur.slot, value: cur.value }],
-      onMatch,
-    );
+    if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {return;}
+    walkJsonc(node.items[idx], subs, i + 1, [...walked, { slot: cur.slot, value: cur.value }], onMatch);
   }
 }
 
@@ -537,8 +447,8 @@ function walkJsonl(
   if (walked.length > MAX_TRAVERSAL_DEPTH) {
     throw new OcPathError(
       `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological JSONL pattern`,
-      "",
-      "OC_PATH_DEPTH_EXCEEDED",
+      '',
+      'OC_PATH_DEPTH_EXCEEDED',
     );
   }
   if (i >= subs.length) {
@@ -577,15 +487,11 @@ function walkJsonl(
       // `-N` would (so unions of positional tokens, e.g. `{L1,$last}`,
       // work as expected).
       const alts = parseUnionSeg(cur.value);
-      if (alts === null) {
-        return;
-      }
+      if (alts === null) {return;}
       for (const alt of alts) {
         const line = pickLine(ast, alt);
-        if (line === null) {
-          continue;
-        }
-        const concreteAddr = line.kind === "value" ? `L${line.line}` : alt;
+        if (line === null) {continue;}
+        const concreteAddr = line.kind === 'value' ? `L${line.line}` : alt;
         walkJsonlInsideLine(line, subs, i + 1, [{ slot: cur.slot, value: concreteAddr }], onMatch);
       }
       return;
@@ -597,17 +503,11 @@ function walkJsonl(
       // a predicate inside a line's body uses the same syntax inside
       // the JSONC walker's predicate path.
       const pred = parsePredicateSeg(cur.value);
-      if (pred === null) {
-        return;
-      }
+      if (pred === null) {return;}
       forEachValueLine(ast, (l, addr) => {
-        if (l.kind !== "value") {
-          return;
-        }
+        if (l.kind !== 'value') {return;}
         const actual = topLevelLeafText(l.value, pred.key);
-        if (!evaluatePredicate(actual, pred)) {
-          return;
-        }
+        if (!evaluatePredicate(actual, pred)) {return;}
         walkJsonlInsideLine(l, subs, i + 1, [{ slot: cur.slot, value: addr }], onMatch);
       });
       return;
@@ -616,10 +516,8 @@ function walkJsonl(
     // addressing tokens. The emitted concrete address is `Lnnn` (the
     // canonical line-address form) regardless of how it was looked up.
     const line = pickLine(ast, cur.value);
-    if (line === null) {
-      return;
-    }
-    const concreteAddr = line.kind === "value" ? `L${line.line}` : cur.value;
+    if (line === null) {return;}
+    const concreteAddr = line.kind === 'value' ? `L${line.line}` : cur.value;
     walkJsonlInsideLine(line, subs, i + 1, [{ slot: cur.slot, value: concreteAddr }], onMatch);
     return;
   }
@@ -632,23 +530,13 @@ function walkJsonl(
  * match a non-leaf sibling).
  */
 function topLevelLeafText(value: JsoncValue, key: string): string | null {
-  if (value.kind !== "object") {
-    return null;
-  }
+  if (value.kind !== 'object') {return null;}
   const entry = value.entries.find((e) => e.key === key);
-  if (entry === undefined) {
-    return null;
-  }
+  if (entry === undefined) {return null;}
   const v = entry.value;
-  if (v.kind === "string") {
-    return v.value;
-  }
-  if (v.kind === "number" || v.kind === "boolean") {
-    return String(v.value);
-  }
-  if (v.kind === "null") {
-    return null;
-  }
+  if (v.kind === 'string') {return v.value;}
+  if (v.kind === 'number' || v.kind === 'boolean') {return String(v.value);}
+  if (v.kind === 'null') {return null;}
   return null;
 }
 
@@ -667,62 +555,51 @@ function walkJsonlInsideLine(
   if (walked.length > MAX_TRAVERSAL_DEPTH) {
     throw new OcPathError(
       `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological JSONL pattern`,
-      "",
-      "OC_PATH_DEPTH_EXCEEDED",
+      '',
+      'OC_PATH_DEPTH_EXCEEDED',
     );
   }
   if (i >= subs.length) {
     onMatch(walked);
     return;
   }
-  if (line.kind !== "value") {
-    return;
-  }
+  if (line.kind !== 'value') {return;}
   walkJsonc(line.value, subs, i, walked, onMatch);
 }
 
-function forEachValueLine(ast: JsonlAst, visit: (line: JsonlLine, addr: string) => void): void {
+function forEachValueLine(
+  ast: JsonlAst,
+  visit: (line: JsonlLine, addr: string) => void,
+): void {
   for (const l of ast.lines) {
-    if (l.kind === "value") {
-      visit(l, `L${l.line}`);
-    }
+    if (l.kind === 'value') {visit(l, `L${l.line}`);}
   }
 }
 
 function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
-  if (addr === "$last") {
+  if (addr === '$last') {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
       const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        return l;
-      }
+      if (l !== undefined && l.kind === 'value') {return l;}
     }
     return null;
   }
-  if (addr === "$first") {
+  if (addr === '$first') {
     for (const l of ast.lines) {
-      if (l.kind === "value") {
-        return l;
-      }
+      if (l.kind === 'value') {return l;}
     }
     return null;
   }
   if (/^-\d+$/.test(addr)) {
-    const valueLines = ast.lines.filter(
-      (l): l is Extract<JsonlLine, { kind: "value" }> => l.kind === "value",
-    );
+    const valueLines = ast.lines.filter((l): l is Extract<JsonlLine, { kind: 'value' }> => l.kind === 'value');
     const n = valueLines.length + Number(addr);
     return n >= 0 && n < valueLines.length ? valueLines[n] : null;
   }
   const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) {
-    return null;
-  }
+  if (m === null || m[1] === undefined) {return null;}
   const target = Number(m[1]);
   for (const l of ast.lines) {
-    if (l.line === target) {
-      return l;
-    }
+    if (l.line === target) {return l;}
   }
   return null;
 }
@@ -742,11 +619,11 @@ function positionalForYamlNode(node: Node, seg: string): string | null {
 }
 
 function positionalForJsoncNode(node: JsoncValue, seg: string): string | null {
-  if (node.kind === "object") {
+  if (node.kind === 'object') {
     const keys = node.entries.map((e) => e.key);
     return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
   }
-  if (node.kind === "array") {
+  if (node.kind === 'array') {
     return resolvePositionalSeg(seg, { indexable: true, size: node.items.length });
   }
   return null;
@@ -760,30 +637,18 @@ function yamlChildMatchesPredicate(node: Node | null, pred: PredicateSpec): bool
 }
 
 function yamlChildFieldText(node: Node | null, key: string): string | null {
-  if (node === null) {
-    return null;
-  }
-  if (!isMap(node)) {
-    return null;
-  }
+  if (node === null) {return null;}
+  if (!isMap(node)) {return null;}
   for (const pair of (node as { items: Pair[] }).items) {
     const k = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
-    if (k !== key) {
-      continue;
-    }
+    if (k !== key) {continue;}
     const v = pair.value;
     if (isScalar(v)) {
       const sv = v.value;
-      if (sv === null) {
-        return "null";
-      }
-      if (typeof sv === "string") {
-        return sv;
-      }
-      if (typeof sv === "number" || typeof sv === "boolean") {
-        return String(sv);
-      }
-      return JSON.stringify(sv) ?? "null";
+      if (sv === null) {return 'null';}
+      if (typeof sv === 'string') {return sv;}
+      if (typeof sv === 'number' || typeof sv === 'boolean') {return String(sv);}
+      return JSON.stringify(sv) ?? 'null';
     }
     return null;
   }
@@ -795,26 +660,14 @@ function jsoncChildMatchesPredicate(node: JsoncValue, pred: PredicateSpec): bool
 }
 
 function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
-  if (node.kind !== "object") {
-    return null;
-  }
+  if (node.kind !== 'object') {return null;}
   const e = node.entries.find((entry) => entry.key === key);
-  if (e === undefined) {
-    return null;
-  }
+  if (e === undefined) {return null;}
   const v = e.value;
-  if (v.kind === "string") {
-    return v.value;
-  }
-  if (v.kind === "number") {
-    return String(v.value);
-  }
-  if (v.kind === "boolean") {
-    return String(v.value);
-  }
-  if (v.kind === "null") {
-    return "null";
-  }
+  if (v.kind === 'string') {return v.value;}
+  if (v.kind === 'number') {return String(v.value);}
+  if (v.kind === 'boolean') {return String(v.value);}
+  if (v.kind === 'null') {return 'null';}
   return null;
 }
 
@@ -834,7 +687,7 @@ function walkMd(
   const cur = subs[i];
 
   // Frontmatter addressing: literal `[frontmatter]` in section slot.
-  if (walked.length === 0 && cur.value === "[frontmatter]") {
+  if (walked.length === 0 && cur.value === '[frontmatter]') {
     // Next sub addresses a frontmatter key.
     const next = subs[i + 1];
     if (next === undefined) {
@@ -855,9 +708,7 @@ function walkMd(
     // segment must be unquoted before comparing.
     const fmKey = isQuotedSeg(next.value) ? unquoteSeg(next.value) : next.value;
     const entry = ast.frontmatter.find((e) => e.key === fmKey);
-    if (entry === undefined) {
-      return;
-    }
+    if (entry === undefined) {return;}
     onMatch([
       { slot: cur.slot, value: cur.value },
       { slot: next.slot, value: next.value },
@@ -885,7 +736,14 @@ function walkMd(
         // deeper hierarchies (cross-kind asymmetry — same lint rule
         // worked on yaml but produced 0 matches on md).
         if (cur.value === WILDCARD_RECURSIVE) {
-          walkMdInsideBlock(block, ast, subs, i, [{ slot: cur.slot, value: block.slug }], onMatch);
+          walkMdInsideBlock(
+            block,
+            ast,
+            subs,
+            i,
+            [{ slot: cur.slot, value: block.slug }],
+            onMatch,
+          );
         }
       }
       // `**` 0-match: emit at root if any.
@@ -896,20 +754,20 @@ function walkMd(
     }
     const targetSlug = cur.value.toLowerCase();
     const block = ast.blocks.find((b) => b.slug === targetSlug);
-    if (block === undefined) {
-      return;
-    }
-    walkMdInsideBlock(block, ast, subs, i + 1, [{ slot: cur.slot, value: cur.value }], onMatch);
+    if (block === undefined) {return;}
+    walkMdInsideBlock(
+      block,
+      ast,
+      subs,
+      i + 1,
+      [{ slot: cur.slot, value: cur.value }],
+      onMatch,
+    );
   }
 }
 
 function walkMdInsideBlock(
-  block: {
-    readonly items: readonly {
-      readonly slug: string;
-      readonly kv?: { readonly key: string; readonly value: string };
-    }[];
-  },
+  block: { readonly items: readonly { readonly slug: string; readonly kv?: { readonly key: string; readonly value: string } }[] },
   ast: MdAst,
   subs: readonly PatternSub[],
   i: number,
@@ -949,39 +807,24 @@ function walkMdInsideBlock(
   // Ordinal `#N` and positional `$first`/`$last`/`-N` short-circuit the
   // slug lookup — the resolver handles them, so the find walker just
   // descends into the appropriate item.
-  let item:
-    | { readonly slug: string; readonly kv?: { readonly key: string; readonly value: string } }
-    | undefined;
+  let item: { readonly slug: string; readonly kv?: { readonly key: string; readonly value: string } } | undefined;
   if (isOrdinalSeg(cur.value)) {
     const n = parseOrdinalSeg(cur.value);
-    if (n === null || n < 0 || n >= block.items.length) {
-      return;
-    }
+    if (n === null || n < 0 || n >= block.items.length) {return;}
     item = block.items[n];
   } else if (isPositionalSeg(cur.value)) {
     const concrete = resolvePositionalSeg(cur.value, {
       indexable: true,
       size: block.items.length,
     });
-    if (concrete === null) {
-      return;
-    }
+    if (concrete === null) {return;}
     item = block.items[Number(concrete)];
   } else {
     const targetItemSlug = cur.value.toLowerCase();
     item = block.items.find((it) => it.slug === targetItemSlug);
   }
-  if (item === undefined) {
-    return;
-  }
-  walkMdInsideItem(
-    item,
-    ast,
-    subs,
-    i + 1,
-    [...walked, { slot: cur.slot, value: cur.value }],
-    onMatch,
-  );
+  if (item === undefined) {return;}
+  walkMdInsideItem(item, ast, subs, i + 1, [...walked, { slot: cur.slot, value: cur.value }], onMatch);
 }
 
 function walkMdInsideItem(
@@ -998,15 +841,12 @@ function walkMdInsideItem(
   }
   const cur = subs[i];
   // Field slot — addresses kv.key (case-insensitive).
-  if (item.kv === undefined) {
-    return;
-  }
+  if (item.kv === undefined) {return;}
   if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
     onMatch([...walked, { slot: cur.slot, value: item.kv.key }]);
     return;
   }
-  if (item.kv.key.toLowerCase() !== cur.value.toLowerCase()) {
-    return;
-  }
+  if (item.kv.key.toLowerCase() !== cur.value.toLowerCase()) {return;}
   onMatch([...walked, { slot: cur.slot, value: cur.value }]);
 }
+

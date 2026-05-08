@@ -19,21 +19,21 @@
  * @module @openclaw/oc-path/resolve
  */
 
-import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
-import type { OcPath } from "./oc-path.js";
-import { isOrdinalSeg, isPositionalSeg, parseOrdinalSeg, resolvePositionalSeg } from "./oc-path.js";
+import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from './ast.js';
+import type { OcPath } from './oc-path.js';
+import { isOrdinalSeg, isPositionalSeg, parseOrdinalSeg, resolvePositionalSeg } from './oc-path.js';
 
 /**
  * The resolved target plus a stable description of what kind of node it
  * is. Lint rules and doctor fixers branch on `kind`.
  */
 export type OcPathMatch =
-  | { readonly kind: "root"; readonly node: MdAst }
-  | { readonly kind: "frontmatter"; readonly node: FrontmatterEntry }
-  | { readonly kind: "block"; readonly node: AstBlock }
-  | { readonly kind: "item"; readonly node: AstItem; readonly block: AstBlock }
+  | { readonly kind: 'root'; readonly node: MdAst }
+  | { readonly kind: 'frontmatter'; readonly node: FrontmatterEntry }
+  | { readonly kind: 'block'; readonly node: AstBlock }
+  | { readonly kind: 'item'; readonly node: AstItem; readonly block: AstBlock }
   | {
-      readonly kind: "item-field";
+      readonly kind: 'item-field';
       readonly node: AstItem;
       readonly block: AstBlock;
       /** The kv.value string, surfaced for convenience. */
@@ -56,32 +56,26 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
   // The frontmatter key sits at the OcPath `item` slot in this 3-segment
   // shape; we accept `field` as a fallback for callers that thread
   // 4-segment paths.
-  if (path.section === "[frontmatter]") {
+  if (path.section === '[frontmatter]') {
     const key = path.item ?? path.field;
-    if (key === undefined) {
-      return null;
-    }
+    if (key === undefined) {return null;}
     const entry = ast.frontmatter.find((e) => e.key === key);
-    if (entry === undefined) {
-      return null;
-    }
-    return { kind: "frontmatter", node: entry };
+    if (entry === undefined) {return null;}
+    return { kind: 'frontmatter', node: entry };
   }
 
   // Plain file root address.
   if (path.section === undefined) {
-    return { kind: "root", node: ast };
+    return { kind: 'root', node: ast };
   }
 
   const sectionSlug = path.section.toLowerCase();
   const block = ast.blocks.find((b) => b.slug === sectionSlug);
-  if (block === undefined) {
-    return null;
-  }
+  if (block === undefined) {return null;}
 
   // Section-only address.
   if (path.item === undefined) {
-    return { kind: "block", node: block };
+    return { kind: 'block', node: block };
   }
 
   // Item addressing: ordinal (`#N`) > positional (`$first`/`$last`/`-N`)
@@ -90,40 +84,30 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
   let item: AstItem | undefined;
   if (isOrdinalSeg(path.item)) {
     const n = parseOrdinalSeg(path.item);
-    if (n === null || n < 0 || n >= block.items.length) {
-      return null;
-    }
+    if (n === null || n < 0 || n >= block.items.length) {return null;}
     item = block.items[n];
   } else if (isPositionalSeg(path.item)) {
     const concrete = resolvePositionalSeg(path.item, {
       indexable: true,
       size: block.items.length,
     });
-    if (concrete === null) {
-      return null;
-    }
+    if (concrete === null) {return null;}
     item = block.items[Number(concrete)];
   } else {
     const itemSlug = path.item.toLowerCase();
     item = block.items.find((i) => i.slug === itemSlug);
   }
-  if (item === undefined) {
-    return null;
-  }
+  if (item === undefined) {return null;}
 
   // Item-only address.
   if (path.field === undefined) {
-    return { kind: "item", node: item, block };
+    return { kind: 'item', node: item, block };
   }
 
   // Item-field address. Requires the item to have a `kv` and the field
   // to match the kv key (case-insensitive). A field on an item without
   // kv shape is unresolvable — return null rather than guessing.
-  if (item.kv === undefined) {
-    return null;
-  }
-  if (item.kv.key.toLowerCase() !== path.field.toLowerCase()) {
-    return null;
-  }
-  return { kind: "item-field", node: item, block, value: item.kv.value };
+  if (item.kv === undefined) {return null;}
+  if (item.kv.key.toLowerCase() !== path.field.toLowerCase()) {return null;}
+  return { kind: 'item-field', node: item, block, value: item.kv.value };
 }

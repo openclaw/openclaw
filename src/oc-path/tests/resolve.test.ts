@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { parseMd } from "../parse.js";
-import { resolveMdOcPath as resolveOcPath } from "../resolve.js";
+import { describe, expect, it } from 'vitest';
+import { parseMd } from '../parse.js';
+import { resolveMdOcPath as resolveOcPath } from '../resolve.js';
 
 const SAMPLE = `---
 name: github
@@ -20,80 +20,80 @@ Preamble.
 - curl: HTTP client
 `;
 
-describe("resolveOcPath", () => {
+describe('resolveOcPath', () => {
   const { ast } = parseMd(SAMPLE);
 
-  it("resolves root", () => {
-    const m = resolveOcPath(ast, { file: "AGENTS.md" });
-    expect(m?.kind).toBe("root");
+  it('resolves root', () => {
+    const m = resolveOcPath(ast, { file: 'AGENTS.md' });
+    expect(m?.kind).toBe('root');
   });
 
-  it("resolves block by slug", () => {
-    const m = resolveOcPath(ast, { file: "AGENTS.md", section: "boundaries" });
-    expect(m?.kind).toBe("block");
-    if (m?.kind === "block") {
-      expect(m.node.heading).toBe("Boundaries");
+  it('resolves block by slug', () => {
+    const m = resolveOcPath(ast, { file: 'AGENTS.md', section: 'boundaries' });
+    expect(m?.kind).toBe('block');
+    if (m?.kind === 'block') {
+      expect(m.node.heading).toBe('Boundaries');
     }
   });
 
-  it("resolves item by slug", () => {
+  it('resolves item by slug', () => {
     const m = resolveOcPath(ast, {
-      file: "AGENTS.md",
-      section: "tools",
-      item: "gh",
+      file: 'AGENTS.md',
+      section: 'tools',
+      item: 'gh',
     });
-    expect(m?.kind).toBe("item");
-    if (m?.kind === "item") {
-      expect(m.node.kv?.value).toBe("GitHub CLI");
-      expect(m.block.heading).toBe("Tools");
+    expect(m?.kind).toBe('item');
+    if (m?.kind === 'item') {
+      expect(m.node.kv?.value).toBe('GitHub CLI');
+      expect(m.block.heading).toBe('Tools');
     }
   });
 
-  it("resolves item-field via kv", () => {
+  it('resolves item-field via kv', () => {
     const m = resolveOcPath(ast, {
-      file: "AGENTS.md",
-      section: "tools",
-      item: "gh",
-      field: "gh",
+      file: 'AGENTS.md',
+      section: 'tools',
+      item: 'gh',
+      field: 'gh',
     });
-    expect(m?.kind).toBe("item-field");
-    if (m?.kind === "item-field") {
-      expect(m.value).toBe("GitHub CLI");
+    expect(m?.kind).toBe('item-field');
+    if (m?.kind === 'item-field') {
+      expect(m.value).toBe('GitHub CLI');
     }
   });
 
-  it("resolves frontmatter via [frontmatter] sentinel section", () => {
+  it('resolves frontmatter via [frontmatter] sentinel section', () => {
     const m = resolveOcPath(ast, {
-      file: "AGENTS.md",
-      section: "[frontmatter]",
-      field: "name",
+      file: 'AGENTS.md',
+      section: '[frontmatter]',
+      field: 'name',
     });
-    expect(m?.kind).toBe("frontmatter");
-    if (m?.kind === "frontmatter") {
-      expect(m.node.value).toBe("github");
+    expect(m?.kind).toBe('frontmatter');
+    if (m?.kind === 'frontmatter') {
+      expect(m.node.value).toBe('github');
     }
   });
 
-  it("returns null for unknown section", () => {
-    const m = resolveOcPath(ast, { file: "AGENTS.md", section: "nonexistent" });
+  it('returns null for unknown section', () => {
+    const m = resolveOcPath(ast, { file: 'AGENTS.md', section: 'nonexistent' });
     expect(m).toBeNull();
   });
 
-  it("returns null for unknown item", () => {
+  it('returns null for unknown item', () => {
     const m = resolveOcPath(ast, {
-      file: "AGENTS.md",
-      section: "tools",
-      item: "nonexistent",
+      file: 'AGENTS.md',
+      section: 'tools',
+      item: 'nonexistent',
     });
     expect(m).toBeNull();
   });
 
-  it("returns null for field on non-kv item", () => {
+  it('returns null for field on non-kv item', () => {
     const m = resolveOcPath(ast, {
-      file: "AGENTS.md",
-      section: "boundaries",
-      item: "never-write-to-etc",
-      field: "risk",
+      file: 'AGENTS.md',
+      section: 'boundaries',
+      item: 'never-write-to-etc',
+      field: 'risk',
     });
     expect(m).toBeNull();
   });

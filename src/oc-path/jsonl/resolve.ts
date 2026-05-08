@@ -15,8 +15,7 @@
  * @module @openclaw/oc-path/jsonl/resolve
  */
 
-import type { JsoncEntry, JsoncValue } from "../jsonc/ast.js";
-import type { OcPath } from "../oc-path.js";
+import type { OcPath } from '../oc-path.js';
 import {
   POS_FIRST,
   POS_LAST,
@@ -25,54 +24,52 @@ import {
   resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
-} from "../oc-path.js";
-import type { JsonlAst, JsonlLine } from "./ast.js";
+} from '../oc-path.js';
+import type { JsoncEntry, JsoncValue } from '../jsonc/ast.js';
+import type { JsonlAst, JsonlLine } from './ast.js';
 
 export type JsonlOcPathMatch =
-  | { readonly kind: "root"; readonly node: JsonlAst }
-  | { readonly kind: "line"; readonly node: JsonlLine }
+  | { readonly kind: 'root'; readonly node: JsonlAst }
+  | { readonly kind: 'line'; readonly node: JsonlLine }
   | {
-      readonly kind: "value";
+      readonly kind: 'value';
       readonly node: JsoncValue;
       readonly line: number;
       readonly path: readonly string[];
     }
   | {
-      readonly kind: "object-entry";
+      readonly kind: 'object-entry';
       readonly node: JsoncEntry;
       readonly line: number;
       readonly path: readonly string[];
     };
 
-export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatch | null {
+export function resolveJsonlOcPath(
+  ast: JsonlAst,
+  path: OcPath,
+): JsonlOcPathMatch | null {
   // The first non-file segment is the line address (Lnnn or $last).
   const head = path.section;
-  if (head === undefined) {
-    return { kind: "root", node: ast };
-  }
+  if (head === undefined) {return { kind: 'root', node: ast };}
 
   const lineEntry = pickLine(ast, head);
-  if (lineEntry === null) {
-    return null;
-  }
+  if (lineEntry === null) {return null;}
 
   // No further descent — return the line entry itself.
   if (path.item === undefined && path.field === undefined) {
-    return { kind: "line", node: lineEntry };
+    return { kind: 'line', node: lineEntry };
   }
 
-  if (lineEntry.kind !== "value") {
-    return null;
-  }
+  if (lineEntry.kind !== 'value') {return null;}
 
   const segments: string[] = [];
   if (path.item !== undefined) {
-    for (const s of splitRespectingBrackets(path.item, ".")) {
+    for (const s of splitRespectingBrackets(path.item, '.')) {
       segments.push(isQuotedSeg(s) ? unquoteSeg(s) : s);
     }
   }
   if (path.field !== undefined) {
-    for (const s of splitRespectingBrackets(path.field, ".")) {
+    for (const s of splitRespectingBrackets(path.field, '.')) {
       segments.push(isQuotedSeg(s) ? unquoteSeg(s) : s);
     }
   }
@@ -82,36 +79,26 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
   const walked: string[] = [];
 
   for (let seg of segments) {
-    if (seg.length === 0) {
-      return null;
-    }
+    if (seg.length === 0) {return null;}
     // See openclaw#59934 — positional `-N` falls through on keyed containers.
     if (isPositionalSeg(seg)) {
       const concrete = positionalForJsonc(current, seg);
-      if (concrete !== null) {
-        seg = concrete;
-      }
+      if (concrete !== null) {seg = concrete;}
     }
     walked.push(seg);
-    if (current.kind === "object") {
+    if (current.kind === 'object') {
       const entry = current.entries.find((e) => e.key === seg);
-      if (entry === undefined) {
-        return null;
-      }
+      if (entry === undefined) {return null;}
       lastEntry = entry;
       current = entry.value;
       continue;
     }
-    if (current.kind === "array") {
+    if (current.kind === 'array') {
       const idx = Number(seg);
-      if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {
-        return null;
-      }
+      if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
       lastEntry = null;
       const item = current.items[idx];
-      if (item === undefined) {
-        return null;
-      }
+      if (item === undefined) {return null;}
       current = item;
       continue;
     }
@@ -120,60 +107,50 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
 
   if (lastEntry !== null && current === lastEntry.value) {
     return {
-      kind: "object-entry",
+      kind: 'object-entry',
       node: lastEntry,
       line: lineEntry.line,
       path: walked,
     };
   }
-  return { kind: "value", node: current, line: lineEntry.line, path: walked };
+  return { kind: 'value', node: current, line: lineEntry.line, path: walked };
 }
 
 function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
   if (addr === POS_LAST) {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
       const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        return l;
-      }
+      if (l !== undefined && l.kind === 'value') {return l;}
     }
     return null;
   }
   if (addr === POS_FIRST) {
     for (const l of ast.lines) {
-      if (l.kind === "value") {
-        return l;
-      }
+      if (l.kind === 'value') {return l;}
     }
     return null;
   }
   // Negative line address: `-N` selects the Nth-from-last value line.
   if (/^-\d+$/.test(addr)) {
-    const valueLines = ast.lines.filter(
-      (l): l is Extract<JsonlLine, { kind: "value" }> => l.kind === "value",
-    );
+    const valueLines = ast.lines.filter((l): l is Extract<JsonlLine, { kind: 'value' }> => l.kind === 'value');
     const n = valueLines.length + Number(addr);
     return n >= 0 && n < valueLines.length ? valueLines[n] : null;
   }
   const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) {
-    return null;
-  }
+  if (m === null || m[1] === undefined) {return null;}
   const target = Number(m[1]);
   for (const l of ast.lines) {
-    if (l.line === target) {
-      return l;
-    }
+    if (l.line === target) {return l;}
   }
   return null;
 }
 
 function positionalForJsonc(node: JsoncValue, seg: string): string | null {
-  if (node.kind === "object") {
+  if (node.kind === 'object') {
     const keys = node.entries.map((e) => e.key);
     return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
   }
-  if (node.kind === "array") {
+  if (node.kind === 'array') {
     return resolvePositionalSeg(seg, { indexable: true, size: node.items.length });
   }
   return null;

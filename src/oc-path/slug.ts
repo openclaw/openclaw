@@ -36,8 +36,8 @@ const TRIM_HYPHENS = /^-+|-+$/g;
 export function slugify(text: string): string {
   return text
     .toLowerCase()
-    .replace(/_/g, "-")
-    .replace(NON_SLUG_CHARS, "-")
-    .replace(COLLAPSE_HYPHENS, "-")
-    .replace(TRIM_HYPHENS, "");
+    .replace(/_/g, '-')
+    .replace(NON_SLUG_CHARS, '-')
+    .replace(COLLAPSE_HYPHENS, '-')
+    .replace(TRIM_HYPHENS, '');
 }

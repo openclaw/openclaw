@@ -28,29 +28,31 @@
  * @module @openclaw/oc-path/jsonc/edit
  */
 
-import type { OcPath } from "../oc-path.js";
+import type { OcPath } from '../oc-path.js';
 import {
   isPositionalSeg,
   isQuotedSeg,
   resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
-} from "../oc-path.js";
-import type { JsoncAst, JsoncEntry, JsoncValue } from "./ast.js";
-import { emitJsonc } from "./emit.js";
+} from '../oc-path.js';
+import type { JsoncAst, JsoncEntry, JsoncValue } from './ast.js';
+import { emitJsonc } from './emit.js';
 
 export type JsoncEditResult =
   | { readonly ok: true; readonly ast: JsoncAst }
-  | { readonly ok: false; readonly reason: "unresolved" | "no-root" };
+  | { readonly ok: false; readonly reason: 'unresolved' | 'no-root' };
 
 /**
  * Replace the value at `path` with `newValue`. Returns the new AST or
  * a structured failure reason. Numeric segments index into arrays.
  */
-export function setJsoncOcPath(ast: JsoncAst, path: OcPath, newValue: JsoncValue): JsoncEditResult {
-  if (ast.root === null) {
-    return { ok: false, reason: "no-root" };
-  }
+export function setJsoncOcPath(
+  ast: JsoncAst,
+  path: OcPath,
+  newValue: JsoncValue,
+): JsoncEditResult {
+  if (ast.root === null) {return { ok: false, reason: 'no-root' };}
 
   // Use bracket/brace/quote-aware split so that quoted segments
   // (e.g. `"anthropic/claude-opus-4-7"`) — which can contain dots,
@@ -59,15 +61,9 @@ export function setJsoncOcPath(ast: JsoncAst, path: OcPath, newValue: JsoncValue
   // `resolveJsoncOcPath`, which already respects quoting. Closes the
   // resolve-vs-edit asymmetry flagged on PR #78678.
   const segments: string[] = [];
-  if (path.section !== undefined) {
-    segments.push(...splitRespectingBrackets(path.section, "."));
-  }
-  if (path.item !== undefined) {
-    segments.push(...splitRespectingBrackets(path.item, "."));
-  }
-  if (path.field !== undefined) {
-    segments.push(...splitRespectingBrackets(path.field, "."));
-  }
+  if (path.section !== undefined) {segments.push(...splitRespectingBrackets(path.section, '.'));}
+  if (path.item !== undefined) {segments.push(...splitRespectingBrackets(path.item, '.'));}
+  if (path.field !== undefined) {segments.push(...splitRespectingBrackets(path.field, '.'));}
 
   // Empty path — replace the root.
   if (segments.length === 0) {
@@ -76,9 +72,7 @@ export function setJsoncOcPath(ast: JsoncAst, path: OcPath, newValue: JsoncValue
   }
 
   const replaced = replaceAt(ast.root, segments, 0, newValue);
-  if (replaced === null) {
-    return { ok: false, reason: "unresolved" };
-  }
+  if (replaced === null) {return { ok: false, reason: 'unresolved' };}
   const next = { ...ast, root: replaced };
   return { ok: true, ast: rebuildRaw(next, path.file) };
 }
@@ -90,14 +84,10 @@ function replaceAt(
   newValue: JsoncValue,
 ): JsoncValue | null {
   const seg = segments[i];
-  if (seg === undefined) {
-    return newValue;
-  }
-  if (seg.length === 0) {
-    return null;
-  }
+  if (seg === undefined) {return newValue;}
+  if (seg.length === 0) {return null;}
 
-  if (current.kind === "object") {
+  if (current.kind === 'object') {
     // Resolve positional tokens ($first / $last) against the entries
     // ordered key list before any literal-key comparison. Without
     // this, `oc://x.jsonc/agents/$first/alias` would look for a key
@@ -111,9 +101,7 @@ function replaceAt(
         size: current.entries.length,
         keys: current.entries.map((e) => e.key),
       });
-      if (resolved === null) {
-        return null;
-      }
+      if (resolved === null) {return null;}
       segNorm = resolved;
     }
     // Quoted segments (e.g. `"anthropic/claude-opus-4-7"`) carry the
@@ -122,28 +110,22 @@ function replaceAt(
     // pass through unchanged.
     const lookupKey = isQuotedSeg(segNorm) ? unquoteSeg(segNorm) : segNorm;
     const idx = current.entries.findIndex((e) => e.key === lookupKey);
-    if (idx === -1) {
-      return null;
-    }
+    if (idx === -1) {return null;}
     const child = current.entries[idx];
-    if (child === undefined) {
-      return null;
-    }
+    if (child === undefined) {return null;}
     const replacedChild = replaceAt(child.value, segments, i + 1, newValue);
-    if (replacedChild === null) {
-      return null;
-    }
+    if (replacedChild === null) {return null;}
     const newEntry: JsoncEntry = { ...child, value: replacedChild };
     const newEntries = current.entries.slice();
     newEntries[idx] = newEntry;
     return {
-      kind: "object",
+      kind: 'object',
       entries: newEntries,
       ...(current.line !== undefined ? { line: current.line } : {}),
     };
   }
 
-  if (current.kind === "array") {
+  if (current.kind === 'array') {
     // Resolve positional tokens ($first / $last / -N) against the
     // array's size before the numeric coercion below; without this
     // `Number('$last')` is NaN and the path silently unresolves.
@@ -153,27 +135,19 @@ function replaceAt(
         indexable: true,
         size: current.items.length,
       });
-      if (resolved === null) {
-        return null;
-      }
+      if (resolved === null) {return null;}
       segNorm = resolved;
     }
     const idx = Number(segNorm);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {
-      return null;
-    }
+    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
     const child = current.items[idx];
-    if (child === undefined) {
-      return null;
-    }
+    if (child === undefined) {return null;}
     const replacedChild = replaceAt(child, segments, i + 1, newValue);
-    if (replacedChild === null) {
-      return null;
-    }
+    if (replacedChild === null) {return null;}
     const newItems = current.items.slice();
     newItems[idx] = replacedChild;
     return {
-      kind: "array",
+      kind: 'array',
       items: newItems,
       ...(current.line !== undefined ? { line: current.line } : {}),
     };
@@ -201,11 +175,10 @@ function rebuildRaw(ast: JsoncAst, fileName?: string): JsoncAst {
   // caller-injected sentinel reaches a leaf — without the file
   // context, forensics + audit pipelines see "rejected somewhere"
   // with no way to identify the file.
-  const opts =
-    fileName !== undefined
-      ? { mode: "render" as const, fileNameForGuard: fileName }
-      : { mode: "render" as const };
-  const next: JsoncAst = { kind: "jsonc", raw: "", root: ast.root };
+  const opts = fileName !== undefined
+    ? { mode: 'render' as const, fileNameForGuard: fileName }
+    : { mode: 'render' as const };
+  const next: JsoncAst = { kind: 'jsonc', raw: '', root: ast.root };
   const rendered = emitJsonc(next, opts);
   return { ...ast, raw: rendered };
 }

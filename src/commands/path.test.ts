@@ -97,7 +97,11 @@ describe("openclaw path CLI", () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
       const rt = createTestRuntime();
-      await pathResolveCommand("oc://gateway.jsonc/version", { cwd: workspaceDir, json: true }, rt);
+      await pathResolveCommand(
+        "oc://gateway.jsonc/version",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
       expect(rt.exitCode).toBe(0);
       const out = JSON.parse(stdoutText(rt));
       expect(out.resolved).toBe(true);
@@ -109,7 +113,11 @@ describe("openclaw path CLI", () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
       const rt = createTestRuntime();
-      await pathResolveCommand("oc://gateway.jsonc/missing", { cwd: workspaceDir, json: true }, rt);
+      await pathResolveCommand(
+        "oc://gateway.jsonc/missing",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
       expect(rt.exitCode).toBe(1);
       const out = JSON.parse(stdoutText(rt));
       expect(out.resolved).toBe(false);
@@ -199,7 +207,11 @@ describe("openclaw path CLI", () => {
       const filePath = join(workspaceDir, "config.jsonc");
       writeFileSync(filePath, '{ "items": [ { "id": "a" }, { "id": "b" } ] }', "utf-8");
       const rt = createTestRuntime();
-      await pathFindCommand("oc://config.jsonc/items/*/id", { cwd: workspaceDir, json: true }, rt);
+      await pathFindCommand(
+        "oc://config.jsonc/items/*/id",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
       expect(rt.exitCode).toBe(0);
       const out = JSON.parse(stdoutText(rt));
       expect(out.count).toBe(2);
@@ -209,7 +221,11 @@ describe("openclaw path CLI", () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, "{}", "utf-8");
       const rt = createTestRuntime();
-      await pathFindCommand("oc://gateway.jsonc/nope/*", { cwd: workspaceDir, json: true }, rt);
+      await pathFindCommand(
+        "oc://gateway.jsonc/nope/*",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
       expect(rt.exitCode).toBe(1);
     });
 
@@ -219,7 +235,11 @@ describe("openclaw path CLI", () => {
       // fs.readFile. The CLI now surfaces a clear error before touching
       // the filesystem, with stable code OC_PATH_FILE_WILDCARD_UNSUPPORTED.
       const rt = createTestRuntime();
-      await pathFindCommand("oc://*.jsonc/items", { cwd: workspaceDir, json: true }, rt);
+      await pathFindCommand(
+        "oc://*.jsonc/items",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
       expect(rt.exitCode).toBe(2);
       expect(stderrText(rt)).toContain("OC_PATH_FILE_WILDCARD_UNSUPPORTED");
       expect(stderrText(rt)).toContain("file-slot wildcards are not supported");

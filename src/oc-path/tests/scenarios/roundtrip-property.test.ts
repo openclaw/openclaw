@@ -6,16 +6,16 @@
  * corpus of synthetic markdown shapes and verifies parser idempotence
  * (`parse(emitMd(parse(raw))) === parse(raw)` modulo `raw`).
  */
-import { describe, expect, it } from "vitest";
-import { emitMd } from "../../emit.js";
-import { parseMd } from "../../parse.js";
+import { describe, expect, it } from 'vitest';
+import { emitMd } from '../../emit.js';
+import { parseMd } from '../../parse.js';
 
 function roundTrip(raw: string): string {
   return emitMd(parseMd(raw).ast);
 }
 
-describe("wave-10 roundtrip-property", () => {
-  it("RT-01 byte-fidelity over 100 generated shapes", () => {
+describe('wave-10 roundtrip-property', () => {
+  it('RT-01 byte-fidelity over 100 generated shapes', () => {
     const inputs = generateCorpus(100);
     for (const raw of inputs) {
       try {
@@ -23,14 +23,13 @@ describe("wave-10 roundtrip-property", () => {
       } catch (e) {
         // Surface which input failed for debugging.
         throw new Error(
-          `round-trip failed for input (length ${raw.length}):\n${JSON.stringify(raw.slice(0, 200))}\nError: ${(e as Error).message}`,
-          { cause: e },
+          `round-trip failed for input (length ${raw.length}):\n${JSON.stringify(raw.slice(0, 200))}\nError: ${(e as Error).message}`, { cause: e },
         );
       }
     }
   });
 
-  it("RT-02 parser idempotence (parse → emit → parse → identical AST shape)", () => {
+  it('RT-02 parser idempotence (parse → emit → parse → identical AST shape)', () => {
     const inputs = generateCorpus(50);
     for (const raw of inputs) {
       const a = parseMd(raw).ast;
@@ -42,7 +41,7 @@ describe("wave-10 roundtrip-property", () => {
     }
   });
 
-  it("RT-03 stable output for identical input", () => {
+  it('RT-03 stable output for identical input', () => {
     const raw = `---\nname: x\n---\n\n## A\n- a\n## B\n- b: c\n`;
     const out1 = roundTrip(raw);
     const out2 = roundTrip(raw);
@@ -51,7 +50,7 @@ describe("wave-10 roundtrip-property", () => {
     expect(out2).toBe(out3);
   });
 
-  it("RT-04 ordering deterministic (no Object.keys / Set ordering surprises)", () => {
+  it('RT-04 ordering deterministic (no Object.keys / Set ordering surprises)', () => {
     const raw = `---\nb: 2\na: 1\nc: 3\n---\n## Z\n- z\n## A\n- a\n`;
     const a1 = parseMd(raw).ast;
     const a2 = parseMd(raw).ast;
@@ -59,32 +58,32 @@ describe("wave-10 roundtrip-property", () => {
     expect(a1.blocks.map((b) => b.heading)).toEqual(a2.blocks.map((b) => b.heading));
   });
 
-  it("RT-05 round-trip preserves comment-like lines (no comment recognition at substrate)", () => {
+  it('RT-05 round-trip preserves comment-like lines (no comment recognition at substrate)', () => {
     const raw = `## H\n\n<!-- a comment -->\n- bullet\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("RT-06 round-trip preserves indented blocks (substrate doesn't reflow)", () => {
+  it('RT-06 round-trip preserves indented blocks (substrate doesn\'t reflow)', () => {
     const raw = `## H\n\n    indented code-ish block\n      more indented\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("RT-07 round-trip preserves blockquotes", () => {
+  it('RT-07 round-trip preserves blockquotes', () => {
     const raw = `## H\n\n> quoted line 1\n> quoted line 2\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("RT-08 round-trip preserves images / links", () => {
+  it('RT-08 round-trip preserves images / links', () => {
     const raw = `## H\n\n![alt](path/to/img.png)\n[link](http://example.com)\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("RT-09 round-trip preserves HTML", () => {
+  it('RT-09 round-trip preserves HTML', () => {
     const raw = `## H\n\n<details><summary>x</summary>body</details>\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("RT-10 round-trip preserves consecutive headings with no body between", () => {
+  it('RT-10 round-trip preserves consecutive headings with no body between', () => {
     const raw = `## A\n## B\n## C\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
@@ -102,45 +101,45 @@ function generateCorpus(count: number): string[] {
   };
   const choose = <T>(arr: readonly T[]): T => arr[Math.floor(rand() * arr.length)];
 
-  const headings = ["Boundaries", "Tools", "Memory", "Identity", "User", "Heartbeat", "Skills"];
-  const fmKeys = ["name", "description", "tier", "enabled", "timeout", "url"];
-  const fmValues = ["github", "gh CLI", "T1", "true", "15000", "https://example.com"];
-  const itemTexts = ["never write to /etc", "always confirm", "gh: GitHub CLI", "curl: HTTP"];
-  const eols = ["\n", "\r\n"];
+  const headings = ['Boundaries', 'Tools', 'Memory', 'Identity', 'User', 'Heartbeat', 'Skills'];
+  const fmKeys = ['name', 'description', 'tier', 'enabled', 'timeout', 'url'];
+  const fmValues = ['github', 'gh CLI', 'T1', 'true', '15000', 'https://example.com'];
+  const itemTexts = ['never write to /etc', 'always confirm', 'gh: GitHub CLI', 'curl: HTTP'];
+  const eols = ['\n', '\r\n'];
 
   for (let i = 0; i < count; i++) {
     const eol = choose(eols);
     const parts: string[] = [];
 
     if (rand() < 0.5) {
-      parts.push("---");
+      parts.push('---');
       const fmCount = Math.floor(rand() * 4);
       for (let k = 0; k < fmCount; k++) {
         parts.push(`${choose(fmKeys)}: ${choose(fmValues)}`);
       }
-      parts.push("---");
-      parts.push("");
+      parts.push('---');
+      parts.push('');
     }
 
     if (rand() < 0.3) {
-      parts.push("Some preamble.");
-      parts.push("");
+      parts.push('Some preamble.');
+      parts.push('');
     }
 
     const blockCount = Math.floor(rand() * 3) + 1;
     for (let b = 0; b < blockCount; b++) {
       parts.push(`## ${choose(headings)}`);
-      parts.push("");
+      parts.push('');
       const itemCount = Math.floor(rand() * 4);
       for (let it = 0; it < itemCount; it++) {
         parts.push(`- ${choose(itemTexts)}`);
       }
       if (rand() < 0.2) {
-        parts.push("```");
-        parts.push("code");
-        parts.push("```");
+        parts.push('```');
+        parts.push('code');
+        parts.push('```');
       }
-      parts.push("");
+      parts.push('');
     }
 
     corpus.push(parts.join(eol));

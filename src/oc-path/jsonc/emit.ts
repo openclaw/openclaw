@@ -28,11 +28,11 @@
  * @module @openclaw/oc-path/jsonc/emit
  */
 
-import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
-import type { JsoncAst, JsoncValue } from "./ast.js";
+import { OcEmitSentinelError, REDACTED_SENTINEL } from '../sentinel.js';
+import type { JsoncAst, JsoncValue } from './ast.js';
 
 export interface JsoncEmitOptions {
-  readonly mode?: "roundtrip" | "render";
+  readonly mode?: 'roundtrip' | 'render';
   readonly fileNameForGuard?: string;
   /**
    * When `false`, round-trip mode also scans `ast.raw` for the
@@ -44,11 +44,11 @@ export interface JsoncEmitOptions {
 }
 
 export function emitJsonc(ast: JsoncAst, opts: JsoncEmitOptions = {}): string {
-  const mode = opts.mode ?? "roundtrip";
-  const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : "oc://";
+  const mode = opts.mode ?? 'roundtrip';
+  const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : 'oc://';
   const acceptPreExisting = opts.acceptPreExistingSentinel ?? true;
 
-  if (mode === "roundtrip") {
+  if (mode === 'roundtrip') {
     if (!acceptPreExisting && ast.raw.includes(REDACTED_SENTINEL)) {
       throw new OcEmitSentinelError(`${guardPath}/[raw]`);
     }
@@ -58,41 +58,42 @@ export function emitJsonc(ast: JsoncAst, opts: JsoncEmitOptions = {}): string {
   // Render mode — synthesize JSON from the structural tree (loses
   // comments). Walk every leaf string for sentinel detection so a
   // caller-injected sentinel via setOcPath is rejected.
-  if (ast.root === null) {
-    return "";
-  }
+  if (ast.root === null) {return '';}
   return renderValue(ast.root, guardPath, []);
 }
 
 function renderValue(value: JsoncValue, guardPath: string, walked: readonly string[]): string {
   switch (value.kind) {
-    case "object": {
+    case 'object': {
       const parts = value.entries.map(
-        (e) => `${JSON.stringify(e.key)}: ${renderValue(e.value, guardPath, [...walked, e.key])}`,
+        (e) =>
+          `${JSON.stringify(e.key)}: ${renderValue(e.value, guardPath, [...walked, e.key])}`,
       );
-      return `{ ${parts.join(", ")} }`;
+      return `{ ${parts.join(', ')} }`;
     }
-    case "array": {
-      const parts = value.items.map((v, i) => renderValue(v, guardPath, [...walked, String(i)]));
-      return `[ ${parts.join(", ")} ]`;
+    case 'array': {
+      const parts = value.items.map((v, i) =>
+        renderValue(v, guardPath, [...walked, String(i)]),
+      );
+      return `[ ${parts.join(', ')} ]`;
     }
-    case "string": {
+    case 'string': {
       // Reject ANY string that contains the sentinel — embedded
       // (`prefix__OPENCLAW_REDACTED__suffix`) is just as much of a
       // "literal redacted token landed on disk" leak as exact-match.
       // The roundtrip path uses `raw.includes()` for the same reason;
       // render needs the same predicate per leaf.
       if (value.value.includes(REDACTED_SENTINEL)) {
-        throw new OcEmitSentinelError(`${guardPath}/${walked.join("/")}`);
+        throw new OcEmitSentinelError(`${guardPath}/${walked.join('/')}`);
       }
       return JSON.stringify(value.value);
     }
-    case "number":
+    case 'number':
       return String(value.value);
-    case "boolean":
+    case 'boolean':
       return String(value.value);
-    case "null":
-      return "null";
+    case 'null':
+      return 'null';
   }
   throw new Error(`unreachable: jsonc renderValue kind`);
 }

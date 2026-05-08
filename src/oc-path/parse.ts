@@ -26,11 +26,11 @@ import type {
   FrontmatterEntry,
   ParseResult,
   MdAst,
-} from "./ast.js";
-import { slugify } from "./slug.js";
+} from './ast.js';
+import { slugify } from './slug.js';
 
-const FENCE = "---";
-const BOM = "﻿";
+const FENCE = '---';
+const BOM = '﻿';
 
 /**
  * Parse raw bytes into a `MdAst`. Soft-error policy: never
@@ -52,7 +52,7 @@ export function parseMd(raw: string): ParseResult {
   const { preamble, blocks } = splitH2Blocks(bodyLines, bodyStartLine + 1, diagnostics);
 
   const ast: MdAst = {
-    kind: "md",
+    kind: 'md',
     raw,
     frontmatter: fm?.entries ?? [],
     preamble,
@@ -74,12 +74,8 @@ function detectFrontmatter(
   lines: readonly string[],
   diagnostics: Diagnostic[],
 ): FrontmatterRange | null {
-  if (lines.length < 2) {
-    return null;
-  }
-  if (lines[0] !== FENCE) {
-    return null;
-  }
+  if (lines.length < 2) {return null;}
+  if (lines[0] !== FENCE) {return null;}
 
   let closeIndex = -1;
   for (let i = 1; i < lines.length; i++) {
@@ -91,9 +87,9 @@ function detectFrontmatter(
   if (closeIndex === -1) {
     diagnostics.push({
       line: 1,
-      message: "frontmatter opens with --- but never closes",
-      severity: "warning",
-      code: "OC_FRONTMATTER_UNCLOSED",
+      message: 'frontmatter opens with --- but never closes',
+      severity: 'warning',
+      code: 'OC_FRONTMATTER_UNCLOSED',
     });
     return null;
   }
@@ -101,9 +97,7 @@ function detectFrontmatter(
   const entries: FrontmatterEntry[] = [];
   for (let i = 1; i < closeIndex; i++) {
     const line = lines[i];
-    if (line.trim().length === 0) {
-      continue;
-    }
+    if (line.trim().length === 0) {continue;}
     const m = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(line);
     if (m === null) {
       // Could be a list-style continuation (`  - item`) for the previous key;
@@ -126,7 +120,7 @@ function unquote(value: string): string {
   if (value.length >= 2) {
     const first = value.charCodeAt(0);
     const last = value.charCodeAt(value.length - 1);
-    if (first === last && (first === 34 /* " */ || first === 39) /* ' */) {
+    if (first === last && (first === 34 /* " */ || first === 39 /* ' */)) {
       return value.slice(1, -1);
     }
   }
@@ -148,13 +142,11 @@ function splitH2Blocks(
 
   for (let i = 0; i < bodyLines.length; i++) {
     const line = bodyLines[i];
-    if (line.startsWith("```")) {
+    if (line.startsWith('```')) {
       inCode = !inCode;
       continue;
     }
-    if (inCode) {
-      continue;
-    }
+    if (inCode) {continue;}
     const m = /^##\s+(\S.*?)\s*$/.exec(line);
     if (m !== null) {
       headings.push({ line: i, text: m[1] });
@@ -163,12 +155,12 @@ function splitH2Blocks(
 
   if (headings.length === 0) {
     return {
-      preamble: bodyLines.join("\n"),
+      preamble: bodyLines.join('\n'),
       blocks: [],
     };
   }
 
-  const preamble = bodyLines.slice(0, headings[0].line).join("\n");
+  const preamble = bodyLines.slice(0, headings[0].line).join('\n');
   const blocks: AstBlock[] = [];
 
   for (let h = 0; h < headings.length; h++) {
@@ -176,7 +168,7 @@ function splitH2Blocks(
     const end = h + 1 < headings.length ? headings[h + 1].line : bodyLines.length;
     const headingText = headings[h].text;
     const blockBodyLines = bodyLines.slice(start + 1, end);
-    const bodyText = blockBodyLines.join("\n");
+    const bodyText = blockBodyLines.join('\n');
     const headingLineNum = bodyStartLineNum + start;
 
     const items = extractItems(blockBodyLines, headingLineNum + 1, diagnostics);
@@ -212,24 +204,22 @@ function extractItems(
 
   for (let i = 0; i < blockBodyLines.length; i++) {
     const line = blockBodyLines[i];
-    if (line.startsWith("```")) {
+    if (line.startsWith('```')) {
       inCode = !inCode;
       continue;
     }
-    if (inCode) {
-      continue;
-    }
+    if (inCode) {continue;}
     const m = BULLET_RE.exec(line);
-    if (m === null) {
-      continue;
-    }
+    if (m === null) {continue;}
     const text = m[1];
     const kvMatch = KV_RE.exec(text);
     const item: AstItem = {
       text,
       slug: kvMatch ? slugify(kvMatch[1]) : slugify(text),
       line: startLineNum + i,
-      ...(kvMatch !== null ? { kv: { key: kvMatch[1].trim(), value: kvMatch[2].trim() } } : {}),
+      ...(kvMatch !== null
+        ? { kv: { key: kvMatch[1].trim(), value: kvMatch[2].trim() } }
+        : {}),
     };
     items.push(item);
   }
@@ -239,21 +229,24 @@ function extractItems(
 
 // ---------- Tables ---------------------------------------------------------
 
-function extractTables(blockBodyLines: readonly string[], startLineNum: number): AstTable[] {
+function extractTables(
+  blockBodyLines: readonly string[],
+  startLineNum: number,
+): AstTable[] {
   const tables: AstTable[] = [];
   let i = 0;
   while (i < blockBodyLines.length) {
     const headerLine = blockBodyLines[i];
     const sepLine = blockBodyLines[i + 1];
     if (
-      headerLine.trim().startsWith("|") &&
+      headerLine.trim().startsWith('|') &&
       sepLine !== undefined &&
       /^\s*\|\s*[:-]+(?:\s*\|\s*[:-]+)*\s*\|?\s*$/.test(sepLine)
     ) {
       const headers = splitTableRow(headerLine);
       const rows: string[][] = [];
       let j = i + 2;
-      while (j < blockBodyLines.length && blockBodyLines[j].trim().startsWith("|")) {
+      while (j < blockBodyLines.length && blockBodyLines[j].trim().startsWith('|')) {
         rows.push(splitTableRow(blockBodyLines[j]));
         j++;
       }
@@ -267,8 +260,8 @@ function extractTables(blockBodyLines: readonly string[], startLineNum: number):
 }
 
 function splitTableRow(line: string): string[] {
-  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  return trimmed.split("|").map((cell) => cell.trim());
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return trimmed.split('|').map((cell) => cell.trim());
 }
 
 // ---------- Code blocks ---------------------------------------------------
@@ -281,17 +274,17 @@ function extractCodeBlocks(
   let i = 0;
   while (i < blockBodyLines.length) {
     const open = blockBodyLines[i];
-    if (open.startsWith("```")) {
+    if (open.startsWith('```')) {
       const lang = open.slice(3).trim();
       const langField = lang.length > 0 ? lang : null;
       const startLine = startLineNum + i;
       let j = i + 1;
       const bodyLines: string[] = [];
-      while (j < blockBodyLines.length && !blockBodyLines[j].startsWith("```")) {
+      while (j < blockBodyLines.length && !blockBodyLines[j].startsWith('```')) {
         bodyLines.push(blockBodyLines[j]);
         j++;
       }
-      codeBlocks.push({ lang: langField, text: bodyLines.join("\n"), line: startLine });
+      codeBlocks.push({ lang: langField, text: bodyLines.join('\n'), line: startLine });
       i = j + 1;
       continue;
     }

@@ -14,11 +14,11 @@
  * @module @openclaw/oc-path/yaml/emit
  */
 
-import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
-import type { YamlAst } from "./ast.js";
+import { OcEmitSentinelError, REDACTED_SENTINEL } from '../sentinel.js';
+import type { YamlAst } from './ast.js';
 
 export interface YamlEmitOptions {
-  readonly mode?: "roundtrip" | "render";
+  readonly mode?: 'roundtrip' | 'render';
   readonly fileNameForGuard?: string;
   /**
    * See `JsoncEmitOptions.acceptPreExistingSentinel` for the rationale.
@@ -30,11 +30,11 @@ export interface YamlEmitOptions {
 }
 
 export function emitYaml(ast: YamlAst, opts: YamlEmitOptions = {}): string {
-  const mode = opts.mode ?? "roundtrip";
-  const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : "oc://";
+  const mode = opts.mode ?? 'roundtrip';
+  const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : 'oc://';
   const acceptPreExisting = opts.acceptPreExistingSentinel ?? true;
 
-  if (mode === "roundtrip") {
+  if (mode === 'roundtrip') {
     if (!acceptPreExisting && ast.raw.includes(REDACTED_SENTINEL)) {
       throw new OcEmitSentinelError(`${guardPath}/[raw]`);
     }

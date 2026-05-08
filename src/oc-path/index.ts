@@ -30,7 +30,7 @@
  * `emitXxx`). Plugin packs that depend on the substrate declare the
  * version they were authored against and the host warns on mismatch.
  */
-export const SDK_VERSION = "0.1.0";
+export const SDK_VERSION = '0.1.0';
 
 // AST types
 export type {
@@ -42,13 +42,18 @@ export type {
   FrontmatterEntry,
   ParseResult,
   MdAst,
-} from "./ast.js";
-export type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
-export type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
-export type { YamlAst } from "./yaml/ast.js";
+} from './ast.js';
+export type { JsoncAst, JsoncEntry, JsoncValue } from './jsonc/ast.js';
+export type { JsonlAst, JsonlLine } from './jsonl/ast.js';
+export type { YamlAst } from './yaml/ast.js';
 
 // OcPath types + parser/formatter
-export type { OcPath, PathSegmentLayout, PositionalContainer, PredicateSpec } from "./oc-path.js";
+export type {
+  OcPath,
+  PathSegmentLayout,
+  PositionalContainer,
+  PredicateSpec,
+} from './oc-path.js';
 // Public OcPath surface — what plugin authors and callers use.
 export {
   MAX_PATH_LENGTH,
@@ -69,7 +74,7 @@ export {
   isUnionSeg,
   isValidOcPath,
   parseOcPath,
-} from "./oc-path.js";
+} from './oc-path.js';
 
 // `evaluatePredicate`, `getPathLayout`, `parseOrdinalSeg`,
 // `parsePredicateSeg`, `parseUnionSeg`, `quoteSeg`, `unquoteSeg`,
@@ -81,22 +86,22 @@ export {
 // `parseOcPath` / `formatOcPath` / `findOcPaths`.
 
 // Per-kind parse / emit (encoding is genuinely per-kind)
-export { parseMd } from "./parse.js";
-export { parseJsonc } from "./jsonc/parse.js";
-export { parseJsonl } from "./jsonl/parse.js";
-export { parseYaml } from "./yaml/parse.js";
-export type { JsoncParseResult } from "./jsonc/parse.js";
-export type { JsonlParseResult } from "./jsonl/parse.js";
-export type { YamlParseResult } from "./yaml/parse.js";
+export { parseMd } from './parse.js';
+export { parseJsonc } from './jsonc/parse.js';
+export { parseJsonl } from './jsonl/parse.js';
+export { parseYaml } from './yaml/parse.js';
+export type { JsoncParseResult } from './jsonc/parse.js';
+export type { JsonlParseResult } from './jsonl/parse.js';
+export type { YamlParseResult } from './yaml/parse.js';
 
-export type { EmitOptions } from "./emit.js";
-export { emitMd, markDirty } from "./emit.js";
-export type { JsoncEmitOptions } from "./jsonc/emit.js";
-export { emitJsonc } from "./jsonc/emit.js";
-export type { JsonlEmitOptions } from "./jsonl/emit.js";
-export { emitJsonl } from "./jsonl/emit.js";
-export type { YamlEmitOptions } from "./yaml/emit.js";
-export { emitYaml } from "./yaml/emit.js";
+export type { EmitOptions } from './emit.js';
+export { emitMd, markDirty } from './emit.js';
+export type { JsoncEmitOptions } from './jsonc/emit.js';
+export { emitJsonc } from './jsonc/emit.js';
+export type { JsonlEmitOptions } from './jsonl/emit.js';
+export { emitJsonl } from './jsonl/emit.js';
+export type { YamlEmitOptions } from './yaml/emit.js';
+export { emitYaml } from './yaml/emit.js';
 
 // Universal verbs — the only public resolve / set on the surface.
 export type {
@@ -107,22 +112,22 @@ export type {
   ContainerKind,
   SetResult,
   InsertionInfo,
-} from "./universal.js";
-export { resolveOcPath, setOcPath, detectInsertion } from "./universal.js";
+} from './universal.js';
+export { resolveOcPath, setOcPath, detectInsertion } from './universal.js';
 
 // Multi-match search verb — the wildcard-accepting cousin of resolve.
-export type { OcPathMatch } from "./find.js";
-export { findOcPaths } from "./find.js";
+export type { OcPathMatch } from './find.js';
+export { findOcPaths } from './find.js';
 
 // Cross-kind utility — filename → kind hint.
-export { inferKind } from "./dispatch.js";
-export type { OcKind } from "./dispatch.js";
+export { inferKind } from './dispatch.js';
+export type { OcKind } from './dispatch.js';
 
 // Sentinel guard
-export { OcEmitSentinelError, REDACTED_SENTINEL, guardSentinel } from "./sentinel.js";
+export { OcEmitSentinelError, REDACTED_SENTINEL, guardSentinel } from './sentinel.js';
 
 // Slug helper
-export { slugify } from "./slug.js";
+export { slugify } from './slug.js';
 
 // Workspace manifest is a separate concern (filesystem classifier);
 // it's not part of this PR's scope.

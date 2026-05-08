@@ -15,45 +15,41 @@
  * @module @openclaw/oc-path/jsonl/edit
  */
 
-import type { JsoncEntry, JsoncValue } from "../jsonc/ast.js";
-import type { OcPath } from "../oc-path.js";
+import type { OcPath } from '../oc-path.js';
 import {
   isPositionalSeg,
   isQuotedSeg,
   resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
-} from "../oc-path.js";
-import type { JsonlAst, JsonlLine } from "./ast.js";
-import { emitJsonl } from "./emit.js";
+} from '../oc-path.js';
+import type { JsoncEntry, JsoncValue } from '../jsonc/ast.js';
+import type { JsonlAst, JsonlLine } from './ast.js';
+import { emitJsonl } from './emit.js';
 
 export type JsonlEditResult =
   | { readonly ok: true; readonly ast: JsonlAst }
-  | { readonly ok: false; readonly reason: "unresolved" | "not-a-value-line" };
+  | { readonly ok: false; readonly reason: 'unresolved' | 'not-a-value-line' };
 
-export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue): JsonlEditResult {
+export function setJsonlOcPath(
+  ast: JsonlAst,
+  path: OcPath,
+  newValue: JsoncValue,
+): JsonlEditResult {
   const head = path.section;
-  if (head === undefined) {
-    return { ok: false, reason: "unresolved" };
-  }
+  if (head === undefined) {return { ok: false, reason: 'unresolved' };}
 
   const lineIdx = pickLineIndex(ast, head);
-  if (lineIdx === -1) {
-    return { ok: false, reason: "unresolved" };
-  }
+  if (lineIdx === -1) {return { ok: false, reason: 'unresolved' };}
   const target = ast.lines[lineIdx];
-  if (target === undefined) {
-    return { ok: false, reason: "unresolved" };
-  }
+  if (target === undefined) {return { ok: false, reason: 'unresolved' };}
 
   // No item/field — replace the whole line value. Requires the line to
   // already be a value line (we don't synthesize lines from blanks).
   if (path.item === undefined && path.field === undefined) {
-    if (target.kind !== "value") {
-      return { ok: false, reason: "not-a-value-line" };
-    }
+    if (target.kind !== 'value') {return { ok: false, reason: 'not-a-value-line' };}
     const newLine: JsonlLine = {
-      kind: "value",
+      kind: 'value',
       line: target.line,
       value: newValue,
       raw: target.raw,
@@ -61,28 +57,20 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
     return finalize(ast, lineIdx, newLine, path.file);
   }
 
-  if (target.kind !== "value") {
-    return { ok: false, reason: "not-a-value-line" };
-  }
+  if (target.kind !== 'value') {return { ok: false, reason: 'not-a-value-line' };}
 
   // Bracket/brace/quote-aware split — preserves quoted segments
   // verbatim so the edit path matches `resolveJsonlOcPath`'s
   // unquoting behavior. Plain `.split('.')` would shred a quoted key
   // and silently desync read-vs-write.
   const segments: string[] = [];
-  if (path.item !== undefined) {
-    segments.push(...splitRespectingBrackets(path.item, "."));
-  }
-  if (path.field !== undefined) {
-    segments.push(...splitRespectingBrackets(path.field, "."));
-  }
+  if (path.item !== undefined) {segments.push(...splitRespectingBrackets(path.item, '.'));}
+  if (path.field !== undefined) {segments.push(...splitRespectingBrackets(path.field, '.'));}
 
   const replaced = replaceAt(target.value, segments, 0, newValue);
-  if (replaced === null) {
-    return { ok: false, reason: "unresolved" };
-  }
+  if (replaced === null) {return { ok: false, reason: 'unresolved' };}
   const newLine: JsonlLine = {
-    kind: "value",
+    kind: 'value',
     line: target.line,
     value: replaced,
     raw: target.raw,
@@ -97,14 +85,10 @@ function replaceAt(
   newValue: JsoncValue,
 ): JsoncValue | null {
   const seg = segments[i];
-  if (seg === undefined) {
-    return newValue;
-  }
-  if (seg.length === 0) {
-    return null;
-  }
+  if (seg === undefined) {return newValue;}
+  if (seg.length === 0) {return null;}
 
-  if (current.kind === "object") {
+  if (current.kind === 'object') {
     // Resolve positional tokens ($first / $last) against the entries'
     // ordered key list before any literal-key comparison. Keeps the
     // jsonl edit path symmetric with resolveJsonlOcPath, which already
@@ -116,37 +100,29 @@ function replaceAt(
         size: current.entries.length,
         keys: current.entries.map((e) => e.key),
       });
-      if (resolved === null) {
-        return null;
-      }
+      if (resolved === null) {return null;}
       segNorm = resolved;
     }
     // Quoted segments carry the raw bytes verbatim; AST entry keys
     // are unquoted. Strip the surrounding quotes before comparing.
     const lookupKey = isQuotedSeg(segNorm) ? unquoteSeg(segNorm) : segNorm;
     const idx = current.entries.findIndex((e) => e.key === lookupKey);
-    if (idx === -1) {
-      return null;
-    }
+    if (idx === -1) {return null;}
     const child = current.entries[idx];
-    if (child === undefined) {
-      return null;
-    }
+    if (child === undefined) {return null;}
     const replacedChild = replaceAt(child.value, segments, i + 1, newValue);
-    if (replacedChild === null) {
-      return null;
-    }
+    if (replacedChild === null) {return null;}
     const newEntry: JsoncEntry = { ...child, value: replacedChild };
     const newEntries = current.entries.slice();
     newEntries[idx] = newEntry;
     return {
-      kind: "object",
+      kind: 'object',
       entries: newEntries,
       ...(current.line !== undefined ? { line: current.line } : {}),
     };
   }
 
-  if (current.kind === "array") {
+  if (current.kind === 'array') {
     // Resolve positional tokens ($first / $last / -N) against the
     // array's size before the numeric coercion below; without this
     // `Number('$last')` is NaN and the path silently unresolves.
@@ -156,27 +132,19 @@ function replaceAt(
         indexable: true,
         size: current.items.length,
       });
-      if (resolved === null) {
-        return null;
-      }
+      if (resolved === null) {return null;}
       segNorm = resolved;
     }
     const idx = Number(segNorm);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {
-      return null;
-    }
+    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
     const child = current.items[idx];
-    if (child === undefined) {
-      return null;
-    }
+    if (child === undefined) {return null;}
     const replacedChild = replaceAt(child, segments, i + 1, newValue);
-    if (replacedChild === null) {
-      return null;
-    }
+    if (replacedChild === null) {return null;}
     const newItems = current.items.slice();
     newItems[idx] = replacedChild;
     return {
-      kind: "array",
+      kind: 'array',
       items: newItems,
       ...(current.line !== undefined ? { line: current.line } : {}),
     };
@@ -191,21 +159,17 @@ function pickLineIndex(ast: JsonlAst, addr: string): number {
   // be addressed by. Without `$first` and `-N` here, a path that
   // resolves cleanly under those tokens would silently unresolve on
   // the edit path (resolve↔write asymmetry).
-  if (addr === "$last") {
+  if (addr === '$last') {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
       const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        return i;
-      }
+      if (l !== undefined && l.kind === 'value') {return i;}
     }
     return -1;
   }
-  if (addr === "$first") {
+  if (addr === '$first') {
     for (let i = 0; i < ast.lines.length; i++) {
       const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        return i;
-      }
+      if (l !== undefined && l.kind === 'value') {return i;}
     }
     return -1;
   }
@@ -216,39 +180,29 @@ function pickLineIndex(ast: JsonlAst, addr: string): number {
     const valueIndices: number[] = [];
     for (let i = 0; i < ast.lines.length; i++) {
       const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        valueIndices.push(i);
-      }
+      if (l !== undefined && l.kind === 'value') {valueIndices.push(i);}
     }
     const n = valueIndices.length + Number(addr);
     return n >= 0 && n < valueIndices.length ? (valueIndices[n] ?? -1) : -1;
   }
   const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) {
-    return -1;
-  }
+  if (m === null || m[1] === undefined) {return -1;}
   const target = Number(m[1]);
   return ast.lines.findIndex((l) => l.line === target);
 }
 
-function finalize(
-  ast: JsonlAst,
-  lineIdx: number,
-  newLine: JsonlLine,
-  fileName?: string,
-): JsonlEditResult {
+function finalize(ast: JsonlAst, lineIdx: number, newLine: JsonlLine, fileName?: string): JsonlEditResult {
   const newLines = ast.lines.slice();
   newLines[lineIdx] = newLine;
   const next: JsonlAst = {
-    kind: "jsonl",
-    raw: "",
+    kind: 'jsonl',
+    raw: '',
     lines: newLines,
     ...(ast.lineEnding !== undefined ? { lineEnding: ast.lineEnding } : {}),
   };
-  const opts =
-    fileName !== undefined
-      ? { mode: "render" as const, fileNameForGuard: fileName }
-      : { mode: "render" as const };
+  const opts = fileName !== undefined
+    ? { mode: 'render' as const, fileNameForGuard: fileName }
+    : { mode: 'render' as const };
   const rendered = emitJsonl(next, opts);
   return { ok: true, ast: { ...next, raw: rendered } };
 }
@@ -260,14 +214,15 @@ function finalize(
  * the file as a whole (line numbers are assigned by the substrate).
  */
 export function appendJsonlOcPath(ast: JsonlAst, value: JsoncValue): JsonlAst {
-  const nextLineNo = ast.lines.length === 0 ? 1 : (ast.lines[ast.lines.length - 1]?.line ?? 0) + 1;
+  const nextLineNo =
+    ast.lines.length === 0 ? 1 : (ast.lines[ast.lines.length - 1]?.line ?? 0) + 1;
   const newLine: JsonlLine = {
-    kind: "value",
+    kind: 'value',
     line: nextLineNo,
     value,
-    raw: "",
+    raw: '',
   };
-  const next: JsonlAst = { kind: "jsonl", raw: "", lines: [...ast.lines, newLine] };
-  const rendered = emitJsonl(next, { mode: "render" });
+  const next: JsonlAst = { kind: 'jsonl', raw: '', lines: [...ast.lines, newLine] };
+  const rendered = emitJsonl(next, { mode: 'render' });
   return { ...next, raw: rendered };
 }

@@ -14,12 +14,12 @@
  * @module @openclaw/oc-path/jsonl/emit
  */
 
-import type { JsoncValue } from "../jsonc/ast.js";
-import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
-import type { JsonlAst } from "./ast.js";
+import { OcEmitSentinelError, REDACTED_SENTINEL } from '../sentinel.js';
+import type { JsoncValue } from '../jsonc/ast.js';
+import type { JsonlAst } from './ast.js';
 
 export interface JsonlEmitOptions {
-  readonly mode?: "roundtrip" | "render";
+  readonly mode?: 'roundtrip' | 'render';
   readonly fileNameForGuard?: string;
   /**
    * See `JsoncEmitOptions.acceptPreExistingSentinel` for the rationale.
@@ -30,11 +30,11 @@ export interface JsonlEmitOptions {
 }
 
 export function emitJsonl(ast: JsonlAst, opts: JsonlEmitOptions = {}): string {
-  const mode = opts.mode ?? "roundtrip";
-  const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : "oc://";
+  const mode = opts.mode ?? 'roundtrip';
+  const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : 'oc://';
   const acceptPreExisting = opts.acceptPreExistingSentinel ?? true;
 
-  if (mode === "roundtrip") {
+  if (mode === 'roundtrip') {
     if (!acceptPreExisting && ast.raw.includes(REDACTED_SENTINEL)) {
       throw new OcEmitSentinelError(`${guardPath}/[raw]`);
     }
@@ -43,7 +43,7 @@ export function emitJsonl(ast: JsonlAst, opts: JsonlEmitOptions = {}): string {
 
   const out: string[] = [];
   for (const ln of ast.lines) {
-    if (ln.kind === "blank" || ln.kind === "malformed") {
+    if (ln.kind === 'blank' || ln.kind === 'malformed') {
       // Blank/malformed lines round-trip as their original raw bytes.
       // Apply the same trust policy: only scan when caller opts in.
       if (!acceptPreExisting && ln.raw.includes(REDACTED_SENTINEL)) {
@@ -63,36 +63,38 @@ export function emitJsonl(ast: JsonlAst, opts: JsonlEmitOptions = {}): string {
   // edited lines joined with `\n` and untouched lines retaining the
   // `\r` on their .raw bytes — silent CRLF→LF corruption on
   // Windows-authored datasets.
-  return out.join(ast.lineEnding ?? "\n");
+  return out.join(ast.lineEnding ?? '\n');
 }
 
 function renderValue(value: JsoncValue, guardPath: string, walked: readonly string[]): string {
   switch (value.kind) {
-    case "object": {
+    case 'object': {
       const parts = value.entries.map(
         (e) => `${JSON.stringify(e.key)}:${renderValue(e.value, guardPath, [...walked, e.key])}`,
       );
-      return `{${parts.join(",")}}`;
+      return `{${parts.join(',')}}`;
     }
-    case "array": {
-      const parts = value.items.map((v, i) => renderValue(v, guardPath, [...walked, String(i)]));
-      return `[${parts.join(",")}]`;
+    case 'array': {
+      const parts = value.items.map((v, i) =>
+        renderValue(v, guardPath, [...walked, String(i)]),
+      );
+      return `[${parts.join(',')}]`;
     }
-    case "string": {
+    case 'string': {
       // Reject ANY string that contains the sentinel — embedded
       // (`prefix__OPENCLAW_REDACTED__suffix`) is just as much of a
       // "literal redacted token landed on disk" leak as exact-match.
       if (value.value.includes(REDACTED_SENTINEL)) {
-        throw new OcEmitSentinelError(`${guardPath}/${walked.join("/")}`);
+        throw new OcEmitSentinelError(`${guardPath}/${walked.join('/')}`);
       }
       return JSON.stringify(value.value);
     }
-    case "number":
+    case 'number':
       return String(value.value);
-    case "boolean":
+    case 'boolean':
       return String(value.value);
-    case "null":
-      return "null";
+    case 'null':
+      return 'null';
   }
   throw new Error(`unreachable: jsonl renderValue kind`);
 }
