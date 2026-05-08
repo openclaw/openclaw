@@ -377,6 +377,36 @@ describe("tryDispatchAcpReply agent_thought_chunk delivery (catalog #12)", () =>
     expect(thoughtCalls.length).toBeGreaterThan(0);
   });
 
+  it("drops unknown-stream events even when the tag is explicitly visible", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "text_delta",
+          tag: "agent_thought_chunk",
+          stream: "diagnostic",
+          text: "Internal diagnostic trace.",
+        });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher, toolResultMock, blockReplyMock, finalReplyMock } = createDispatcher();
+    await runThoughtDispatch({
+      bodyForAgent: "think out loud",
+      cfg: createLiveStreamConfig({ thoughtVisible: true }),
+      dispatcher,
+    });
+
+    // The stream allow-list ("output" | "thought") is enforced before the
+    // visibility check. An event with stream="diagnostic" must be dropped
+    // regardless of tagVisibility.agent_thought_chunk=true. This proves the
+    // visibility flag cannot bypass the stream allow-list.
+    expect(toolResultMock).not.toHaveBeenCalled();
+    expect(blockReplyMock).not.toHaveBeenCalled();
+    expect(finalReplyMock).not.toHaveBeenCalled();
+  });
+
   it("control: delivers visible output-stream agent_message_chunk text_delta", async () => {
     setReadyAcpResolution();
     managerMocks.runTurn.mockImplementation(
