@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { listSessionEntries } from "../config/sessions.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
 import { __resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
@@ -16,29 +14,24 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
-  writeSessionStore,
+  seedGatewaySessionEntries,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
-let sharedSessionStoreDir: string;
-let sharedSessionStorePath: string;
 
 beforeAll(async () => {
   const started = await startServerWithClient();
   server = started.server;
   ws = started.ws;
   await connectOk(ws);
-  sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-session-"));
-  sharedSessionStorePath = path.join(sharedSessionStoreDir, "sessions.json");
 });
 
 afterAll(async () => {
   ws.close();
   await server.close();
-  await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
 });
 
 const BASE_IMAGE_PNG =
@@ -51,12 +44,11 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(runContext?.messageChannel).toBe(channel);
 }
 
-async function setTestSessionStore(params: {
+async function seedTestSessionRows(params: {
   entries: Record<string, Record<string, unknown>>;
   agentId?: string;
 }) {
-  testState.sessionStorePath = sharedSessionStorePath;
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: params.entries,
     agentId: params.agentId,
   });
@@ -70,7 +62,7 @@ async function runMainAgentDeliveryWithSession(params: {
   setRegistry(defaultRegistry);
   testState.allowFrom = params.allowFrom ?? ["+1555"];
   try {
-    await setTestSessionStore({
+    await seedTestSessionRows({
       entries: {
         main: {
           ...params.entry,
@@ -170,7 +162,7 @@ describe("gateway server agent", () => {
 
   test("agent marks implicit delivery when lastTo is stale", async () => {
     testState.allowFrom = ["+436769770569"];
-    await setTestSessionStore({
+    await seedTestSessionRows({
       entries: {
         main: {
           sessionId: "sess-main-stale",
@@ -198,7 +190,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent forwards sessionKey to agentCommand", async () => {
-    await setTestSessionStore({
+    await seedTestSessionRows({
       entries: {
         "agent:main:subagent:abc": {
           sessionId: "sess-sub",
@@ -222,7 +214,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent preserves spawnDepth on subagent sessions", async () => {
-    await setTestSessionStore({
+    await seedTestSessionRows({
       entries: {
         "agent:main:subagent:depth": {
           sessionId: "sess-sub-depth",
@@ -241,17 +233,15 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(true);
     await waitForAgentCommandCall("idem-agent-subdepth");
 
-    const raw = await fs.readFile(sharedSessionStorePath, "utf-8");
-    const persisted = JSON.parse(raw) as Record<
-      string,
-      { spawnDepth?: number; spawnedBy?: string }
-    >;
+    const persisted = Object.fromEntries(
+      listSessionEntries({ agentId: "main" }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
     expect(persisted["agent:main:subagent:depth"]?.spawnDepth).toBe(2);
     expect(persisted["agent:main:subagent:depth"]?.spawnedBy).toBe("agent:main:main");
   });
 
   test("agent derives sessionKey from agentId", async () => {
-    await setTestSessionStore({
+    await seedTestSessionRows({
       agentId: "ops",
       entries: {
         main: {
@@ -393,7 +383,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent forwards image attachments as images[]", async () => {
-    await setTestSessionStore({
+    await seedTestSessionRows({
       entries: {
         main: {
           sessionId: "sess-main-images",
@@ -508,7 +498,7 @@ describe("gateway server agent", () => {
   test("agent errors when delivery requested and no last channel exists", async () => {
     testState.allowFrom = ["+1555"];
     try {
-      await setTestSessionStore({
+      await seedTestSessionRows({
         entries: {
           main: {
             sessionId: "sess-main-missing-provider",
@@ -569,7 +559,7 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-last-signal",
     },
   ])("agent routes main last-channel $name", async (tc) => {
-    await setTestSessionStore({
+    await seedTestSessionRows({
       entries: {
         main: {
           sessionId: tc.sessionId,
