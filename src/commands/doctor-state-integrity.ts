@@ -775,7 +775,6 @@ export async function noteStateIntegrity(
 
   if (stateDirExists) {
     const dirCandidates = new Map<string, string>();
-    dirCandidates.set(sessionsDir, "Sessions dir");
     if (requireOAuthDir) {
       dirCandidates.set(oauthDir, "OAuth dir");
     } else if (!existsDir(oauthDir)) {
@@ -869,7 +868,7 @@ export async function noteStateIntegrity(
   const store = Object.fromEntries(
     listSessionEntries({ agentId, env }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
-  const sessionPathOpts = resolveSessionFilePathOptions({ agentId, sessionsDir });
+  const sessionPathOpts = resolveSessionFilePathOptions({ agentId });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
     const recent = entries
