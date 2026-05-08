@@ -140,12 +140,31 @@ describe("installTestEnv", () => {
         };
       };
     };
-    expect(copiedConfig.models?.providers?.custom).toEqual({ baseUrl: "https://example.test/v1" });
-    expect(copiedConfig.agents?.defaults?.workspace).toBeUndefined();
-    expect(copiedConfig.agents?.defaults?.agentDir).toBeUndefined();
-    expect(copiedConfig.agents?.list?.[0]?.workspace).toBeUndefined();
-    expect(copiedConfig.agents?.list?.[0]?.agentDir).toBeUndefined();
-    expect(copiedConfig.channels?.telegram?.streaming).toEqual({
+    const providers = copiedConfig.models?.providers;
+    expect(providers).toBeDefined();
+    if (!providers) {
+      throw new Error("expected copied model providers config");
+    }
+    expect(providers.custom).toEqual({ baseUrl: "https://example.test/v1" });
+
+    const agentDefaults = copiedConfig.agents?.defaults;
+    const agentConfig = copiedConfig.agents?.list?.[0];
+    expect(agentDefaults).toBeDefined();
+    expect(agentConfig).toBeDefined();
+    if (!agentDefaults || !agentConfig) {
+      throw new Error("expected copied agent config");
+    }
+    expect(agentDefaults.workspace).toBeUndefined();
+    expect(agentDefaults.agentDir).toBeUndefined();
+    expect(agentConfig.workspace).toBeUndefined();
+    expect(agentConfig.agentDir).toBeUndefined();
+
+    const telegramStreaming = copiedConfig.channels?.telegram?.streaming;
+    expect(telegramStreaming).toBeDefined();
+    if (!telegramStreaming) {
+      throw new Error("expected copied telegram streaming config");
+    }
+    expect(telegramStreaming).toEqual({
       mode: "block",
       chunkMode: "newline",
       block: { enabled: true },
