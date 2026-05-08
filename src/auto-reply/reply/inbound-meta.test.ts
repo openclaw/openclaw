@@ -412,14 +412,6 @@ describe("buildInboundUserContextPrefix", () => {
   });
 
   it("omits invalid timestamps instead of throwing", () => {
-    expect(() =>
-      buildInboundUserContextPrefix({
-        ChatType: "group",
-        MessageSid: "msg-with-bad-ts",
-        Timestamp: 1e20,
-      } as TemplateContext),
-    ).not.toThrow();
-
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
       MessageSid: "msg-with-bad-ts",
