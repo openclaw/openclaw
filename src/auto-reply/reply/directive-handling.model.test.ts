@@ -598,7 +598,7 @@ describe("/model chat UX", () => {
     expect(reply?.text).not.toContain("via codex runtime");
   });
 
-  it("does not borrow Codex auth when OpenAI is pinned to PI runtime", async () => {
+  it("does not borrow Codex auth when OpenAI model policy pins PI runtime", async () => {
     setAuthProfiles({
       "openai-codex:patrick@example.test": {
         type: "oauth",
@@ -619,10 +619,11 @@ describe("/model chat UX", () => {
         commands: { text: true },
         agents: {
           defaults: {
-            agentRuntime: { id: "pi" },
             model: { primary: "openai/gpt-5.5" },
             models: {
-              "openai/gpt-5.5": {},
+              "openai/gpt-5.5": {
+                agentRuntime: { id: "pi" },
+              },
             },
           },
         },
@@ -911,7 +912,7 @@ describe("/model chat UX", () => {
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
   });
 
-  it("persists provider-compatible runtime overrides for mixed-content messages", async () => {
+  it("ignores provider-compatible runtime overrides for mixed-content messages", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-4o --runtime codex hello",
       allowedModelKeys: ["openai/gpt-4o"],
@@ -919,16 +920,16 @@ describe("/model chat UX", () => {
 
     expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-4o");
-    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
   });
 
-  it("canonicalizes legacy Codex app-server runtime overrides during persistence", async () => {
+  it("ignores legacy Codex app-server runtime overrides during persistence", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-4o --runtime codex-app-server hello",
       allowedModelKeys: ["openai/gpt-4o"],
     });
 
-    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
   });
 
   it("uses Codex OAuth context config for persisted native Codex runtime directives", async () => {
@@ -988,7 +989,7 @@ describe("/model chat UX", () => {
       initialModelLabel: "openai/gpt-4o",
     });
 
-    expect(sessionEntry.agentRuntimeOverride).toBe("pi");
+    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
       "Ignored unsupported runtime claude-cli for openai.",
       {

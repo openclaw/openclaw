@@ -48,6 +48,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "execAsk",
   "execNode",
   "responseUsage",
+  "usageFamilyKey",
+  "usageFamilySessionIds",
   "providerOverride",
   "modelOverride",
   "agentRuntimeOverride",
