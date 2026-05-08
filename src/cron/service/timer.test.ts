@@ -73,10 +73,12 @@ describe("cron service timer seam coverage", () => {
 
     const persisted = await loadCronStore(storePath);
     const job = persisted.jobs[0];
-    expect(job).toBeDefined();
-    expect(job?.state.lastStatus).toBe("ok");
-    expect(job?.state.runningAtMs).toBeUndefined();
-    expect(job?.state.nextRunAtMs).toBe(now + 60_000);
+    if (!job) {
+      throw new Error("expected persisted heartbeat cron job");
+    }
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect(job.state.nextRunAtMs).toBe(now + 60_000);
     expect(findTaskByRunId(`cron:main-heartbeat-job:${now}`)).toMatchObject({
       runtime: "cron",
       status: "succeeded",
@@ -87,7 +89,8 @@ describe("cron service timer seam coverage", () => {
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
       .filter((delay): delay is number => typeof delay === "number");
-    expect(delays.some((delay) => delay > 0)).toBe(true);
+    const positiveDelays = delays.filter((delay) => delay > 0);
+    expect(positiveDelays.length).toBeGreaterThan(0);
 
     timeoutSpy.mockRestore();
   });

@@ -101,7 +101,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(streamedText).toBe("Title\nLine one\nLine two");
     expect(streamedText).not.toContain("<");
     expect(streamedText).not.toContain("final>");
-    expect(payloads.some((payload) => payload.replace)).toBe(false);
+    expect(payloads.filter((payload) => payload.replace)).toEqual([]);
   });
 
   it("preserves final content when enforced final tags are split across streamed deltas", () => {

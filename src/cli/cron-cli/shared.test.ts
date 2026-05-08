@@ -26,6 +26,11 @@ function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   return { logs, runtime };
 }
 
+function expectLogsToInclude(logs: readonly string[], text: string): void {
+  const matches = logs.filter((line) => line.includes(text));
+  expect(matches.length).toBeGreaterThan(0);
+}
+
 function createBaseJob(overrides: Partial<CronJob>): CronJob {
   const now = Date.now();
   return {
@@ -63,7 +68,7 @@ describe("printCronList", () => {
 
     // Verify output contains the job
     expect(logs.length).toBeGreaterThan(1);
-    expect(logs.some((line) => line.includes("test-job-id"))).toBe(true);
+    expectLogsToInclude(logs, "test-job-id");
   });
 
   it("handles job with defined sessionTarget", () => {
@@ -75,7 +80,7 @@ describe("printCronList", () => {
     });
 
     expect(() => printCronList([jobWithTarget], runtime)).not.toThrow();
-    expect(logs.some((line) => line.includes("isolated"))).toBe(true);
+    expectLogsToInclude(logs, "isolated");
   });
 
   it("tolerates malformed rows in human-readable output", () => {
@@ -91,7 +96,7 @@ describe("printCronList", () => {
     } as unknown as CronJob;
 
     expect(() => printCronList([malformedJob], runtime)).not.toThrow();
-    expect(logs.some((line) => line.includes("malformed-job"))).toBe(true);
+    expectLogsToInclude(logs, "malformed-job");
   });
 
   it("shows stagger label for cron schedules", () => {
@@ -106,7 +111,7 @@ describe("printCronList", () => {
     });
 
     printCronList([job], runtime);
-    expect(logs.some((line) => line.includes("(stagger 5m)"))).toBe(true);
+    expectLogsToInclude(logs, "(stagger 5m)");
   });
 
   it("shows dash for unset agentId instead of default", () => {
@@ -224,7 +229,7 @@ describe("printCronList", () => {
     });
 
     printCronList([job], runtime);
-    expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
+    expectLogsToInclude(logs, "(exact)");
   });
 });
 

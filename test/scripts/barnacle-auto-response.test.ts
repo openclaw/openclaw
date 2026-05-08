@@ -236,7 +236,7 @@ describe("barnacle-auto-response", () => {
     expect(managedLabelSpecs[PROOF_SUFFICIENT_LABEL].color).toBe("0E8A16");
 
     for (const label of Object.values(candidateLabels)) {
-      expect(managedLabelSpecs[label]).toBeDefined();
+      expect(managedLabelSpecs).toHaveProperty(label);
       expect(managedLabelSpecs[label].description).toMatch(/^Candidate:/);
     }
   });

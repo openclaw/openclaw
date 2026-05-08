@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
-import { resolveAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
+import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -1601,7 +1601,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       provider: resolved.provider,
       model: resolved.model,
     });
-    const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
+    const agentRuntime = resolveModelAgentRuntimeMetadata({
+      cfg,
+      agentId,
+      provider: resolvedDisplayModel.provider,
+      model: resolvedDisplayModel.model,
+      sessionKey: target.canonicalKey ?? key,
+    });
     const result: SessionsPatchResult = {
       ok: true,
       path: storePath,

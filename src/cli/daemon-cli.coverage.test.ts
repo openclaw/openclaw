@@ -325,7 +325,8 @@ describe("daemon-cli coverage", () => {
     expect(serviceStop).toHaveBeenCalledTimes(1);
     const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
     const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
-    expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
-    expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
+    expect(parsed.filter((entry) => entry.ok).map((entry) => entry.action)).toEqual(
+      expect.arrayContaining(["start", "stop"]),
+    );
   });
 });

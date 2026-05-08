@@ -23,20 +23,6 @@ afterEach(() => {
 // Runtime smoke
 // ---------------------------------------------------------------------------
 describe("runtime smoke", () => {
-  it("creates and exercises a keyed store directly", async () => {
-    await withOpenClawTestState({ label: "e2e-smoke-load" }, async () => {
-      const store = createPluginStateKeyedStore<{ ready: boolean }>("fixture-plugin", {
-        namespace: "boot",
-        maxEntries: 10,
-      });
-      expect(store).toBeDefined();
-      expect(typeof store.register).toBe("function");
-      expect(typeof store.registerIfAbsent).toBe("function");
-      expect(typeof store.lookup).toBe("function");
-      expect(typeof store.consume).toBe("function");
-    });
-  });
-
   it("writes and reads a value", async () => {
     await withOpenClawTestState({ label: "e2e-smoke-rw" }, async () => {
       const store = createPluginStateKeyedStore<{ msg: string }>("fixture-plugin", {
@@ -278,7 +264,8 @@ describe("failure safety", () => {
       expect(result.ok).toBe(true);
       expect(result.dbPath).toContain("state.sqlite");
       expect(result.steps.length).toBeGreaterThanOrEqual(4);
-      expect(result.steps.every((s) => s.ok)).toBe(true);
+      const failedSteps = result.steps.filter((step) => !step.ok);
+      expect(failedSteps).toEqual([]);
 
       // The probe's temporary stored value must not leak into the result.
       const serialised = JSON.stringify(result);

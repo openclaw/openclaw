@@ -15,10 +15,7 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import {
-  isCliRuntimeAlias,
-  resolveCliRuntimeExecutionProvider,
-} from "../../agents/model-runtime-aliases.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveOpenAIRuntimeProviderForPi } from "../../agents/openai-codex-routing.js";
 import {
@@ -342,10 +339,13 @@ function extractCodexUsageLimitMessage(text: string): string | undefined {
     "You've reached your Codex subscription usage limit.",
     "Codex usage limit reached.",
   ];
-  const markerIndex = markers
-    .map((marker) => text.indexOf(marker))
-    .filter((index) => index >= 0)
-    .toSorted((left, right) => left - right)[0];
+  let markerIndex: number | undefined;
+  for (const marker of markers) {
+    const index = text.indexOf(marker);
+    if (index >= 0 && (markerIndex === undefined || index < markerIndex)) {
+      markerIndex = index;
+    }
+  }
   if (markerIndex === undefined) {
     return undefined;
   }
@@ -1404,15 +1404,12 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
-          const agentRuntimeOverride = normalizeOptionalString(
-            params.getActiveSessionEntry()?.agentRuntimeOverride,
-          );
           const cliExecutionProvider =
             resolveCliRuntimeExecutionProvider({
               provider,
               cfg: runtimeConfig,
               agentId: params.followupRun.run.agentId,
-              runtimeOverride: agentRuntimeOverride,
+              modelId: model,
             }) ?? provider;
 
           if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
@@ -1565,13 +1562,6 @@ export async function runAgentTurnWithFallback(params: {
               model,
             },
           );
-          const requestedAgentHarnessId =
-            agentRuntimeOverride &&
-            agentRuntimeOverride !== "auto" &&
-            agentRuntimeOverride !== "default" &&
-            !isCliRuntimeAlias(agentRuntimeOverride)
-              ? agentRuntimeOverride
-              : undefined;
           const agentHarnessPolicy = resolveAgentHarnessPolicy({
             provider,
             modelId: model,
@@ -1581,8 +1571,7 @@ export async function runAgentTurnWithFallback(params: {
           });
           const embeddedRunProvider = resolveOpenAIRuntimeProviderForPi({
             provider,
-            harnessRuntime: requestedAgentHarnessId ?? agentHarnessPolicy.runtime,
-            agentHarnessId: requestedAgentHarnessId,
+            harnessRuntime: agentHarnessPolicy.runtime,
             authProfileProvider: runBaseParams.authProfileId?.split(":", 1)[0],
             authProfileId: runBaseParams.authProfileId,
             config: runtimeConfig,
@@ -1607,7 +1596,6 @@ export async function runAgentTurnWithFallback(params: {
                 ...senderContext,
                 ...runBaseParams,
                 provider: embeddedRunProvider,
-                ...(requestedAgentHarnessId ? { agentHarnessId: requestedAgentHarnessId } : {}),
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
