@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
 import {
   __setRealtimeVoiceAgentConsultDepsForTest,
   consultRealtimeVoiceAgent,
@@ -35,10 +34,6 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
         accountId?: string;
         threadId?: string | number;
       };
-      lastChannel?: string;
-      lastTo?: string;
-      lastAccountId?: string;
-      lastThreadId?: string | number;
     }
   > = {};
   const runEmbeddedPiAgent = vi.fn(async () => ({
@@ -97,30 +92,6 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
     runEmbeddedPiAgent,
     sessionStore,
   };
-}
-
-function requireEmbeddedPiAgentCall(runEmbeddedPiAgent: {
-  mock: { calls: unknown[][] };
-}): RunEmbeddedPiAgentParams {
-  const [call] = runEmbeddedPiAgent.mock.calls;
-  if (!call) {
-    throw new Error("Expected embedded PI agent call");
-  }
-  const [params] = call;
-  if (typeof params !== "object" || params === null || Array.isArray(params)) {
-    throw new Error("Expected embedded PI agent params to be an object");
-  }
-  return params as RunEmbeddedPiAgentParams;
-}
-
-function expectPositiveTimestamp(value: unknown) {
-  expect(typeof value).toBe("number");
-  expect(value as number).toBeGreaterThan(0);
-}
-
-function expectNonEmptyString(value: unknown) {
-  expect(typeof value).toBe("string");
-  expect((value as string).trim()).not.toBe("");
 }
 
 describe("realtime voice agent consult runtime", () => {
@@ -356,9 +327,6 @@ describe("realtime voice agent consult runtime", () => {
         to: "channel:123",
         accountId: "default",
       },
-      lastChannel: "discord",
-      lastTo: "channel:123",
-      lastAccountId: "default",
     });
   });
 
