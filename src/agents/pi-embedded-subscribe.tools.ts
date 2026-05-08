@@ -1,7 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
-import { splitMediaFromOutput } from "../media/parse.js";
 import { pluginRegistrationContractRegistry } from "../plugins/contracts/registry.js";
 import {
   normalizeOptionalLowercaseString,
@@ -216,7 +215,7 @@ export function extractToolResultText(result: unknown): string | undefined {
   return texts.join("\n");
 }
 
-// Core tool names that are allowed to emit local MEDIA: paths.
+// Core tool names that are allowed to emit structured local media paths.
 // Plugin/MCP tools are intentionally excluded to prevent untrusted file reads.
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "agents_list",
@@ -287,19 +286,29 @@ export function isToolResultMediaTrusted(toolName?: string, result?: unknown): b
   );
 }
 
-function isTrustedOwnedTtsLocalMedia(toolName: string | undefined, result: unknown): boolean {
-  if (
-    !toolName ||
-    !isToolResultMediaTrusted(toolName, result) ||
-    normalizeToolName(toolName) !== "tts"
-  ) {
+export function isLocalToolResultMediaUrl(mediaUrl: string): boolean {
+  return !HTTP_URL_RE.test(mediaUrl.trim());
+}
+
+export function isToolResultLocalMediaTrusted(
+  toolName: string | undefined,
+  result?: unknown,
+  builtinToolNames?: ReadonlySet<string>,
+): boolean {
+  if (!isToolResultMediaTrusted(toolName, result)) {
     return false;
   }
-  const media = readToolResultDetails(result)?.media;
-  if (!media || typeof media !== "object" || Array.isArray(media)) {
-    return false;
+  // When the current run provides its exact registered tool names (core
+  // built-ins plus bundled/trusted plugin tools), require the raw emitted
+  // tool name to match one of them before allowing local MEDIA: paths.
+  // This blocks normalized aliases and case-variant collisions such as
+  // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
+  // registered tool's media trust.
+  if (builtinToolNames !== undefined) {
+    const registeredName = toolName?.trim();
+    return Boolean(registeredName && builtinToolNames.has(registeredName));
   }
-  return (media as Record<string, unknown>).trustedLocalMedia === true;
+  return true;
 }
 
 export function filterToolResultMediaUrls(
@@ -311,27 +320,10 @@ export function filterToolResultMediaUrls(
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
-  const trustedOwnedTtsLocalMedia = isTrustedOwnedTtsLocalMedia(toolName, result);
-  if (isToolResultMediaTrusted(toolName, result)) {
-    // When the current run provides its exact registered tool names (core
-    // built-ins plus bundled/trusted plugin tools), require the raw emitted
-    // tool name to match one of them before allowing local MEDIA: paths.
-    // This blocks normalized aliases and case-variant collisions such as
-    // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
-    // registered tool's media trust. TTS-generated local files carry a
-    // separate trusted-media flag from the owned tool result, so they can
-    // survive runs whose exact built-in set omitted the raw tts name.
-    if (builtinToolNames !== undefined) {
-      if (!trustedOwnedTtsLocalMedia) {
-        const registeredName = toolName?.trim();
-        if (!registeredName || !builtinToolNames.has(registeredName)) {
-          return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
-        }
-      }
-    }
+  if (isToolResultLocalMediaTrusted(toolName, result, builtinToolNames)) {
     return mediaUrls;
   }
-  return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+  return mediaUrls.filter((url) => !isLocalToolResultMediaUrl(url));
 }
 
 /**
@@ -339,8 +331,10 @@ export function filterToolResultMediaUrls(
  *
  * Strategy (first match wins):
  * 1. Read structured `details.media` attachments from tool details.
- * 2. Parse `MEDIA:` directive tokens from text content blocks.
- * 3. Fall back to `details.path` when image content exists (legacy imageResult).
+ * 2. Fall back to `details.path` when image content exists (legacy imageResult).
+ *
+ * Raw textual `MEDIA:` tokens in tool output are intentionally inert here;
+ * only current final assistant replies may activate raw text directives.
  *
  * Returns an empty array when no media is found (e.g. Pi SDK `read` tool
  * returns base64 image data but no file path; those need a different delivery
@@ -379,44 +373,6 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
   return Array.from(new Set(urls));
 }
 
-function extractTextContentMediaArtifact(content: unknown[]): {
-  mediaUrls: string[];
-  audioAsVoice?: boolean;
-  hasImageContent: boolean;
-} {
-  const mediaUrls: string[] = [];
-  let audioAsVoice = false;
-  let hasImageContent = false;
-
-  for (const item of content) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
-    const entry = item as Record<string, unknown>;
-    if (entry.type === "image") {
-      hasImageContent = true;
-      continue;
-    }
-    if (entry.type !== "text" || typeof entry.text !== "string") {
-      continue;
-    }
-
-    const parsed = splitMediaFromOutput(entry.text);
-    if (parsed.audioAsVoice) {
-      audioAsVoice = true;
-    }
-    if (parsed.mediaUrls?.length) {
-      mediaUrls.push(...parsed.mediaUrls);
-    }
-  }
-
-  return {
-    mediaUrls,
-    ...(audioAsVoice ? { audioAsVoice: true } : {}),
-    hasImageContent,
-  };
-}
-
 export function extractToolResultMediaArtifact(
   result: unknown,
 ): ToolResultMediaArtifact | undefined {
@@ -441,18 +397,20 @@ export function extractToolResultMediaArtifact(
     return undefined;
   }
 
-  const textMedia = extractTextContentMediaArtifact(content);
-
-  if (textMedia.mediaUrls.length > 0) {
-    return {
-      mediaUrls: textMedia.mediaUrls,
-      ...(textMedia.audioAsVoice ? { audioAsVoice: true } : {}),
-    };
+  let hasImageContent = false;
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (entry.type === "image") {
+      hasImageContent = true;
+    }
   }
 
   // Fall back to legacy details.path when image content exists but no
-  // structured media details or MEDIA: text.
-  if (textMedia.hasImageContent) {
+  // structured media details.
+  if (hasImageContent) {
     const details = record.details as Record<string, unknown> | undefined;
     const p = normalizeOptionalString(details?.path) ?? "";
     if (p) {

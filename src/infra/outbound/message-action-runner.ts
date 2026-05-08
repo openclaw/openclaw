@@ -628,7 +628,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     message = caption;
   }
 
-  const parsed = parseReplyDirectives(message);
+  const parsed = parseReplyDirectives(message, { mediaDirectives: "strip" });
   const mergedMediaUrls: string[] = [];
   const seenMedia = new Set<string>();
   const pushMedia = (value?: string | null) => {

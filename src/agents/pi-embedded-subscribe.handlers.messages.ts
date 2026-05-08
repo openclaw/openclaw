@@ -561,7 +561,9 @@ export function handleMessageUpdate(
     if (shouldUsePhaseAwareBlockReply) {
       recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
     }
-    const parsedFull = parseReplyDirectives(splitTrailingDirective(next).text);
+    const parsedFull = parseReplyDirectives(splitTrailingDirective(next).text, {
+      mediaDirectives: "extract",
+    });
     const cleanedText = parsedFull.text;
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
     const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
@@ -695,7 +697,9 @@ export function handleMessageEnd(
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
   const trimmedText = text.trim();
   const parsedText = trimmedText
-    ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
+    ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text, {
+        mediaDirectives: "extract",
+      })
     : null;
   let cleanedText = parsedText?.text ?? "";
   let { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});

@@ -266,7 +266,7 @@ export function buildEmbeddedRunPayloads(params: {
         replyToId,
         replyToTag,
         replyToCurrent,
-      } = parseReplyDirectives(agg);
+      } = parseReplyDirectives(agg, { mediaDirectives: "strip" });
       if (cleanedText) {
         replyItems.push({
           text: cleanedText,
@@ -344,12 +344,12 @@ export function buildEmbeddedRunPayloads(params: {
     return isRawApiErrorPayload(trimmed);
   };
   const rawAnswerDirectiveState = fallbackRawAnswerText
-    ? parseReplyDirectives(fallbackRawAnswerText)
+    ? parseReplyDirectives(fallbackRawAnswerText, { mediaDirectives: "extract" })
     : null;
   const rawAnswerHasMedia =
     (rawAnswerDirectiveState?.mediaUrls?.length ?? 0) > 0 || rawAnswerDirectiveState?.audioAsVoice;
   const assistantTextsHaveMedia = params.assistantTexts.some((text) => {
-    const parsed = parseReplyDirectives(text);
+    const parsed = parseReplyDirectives(text, { mediaDirectives: "extract" });
     return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
   });
   const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
@@ -384,7 +384,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
-    } = parseReplyDirectives(text);
+    } = parseReplyDirectives(text, { mediaDirectives: "extract" });
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }
@@ -427,7 +427,9 @@ export function buildEmbeddedRunPayloads(params: {
         warningPolicy.includeDetails && params.lastToolError.error
           ? `: ${params.lastToolError.error}`
           : "";
-      const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
+      const warningText = parseReplyDirectives(`⚠️ ${toolSummary} failed${errorSuffix}`, {
+        mediaDirectives: "strip",
+      }).text;
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning
         ? replyItems.some((item) => {

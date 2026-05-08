@@ -59,6 +59,7 @@ type OutboundPayloadPlanContext = {
   sessionKey?: string;
   surface?: string;
   conversationType?: SilentReplyConversationType;
+  mediaDirectives?: "extract" | "strip";
   /**
    * When true, bare silent payloads are dropped instead of being rewritten to
    * visible fallback text. Set by callers that know the parent session has at
@@ -132,12 +133,13 @@ type PreparedOutboundPayloadPlanEntry = {
 
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
-  context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
+  context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages" | "mediaDirectives"> = {},
 ): PreparedOutboundPayloadPlanEntry | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
   const parsed = parseReplyDirectives(payload.text ?? "", {
+    mediaDirectives: context.mediaDirectives ?? "strip",
     extractMarkdownImages: context.extractMarkdownImages,
   });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
@@ -199,6 +201,7 @@ export function createOutboundPayloadPlan(
   for (const payload of payloads) {
     const entry = createOutboundPayloadPlanEntry(payload, {
       extractMarkdownImages: context.extractMarkdownImages,
+      mediaDirectives: context.mediaDirectives,
     });
     if (!entry) {
       continue;

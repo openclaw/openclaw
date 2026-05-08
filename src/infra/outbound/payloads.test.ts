@@ -31,7 +31,7 @@ function resolveMirrorProjection(payloads: readonly ReplyPayload[]) {
 }
 
 describe("normalizeReplyPayloadsForDelivery", () => {
-  it("parses directives, merges media, and preserves reply metadata", () => {
+  it("strips raw media directives while preserving explicit media and reply metadata", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
         {
@@ -39,6 +39,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           mediaUrl: " https://x.test/a.png ",
           mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
           replyToTag: false,
+          audioAsVoice: true,
         },
       ]),
     ).toEqual([
@@ -99,6 +100,27 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       {
         text: "Please update wiki/tools.md after this ships.",
         mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: undefined,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
+  it("preserves explicit media fields without activating raw media in payload text", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        {
+          text: "Tool log\nMEDIA:/tmp/secret.png\nDone",
+          mediaUrls: ["https://x.test/structured.png"],
+        },
+      ]),
+    ).toEqual([
+      {
+        text: "Tool log\nDone",
+        mediaUrls: ["https://x.test/structured.png"],
         mediaUrl: undefined,
         replyToId: undefined,
         replyToCurrent: undefined,
@@ -417,11 +439,9 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           "text": "",
         },
         {
-          "audioAsVoice": true,
-          "mediaUrl": "https://x.test/m2.png",
-          "mediaUrls": [
-            "https://x.test/m2.png",
-          ],
+          "audioAsVoice": false,
+          "mediaUrl": undefined,
+          "mediaUrls": undefined,
           "replyToCurrent": undefined,
           "replyToId": "444",
           "replyToTag": true,
@@ -532,21 +552,13 @@ describe("normalizeOutboundPayloadsForJson", () => {
         ],
       },
       {
-        name: "MEDIA directive extraction",
+        name: "raw MEDIA directive text is inert",
         input: [
           {
             text: "MEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png",
           },
         ],
-        expected: [
-          {
-            text: "",
-            mediaUrl: null,
-            mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
-            audioAsVoice: undefined,
-            channelData: undefined,
-          },
-        ],
+        expected: [],
       },
     ]),
   )("$name", ({ input, expected }) => {

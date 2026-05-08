@@ -36,6 +36,7 @@ export function normalizeReplyPayloadDirectives(params: {
         currentMessageId: params.currentMessageId,
         silentToken,
         extractMarkdownImages: params.extractMarkdownImages,
+        mediaDirectives: "extract",
       })
     : undefined;
 

@@ -13,19 +13,41 @@ export type ReplyDirectiveParseResult = {
   isSilent: boolean;
 };
 
+export type MediaDirectiveParseMode = "extract" | "strip" | "ignore";
+
 export type ReplyDirectiveParseOptions = {
   currentMessageId?: string;
   silentToken?: string;
   extractMarkdownImages?: boolean;
+  /**
+   * Raw textual MEDIA: lines are authority-bearing only at final-reply boundaries.
+   * Use "strip" for tool/log/diagnostic text that should be rendered without
+   * activating raw media directives, and "ignore" when MEDIA-looking text
+   * should remain visible.
+   */
+  mediaDirectives?: MediaDirectiveParseMode;
 };
 
 export function parseReplyDirectives(
   raw: string,
   options: ReplyDirectiveParseOptions = {},
 ): ReplyDirectiveParseResult {
-  const split = splitMediaFromOutput(raw, {
-    extractMarkdownImages: options.extractMarkdownImages,
-  });
+  const mediaDirectiveMode = options.mediaDirectives ?? "extract";
+  const split = (() => {
+    if (mediaDirectiveMode === "ignore") {
+      return { text: raw };
+    }
+    if (mediaDirectiveMode === "strip") {
+      const stripped = splitMediaFromOutput(raw, { extractMarkdownImages: false });
+      if (options.extractMarkdownImages !== true) {
+        return { text: stripped.text };
+      }
+      return splitMediaFromOutput(stripped.text, { extractMarkdownImages: true });
+    }
+    return splitMediaFromOutput(raw, {
+      extractMarkdownImages: options.extractMarkdownImages,
+    });
+  })();
   let text = split.text ?? "";
 
   const replyParsed = parseInlineDirectives(text, {
@@ -44,14 +66,17 @@ export function parseReplyDirectives(
     text = "";
   }
 
+  const exposeMediaDirectives =
+    mediaDirectiveMode === "extract" ||
+    (mediaDirectiveMode === "strip" && options.extractMarkdownImages === true);
   return {
     text,
-    mediaUrls: split.mediaUrls,
-    mediaUrl: split.mediaUrl,
+    mediaUrls: exposeMediaDirectives ? split.mediaUrls : undefined,
+    mediaUrl: exposeMediaDirectives ? split.mediaUrl : undefined,
     replyToId: replyParsed.replyToId,
     replyToCurrent: replyParsed.replyToCurrent || undefined,
     replyToTag: replyParsed.hasReplyTag,
-    audioAsVoice: split.audioAsVoice,
+    audioAsVoice: mediaDirectiveMode === "extract" ? split.audioAsVoice : undefined,
     isSilent,
   };
 }

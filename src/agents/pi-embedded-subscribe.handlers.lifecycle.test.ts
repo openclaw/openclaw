@@ -34,6 +34,7 @@ function createContext(
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: false,
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       blockState: {
         thinking: true,
@@ -341,15 +342,18 @@ describe("handleAgentEnd", () => {
     const ctx = createContext(undefined);
     ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
     ctx.state.pendingToolAudioAsVoice = true;
+    ctx.state.pendingToolTrustedLocalMedia = true;
 
     await handleAgentEnd(ctx);
 
     expect(ctx.emitBlockReply).toHaveBeenCalledWith({
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
+      trustedLocalMedia: true,
     });
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+    expect(ctx.state.pendingToolTrustedLocalMedia).toBe(false);
   });
 
   it("preserves orphaned tool media when no block reply callback is configured", async () => {

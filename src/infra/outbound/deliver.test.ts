@@ -2194,16 +2194,13 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it("normalizes payloads and drops empty entries", () => {
+  it("normalizes payloads, strips raw media directives, and drops empty entries", () => {
     const normalized = normalizeOutboundPayloads([
       { text: "hi" },
       { text: "MEDIA:https://x.test/a.jpg" },
       { text: " ", mediaUrls: [] },
     ]);
-    expect(normalized).toEqual([
-      { text: "hi", mediaUrls: [] },
-      { text: "", mediaUrls: ["https://x.test/a.jpg"] },
-    ]);
+    expect(normalized).toEqual([{ text: "hi", mediaUrls: [], audioAsVoice: undefined }]);
   });
 
   it("continues on errors when bestEffort is enabled", async () => {

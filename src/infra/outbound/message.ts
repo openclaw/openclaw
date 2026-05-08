@@ -328,7 +328,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
             audioAsVoice: params.asVoice === true,
           },
         ];
-  const outboundPlan = createOutboundPayloadPlan(outboundPayloads);
+  const outboundPlan = createOutboundPayloadPlan(outboundPayloads, { mediaDirectives: "extract" });
   const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPlan);
   const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPlan);
   const mirrorText = mirrorProjection.text;

@@ -13,6 +13,7 @@ import {
 } from "../../infra/outbound/outbound-session.js";
 import {
   createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
@@ -478,7 +479,10 @@ export const sendHandlers: GatewayRequestHandlers = {
             ...(request.asVoice === true ? { audioAsVoice: true } : {}),
           },
         ];
-        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
+        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads, {
+          mediaDirectives: "extract",
+        });
+        const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPayloadPlan);
         const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
         const mirrorText = mirrorProjection.text;
         const mirrorMediaUrls = mirrorProjection.mediaUrls;
@@ -543,7 +547,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           channel: outboundChannel,
           to: deliveryTarget,
           accountId,
-          payloads: outboundPayloads,
+          payloads: normalizedPayloads,
           replyToId: replyToId ?? null,
           session: outboundSession,
           gifPlayback: request.gifPlayback,

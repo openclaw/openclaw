@@ -242,7 +242,13 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        payloads: [{ text: "", mediaUrl: "https://example.com/a.png", mediaUrls: undefined }],
+        payloads: [
+          expect.objectContaining({
+            text: "",
+            mediaUrl: "https://example.com/a.png",
+            mediaUrls: ["https://example.com/a.png"],
+          }),
+        ],
       }),
     );
     expect(respond).toHaveBeenCalledWith(
@@ -269,11 +275,11 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({
         channel: "whatsapp",
         payloads: [
-          {
+          expect.objectContaining({
             text: "caption",
             mediaUrl: "file:///tmp/workspace/photo.png",
-            mediaUrls: undefined,
-          },
+            mediaUrls: ["file:///tmp/workspace/photo.png"],
+          }),
         ],
         session: expect.objectContaining({
           agentId: "work",
