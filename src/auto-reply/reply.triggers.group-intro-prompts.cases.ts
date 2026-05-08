@@ -15,7 +15,13 @@ export function registerGroupIntroPromptCases(): void {
       setup?: (cfg: ReturnType<typeof makeCfg>) => void;
     };
     const groupParticipationNote =
-      "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
+      "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human in chat: concise by default, usually one compact paragraph, no walls of text, sparse bullets, no tables, and line breaks only when they clearly help.";
+    const groupLinkPreviewNote =
+      "Use link previews thoughtfully: one relevant link can preview; if your reply has two or more links, suppress previews for all of them where the chat app supports it.";
+    const discordLinkPreviewNote =
+      "Discord: suppress multi-link previews by wrapping each URL in angle brackets, for example <https://example.com>.";
+    const groupLinkedReferenceNote =
+      "Prefer linked labels over pasted raw URLs: link the human-readable identifier or title, such as a PR, issue, commit, release, doc, ticket, article, or dashboard.";
     const groupSilentNote =
       'If no response is needed, reply with exactly "NO_REPLY" (and nothing else) so OpenClaw stays silent.';
     const groupSilentProseGuard =
@@ -35,6 +41,9 @@ export function registerGroupIntroPromptCases(): void {
         expected: [
           "You are in a Discord group chat.",
           groupParticipationNote,
+          groupLinkPreviewNote,
+          discordLinkPreviewNote,
+          groupLinkedReferenceNote,
           groupSilentNote,
           groupSilentProseGuard,
           "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.",
@@ -53,6 +62,8 @@ export function registerGroupIntroPromptCases(): void {
         expected: [
           "You are in a WhatsApp group chat. Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
           groupParticipationNote,
+          groupLinkPreviewNote,
+          groupLinkedReferenceNote,
           groupSilentNote,
           groupSilentProseGuard,
           "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.",
@@ -71,6 +82,8 @@ export function registerGroupIntroPromptCases(): void {
         expected: [
           "You are in a Telegram group chat.",
           groupParticipationNote,
+          groupLinkPreviewNote,
+          groupLinkedReferenceNote,
           groupSilentNote,
           groupSilentProseGuard,
           "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.",

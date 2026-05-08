@@ -243,12 +243,20 @@ export function buildGroupChatContext(params: {
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
   );
   lines.push(
-    "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.",
+    "Write like a human in chat: concise by default, usually one compact paragraph, no walls of text, sparse bullets, no tables, and line breaks only when they clearly help.",
+  );
+  lines.push(
+    "Use link previews thoughtfully: one relevant link can preview; if your reply has two or more links, suppress previews for all of them where the chat app supports it.",
+  );
+  if (normalizeOptionalLowercaseString(params.sessionCtx.Provider) === "discord") {
+    lines.push(
+      "Discord: suppress multi-link previews by wrapping each URL in angle brackets, for example <https://example.com>.",
+    );
+  }
+  lines.push(
+    "Prefer linked labels over pasted raw URLs: link the human-readable identifier or title, such as a PR, issue, commit, release, doc, ticket, article, or dashboard.",
   );
   lines.push("If addressed to someone else, stay silent unless invited or correcting key facts.");
-  if (normalizeOptionalLowercaseString(params.sessionCtx.Provider) === "discord") {
-    lines.push("Discord: wrap bare URLs like <https://example.com> to suppress embeds.");
-  }
   lines.push(
     "When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value.",
   );
