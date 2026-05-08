@@ -325,7 +325,7 @@ describe("commands.list handler", () => {
   it("omits plugin commands when provider lacks nativeCommandsAutoEnabled", () => {
     const { payload } = callHandler({ provider: "whatsapp" });
     const { commands } = payload as { commands: Array<{ name: string; source: string }> };
-    expect(commands.filter((c) => c.source === "plugin")).toEqual([]);
+    expect(commands.some((c) => c.source === "plugin")).toBe(false);
   });
 
   it("uses text-surface names when scope=text even with provider-native aliases", () => {
