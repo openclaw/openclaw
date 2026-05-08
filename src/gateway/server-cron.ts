@@ -251,6 +251,8 @@ export function buildGatewayCronService(params: {
 
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const runLogPrune = resolveCronRunLogPruneOptions(params.cfg.cron?.runLog);
+  const warnedLegacyWebhookJobs = new Set<string>();
+
   const runCronChangedHook = (evt: PluginHookCronChangedEvent) => {
     const hookRunner = getGlobalHookRunner();
     if (!hookRunner?.hasHooks("cron_changed")) {
