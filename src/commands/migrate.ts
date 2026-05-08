@@ -60,7 +60,6 @@ type StateMigrationPlanSummary = {
   sessions: boolean;
   agentDir: boolean;
   channelPlans: number;
-  sqliteTables: number;
 };
 
 type StateMigrationPlanOutput = {
@@ -242,14 +241,12 @@ function summarizeStateMigrationPlan(
   const total =
     (detected.sessions.hasLegacy ? 1 : 0) +
     (detected.agentDir.hasLegacy ? 1 : 0) +
-    detected.channelPlans.plans.length +
-    detected.sqlite.legacyTables.length;
+    detected.channelPlans.plans.length;
   return {
     total,
     sessions: detected.sessions.hasLegacy,
     agentDir: detected.agentDir.hasLegacy,
     channelPlans: detected.channelPlans.plans.length,
-    sqliteTables: detected.sqlite.legacyTables.length,
   };
 }
 

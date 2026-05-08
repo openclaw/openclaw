@@ -55,7 +55,7 @@ export interface CaptureBlobs {
   blob_id: string;
   content_type: string | null;
   created_at: number;
-  data: Buffer;
+  data: Uint8Array;
   encoding: string;
   sha256: string;
   size_bytes: number;
@@ -186,7 +186,7 @@ export interface Kv {
 }
 
 export interface MediaBlobs {
-  blob: Buffer;
+  blob: Uint8Array;
   content_type: string | null;
   created_at: number;
   id: string;
@@ -221,7 +221,7 @@ export interface MigrationSources {
 }
 
 export interface PluginBlobEntries {
-  blob: Buffer;
+  blob: Uint8Array;
   created_at: number;
   entry_key: string;
   expires_at: number | null;

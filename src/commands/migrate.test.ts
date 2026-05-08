@@ -242,13 +242,8 @@ function stateDetection(overrides: Record<string, unknown> = {}) {
       hasLegacy: false,
       plans: [],
     },
-    sqlite: {
-      hasLegacy: true,
-      legacyTables: ["session_entries"],
-    },
     preview: [
       "- Sessions: /tmp/openclaw-migrate-command-test/sessions -> /tmp/openclaw-migrate-command-test/agents/main/sessions",
-      "- SQLite: move global agent-owned table(s) into per-agent databases: session_entries",
     ],
     ...overrides,
   };
@@ -308,9 +303,9 @@ describe("migrateApplyCommand", () => {
 
     const result = await migrateStatePlanCommand(jsonRuntime);
 
-    expect(result.summary).toMatchObject({ total: 2, sessions: true, sqliteTables: 1 });
+    expect(result.summary).toMatchObject({ total: 1, sessions: true });
     expect(logs.join("\n")).toContain("Legacy OpenClaw state migration plan for agent main");
-    expect(logs.join("\n")).toContain("session_entries");
+    expect(logs.join("\n")).toContain("Sessions:");
   });
 
   it("applies legacy state migration after a verified backup", async () => {

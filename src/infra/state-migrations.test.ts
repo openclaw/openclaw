@@ -6,10 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadSqliteSessionEntries } from "../config/sessions/store-backend.sqlite.js";
 import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -668,109 +665,5 @@ describe("state migrations", () => {
       },
     });
     await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("moves old global agent-owned SQLite rows into per-agent databases", async () => {
-    const { root, env, cfg } = await createLegacyStateFixture();
-    const stateDatabase = openOpenClawStateDatabase({ env });
-    stateDatabase.db.exec(`
-      CREATE TABLE session_entries (
-        agent_id TEXT NOT NULL,
-        session_key TEXT NOT NULL,
-        entry_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (agent_id, session_key)
-      );
-      CREATE TABLE transcript_events (
-        agent_id TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        seq INTEGER NOT NULL,
-        event_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (agent_id, session_id, seq)
-      );
-      CREATE TABLE vfs_entries (
-        agent_id TEXT NOT NULL,
-        namespace TEXT NOT NULL,
-        path TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        content_blob BLOB,
-        metadata_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (agent_id, namespace, path)
-      );
-      CREATE TABLE tool_artifacts (
-        agent_id TEXT NOT NULL,
-        run_id TEXT NOT NULL,
-        artifact_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        metadata_json TEXT NOT NULL,
-        blob BLOB,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (agent_id, run_id, artifact_id)
-      );
-    `);
-    stateDatabase.db
-      .prepare("INSERT INTO session_entries VALUES (?, ?, ?, ?)")
-      .run("worker-1", "agent:worker-1:legacy", '{"sessionId":"global-session"}', 10);
-    stateDatabase.db
-      .prepare("INSERT INTO transcript_events VALUES (?, ?, ?, ?, ?)")
-      .run("worker-1", "global-transcript", 0, '{"type":"session","id":"global-transcript"}', 11);
-    stateDatabase.db
-      .prepare("INSERT INTO vfs_entries VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run("worker-1", "workspace", "/note.txt", "file", Buffer.from("hello"), "{}", 12);
-    stateDatabase.db
-      .prepare("INSERT INTO tool_artifacts VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run("worker-1", "run-1", "artifact-1", "blob", "{}", Buffer.from("artifact"), 13);
-
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env,
-      homedir: () => root,
-      includeSessions: false,
-      includeChannelPlans: false,
-    });
-    const result = await runLegacyStateMigrations({
-      detected,
-      now: () => 1234,
-    });
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        "Migrated 1 global session row(s) into per-agent SQLite databases.",
-        "Migrated 1 global transcript event row(s) into per-agent SQLite databases.",
-        "Migrated 1 global VFS row(s) into per-agent SQLite databases.",
-        "Migrated 1 global tool artifact row(s) into per-agent SQLite databases.",
-      ]),
-    );
-    const agentDatabase = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(
-      agentDatabase.db
-        .prepare("SELECT entry_json FROM session_entries WHERE session_key = ?")
-        .get("agent:worker-1:legacy"),
-    ).toMatchObject({ entry_json: '{"sessionId":"global-session"}' });
-    expect(
-      agentDatabase.db
-        .prepare("SELECT event_json FROM transcript_events WHERE session_id = ?")
-        .get("global-transcript"),
-    ).toMatchObject({ event_json: '{"type":"session","id":"global-transcript"}' });
-    expect(
-      agentDatabase.db
-        .prepare("SELECT kind FROM vfs_entries WHERE namespace = ? AND path = ?")
-        .get("workspace", "/note.txt"),
-    ).toMatchObject({ kind: "file" });
-    expect(
-      agentDatabase.db
-        .prepare("SELECT kind FROM tool_artifacts WHERE run_id = ? AND artifact_id = ?")
-        .get("run-1", "artifact-1"),
-    ).toMatchObject({ kind: "blob" });
-    for (const table of ["session_entries", "transcript_events", "vfs_entries", "tool_artifacts"]) {
-      expect(
-        stateDatabase.db
-          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-          .get(table),
-      ).toBeUndefined();
-    }
   });
 });

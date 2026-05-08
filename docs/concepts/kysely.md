@@ -77,6 +77,7 @@ DATABASE_URL="$tmp_db" pnpm dlx \
   --package better-sqlite3 \
   kysely-codegen \
   --dialect sqlite \
+  --type-mapping '{"blob":"Uint8Array"}' \
   --out-file src/path/to/db.generated.d.ts
 ```
 
@@ -98,6 +99,9 @@ Rules:
   review the diff.
 - Use the same command with `--verify` in CI or a local check when generated
   types are committed.
+- Map SQLite `blob` columns to `Uint8Array` for native `node:sqlite` stores.
+  `node:sqlite` returns BLOB values as `Uint8Array`; wrap them in
+  `Buffer.from(...)` at API boundaries that need `Buffer` helpers.
 - For OpenClaw's native `node:sqlite` runtime, keep codegen as a dev-time tool.
   The codegen command uses `better-sqlite3` only because `kysely-codegen`'s
   SQLite introspector loads that driver. The runtime adapter remains

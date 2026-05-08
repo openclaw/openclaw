@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable } from "kysely";
-import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -362,7 +361,7 @@ export class DebugProxyCaptureStore {
   }
 
   readBlob(blobId: string): string | null {
-    const row = executeSqliteQueryTakeFirstSync<{ data: Buffer }>(
+    const row = executeSqliteQueryTakeFirstSync<{ data: Uint8Array }>(
       this.db,
       getCaptureKysely(this.db)
         .selectFrom("capture_blobs")
@@ -516,7 +515,7 @@ export class DebugProxyCaptureStore {
         this.db,
         db
           .selectFrom("capture_events")
-          .select(sql<number>`COUNT(*)`.as("count"))
+          .select((eb) => eb.fn.countAll<number>().as("count"))
           .where("session_id", "in", uniqueSessionIds),
       )?.count ?? 0;
     const sessionCount =
@@ -524,7 +523,7 @@ export class DebugProxyCaptureStore {
         this.db,
         db
           .selectFrom("capture_sessions")
-          .select(sql<number>`COUNT(*)`.as("count"))
+          .select((eb) => eb.fn.countAll<number>().as("count"))
           .where("id", "in", uniqueSessionIds),
       )?.count ?? 0;
     executeSqliteQuerySync(

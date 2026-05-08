@@ -10,6 +10,10 @@ import {
 } from "./kysely-sync.js";
 
 type TestDatabase = {
+  blob_entry: {
+    id: Generated<number>;
+    data: Uint8Array;
+  };
   person: {
     id: Generated<number>;
     name: string;
@@ -134,6 +138,27 @@ describe("NodeSqliteKyselyDialect", () => {
       clearNodeSqliteKyselyCacheForDatabase(sqlite);
       sqlite.close();
     }
+  });
+
+  it("returns SQLite blobs as Uint8Array values", async () => {
+    db = new Kysely<TestDatabase>({
+      dialect: new NodeSqliteKyselyDialect({
+        database: new DatabaseSync(":memory:"),
+      }),
+    });
+    await db.schema
+      .createTable("blob_entry")
+      .addColumn("id", "integer", (col) => col.primaryKey().autoIncrement())
+      .addColumn("data", "blob", (col) => col.notNull())
+      .execute();
+
+    const input = Buffer.from([1, 2, 3, 4]);
+    await db.insertInto("blob_entry").values({ data: input }).execute();
+
+    const row = await db.selectFrom("blob_entry").select("data").executeTakeFirstOrThrow();
+    expect(row.data).toBeInstanceOf(Uint8Array);
+    expect(Buffer.isBuffer(row.data)).toBe(false);
+    expect(Buffer.from(row.data)).toEqual(input);
   });
 
   it("rolls back transactions and controlled savepoints", async () => {

@@ -31,6 +31,7 @@ const SCHEMAS = [
 ];
 
 const verify = process.argv.includes("--verify") || process.argv.includes("--check");
+const SQLITE_TYPE_MAPPING = JSON.stringify({ blob: "Uint8Array" });
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -87,6 +88,8 @@ function generate(schema) {
         "kysely-codegen",
         "--dialect",
         "sqlite",
+        "--type-mapping",
+        SQLITE_TYPE_MAPPING,
         "--out-file",
         tmpOut,
       ],
