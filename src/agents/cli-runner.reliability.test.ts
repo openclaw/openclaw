@@ -32,6 +32,14 @@ vi.mock("../tts/tts.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
+// Stub the bundled-plugin facade so isClaudeCliProvider works in unit
+// tests without loading the real anthropic plugin assets. Required by the
+// in-runner poisoned-resume timeout retry path (#79365).
+vi.mock("../plugin-sdk/anthropic-cli.js", () => ({
+  CLAUDE_CLI_BACKEND_ID: "claude-cli",
+  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
+}));
+
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
 
@@ -108,16 +116,29 @@ function buildPreparedContext(params?: {
   runId?: string;
   lane?: string;
   openClawHistoryPrompt?: string;
+  provider?: "codex-cli" | "claude-cli";
 }): PreparedCliRunContext {
-  const backend = {
-    command: "codex",
-    args: ["exec", "--json"],
-    output: "text" as const,
-    input: "arg" as const,
-    modelArg: "--model",
-    sessionMode: "existing" as const,
-    serialize: true,
-  };
+  const provider = params?.provider ?? "codex-cli";
+  const backend =
+    provider === "claude-cli"
+      ? {
+          command: "claude",
+          args: ["-p", "--output-format", "text"],
+          output: "text" as const,
+          input: "arg" as const,
+          modelArg: "--model",
+          sessionMode: "existing" as const,
+          serialize: true,
+        }
+      : {
+          command: "codex",
+          args: ["exec", "--json"],
+          output: "text" as const,
+          input: "arg" as const,
+          modelArg: "--model",
+          sessionMode: "existing" as const,
+          serialize: true,
+        };
   return {
     params: {
       sessionId: "s1",
@@ -125,8 +146,8 @@ function buildPreparedContext(params?: {
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",
-      provider: "codex-cli",
-      model: "gpt-5.4",
+      provider,
+      model: provider === "claude-cli" ? "opus" : "gpt-5.4",
       thinkLevel: "low",
       timeoutMs: 1_000,
       runId: params?.runId ?? "run-2",
@@ -135,18 +156,18 @@ function buildPreparedContext(params?: {
     started: Date.now(),
     workspaceDir: "/tmp",
     backendResolved: {
-      id: "codex-cli",
+      id: provider,
       config: backend,
       bundleMcp: false,
-      pluginId: "openai",
+      pluginId: provider === "claude-cli" ? "anthropic" : "openai",
     },
     preparedBackend: {
       backend,
       env: {},
     },
     reusableCliSession: params?.cliSessionId ? { sessionId: params.cliSessionId } : {},
-    modelId: "gpt-5.4",
-    normalizedModel: "gpt-5.4",
+    modelId: provider === "claude-cli" ? "opus" : "gpt-5.4",
+    normalizedModel: provider === "claude-cli" ? "opus" : "gpt-5.4",
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
@@ -351,6 +372,194 @@ describe("runCliAgent reliability", () => {
         }),
         expect.any(Object),
       );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Regression tests for #79365 — resume-watchdog cascade. Mirrors the
+  // existing session_expired in-runner retry contract: when a resumed
+  // claude-cli session is killed by the no-output watchdog (timeout
+  // FailoverError) and we have a sessionKey + sessionId, retry the same
+  // attempt cold (no --resume) so a single agent_end hook fires with the
+  // final result. Hook ordering must stay consistent (no failed agent_end
+  // followed by a successful return), which is why this lives in the
+  // runner and not the outer attempt-execution layer.
+  it("retries cold (no --resume) when a resumed claude-cli session hits the no-output watchdog (#79365)", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => ["llm_input", "agent_end"].includes(hookName)),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    supervisorSpawnMock.mockClear();
+    // First attempt: poisoned resume hangs and watchdog kills it.
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+    // Second attempt (cold): clean recovery with a fresh sessionId.
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello after cold restart",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      const result = await runPreparedCliAgent({
+        ...buildPreparedContext({
+          provider: "claude-cli",
+          sessionKey: "agent:main:subagent:resume-cascade",
+          cliSessionId: "poisoned-cli-session",
+          runId: "run-resume-cascade",
+        }),
+        params: {
+          ...buildPreparedContext({
+            provider: "claude-cli",
+            sessionKey: "agent:main:subagent:resume-cascade",
+            cliSessionId: "poisoned-cli-session",
+            runId: "run-resume-cascade",
+          }).params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello after cold restart" }]);
+      // Both attempts ran: first with --resume <id>, second cold.
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+      // Exactly one agent_end hook event fires — with success: true — so
+      // hook consumers do not see a failed-then-succeeded sequence.
+      await vi.waitFor(() => {
+        expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+      });
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true }),
+        expect.any(Object),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retry on no-output watchdog timeout when there is no resumed claude-cli session", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => ["llm_input", "agent_end"].includes(hookName)),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      await expect(
+        runPreparedCliAgent({
+          ...buildPreparedContext({
+            provider: "claude-cli",
+            sessionKey: "agent:main:subagent:cold-timeout",
+            // No cliSessionId — cold start.
+            runId: "run-cold-timeout",
+          }),
+          params: {
+            ...buildPreparedContext({
+              provider: "claude-cli",
+              sessionKey: "agent:main:subagent:cold-timeout",
+              runId: "run-cold-timeout",
+            }).params,
+            agentId: "main",
+            sessionFile,
+            workspaceDir: dir,
+          },
+        }),
+      ).rejects.toThrow("produced no output");
+      // Only one attempt — there was no poisoned resume id to discard.
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retry non-claude-cli providers on watchdog timeout, even with a resume id", async () => {
+    // The resume cascade fix is scoped to claude-cli; a codex-cli
+    // (or other) provider that times out with a resume id should not
+    // get the cold-restart retry, preserving the historical contract.
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => ["llm_input", "agent_end"].includes(hookName)),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      await expect(
+        runPreparedCliAgent({
+          ...buildPreparedContext({
+            provider: "codex-cli",
+            sessionKey: "agent:main:subagent:codex-timeout",
+            cliSessionId: "codex-thread-123",
+            runId: "run-codex-timeout",
+          }),
+          params: {
+            ...buildPreparedContext({
+              provider: "codex-cli",
+              sessionKey: "agent:main:subagent:codex-timeout",
+              cliSessionId: "codex-thread-123",
+              runId: "run-codex-timeout",
+            }).params,
+            agentId: "main",
+            sessionFile,
+            workspaceDir: dir,
+          },
+        }),
+      ).rejects.toThrow("produced no output");
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -227,6 +227,118 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
+  // Regression test for #79365 — resume-watchdog cascade.
+  // Before the fix, a no-output watchdog kill on a resumed claude-cli session
+  // surfaced as `FailoverError reason=timeout` and left the persisted
+  // sessionId untouched, so every following turn re-resumed the same
+  // poisoned transcript and timed out again (5 wasted 180s windows seen in
+  // production). After the fix, the same code path that already clears the
+  // binding for `session_expired` also clears it for a resumed claude-cli
+  // `timeout`, then retries with a fresh session id.
+  it("clears the poisoned Claude CLI session after a resume-watchdog timeout (#79365)", async () => {
+    const sessionKey = "agent:main:direct:cli-resume-timeout";
+    const homeDir = path.join(tmpDir, "home");
+    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    process.env.HOME = homeDir;
+    await fs.mkdir(projectsDir, { recursive: true });
+    // Transcript exists on disk with an assistant message — i.e. the
+    // missing-transcript pre-flight (#77030) does NOT fire here. The bug
+    // is specifically about poisoned-but-present transcripts.
+    await fs.writeFile(
+      path.join(projectsDir, "poisoned-cli-session.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "old reply" }] },
+      })}\n`,
+      "utf-8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cli-timeout",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "poisoned-cli-session",
+          authProfileId: "anthropic:claude-cli",
+        },
+      },
+      cliSessionIds: { "claude-cli": "poisoned-cli-session" },
+      claudeCliSessionId: "poisoned-cli-session",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    runCliAgentMock
+      .mockRejectedValueOnce(
+        new FailoverError("CLI produced no output for 180s and was terminated.", {
+          reason: "timeout",
+          provider: "claude-cli",
+          model: "opus",
+          status: 504,
+        }),
+      )
+      .mockResolvedValueOnce(makeCliResult("hello after cold restart"));
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "please respond",
+      runId: "run-cli-resume-timeout",
+    });
+
+    // Two attempts: first with the poisoned resume id, second cold.
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBe("poisoned-cli-session");
+    expect(runCliAgentMock.mock.calls[1]?.[0]?.cliSessionId).toBeUndefined();
+    // Persisted binding wiped so the next user turn does not start by
+    // re-resuming the poisoned id.
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+  });
+
+  it("does not retry on timeout when there was no resumed Claude CLI session (cold start)", async () => {
+    // Same FailoverError, but no persisted resume id ⇒ this is a normal
+    // cold-start timeout (slow/wedged child process), not a poisoned
+    // resume. Keep the previous behaviour: surface the failure to the
+    // caller, do not retry.
+    const sessionKey = "agent:main:direct:cli-cold-timeout";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cold-timeout",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("CLI produced no output for 180s and was terminated.", {
+        reason: "timeout",
+        provider: "claude-cli",
+        model: "opus",
+        status: 504,
+      }),
+    );
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "hello",
+        runId: "run-cli-cold-timeout",
+      }),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "timeout",
+    });
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not pass --resume when the stored Claude CLI transcript is missing", async () => {
     const sessionKey = "agent:main:direct:claude-missing-transcript";
     const homeDir = path.join(tmpDir, "home");

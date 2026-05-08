@@ -3,6 +3,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isClaudeCliProvider } from "../plugin-sdk/anthropic-cli.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -474,13 +475,37 @@ export async function runPreparedCliAgent(
     } catch (err) {
       if (isFailoverError(err)) {
         const retryableSessionId = context.reusableCliSession.sessionId ?? params.cliSessionId;
-        // Check if this is a session expired error and we have a session to clear
-        if (err.reason === "session_expired" && retryableSessionId && params.sessionKey) {
-          // Clear the expired session ID from the session entry
+        // Decide whether to recover in-runner with a cold restart (no --resume).
+        //
+        // session_expired is the clean-error case ("Conversation not found");
+        // we have always retried it here.
+        //
+        // timeout on a resumed claude-cli session is the silent-hang case: the
+        // on-disk transcript is poisoned (corrupted tool-call state, stuck MCP
+        // call, etc.), the watchdog killed the child after no output, and re-
+        // resuming the same sessionId on the next turn just hangs again. The
+        // historical behaviour was a 5-attempt cascade burning ~15 min of the
+        // lane before a manual gateway bounce (#79365). Retry once here without
+        // --resume so the cold child starts a fresh session and the post-run
+        // flow persists a clean sessionId via setCliSessionBinding. Hooks stay
+        // consistent (single agent_end), matching the existing session_expired
+        // retry's contract.
+        const isPoisonedResumeTimeout =
+          err.reason === "timeout" &&
+          isClaudeCliProvider(params.provider) &&
+          Boolean(context.reusableCliSession.sessionId);
+        const recoverableReason = err.reason === "session_expired" || isPoisonedResumeTimeout;
+        if (recoverableReason && retryableSessionId && params.sessionKey) {
+          // Clear the expired or poisoned session ID from the session entry
           // This requires access to the session store, which we don't have here
           // We'll need to modify the caller to handle this case
 
           // For now, retry without the session ID to create a new session
+          if (isPoisonedResumeTimeout) {
+            log.warn(
+              `claude-cli resume timeout, retrying without --resume: provider=${params.provider} sessionId=${retryableSessionId}`,
+            );
+          }
           try {
             const { output, lastAssistant } = await executeCliAttempt(undefined);
             const effectiveCliSessionId = output.sessionId;

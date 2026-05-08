@@ -528,16 +528,35 @@ export function runAgentAttempt(params: {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
       } catch (err) {
+        // Recover from two stale-binding failure modes by clearing the
+        // persisted CLI session and retrying with a fresh session id:
+        //   * session_expired   - claude-cli reported "Conversation not found"
+        //   * timeout (claude-cli resumed) - watchdog killed a resumed live
+        //     session whose on-disk transcript is poisoned (corrupted tool
+        //     call state, hung MCP shutdown, etc.). Without dropping the
+        //     binding here, every subsequent user turn re-resumes the same
+        //     dead sessionId and hits the watchdog again, producing the
+        //     5-strike no-output-timeout cascade described in #79365.
+        // Both cases are gated on a stored sessionId; non-resumed timeouts
+        // (the run started cold) keep the previous behaviour.
+        const isPoisonedResumeTimeout =
+          err instanceof FailoverError &&
+          err.reason === "timeout" &&
+          isClaudeCliProvider(cliExecutionProvider);
         if (
           err instanceof FailoverError &&
-          err.reason === "session_expired" &&
+          (err.reason === "session_expired" || isPoisonedResumeTimeout) &&
           activeCliSessionBinding?.sessionId &&
           params.sessionKey &&
           params.sessionStore &&
           params.storePath
         ) {
+          const reason =
+            err.reason === "session_expired"
+              ? "session expired"
+              : "resumed session timeout (poisoned transcript)";
           log.warn(
-            `CLI session expired, clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
+            `CLI ${reason}, clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
           );
 
           params.sessionEntry =
@@ -548,6 +567,16 @@ export function runAgentAttempt(params: {
               storePath: params.storePath,
             })) ?? params.sessionEntry;
 
+          // For poisoned-resume timeouts, the in-runner retry inside
+          // runPreparedCliAgent already attempted a cold restart and
+          // succeeded (otherwise we wouldn't be here on a re-throw); when it
+          // re-throws, the outer attempt is over for this turn. Either way,
+          // we still want to wipe the persisted binding so the next user
+          // turn does not resume the same dead sessionId. Re-issuing
+          // runCliWithSession(undefined) here is safe for session_expired
+          // (legacy behaviour) and acts as a belt-and-braces fallback for
+          // poisoned-resume timeouts when the in-runner retry was not
+          // taken (e.g. no sessionKey on the runner params).
           return await runCliWithSession(undefined).then(async (result) => {
             if (
               result.meta.agentMeta?.cliSessionBinding?.sessionId &&
