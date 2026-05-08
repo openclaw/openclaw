@@ -511,7 +511,7 @@ describe("compaction-safeguard runtime registry", () => {
   it("clears entry when value is null", () => {
     const sm = {};
     setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.7 });
-    expect(getCompactionSafeguardRuntime(sm)).not.toBeNull();
+    expect(getCompactionSafeguardRuntime(sm)).toEqual({ maxHistoryShare: 0.7 });
     setCompactionSafeguardRuntime(sm, null);
     expect(getCompactionSafeguardRuntime(sm)).toBeNull();
   });
