@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCommitmentTimezone, resolveCommitmentsConfig } from "./config.js";
@@ -182,13 +181,7 @@ function openTerminalFailureCooldown(agentId: string, error: unknown): void {
 }
 
 function resolveExtractionSessionFile(agentId: string, runId: string): string {
-  return path.join(
-    resolveStateDir(),
-    "commitments",
-    "extractor-sessions",
-    agentId,
-    `${runId}.jsonl`,
-  );
+  return createSqliteSessionTranscriptLocator({ agentId, sessionId: runId });
 }
 
 function joinPayloadText(result: EmbeddedPiPayloadResult): string {
