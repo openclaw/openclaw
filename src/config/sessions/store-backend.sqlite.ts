@@ -1,4 +1,3 @@
-import fs, { readFileSync } from "node:fs";
 import type { Insertable, Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -12,7 +11,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { type OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
-import { applySessionStoreMigrations } from "./store-migrations.js";
 import { normalizeSessionStore } from "./store-normalize.js";
 import type { SessionEntry } from "./types.js";
 
@@ -20,12 +18,6 @@ export type SqliteSessionEntriesOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
   sourcePath?: string;
   now?: () => number;
-};
-
-export type JsonSessionEntriesImportResult = {
-  imported: number;
-  sourcePath: string;
-  removedSource: boolean;
 };
 
 export type ReplaceSqliteSessionEntryOptions = SqliteSessionEntriesOptions & {
@@ -142,41 +134,6 @@ function normalizeStoredSessionEntryJson(
 export function countSqliteSessionEntries(options: SqliteSessionEntriesOptions): number {
   const database = openOpenClawAgentDatabase(options);
   return countSessionEntryRows(database);
-}
-
-function parseJsonSessionStoreFromPath(sourcePath: string): Record<string, SessionEntry> {
-  let store: Record<string, SessionEntry> = {};
-  try {
-    const parsed = JSON.parse(readJsonSessionStoreRawForImport(sourcePath)) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      store = parsed as Record<string, SessionEntry>;
-    }
-  } catch {
-    store = {};
-  }
-  applySessionStoreMigrations(store);
-  normalizeSessionStore(store);
-  return store;
-}
-
-function replaceSqliteSessionEntrySet(params: {
-  database: OpenClawAgentDatabase;
-  options: SqliteSessionEntriesOptions;
-  store: Record<string, SessionEntry>;
-}): void {
-  const updatedAt = resolveNow(params.options);
-  const db = getNodeSqliteKysely<SessionEntriesDatabase>(params.database.db);
-  executeSqliteQuerySync(params.database.db, db.deleteFrom("session_entries"));
-  upsertSessionEntries(
-    params.database,
-    Object.entries(params.store).map(([sessionKey, entry]) =>
-      bindSessionEntry({
-        sessionKey,
-        entry,
-        updatedAt,
-      }),
-    ),
-  );
 }
 
 export function replaceSqliteSessionEntry(options: ReplaceSqliteSessionEntryOptions): void {
@@ -296,25 +253,27 @@ export function loadSqliteSessionEntries(
   return store;
 }
 
-export function replaceSqliteSessionEntries(
-  options: SqliteSessionEntriesOptions,
-  store: Record<string, SessionEntry>,
-): void {
-  normalizeSessionStore(store);
-  runOpenClawAgentWriteTransaction((database) => {
-    replaceSqliteSessionEntrySet({ database, options, store });
-  }, options);
-}
-
 export function mergeSqliteSessionEntries(
   options: SqliteSessionEntriesOptions,
   incoming: Record<string, SessionEntry>,
 ): { imported: number; stored: number } {
-  const mergedStore = mergeSessionEntriesByUpdatedAt(loadSqliteSessionEntries(options), incoming);
-  replaceSqliteSessionEntries(options, mergedStore);
+  normalizeSessionStore(incoming);
+  const existing = loadSqliteSessionEntries(options);
+  const upsertEntries: Record<string, SessionEntry> = {};
+  for (const [key, entry] of Object.entries(incoming)) {
+    const current = existing[key];
+    if (!current || resolveSessionEntryUpdatedAt(entry) >= resolveSessionEntryUpdatedAt(current)) {
+      upsertEntries[key] = entry;
+      existing[key] = entry;
+    }
+  }
+  applySqliteSessionEntriesPatch({
+    ...options,
+    upsertEntries,
+  });
   return {
     imported: Object.keys(incoming).length,
-    stored: Object.keys(mergedStore).length,
+    stored: Object.keys(existing).length,
   };
 }
 
@@ -322,53 +281,4 @@ function resolveSessionEntryUpdatedAt(entry: SessionEntry): number {
   return typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
     ? entry.updatedAt
     : 0;
-}
-
-function mergeSessionEntriesByUpdatedAt(
-  existing: Record<string, SessionEntry>,
-  incoming: Record<string, SessionEntry>,
-): Record<string, SessionEntry> {
-  const merged: Record<string, SessionEntry> = { ...existing };
-  for (const [key, entry] of Object.entries(incoming)) {
-    const current = merged[key];
-    if (!current || resolveSessionEntryUpdatedAt(entry) >= resolveSessionEntryUpdatedAt(current)) {
-      merged[key] = entry;
-    }
-  }
-  normalizeSessionStore(merged);
-  return merged;
-}
-
-export function importJsonSessionStoreToSqlite(params: {
-  agentId: string;
-  sourcePath: string;
-  dbPath?: string;
-  env?: NodeJS.ProcessEnv;
-  now?: () => number;
-}): JsonSessionEntriesImportResult {
-  const options = {
-    agentId: params.agentId,
-    sourcePath: params.sourcePath,
-    ...(params.env ? { env: params.env } : {}),
-    ...(params.dbPath ? { path: params.dbPath } : {}),
-    ...(params.now ? { now: params.now } : {}),
-  };
-  const importedStore = parseJsonSessionStoreFromPath(params.sourcePath);
-  const result = mergeSqliteSessionEntries(options, importedStore);
-  let removedSource = false;
-  try {
-    fs.rmSync(params.sourcePath, { force: true });
-    removedSource = true;
-  } catch {
-    removedSource = false;
-  }
-  return {
-    imported: result.imported,
-    sourcePath: params.sourcePath,
-    removedSource,
-  };
-}
-
-export function readJsonSessionStoreRawForImport(pathname: string): string {
-  return readFileSync(pathname, "utf8");
 }
