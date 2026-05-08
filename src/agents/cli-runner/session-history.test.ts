@@ -229,11 +229,10 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
-  it("honors custom session store roots when resolving hook history transcripts", async () => {
+  it("honors custom transcript roots when resolving hook history transcripts", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const customStoreDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-store-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const storePath = path.join(customStoreDir, "sessions.json");
     const sessionFile = createSessionTranscript({
       rootDir: customStoreDir,
       sessionId: "session-custom-store",
