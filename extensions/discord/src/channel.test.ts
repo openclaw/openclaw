@@ -467,12 +467,14 @@ describe("discordPlugin outbound", () => {
   });
 
   it("does not block Discord monitor startup on the startup probe", async () => {
-    let resolveProbe!: (value: {
-      ok: true;
-      bot: { username: string };
-      application: { intents: { messageContent: "limited" } };
-      elapsedMs: number;
-    }) => void;
+    let resolveProbe:
+      | ((value: {
+          ok: true;
+          bot: { username: string };
+          application: { intents: { messageContent: "limited" } };
+          elapsedMs: number;
+        }) => void)
+      | undefined;
     probeDiscordMock.mockReturnValue(
       new Promise((resolve) => {
         resolveProbe = resolve;
@@ -503,6 +505,9 @@ describe("discordPlugin outbound", () => {
     );
     expect(statusPatches.filter((patch) => "bot" in patch || "application" in patch)).toEqual([]);
 
+    if (!resolveProbe) {
+      throw new Error("Expected Discord startup probe resolver to be initialized");
+    }
     resolveProbe({
       ok: true,
       bot: { username: "AsyncBob" },

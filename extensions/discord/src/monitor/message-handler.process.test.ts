@@ -716,7 +716,7 @@ describe("processDiscordMessage ack reactions", () => {
 
   it("shows stall emojis for long no-progress runs", async () => {
     vi.useFakeTimers();
-    let releaseDispatch!: () => void;
+    let releaseDispatch: (() => void) | undefined;
     const dispatchGate = new Promise<void>((resolve) => {
       releaseDispatch = () => resolve();
     });
@@ -729,6 +729,9 @@ describe("processDiscordMessage ack reactions", () => {
     const runPromise = runProcessDiscordMessage(ctx);
 
     await vi.advanceTimersByTimeAsync(30_001);
+    if (!releaseDispatch) {
+      throw new Error("Expected Discord dispatch release callback to be initialized");
+    }
     releaseDispatch();
     await vi.runAllTimersAsync();
 
