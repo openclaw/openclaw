@@ -1,3 +1,4 @@
+import path from "node:path";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveSessionFilePath } from "./paths.js";
 import { getSessionEntry, upsertSessionEntry } from "./store.js";
@@ -32,10 +33,13 @@ export async function resolveAndPersistSessionFile(params: {
     : !baseEntry.sessionFile && fallbackSessionFile
       ? { ...baseEntry, sessionFile: fallbackSessionFile }
       : baseEntry;
-  const sessionFile = resolveSessionFilePath(sessionId, entryForResolve, {
-    agentId: params.agentId,
-    sessionsDir: params.sessionsDir,
-  });
+  const sessionFile =
+    fallbackSessionFile && !params.sessionsDir
+      ? path.resolve(fallbackSessionFile)
+      : resolveSessionFilePath(sessionId, entryForResolve, {
+          agentId: params.agentId,
+          sessionsDir: params.sessionsDir,
+        });
   const persistedEntry: SessionEntry = {
     ...baseEntry,
     sessionId,

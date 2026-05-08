@@ -9,8 +9,7 @@ export function useTempSessionsFixture(prefix: string) {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    sessionsDir = path.join(tempDir, "agents", "main", "sessions");
-    fs.mkdirSync(sessionsDir, { recursive: true });
+    sessionsDir = path.join(tempDir, "transcript-fixtures", "main");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
   });
 

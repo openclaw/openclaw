@@ -57,7 +57,12 @@ export function resolveSessionTranscriptCandidates(
 
   if (sessionFile) {
     if (agentId) {
-      if (sessionFileState !== "stale") {
+      if (sessionFileState === "custom") {
+        const trimmed = sessionFile.trim();
+        if (trimmed) {
+          candidates.push(path.resolve(trimmed));
+        }
+      } else if (sessionFileState !== "stale") {
         pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
       }
     } else {
