@@ -103,6 +103,14 @@ export async function runIMessageCatchup(
     const sinceISO = new Date(sinceMs).toISOString();
     const collected: IMessageCatchupRow[] = [];
     const perChatLimit = Math.min(limit, PER_CHAT_HISTORY_LIMIT_CAP);
+    // Track the highest rowid / date the imsg bridge actually returned across
+    // all chats, regardless of whether each row passed the parser. The catchup
+    // loop uses this as a cursor-advance floor so an unparseable row (corrupt
+    // text column, schema drift, etc.) cannot stall catchup forever — without
+    // this, the same broken row would be re-fetched and re-dropped on every
+    // gateway startup.
+    let rawWatermarkRowid = -Infinity;
+    let rawWatermarkMs = -Infinity;
 
     for (const chat of chats) {
       const chatId = typeof chat.id === "number" && Number.isFinite(chat.id) ? chat.id : null;
@@ -138,6 +146,26 @@ export async function runIMessageCatchup(
 
       const messages = Array.isArray(historyResult?.messages) ? historyResult.messages : [];
       for (const raw of messages) {
+        // Best-effort raw-watermark probe BEFORE we run the parser, so even
+        // rows we drop still let the cursor advance past them. We only trust
+        // numeric `id` / parseable `created_at` — if the row is so malformed
+        // that we cannot even read those, leave the watermark unchanged for
+        // this row (same forward-progress behavior as today, just no worse).
+        const rawRecord = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+        const rawRowid =
+          rawRecord && typeof rawRecord.id === "number" && Number.isFinite(rawRecord.id)
+            ? rawRecord.id
+            : null;
+        const rawCreatedAt =
+          rawRecord && typeof rawRecord.created_at === "string" ? rawRecord.created_at : null;
+        const rawDateMs = rawCreatedAt ? Date.parse(rawCreatedAt) : NaN;
+        if (rawRowid !== null) {
+          rawWatermarkRowid = Math.max(rawWatermarkRowid, rawRowid);
+        }
+        if (Number.isFinite(rawDateMs)) {
+          rawWatermarkMs = Math.max(rawWatermarkMs, rawDateMs);
+        }
+
         // Reuse the live notification parser by wrapping the row in the same
         // `{ message: ... }` envelope. Anything that fails the parser would
         // also be dropped on the live path, so the same shape guard applies.
@@ -184,7 +212,12 @@ export async function runIMessageCatchup(
       }
     }
 
-    return { resolved: true, rows: capped };
+    return {
+      resolved: true,
+      rows: capped,
+      ...(Number.isFinite(rawWatermarkRowid) ? { highWatermarkRowid: rawWatermarkRowid } : {}),
+      ...(Number.isFinite(rawWatermarkMs) ? { highWatermarkMs: rawWatermarkMs } : {}),
+    };
   };
 
   const dispatchFn: CatchupDispatchFn = async (row) => {

@@ -303,8 +303,55 @@ describe("runIMessageCatchup", () => {
 
     expect(summary.failed).toBe(1);
     expect(summary.replayed).toBe(0);
-    // Cursor held below the failed row's rowid (still 0 since no successful row preceded it).
-    expect(summary.cursorAfter.lastSeenRowid).toBe(0);
+    // Cursor clamps to `failed.rowid - 1` (== 499), strictly below the held
+    // failure, so the next pass refetches row 500 — and never leapfrogs it.
+    expect(summary.cursorAfter.lastSeenRowid).toBe(499);
+  });
+
+  it("emits a high-watermark even when every row fails payload validation", async () => {
+    // Regression: without this, a chat whose only fresh row is unparseable
+    // (corrupt text column, schema drift) would stall catchup forever — the
+    // row never reaches the cursor loop, the cursor never advances past it,
+    // the next pass re-fetches and re-drops the same row. The bridge probes
+    // raw `id` / `created_at` per row before parsing and emits the highest
+    // values it saw as a watermark so the cursor loop can still advance.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
+    const { client } = makeFakeClient(({ method }) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 1, last_message_at: "2026-05-08T11:55:00.000Z" }] };
+      }
+      return {
+        messages: [
+          // Junk row — wrong types in everything except id + created_at, so
+          // parseIMessageNotification rejects it but the watermark probe
+          // still records id=999 and the parsed created_at.
+          {
+            id: 999,
+            guid: 42, // wrong type
+            chat_id: "x", // wrong type
+            sender: false, // wrong type
+            is_from_me: "no", // wrong type
+            text: 7, // wrong type
+            created_at: "2026-05-08T11:55:00.000Z",
+          },
+        ],
+      };
+    });
+
+    const summary = await runIMessageCatchup({
+      client: client as never,
+      accountId: "default",
+      config: resolveCatchupConfig({ enabled: true, perRunLimit: 50, maxAgeMinutes: 60 }),
+      includeAttachments: false,
+      dispatchPayload: async () => {},
+    });
+
+    expect(summary.querySucceeded).toBe(true);
+    expect(summary.replayed).toBe(0);
+    expect(summary.fetchedCount).toBe(0);
+    // Cursor advances to the watermark — next pass won't keep re-fetching this row.
+    expect(summary.cursorAfter.lastSeenRowid).toBe(999);
   });
 
   it("filters rows that fail payload validation", async () => {

@@ -245,7 +245,23 @@ export type CatchupFetchFn = (params: {
   sinceMs: number;
   sinceRowid: number;
   limit: number;
-}) => Promise<{ resolved: boolean; rows: IMessageCatchupRow[] }>;
+}) => Promise<{
+  resolved: boolean;
+  rows: IMessageCatchupRow[];
+  /**
+   * Highest `rowid` the fetcher saw in the raw response, including rows it
+   * dropped (parser failure, schema drift, missing fields). The replay loop
+   * uses this as a floor for the cursor advance so a single unparseable row
+   * cannot stall catchup forever — without this, the bridge silently
+   * dropping a row would mean the next pass re-fetches the same broken row
+   * indefinitely. Optional so test fetchers that only emit fully-valid rows
+   * can omit it; when omitted, the cursor advance falls back to the rows
+   * the loop actually processed.
+   */
+  highWatermarkRowid?: number;
+  /** Companion to `highWatermarkRowid` — highest `date` seen in the raw response. */
+  highWatermarkMs?: number;
+}>;
 
 export type CatchupDispatchFn = (row: IMessageCatchupRow) => Promise<{ ok: boolean }>;
 
@@ -325,8 +341,20 @@ export async function performIMessageCatchup(
   // and a mid-run failure leaves a usable lastSeenRowid for the next pass.
   const rows = [...fetchResult.rows].sort((a, b) => a.rowid - b.rowid);
   const failureRetries = { ...(cursor?.failureRetries ?? {}) };
-  let lastSeenMs = cursor?.lastSeenMs ?? windowStartMs;
-  let lastSeenRowid = cursor?.lastSeenRowid ?? 0;
+
+  // Two distinct watermarks: `highWatermark*` is the high point we reached on
+  // any row we processed cleanly (success / skipFromMe / skipPreCursor /
+  // skipGivenUp / give-up), and `earliestHeldFailureRow` is the smallest-rowid
+  // row whose dispatch failed below the retry ceiling on this pass. When a
+  // failure is held, the persisted cursor must NOT leapfrog it — otherwise
+  // the next pass would filter the failed row out via `row.rowid <= sinceRowid`
+  // and never retry. Already-successful rows above the held failure get
+  // re-replayed on the next pass and absorbed by the inbound-dedupe cache.
+  const cursorBeforeMs = cursor?.lastSeenMs ?? windowStartMs;
+  const cursorBeforeRowid = cursor?.lastSeenRowid ?? 0;
+  let highWatermarkMs = cursorBeforeMs;
+  let highWatermarkRowid = cursorBeforeRowid;
+  let earliestHeldFailureRow: IMessageCatchupRow | null = null;
 
   for (const row of rows) {
     if (row.rowid <= sinceRowid) {
@@ -337,21 +365,21 @@ export async function performIMessageCatchup(
       // Row predates the recency ceiling. Skip but advance the cursor so we
       // don't re-fetch it next pass.
       summary.skippedPreCursor += 1;
-      lastSeenMs = Math.max(lastSeenMs, row.date);
-      lastSeenRowid = Math.max(lastSeenRowid, row.rowid);
+      highWatermarkMs = Math.max(highWatermarkMs, row.date);
+      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
     if (row.isFromMe) {
       summary.skippedFromMe += 1;
-      lastSeenMs = Math.max(lastSeenMs, row.date);
-      lastSeenRowid = Math.max(lastSeenRowid, row.rowid);
+      highWatermarkMs = Math.max(highWatermarkMs, row.date);
+      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
     const priorCount = failureRetries[row.guid] ?? 0;
     if (priorCount >= cfg.maxFailureRetries) {
       summary.skippedGivenUp += 1;
-      lastSeenMs = Math.max(lastSeenMs, row.date);
-      lastSeenRowid = Math.max(lastSeenRowid, row.rowid);
+      highWatermarkMs = Math.max(highWatermarkMs, row.date);
+      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
 
@@ -366,8 +394,8 @@ export async function performIMessageCatchup(
     if (dispatched.ok) {
       summary.replayed += 1;
       delete failureRetries[row.guid];
-      lastSeenMs = Math.max(lastSeenMs, row.date);
-      lastSeenRowid = Math.max(lastSeenRowid, row.rowid);
+      highWatermarkMs = Math.max(highWatermarkMs, row.date);
+      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
 
@@ -382,11 +410,45 @@ export async function performIMessageCatchup(
       // Cursor advances past the wedged guid so subsequent passes can make
       // progress. Already-given-up entries in future runs count under
       // skippedGivenUp.
-      lastSeenMs = Math.max(lastSeenMs, row.date);
-      lastSeenRowid = Math.max(lastSeenRowid, row.rowid);
+      highWatermarkMs = Math.max(highWatermarkMs, row.date);
+      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
+      continue;
     }
-    // Below the ceiling: hold the cursor on this row so the next pass
-    // retries it before advancing.
+    // Below the retry ceiling: hold the cursor BEFORE this row so the next
+    // pass retries it. Rows are sorted ascending, so the first held failure
+    // is the lowest-rowid one — clamp the persisted cursor at its rowid - 1.
+    if (earliestHeldFailureRow === null || row.rowid < earliestHeldFailureRow.rowid) {
+      earliestHeldFailureRow = row;
+    }
+  }
+
+  // Apply the bridge's high-watermark floor. The bridge tracks the highest
+  // rowid in the raw `messages.history` response, including rows it had to
+  // drop (parser failure, schema drift). Without this, an unparseable row
+  // could permanently stall the cursor: it never reaches the loop, the loop
+  // never advances past it, the next pass re-fetches the same broken row.
+  // The floor only applies when no failure is held — a held failure has
+  // tighter cursor-cap semantics that must win.
+  if (earliestHeldFailureRow === null) {
+    if (typeof fetchResult.highWatermarkMs === "number") {
+      highWatermarkMs = Math.max(highWatermarkMs, fetchResult.highWatermarkMs);
+    }
+    if (typeof fetchResult.highWatermarkRowid === "number") {
+      highWatermarkRowid = Math.max(highWatermarkRowid, fetchResult.highWatermarkRowid);
+    }
+  }
+
+  let lastSeenMs: number;
+  let lastSeenRowid: number;
+  if (earliestHeldFailureRow !== null) {
+    // Hold cursor strictly below the failed row. Already-successful rows
+    // above it get re-replayed next pass; the inbound-dedupe cache absorbs
+    // the duplicate dispatch.
+    lastSeenMs = Math.max(cursorBeforeMs, earliestHeldFailureRow.date - 1);
+    lastSeenRowid = Math.max(cursorBeforeRowid, earliestHeldFailureRow.rowid - 1);
+  } else {
+    lastSeenMs = highWatermarkMs;
+    lastSeenRowid = highWatermarkRowid;
   }
 
   const capped = capFailureRetriesMap(failureRetries);
