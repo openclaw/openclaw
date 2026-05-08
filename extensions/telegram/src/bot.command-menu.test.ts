@@ -23,10 +23,13 @@ let createTelegramBot: (
 const loadConfig = getLoadConfigMock();
 
 function createSignal() {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((res) => {
     resolve = res;
   });
+  if (!resolve) {
+    throw new Error("Expected command sync signal resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
