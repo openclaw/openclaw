@@ -57,7 +57,7 @@ export function resolveExportCommandSessionTarget(
     return { agentId: targetAgentId, entry, sessionFile };
   } catch (err) {
     return {
-      text: `❌ Failed to resolve session file: ${formatErrorMessage(err)}`,
+      text: `❌ Failed to resolve session transcript: ${formatErrorMessage(err)}`,
     };
   }
 }

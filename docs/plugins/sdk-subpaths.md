@@ -239,7 +239,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers and markers such as `buildHistoryContext`, `HISTORY_CONTEXT_MARKER`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
-    | `plugin-sdk/session-store-runtime` | SQLite-backed session row, session-key, updated-at, and transcript path helpers |
+    | `plugin-sdk/session-store-runtime` | SQLite-backed session row, session-key, updated-at, and transcript locator helpers |
     | `plugin-sdk/cron-store-runtime` | SQLite cron store key/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
