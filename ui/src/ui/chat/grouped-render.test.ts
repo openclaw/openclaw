@@ -481,6 +481,28 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
+  it("marks assistant bubbles with hover actions so CSS reserves room for the buttons", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "ok",
+      timestamp: 1000,
+    });
+
+    const bubble = expectElement(container, ".chat-bubble", HTMLElement);
+    expect(bubble.classList.contains("has-copy")).toBe(true);
+    expect(bubble.querySelector(".chat-bubble-actions")).toBeInstanceOf(HTMLElement);
+  });
+
+  it("does not mark user bubbles with the actions reservation class", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(container, { role: "user", content: "hi", timestamp: 1000 }, "user");
+
+    const bubble = expectElement(container, ".chat-bubble", HTMLElement);
+    expect(bubble.classList.contains("has-copy")).toBe(false);
+    expect(bubble.querySelector(".chat-bubble-actions")).toBeNull();
+  });
+
   it("positions delete confirm by message side", () => {
     const container = document.createElement("div");
     clearDeleteConfirmSkip();

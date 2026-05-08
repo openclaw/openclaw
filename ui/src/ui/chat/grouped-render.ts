@@ -1441,10 +1441,12 @@ function renderGroupedMessage(
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
   const isToolMessage = normalizedRole === "tool" || isToolResult;
+  const hasActions = canCopyMarkdown || canExpand;
   const bubbleClasses = [
     "chat-bubble",
     isToolMessage ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
+    hasActions ? "has-copy" : "",
     "fade-in",
   ]
     .filter(Boolean)
@@ -1491,7 +1493,6 @@ function renderGroupedMessage(
         : "Tool output";
   const toolMessageIcon = singleToolDisplay ? icons[singleToolDisplay.icon] : icons.zap;
 
-  const hasActions = canCopyMarkdown || canExpand;
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
   return html`
