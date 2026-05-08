@@ -1,6 +1,7 @@
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
+import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../agents/pi-settings.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
@@ -13,7 +14,7 @@ import {
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { normalizeAlias } from "./models/alias-name.js";
 
-const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
+const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 4096;
 // Azure OpenAI uses the Responses API which supports larger defaults
 const AZURE_DEFAULT_CONTEXT_WINDOW = 400_000;
@@ -26,7 +27,13 @@ export type CustomModelImageInputInference = {
 
 function normalizeContextWindowForCustomModel(value: unknown): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
-  return parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS ? parsed : CONTEXT_WINDOW_HARD_MIN_TOKENS;
+  if (
+    parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS &&
+    parsed > DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR
+  ) {
+    return parsed;
+  }
+  return DEFAULT_CONTEXT_WINDOW;
 }
 
 function customModelInputs(supportsImageInput: boolean): CustomModelInput[] {

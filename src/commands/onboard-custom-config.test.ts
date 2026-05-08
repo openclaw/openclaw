@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
+import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../agents/pi-settings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyCustomApiConfig,
@@ -106,17 +107,22 @@ it("uses expanded max_tokens for anthropic verification probes", () => {
 describe("applyCustomApiConfig", () => {
   it.each([
     {
-      name: "uses hard-min context window for newly added custom models",
+      name: "uses documented default context window for newly added custom models",
       existingContextWindow: undefined,
-      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+      expectedContextWindow: 200000,
     },
     {
-      name: "upgrades existing custom model context window when below hard minimum",
+      name: "upgrades existing custom model context window when below the compaction reserve floor",
       existingContextWindow: 2048,
-      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+      expectedContextWindow: 200000,
     },
     {
-      name: "preserves existing custom model context window when already above minimum",
+      name: "upgrades existing custom model context window when equal to the compaction reserve floor",
+      existingContextWindow: DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+      expectedContextWindow: 200000,
+    },
+    {
+      name: "preserves existing custom model context window when already above the reserve floor",
       existingContextWindow: 131072,
       expectedContextWindow: 131072,
     },
