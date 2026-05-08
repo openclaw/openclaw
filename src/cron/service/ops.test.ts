@@ -160,7 +160,7 @@ describe("cron service ops seam coverage", () => {
     );
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toEqual(expect.anything());
 
     const persisted = (await loadCronStore(storePath)) as {
       jobs: CronJob[];
