@@ -32,7 +32,6 @@ function planFor(
 
 function requireFirstLane(plan: ReturnType<typeof planFor>) {
   const [lane] = plan.lanes;
-  expect(lane).toBeDefined();
   if (!lane) {
     throw new Error("Expected at least one Docker E2E lane");
   }
