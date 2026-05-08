@@ -488,9 +488,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
   }
 
   function createReasoningDefaultContext(): TelegramMessageContext {
-    loadSessionStore.mockReturnValue({
+    sessionRows.value = {
       s1: {},
-    });
+    };
     return createContext({
       ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
       route: { agentId: "ops" } as unknown as TelegramMessageContext["route"],

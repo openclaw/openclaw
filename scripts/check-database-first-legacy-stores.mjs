@@ -91,6 +91,8 @@ const legacyStoreMarkers = [
   { label: "Telegram sent-message cache JSON", pattern: /\.telegram-sent-messages\.json\b/u },
   { label: "Telegram message cache JSON", pattern: /\.telegram-messages\.json\b/u },
   { label: "Telegram topic-name cache JSON", pattern: /\.telegram-topic-names\.json\b/u },
+  { label: "iMessage reply cache JSONL", pattern: /\bimessage[/\\]reply-cache\.jsonl\b/u },
+  { label: "iMessage sent echo cache JSONL", pattern: /\bimessage[/\\]sent-echoes\.jsonl\b/u },
   { label: "Feishu dedupe cache JSON", pattern: /\bfeishu[/\\]dedup[/\\][A-Za-z0-9_-]+\.json\b/u },
   {
     label: "Zalo outbound media JSON/bin sidecar",
@@ -136,6 +138,7 @@ const allowedExactPaths = new Set([
   "extensions/bluebubbles/src/state-migrations.ts",
   "extensions/discord/src/state-migrations.ts",
   "extensions/feishu/src/state-migrations.ts",
+  "extensions/imessage/src/state-migrations.ts",
   "extensions/matrix/src/state-migrations.ts",
   "extensions/matrix/src/legacy-state.ts",
   "extensions/memory-wiki/src/source-sync-state.ts",

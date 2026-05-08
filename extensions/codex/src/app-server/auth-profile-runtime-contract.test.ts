@@ -14,7 +14,7 @@ import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 
-function testSessionFile(suffix = AUTH_PROFILE_RUNTIME_CONTRACT.sessionId): string {
+function testSessionFile(suffix: string = AUTH_PROFILE_RUNTIME_CONTRACT.sessionId): string {
   return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: suffix });
 }
 

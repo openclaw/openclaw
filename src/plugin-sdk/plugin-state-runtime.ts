@@ -5,6 +5,8 @@ export {
   type PluginBlobStore,
 } from "../plugin-state/plugin-blob-store.js";
 export {
+  createCorePluginStateKeyedStore,
+  createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
