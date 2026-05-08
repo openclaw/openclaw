@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { listSessionEntries, upsertSessionEntry } from "../../config/sessions/store.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { loadSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -128,11 +129,9 @@ function firstEmbeddedPiAgentArg(callIndex = 0) {
 
 describe("CLI attempt execution", () => {
   let tmpDir: string;
-  let storePath: string;
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-attempt-"));
-    storePath = path.join(tmpDir, "agents", "main", "sessions", "sessions.json");
     vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
     runCliAgentMock.mockReset();
     runEmbeddedPiAgentMock.mockReset();
@@ -150,7 +149,15 @@ describe("CLI attempt execution", () => {
   });
 
   async function writeStore(store: Record<string, SessionEntry>) {
-    await saveSessionStore(storePath, store);
+    for (const [sessionKey, entry] of Object.entries(store)) {
+      upsertSessionEntry({ agentId: "main", sessionKey, entry });
+    }
+  }
+
+  function readStore(): Record<string, SessionEntry> {
+    return Object.fromEntries(
+      listSessionEntries({ agentId: "main" }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
   }
 
   async function runClaudeCliAttempt(params: {
@@ -186,7 +193,6 @@ describe("CLI attempt execution", () => {
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore: params.sessionStore,
-      storePath,
       sessionHasHistory: false,
     });
   }
@@ -251,7 +257,6 @@ describe("CLI attempt execution", () => {
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
-      storePath,
       sessionHasHistory: false,
     });
 
@@ -261,7 +266,7 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
-    const persisted = loadSessionStore(storePath);
+    const persisted = readStore();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
@@ -301,7 +306,7 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
-    const persisted = loadSessionStore(storePath);
+    const persisted = readStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
@@ -397,7 +402,6 @@ describe("CLI attempt execution", () => {
       onAgentEvent: vi.fn(),
       authProfileProvider: "openai-codex",
       sessionStore,
-      storePath,
       sessionHasHistory: false,
     });
 
@@ -421,7 +425,6 @@ describe("CLI attempt execution", () => {
       sessionKey,
       sessionEntry,
       sessionStore,
-      storePath,
       sessionAgentId: "main",
       sessionCwd: tmpDir,
       config: {},
@@ -485,7 +488,6 @@ describe("CLI attempt execution", () => {
       sessionKey,
       sessionEntry,
       sessionStore,
-      storePath,
       sessionAgentId: "main",
       sessionCwd: tmpDir,
       config: {},
@@ -506,7 +508,6 @@ describe("CLI attempt execution", () => {
       sessionKey,
       sessionEntry: updatedFirst,
       sessionStore,
-      storePath,
       sessionAgentId: "main",
       sessionCwd: tmpDir,
       config: {},
@@ -541,7 +542,6 @@ describe("CLI attempt execution", () => {
       sessionKey,
       sessionEntry,
       sessionStore,
-      storePath,
       sessionAgentId: "main",
       sessionCwd: tmpDir,
       config: {},
@@ -578,7 +578,6 @@ describe("CLI attempt execution", () => {
       sessionKey,
       sessionEntry: updatedFirst,
       sessionStore,
-      storePath,
       sessionAgentId: "main",
       sessionCwd: tmpDir,
       config: {},
@@ -616,7 +615,6 @@ describe("CLI attempt execution", () => {
       sessionKey,
       sessionEntry,
       sessionStore,
-      storePath,
       sessionAgentId: "main",
       sessionCwd: tmpDir,
       config: {},
@@ -668,7 +666,6 @@ describe("CLI attempt execution", () => {
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
-      storePath,
       sessionHasHistory: false,
     });
 
@@ -773,7 +770,6 @@ describe("CLI attempt execution", () => {
       onAgentEvent: vi.fn(),
       authProfileProvider: "anthropic",
       sessionStore,
-      storePath,
       sessionHasHistory: false,
     });
 
@@ -828,7 +824,6 @@ describe("CLI attempt execution", () => {
       onAgentEvent: vi.fn(),
       authProfileProvider: "openai",
       sessionStore,
-      storePath,
       sessionHasHistory: false,
     });
 
@@ -893,7 +888,6 @@ describe("CLI attempt execution", () => {
       onAgentEvent: vi.fn(),
       authProfileProvider: "anthropic",
       sessionStore,
-      storePath,
       sessionHasHistory: true,
     });
 
@@ -1009,7 +1003,6 @@ describe("CLI attempt execution", () => {
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
-      storePath,
       sessionHasHistory: false,
     });
 
