@@ -46,7 +46,7 @@ type SessionRow = SessionDisplayRow & {
 };
 
 const AGENT_PAD = 10;
-const KIND_PAD = 6;
+const KIND_PAD = 11; // "spawn-child".length — longest kind label
 const RUNTIME_PAD = 18;
 const TOKENS_PAD = 20;
 const DEFAULT_SESSIONS_LIMIT = 100;
@@ -186,9 +186,6 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
   }
   if (kind === "direct") {
     return theme.accent(label);
-  }
-  if (kind === "spawn-child") {
-    return theme.muted(label);
   }
   return theme.muted(label);
 };
