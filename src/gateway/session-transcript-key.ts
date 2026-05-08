@@ -21,11 +21,11 @@ function resolveTranscriptIdentityForComparison(value: string | undefined): stri
   return trimmed;
 }
 
-function sessionKeyMatchesTranscriptPath(params: {
+function sessionKeyMatchesTranscriptLocator(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   key: string;
-  targetPath: string;
+  targetLocator: string;
 }): boolean {
   const entry = params.store[params.key];
   if (!entry?.sessionId) {
@@ -42,29 +42,29 @@ function sessionKeyMatchesTranscriptPath(params: {
     entry.sessionId,
     entry.sessionFile,
     sessionAgentId,
-  ).some((candidate) => resolveTranscriptIdentityForComparison(candidate) === params.targetPath);
+  ).some((candidate) => resolveTranscriptIdentityForComparison(candidate) === params.targetLocator);
 }
 
 export function clearSessionTranscriptKeyCacheForTests(): void {
   TRANSCRIPT_SESSION_KEY_CACHE.clear();
 }
 
-export function resolveSessionKeyForTranscriptFile(sessionFile: string): string | undefined {
-  const targetPath = resolveTranscriptIdentityForComparison(sessionFile);
-  if (!targetPath) {
+export function resolveSessionKeyForTranscriptLocator(locator: string): string | undefined {
+  const targetLocator = resolveTranscriptIdentityForComparison(locator);
+  if (!targetLocator) {
     return undefined;
   }
   const cfg = getRuntimeConfig();
   const { entries: store } = loadCombinedSessionEntriesForGateway(cfg);
 
-  const cachedKey = TRANSCRIPT_SESSION_KEY_CACHE.get(targetPath);
+  const cachedKey = TRANSCRIPT_SESSION_KEY_CACHE.get(targetLocator);
   if (
     cachedKey &&
-    sessionKeyMatchesTranscriptPath({
+    sessionKeyMatchesTranscriptLocator({
       cfg,
       store,
       key: cachedKey,
-      targetPath,
+      targetLocator,
     })
   ) {
     return cachedKey;
@@ -76,11 +76,11 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
       continue;
     }
     if (
-      sessionKeyMatchesTranscriptPath({
+      sessionKeyMatchesTranscriptLocator({
         cfg,
         store,
         key,
-        targetPath,
+        targetLocator,
       })
     ) {
       matchingEntries.push([key, entry]);
@@ -131,7 +131,7 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
     if (resolvedKey) {
       // Evict oldest-inserted entry when cache exceeds size cap (FIFO bound).
       if (
-        !TRANSCRIPT_SESSION_KEY_CACHE.has(targetPath) &&
+        !TRANSCRIPT_SESSION_KEY_CACHE.has(targetLocator) &&
         TRANSCRIPT_SESSION_KEY_CACHE.size >= TRANSCRIPT_SESSION_KEY_CACHE_MAX
       ) {
         const oldest = TRANSCRIPT_SESSION_KEY_CACHE.keys().next().value;
@@ -139,11 +139,11 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
           TRANSCRIPT_SESSION_KEY_CACHE.delete(oldest);
         }
       }
-      TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, resolvedKey);
+      TRANSCRIPT_SESSION_KEY_CACHE.set(targetLocator, resolvedKey);
       return resolvedKey;
     }
   }
 
-  TRANSCRIPT_SESSION_KEY_CACHE.delete(targetPath);
+  TRANSCRIPT_SESSION_KEY_CACHE.delete(targetLocator);
   return undefined;
 }

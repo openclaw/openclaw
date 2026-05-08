@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
   exportSqliteSessionTranscriptJsonl,
   replaceSqliteSessionTranscriptEvents,
@@ -12,7 +13,7 @@ import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
+import { resolveSessionKeyForTranscriptLocator } from "./session-transcript-key.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -724,26 +725,29 @@ describe("session.message websocket events", () => {
     }
   });
 
-  test("routes transcript-only updates to the freshest session owner when different sessionIds share a transcript path", async () => {
-    const transcriptDir = await createTranscriptFixtureDir();
-    const transcriptPath = path.join(transcriptDir, "shared.jsonl");
+  test("routes transcript-only updates to the freshest session owner when different sessionIds share a transcript locator", async () => {
+    await createTranscriptFixtureDir();
+    const transcriptLocator = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "shared",
+    });
     await seedGatewaySessionEntries({
       entries: {
         older: {
           sessionId: "sess-old",
-          sessionFile: transcriptPath,
+          sessionFile: transcriptLocator,
           updatedAt: Date.now(),
         },
         newer: {
           sessionId: "sess-new",
-          sessionFile: transcriptPath,
+          sessionFile: transcriptLocator,
           updatedAt: Date.now() + 10,
         },
       },
     });
     replaceTranscriptEvents({
       sessionId: "sess-new",
-      transcriptPath,
+      transcriptPath: transcriptLocator,
       events: [
         { type: "session", version: 1, id: "sess-new" },
         {
@@ -756,13 +760,13 @@ describe("session.message websocket events", () => {
         },
       ],
     });
-    expect(resolveSessionKeyForTranscriptFile(transcriptPath)).toBe("agent:main:newer");
+    expect(resolveSessionKeyForTranscriptLocator(transcriptLocator)).toBe("agent:main:newer");
 
     await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
       emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
+        sessionFile: transcriptLocator,
         message: {
           role: "assistant",
           content: [{ type: "text", text: "shared transcript update" }],
