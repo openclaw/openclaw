@@ -437,11 +437,9 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
       resolveMemoryConfig,
       getMemorySearchManager,
-      requireDefaultStore,
     });
 
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
-    expect(requireDefaultStore).not.toHaveBeenCalled();
     expect(getMemorySearchManager).toHaveBeenCalledWith({
       cfg: expect.objectContaining({
         plugins: expect.objectContaining({
@@ -487,7 +485,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       memoryPlugin: { enabled: true, slot: "qmd" },
       resolveMemoryConfig: vi.fn(() => null),
       getMemorySearchManager,
-      requireDefaultStore: vi.fn(),
     });
 
     expect(manager.probeVectorStoreAvailability).not.toHaveBeenCalled();
@@ -502,9 +499,22 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     });
   });
 
-  it("keeps default memory-core on the cold-start store shortcut", async () => {
-    const resolveMemoryConfig = vi.fn(() => null);
-    const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
+  it("inspects default memory-core even when the cold-start store is not created yet", async () => {
+    const manager = {
+      probeVectorStoreAvailability: vi.fn(async () => true),
+      probeVectorAvailability: vi.fn(async () => true),
+      status: vi.fn(() => ({
+        backend: "builtin" as const,
+        provider: "memory-core",
+        files: 0,
+        chunks: 0,
+        vector: { enabled: true, available: true },
+        fts: { enabled: true, available: true },
+      })),
+      close: vi.fn(async () => {}),
+    };
+    const resolveMemoryConfig = vi.fn(() => ({ store: { path: "/tmp/main.sqlite" } }));
+    const getMemorySearchManager = vi.fn(async () => ({ manager }));
 
     const result = await resolveSharedMemoryStatusSnapshot({
       cfg: {},
@@ -512,11 +522,25 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig,
       getMemorySearchManager,
-      requireDefaultStore: () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
     });
 
-    expect(result).toBeNull();
-    expect(resolveMemoryConfig).not.toHaveBeenCalled();
-    expect(getMemorySearchManager).not.toHaveBeenCalled();
+    expect(resolveMemoryConfig).toHaveBeenCalledWith({}, "main");
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "status",
+    });
+    expect(manager.probeVectorStoreAvailability).toHaveBeenCalled();
+    expect(manager.probeVectorAvailability).not.toHaveBeenCalled();
+    expect(manager.close).toHaveBeenCalled();
+    expect(result).toEqual({
+      agentId: "main",
+      backend: "builtin",
+      provider: "memory-core",
+      files: 0,
+      chunks: 0,
+      vector: { enabled: true, available: true },
+      fts: { enabled: true, available: true },
+    });
   });
 });

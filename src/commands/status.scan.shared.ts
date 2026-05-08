@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
@@ -158,19 +157,6 @@ async function applyLocalStatusRpcFallback(params: {
   };
 }
 
-function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
-  if (
-    cfg.agents?.defaults &&
-    Object.prototype.hasOwnProperty.call(cfg.agents.defaults, "memorySearch")
-  ) {
-    return true;
-  }
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  return agents.some(
-    (agent) => agent?.id === agentId && Object.prototype.hasOwnProperty.call(agent, "memorySearch"),
-  );
-}
-
 export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStatus {
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   if (!pluginsEnabled) {
@@ -288,7 +274,6 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   memoryPlugin: MemoryPluginStatus;
   resolveMemoryConfig: (cfg: OpenClawConfig, agentId: string) => { store: { path: string } } | null;
   getMemorySearchManager: StatusMemorySearchManagerResolver;
-  requireDefaultStore?: (agentId: string) => string | null;
 }): Promise<MemoryStatusSnapshot | null> {
   const { cfg, agentStatus, memoryPlugin } = params;
   if (!memoryPlugin.enabled || !memoryPlugin.slot) {
@@ -300,14 +285,6 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return await resolveMemoryManagerStatusSnapshot(params, agentId);
   }
 
-  const defaultStorePath = params.requireDefaultStore?.(agentId);
-  if (
-    defaultStorePath &&
-    !hasExplicitMemorySearchConfig(cfg, agentId) &&
-    !existsSync(defaultStorePath)
-  ) {
-    return null;
-  }
   const resolvedMemory = params.resolveMemoryConfig(cfg, agentId);
   if (!resolvedMemory) {
     return null;

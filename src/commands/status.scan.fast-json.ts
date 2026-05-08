@@ -2,10 +2,7 @@ import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
-import {
-  resolveDefaultMemoryStorePath,
-  resolveStatusMemoryStatusSnapshot,
-} from "./status.scan-memory.ts";
+import { resolveStatusMemoryStatusSnapshot } from "./status.scan-memory.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
 
@@ -68,7 +65,6 @@ export async function scanStatusJsonFast(
             cfg,
             agentStatus,
             memoryPlugin,
-            requireDefaultStore: resolveDefaultMemoryStorePath,
           })
         : null,
   });

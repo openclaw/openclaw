@@ -27,7 +27,6 @@ export async function resolveStatusMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
   memoryPlugin: MemoryPluginStatus;
-  requireDefaultStore?: (agentId: string) => string;
 }): Promise<MemoryStatusSnapshot | null> {
   const { getMemorySearchManager } = await loadStatusScanDepsRuntimeModule();
   return await resolveSharedMemoryStatusSnapshot({
@@ -36,6 +35,5 @@ export async function resolveStatusMemoryStatusSnapshot(params: {
     memoryPlugin: params.memoryPlugin,
     resolveMemoryConfig: resolveMemorySearchConfig,
     getMemorySearchManager,
-    requireDefaultStore: params.requireDefaultStore,
   });
 }
