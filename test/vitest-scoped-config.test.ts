@@ -625,13 +625,15 @@ describe("scoped vitest configs", () => {
   });
 
   it("normalizes secrets include patterns relative to the scoped dir", () => {
-    expect(defaultSecretsConfig.test?.dir).toBe(path.join(process.cwd(), "src", "secrets"));
-    expect(defaultSecretsConfig.test?.include).toEqual(["**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultSecretsConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "secrets"));
+    expect(testConfig.include).toEqual(["**/*.test.ts"]);
   });
 
   it("normalizes hooks include patterns relative to the scoped dir", () => {
-    expect(defaultHooksConfig.test?.dir).toBe(path.join(process.cwd(), "src", "hooks"));
-    expect(defaultHooksConfig.test?.include).toEqual(["**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultHooksConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "hooks"));
+    expect(testConfig.include).toEqual(["**/*.test.ts"]);
   });
 
   it("keeps memory plugin tests out of the shared extensions lane", () => {
