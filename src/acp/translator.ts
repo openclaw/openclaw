@@ -1286,7 +1286,28 @@ export class AcpGatewayAgent implements Agent {
       }
       return pending;
     }
+    if (runId) {
+      for (const pending of this.pendingPrompts.values()) {
+        if (pending.idempotencyKey !== runId) {
+          continue;
+        }
+        this.reconcilePendingSessionKey(pending, sessionKey);
+        return pending;
+      }
+    }
     return undefined;
+  }
+
+  private reconcilePendingSessionKey(pending: PendingPrompt, sessionKey: string): void {
+    if (pending.sessionKey === sessionKey) {
+      return;
+    }
+    this.log(`session key reconciled: ${pending.sessionKey} -> ${sessionKey}`);
+    pending.sessionKey = sessionKey;
+    const session = this.sessionStore.getSession(pending.sessionId);
+    if (session?.activeRunId === pending.idempotencyKey) {
+      session.sessionKey = sessionKey;
+    }
   }
 
   private clearDisconnectTimer(): void {

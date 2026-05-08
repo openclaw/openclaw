@@ -59,6 +59,63 @@ describe("acp translator stop reason mapping", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
   });
 
+  it("reconciles provisional ACP session keys to canonical Gateway keys by run id", async () => {
+    const sentRunIds: string[] = [];
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        const runId = params?.idempotencyKey;
+        if (typeof runId === "string") {
+          sentRunIds.push(runId);
+        }
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const { agent, sessionId, sessionStore } = createSessionAgentHarness(request, {
+      sessionKey: "acp:session-1",
+    });
+
+    const firstPrompt = promptAgent(agent, sessionId);
+    await vi.waitFor(() => {
+      expect(sentRunIds).toHaveLength(1);
+    });
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId: sentRunIds[0],
+        sessionKey: "agent:main:acp:session-1",
+        seq: 1,
+        state: "final",
+        message: {
+          content: [{ type: "text", text: "first" }],
+        },
+      }),
+    );
+
+    await expect(firstPrompt).resolves.toEqual({ stopReason: "end_turn" });
+    expect(sessionStore.getSession(sessionId)?.sessionKey).toBe("agent:main:acp:session-1");
+
+    const secondPrompt = promptAgent(agent, sessionId, "again");
+    await vi.waitFor(() => {
+      expect(sentRunIds).toHaveLength(2);
+    });
+    expect(request).toHaveBeenLastCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main:acp:session-1",
+      }),
+      { timeoutMs: null },
+    );
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId: sentRunIds[1],
+        sessionKey: "agent:main:acp:session-1",
+        seq: 2,
+        state: "final",
+      }),
+    );
+
+    await expect(secondPrompt).resolves.toEqual({ stopReason: "end_turn" });
+  });
+
   it("keeps in-flight prompts pending across transient gateway disconnects", async () => {
     const { agent, promptPromise, runId } = await createPendingPromptHarness();
     const settleSpy = observeSettlement(promptPromise);

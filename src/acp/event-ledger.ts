@@ -233,7 +233,8 @@ function getOrCreateSession(
 ): LedgerSession {
   const now = state.now();
   const existing = state.store.sessions[params.sessionId];
-  if (!params.reset && existing && existing.sessionKey === params.sessionKey) {
+  if (!params.reset && existing) {
+    existing.sessionKey = params.sessionKey;
     if (params.cwd) {
       existing.cwd = params.cwd;
     }

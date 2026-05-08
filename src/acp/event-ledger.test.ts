@@ -138,6 +138,43 @@ describe("ACP event ledger", () => {
     ]);
   });
 
+  it("preserves prompt history when a provisional ACP key becomes a canonical Gateway key", async () => {
+    const ledger = createInMemoryAcpEventLedger({ now: () => 1000 });
+    await ledger.startSession({
+      sessionId: "acp-session-1",
+      sessionKey: "acp:gateway-session-1",
+      cwd: "/work",
+      complete: true,
+    });
+    await ledger.recordUserPrompt({
+      sessionId: "acp-session-1",
+      sessionKey: "acp:gateway-session-1",
+      runId: "run-1",
+      prompt: [{ type: "text", text: "Question" }],
+    });
+    await ledger.recordUpdate({
+      sessionId: "acp-session-1",
+      sessionKey: "agent:main:acp:gateway-session-1",
+      runId: "run-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Answer" },
+      },
+    });
+
+    const replay = await ledger.readReplayBySessionKey({
+      sessionKey: "agent:main:acp:gateway-session-1",
+    });
+
+    expect(replay.complete).toBe(true);
+    expect(replay.sessionId).toBe("acp-session-1");
+    expect(replay.sessionKey).toBe("agent:main:acp:gateway-session-1");
+    expect(replay.events.map((event) => event.update.sessionUpdate)).toEqual([
+      "user_message_chunk",
+      "agent_message_chunk",
+    ]);
+  });
+
   it("can replay multi-block prompt history by ACP session id", async () => {
     const ledger = createInMemoryAcpEventLedger({ now: () => 1000 });
     await ledger.startSession({
