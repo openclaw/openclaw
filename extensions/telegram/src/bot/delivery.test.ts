@@ -427,7 +427,8 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMessage.mock.calls[0]?.[1]).toBeTypeOf("string");
+    expect(sendMessage.mock.calls[0]?.[1]).not.toBe("");
     expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
   });
 
@@ -445,7 +446,8 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMessage.mock.calls[0]?.[1]).toBeTypeOf("string");
+    expect(sendMessage.mock.calls[0]?.[1]).not.toBe("");
     expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
   });
 
