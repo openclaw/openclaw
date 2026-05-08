@@ -9,6 +9,7 @@ import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.j
 export type EmbeddedPiRunnerTestWorkspace = {
   tempRoot: string;
   agentDir: string;
+  stateDir: string;
   workspaceDir: string;
 };
 
@@ -17,10 +18,12 @@ export async function createEmbeddedPiRunnerTestWorkspace(
 ): Promise<EmbeddedPiRunnerTestWorkspace> {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const agentDir = path.join(tempRoot, "agent");
+  const stateDir = path.join(tempRoot, "state");
   const workspaceDir = path.join(tempRoot, "workspace");
   await fs.mkdir(agentDir, { recursive: true });
+  await fs.mkdir(stateDir, { recursive: true });
   await fs.mkdir(workspaceDir, { recursive: true });
-  return { tempRoot, agentDir, workspaceDir };
+  return { tempRoot, agentDir, stateDir, workspaceDir };
 }
 
 export async function cleanupEmbeddedPiRunnerTestWorkspace(

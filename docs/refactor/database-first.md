@@ -264,6 +264,9 @@ The remaining cleanup is mostly consolidation and deletion:
 - Bootstrap continuation detection now checks SQLite transcript locators through
   `hasCompletedBootstrapTranscriptTurn`; it no longer exposes a
   session-file-shaped helper name.
+- Embedded-runner tests now use virtual SQLite transcript locators, and opening
+  a new locator without a duplicate `sessionId` uses the locator's session id
+  as the database row identity.
 - Memory indexing helpers now use SQLite transcript terminology end to end:
   host exports list/build session transcript entries, targeted sync queues
   `sessionTranscripts`, and QMD/builtin indexers no longer expose session-file

@@ -140,7 +140,7 @@ function loadTranscriptState(params: { sessionFile: string; sessionId?: string; 
   }
 
   const header = createSessionHeader({
-    id: params.sessionId,
+    id: params.sessionId ?? scope.sessionId,
     cwd: params.cwd ?? process.cwd(),
   });
   const state = new TranscriptState({ header, entries: [] });
