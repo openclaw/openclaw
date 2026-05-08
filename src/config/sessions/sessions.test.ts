@@ -682,7 +682,7 @@ describe("resolveAndPersistSessionFile", () => {
     expect(readFixtureSessionEntries()[sessionKey]?.sessionFile).toBe(expectedSessionFile);
   });
 
-  it("rotates to a new transcript path when sessionId changes on the same session key", async () => {
+  it("rotates to a new SQLite locator when sessionId changes on the same session key", async () => {
     const previousSessionId = "old-session-id";
     const nextSessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
@@ -690,10 +690,10 @@ describe("resolveAndPersistSessionFile", () => {
       previousSessionId,
       fixture.sessionsDir(),
     );
-    const expectedNextSessionFile = resolveSessionTranscriptPathInDir(
-      nextSessionId,
-      fixture.sessionsDir(),
-    );
+    const expectedNextSessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: nextSessionId,
+    });
     const store = {
       [sessionKey]: {
         sessionId: previousSessionId,
