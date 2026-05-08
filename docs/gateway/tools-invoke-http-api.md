@@ -130,6 +130,51 @@ You can customize this deny list via `gateway.tools`:
 }
 ```
 
+### Unlocking `exec` for direct invokes
+
+The `exec` tool runs arbitrary shell commands on the gateway host (or on a paired
+node when `tools.exec.host = "node"` is configured), so it stays denied by
+default. This is remote command execution against the same trust boundary the
+agent-side bash exec already uses — sandboxing/container/network policy is the
+isolation boundary, not the HTTP tool registry. Operators who need to script
+gateway-side commands can opt in with two settings:
+
+```json5
+{
+  gateway: {
+    tools: {
+      allow: ["exec"], // remove `exec` from the HTTP deny list
+    },
+  },
+  tools: {
+    exec: {
+      security: "full", // skip the agent approval flow
+      ask: "off", // /tools/invoke has no interactive approver
+    },
+  },
+}
+```
+
+Notes:
+
+- The HTTP-registered `exec` is owner-scoped. Shared-secret bearer auth always
+  resolves to owner; trusted-proxy callers must present `operator.admin`.
+- The HTTP path reuses the full `tools.exec` defaults — `host`, `node`,
+  `security`, `ask`, `safeBins`, merged `safeBinProfiles`, `safeBinTrustedDirs`,
+  `strictInlineEval`, `pathPrepend`, `timeoutSec`, and exit-notification
+  settings — via the same resolver the agent path uses. Configured node
+  bindings and safe-bin hardening continue to apply over `/tools/invoke`.
+- Stricter `tools.exec.security` settings (e.g. `allowlist`) still apply and
+  fail closed: a command that requires approval returns `approval-unavailable`
+  because there is no interactive approver on the HTTP path.
+- Backgrounded execution is disabled on this surface; commands run synchronously
+  to completion or hit the configured `tools.exec.timeoutSec`.
+- The audit warning `gateway.tools_invoke_http.dangerous_allow` fires whenever
+  `gateway.tools.allow` re-enables tools from the default deny list, and
+  escalates to critical when `gateway.bind` is non-loopback or Tailscale serve
+  is in funnel mode. Treat the gateway token/password as full-admin and keep
+  the bind on loopback/tailnet.
+
 To help group policies resolve context, you can optionally set:
 
 - `x-openclaw-message-channel: <channel>` (example: `slack`, `telegram`)
