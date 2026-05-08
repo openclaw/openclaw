@@ -2227,6 +2227,31 @@ describe("loadPluginManifestRegistry", () => {
     expectUnsafeWorkspaceManifestRejected({ id: "unsafe-hardlink", mode: "hardlink" });
   });
 
+  it("still rejects config manifest hardlinks outside the Nix store in Nix mode", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const fixture = prepareLinkedManifestFixture({
+      id: "unsafe-config-hardlink",
+      mode: "hardlink",
+    });
+    if (!fixture.linked) {
+      return;
+    }
+    const registry = loadPluginManifestRegistry({
+      env: hermeticEnv({ OPENCLAW_NIX_MODE: "1" }),
+      candidates: [
+        createPluginCandidate({
+          idHint: "unsafe-config-hardlink",
+          rootDir: fixture.rootDir,
+          origin: "config",
+        }),
+      ],
+    });
+    expect(registry.plugins).toHaveLength(0);
+    expect(hasUnsafeManifestDiagnostic(registry)).toBe(true);
+  });
+
   it("allows bundled manifest paths that are hardlinked aliases", () => {
     if (process.platform === "win32") {
       return;
