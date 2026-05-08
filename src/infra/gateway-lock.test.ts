@@ -56,14 +56,6 @@ function expectGatewayLock(lock: Awaited<ReturnType<typeof acquireGatewayLock>>)
   return lock;
 }
 
-function resolveLockPath(env: NodeJS.ProcessEnv) {
-  const stateDir = resolveStateDir(env);
-  const configPath = resolveConfigPath(env, stateDir);
-  const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
-  const lockDir = resolveTestLockDir();
-  return { lockPath: path.join(lockDir, `gateway.${hash}.lock`), configPath };
-}
-
 function makeProcStat(pid: number, startTime: number) {
   const fields = [
     "R",

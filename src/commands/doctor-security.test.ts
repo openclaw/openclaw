@@ -469,7 +469,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         },
         agents: {
           runner: {
-            ask: "foo",
+            ask: "foo" as never,
           },
         },
       },

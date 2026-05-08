@@ -15,6 +15,7 @@ const legacyStoreMarkers = [
   { label: "cron run JSONL log", pattern: /\bcron[/\\]runs[/\\][A-Za-z0-9._-]+\.jsonl\b/u },
   { label: "trajectory JSONL sidecar", pattern: /\.trajectory\.jsonl\b/u },
   { label: "ACP stream JSONL sidecar", pattern: /\.acp-stream\.jsonl\b/u },
+  { label: "ACP event ledger JSON", pattern: /\bacp[/\\]event-ledger\.json\b/u },
   { label: "runtime cache JSON", pattern: /\bcache[/\\][A-Za-z0-9._-]+\.json\b/u },
   { label: "voice-call JSONL call log", pattern: /\bcalls\.jsonl\b/u },
   { label: "device-pair notify JSON", pattern: /\bdevice-pair-notify\.json\b/u },

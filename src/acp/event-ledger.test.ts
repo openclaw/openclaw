@@ -1,10 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createFileAcpEventLedger, createInMemoryAcpEventLedger } from "./event-ledger.js";
+import {
+  createInMemoryAcpEventLedger,
+  createSqliteAcpEventLedger,
+  importLegacyAcpEventLedgerFileToSqlite,
+  resolveDefaultAcpEventLedgerPath,
+} from "./event-ledger.js";
 
 describe("ACP event ledger", () => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+  });
+
   it("records complete in-memory session updates in sequence", async () => {
     const ledger = createInMemoryAcpEventLedger({ now: () => 123 });
     await ledger.startSession({
@@ -73,10 +83,10 @@ describe("ACP event ledger", () => {
     ).resolves.toEqual({ complete: false, events: [] });
   });
 
-  it("persists file-backed replay state across ledger instances", async () => {
+  it("persists SQLite replay state across ledger instances", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const filePath = path.join(dir, "acp", "event-ledger.json");
-      const first = createFileAcpEventLedger({ filePath, now: () => 1000 });
+      const dbPath = path.join(dir, "openclaw-state.sqlite");
+      const first = createSqliteAcpEventLedger({ path: dbPath, now: () => 1000 });
       await first.startSession({
         sessionId: "session-1",
         sessionKey: "agent:main:work",
@@ -93,7 +103,7 @@ describe("ACP event ledger", () => {
         },
       });
 
-      const second = createFileAcpEventLedger({ filePath });
+      const second = createSqliteAcpEventLedger({ path: dbPath });
       const replay = await second.readReplay({
         sessionId: "session-1",
         sessionKey: "agent:main:work",
@@ -105,7 +115,6 @@ describe("ACP event ledger", () => {
         sessionUpdate: "agent_thought_chunk",
         content: { type: "text", text: "Thinking" },
       });
-      await expect(fs.readFile(filePath, "utf8")).resolves.toContain('"version":1');
     });
   });
 
@@ -288,10 +297,10 @@ describe("ACP event ledger", () => {
     ).resolves.toEqual({ complete: false, events: [] });
   });
 
-  it("keeps the persisted ledger file under the serialized byte budget", async () => {
+  it("keeps SQLite replay state under the serialized byte budget", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const filePath = path.join(dir, "acp", "event-ledger.json");
-      const ledger = createFileAcpEventLedger({ filePath, maxSerializedBytes: 1024 });
+      const dbPath = path.join(dir, "openclaw-state.sqlite");
+      const ledger = createSqliteAcpEventLedger({ path: dbPath, maxSerializedBytes: 1024 });
       await ledger.startSession({
         sessionId: "session-1",
         sessionKey: "agent:main:work",
@@ -309,31 +318,77 @@ describe("ACP event ledger", () => {
         },
       });
 
-      const bytes = Buffer.byteLength(await fs.readFile(filePath, "utf8"), "utf8");
-      expect(bytes).toBeLessThanOrEqual(1024);
       await expect(
         ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
       ).resolves.toEqual({ complete: false, events: [] });
     });
   });
 
-  it("ignores corrupt ledger files instead of replaying unknown state", async () => {
+  it("imports legacy file-backed ledger state into SQLite", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const filePath = path.join(dir, "event-ledger.json");
-      await fs.writeFile(filePath, "{bad json", "utf8");
-      const ledger = createFileAcpEventLedger({ filePath });
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const filePath = resolveDefaultAcpEventLedgerPath(env);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          version: 1,
+          sessions: {
+            "session-1": {
+              sessionId: "session-1",
+              sessionKey: "agent:main:work",
+              cwd: "/work",
+              complete: true,
+              createdAt: 1000,
+              updatedAt: 1000,
+              nextSeq: 2,
+              events: [
+                {
+                  seq: 1,
+                  at: 1000,
+                  sessionId: "session-1",
+                  sessionKey: "agent:main:work",
+                  update: {
+                    sessionUpdate: "agent_message_chunk",
+                    content: { type: "text", text: "Imported" },
+                  },
+                },
+              ],
+            },
+          },
+        }),
+        "utf8",
+      );
 
+      await expect(importLegacyAcpEventLedgerFileToSqlite(env)).resolves.toEqual({
+        imported: true,
+        sessions: 1,
+        events: 1,
+      });
+
+      const ledger = createSqliteAcpEventLedger({ env });
       await expect(
         ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
-      ).resolves.toEqual({ complete: false, events: [] });
+      ).resolves.toMatchObject({
+        complete: true,
+        events: [
+          {
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "Imported" },
+            },
+          },
+        ],
+      });
+      await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
-  it("reloads file-backed state under lock before writing", async () => {
+  it("reloads SQLite state inside the write transaction before persisting", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const filePath = path.join(dir, "acp", "event-ledger.json");
-      const first = createFileAcpEventLedger({ filePath });
-      const second = createFileAcpEventLedger({ filePath });
+      const dbPath = path.join(dir, "openclaw-state.sqlite");
+      const first = createSqliteAcpEventLedger({ path: dbPath });
+      const second = createSqliteAcpEventLedger({ path: dbPath });
 
       await first.startSession({
         sessionId: "session-1",
@@ -356,7 +411,7 @@ describe("ACP event ledger", () => {
         },
       });
 
-      const reader = createFileAcpEventLedger({ filePath });
+      const reader = createSqliteAcpEventLedger({ path: dbPath });
       const replay = await reader.readReplay({
         sessionId: "session-2",
         sessionKey: "acp:gateway-session-2",

@@ -268,6 +268,9 @@ The remaining cleanup is mostly consolidation and deletion:
   session id as the retained transcript identity.
 - ACP session metadata APIs now read/list/upsert SQLite rows by `agentId` and
   no longer expose `storePath` as part of the ACP session entry contract.
+- ACP replay ledger runtime now stores per-session replay rows in the shared
+  SQLite state database instead of `acp/event-ledger.json`; doctor imports and
+  removes the legacy file.
 - Gateway transcript reader helpers now live in
   `src/gateway/session-transcript-readers.ts` instead of the old
   `session-utils.fs` module name. The fallback retry history check is named for
@@ -669,6 +672,8 @@ Move these into agent databases:
   the per-agent `cache_entries` table. Gateway-wide model caches stay in the
   global database unless they become agent-specific.
 - ACP parent stream logs. Done for runtime writes.
+- ACP replay ledger sessions. Done for runtime writes; legacy
+  `acp/event-ledger.json` remains only as doctor/migrate input.
 - Trajectory sidecars when they are not explicit export files. Done for runtime
   writes: trajectory capture writes agent-database `trajectory_runtime_events`
   rows and mirrors run-scoped artifacts into SQLite. Legacy sidecars remain
@@ -1012,6 +1017,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `sessions.json`
 - `*.trajectory.jsonl` except explicit export/debug paths
 - `.acp-stream.jsonl`
+- `acp/event-ledger.json`
 - `cache/*.json` runtime cache files
 - `cron/runs/*.jsonl`
 - `jobs-state.json`

@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  importLegacyAcpEventLedgerFileToSqlite,
+  legacyAcpEventLedgerFileExists,
+} from "../acp/event-ledger.js";
+import {
   discoverLegacyAuthProfileStateAgentDirs,
   importLegacyAuthProfileStateFileToSqlite,
 } from "../agents/auth-profiles/state.js";
@@ -119,6 +123,7 @@ type LegacyStateProbe = {
   taskRegistry: boolean;
   taskFlowRegistry: boolean;
   tuiLastSession: boolean;
+  acpEventLedger: boolean;
   voiceWake: boolean;
   voiceWakeRouting: boolean;
   authProfileStateAgentDirs: string[];
@@ -199,6 +204,7 @@ async function probeLegacyRuntimeStateFiles(params: {
     taskRegistry: legacyTaskRegistrySidecarExists(env),
     taskFlowRegistry: legacyTaskFlowRegistrySidecarExists(env),
     tuiLastSession: await legacyTuiLastSessionFileExists({ stateDir: baseDir }),
+    acpEventLedger: legacyAcpEventLedgerFileExists(env),
     voiceWake: await legacyVoiceWakeConfigFileExists(baseDir),
     voiceWakeRouting: await legacyVoiceWakeRoutingConfigFileExists(baseDir),
     authProfileStateAgentDirs: discoverLegacyAuthProfileStateAgentDirs(env),
@@ -226,7 +232,7 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
   }
   if (!params.prompter.shouldRepair) {
     note(
-      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, exec approvals, channel pairing, node pairing, node host config, push, media, plugin, plugin binding approvals, installed plugin index, subagent, task, Task Flow, TUI, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
+      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, exec approvals, channel pairing, node pairing, node host config, push, media, plugin, plugin binding approvals, installed plugin index, subagent, task, Task Flow, TUI, ACP event ledger, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
       "SQLite state",
     );
     return;
@@ -433,6 +439,16 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
       const result = await importLegacyTuiLastSessionStoreToSqlite({ stateDir: baseDir });
       if (result.imported) {
         changes.push(`- Imported ${result.pointers} TUI last-session pointer(s) into SQLite.`);
+      }
+    });
+  }
+  if (probe.acpEventLedger) {
+    await runImport("ACP event ledger", async () => {
+      const result = await importLegacyAcpEventLedgerFileToSqlite(env);
+      if (result.imported) {
+        changes.push(
+          `- Imported ${result.sessions} ACP event ledger session(s) and ${result.events} event(s) into SQLite.`,
+        );
       }
     });
   }

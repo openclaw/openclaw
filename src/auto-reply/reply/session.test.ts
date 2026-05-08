@@ -9,6 +9,7 @@ import {
 } from "../../agents/pi-bundle-mcp-tools.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntry,
   listSessionEntries,
@@ -1239,7 +1240,7 @@ describe("initSessionState RawBody", () => {
     const sessionKey = `agent:${agentId}:telegram:12345`;
     const sessionId = "sess-worker-1";
     const transcriptDir = path.join(stateDir, "transcript-fixtures", agentId);
-    const sessionFile = path.join(transcriptDir, `${sessionId}.jsonl`);
+    const sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
     const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(transcriptDir, agentId);
 
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -2175,7 +2176,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 
   it("preserves usage family metadata across /new and /reset", async () => {
-    const storePath = await createStorePath("openclaw-reset-usage-family-");
+    const sessionRowsTarget = await createSessionRowsTarget("openclaw-reset-usage-family-");
     const sessionKey = "agent:main:telegram:dm:user-usage-family";
     const existingSessionId = "existing-session-usage-family";
     const cases = [
@@ -2191,7 +2192,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
     for (const testCase of cases) {
       await seedSessionStoreWithOverrides({
-        storePath,
+        target: sessionRowsTarget,
         sessionKey,
         sessionId: existingSessionId,
         overrides: {
@@ -2213,7 +2214,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           Surface: "telegram",
         },
         cfg: {
-          session: { store: storePath, idleMinutes: 999 },
+          session: { idleMinutes: 999 },
         } as OpenClawConfig,
         commandAuthorized: true,
       });
@@ -2227,7 +2228,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         result.sessionId,
       ]);
 
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      const stored = readSessionRowsForFixtureTarget(sessionRowsTarget);
       expect(stored[sessionKey].usageFamilyKey, testCase.name).toBe("family:user-usage-family");
       expect(stored[sessionKey].usageFamilySessionIds, testCase.name).toEqual([
         "ancestor-session",

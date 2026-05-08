@@ -505,6 +505,7 @@ export async function arrangeLegacyStateMigrationTest(): Promise<{
   runtime: { log: MockFn; error: MockFn; exit: MockFn };
   detectLegacyStateMigrations: MockFn;
   runLegacyStateMigrations: MockFn;
+  createPreMigrationBackup: MockFn;
 }> {
   mockDoctorConfigSnapshot();
 

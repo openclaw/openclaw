@@ -2455,7 +2455,7 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
             });
             const suspension = sessionEntry?.quotaSuspension;
-            if (suspension?.state === "resuming") {
+            if (sessionEntry && suspension?.state === "resuming") {
               const subagents = listSessionEntries({ agentId: sessionAgentId })
                 .map(({ entry }) => entry)
                 .filter((s) => s.spawnedBy === sessionEntry.sessionId)
@@ -4162,9 +4162,6 @@ export async function runEmbeddedAttempt(
           sessionManager,
           bundleMcpRuntime,
           bundleLspRuntime,
-          sessionLock,
-          // PERF: If the run was aborted (user stop, timeout, etc.), skip the idle wait
-          // and flush pending results synchronously so we can release the session lock ASAP.
           aborted: cleanupAborted,
           abortSettlePromise: cleanupAborted ? buildAbortSettlePromise() : null,
           runId: params.runId,
