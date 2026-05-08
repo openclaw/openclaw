@@ -47,7 +47,7 @@ describe("config env vars", () => {
         }
       }`);
 
-      expect(() => applyConfigEnvVars(cfg)).not.toThrow();
+      expect(applyConfigEnvVars(cfg)).toBeUndefined();
       expect(process.env.API_TOKEN).toBe("sk-test-123");
       expect(process.env.PORT).toBeUndefined();
       expect(process.env.DEBUG).toBeUndefined();
