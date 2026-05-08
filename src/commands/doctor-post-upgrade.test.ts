@@ -109,6 +109,59 @@ describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("does not flag entry_unresolved when runtimeExtensions exists even if source entry is missing", async () => {
+    const root = await makeFixtureRoot("runtime-extensions");
+    try {
+      const pluginDir = path.join(root, "user-plugins", "runtime-only");
+      await fs.mkdir(path.join(pluginDir, "dist"), { recursive: true });
+      await fs.writeFile(path.join(pluginDir, "dist", "index.js"), "export default {};", "utf-8");
+      // Source entry (./src/index.ts) does NOT exist
+      // But runtime entry (./dist/index.js) DOES exist
+      await fs.writeFile(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "runtime-only",
+          version: "0.0.1",
+          type: "module",
+          openclaw: {
+            extensions: ["./src/index.ts"],
+            runtimeExtensions: ["./dist/index.js"],
+          },
+        }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "runtime-only" }),
+        "utf-8",
+      );
+
+      const installsPath = path.join(root, "plugins", "installs.json");
+      await fs.mkdir(path.dirname(installsPath), { recursive: true });
+      await fs.writeFile(
+        installsPath,
+        JSON.stringify({
+          version: 1,
+          plugins: [
+            {
+              pluginId: "runtime-only",
+              manifestPath: path.join(pluginDir, "openclaw.plugin.json"),
+              rootDir: pluginDir,
+              enabled: true,
+              packageJson: { path: "package.json" },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const report = await runPostUpgradeProbes({ installsPath });
+      expect(report.findings.filter((f) => f.code === "plugin.entry_unresolved")).toHaveLength(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("runPostUpgradeProbes — plugin.manifest_drift", () => {

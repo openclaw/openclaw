@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { listBuiltRuntimeEntryCandidates } from "../plugins/package-entrypoints.js";
 import type { PostUpgradeFinding, PostUpgradeReport } from "./doctor-post-upgrade.types.js";
 
 type InstalledPluginRecord = {
@@ -17,7 +18,7 @@ type InstallsJson = { plugins: InstalledPluginRecord[] };
 async function readInstalledPackageJson(rootDir: string, packageJsonRelPath: string) {
   const absPath = path.join(rootDir, packageJsonRelPath);
   const raw = await fs.readFile(absPath, "utf-8");
-  return JSON.parse(raw) as { openclaw?: { extensions?: string[] } };
+  return JSON.parse(raw) as { openclaw?: { extensions?: string[]; runtimeExtensions?: string[] } };
 }
 
 async function fileExists(absPath: string): Promise<boolean> {
@@ -48,7 +49,7 @@ export async function runPostUpgradeProbes(params: {
   for (const record of installs.plugins) {
     if (!record.enabled) continue;
     const pkgRelPath = record.packageJson?.path ?? "package.json";
-    let pkg: { openclaw?: { extensions?: string[] } };
+    let pkg: { openclaw?: { extensions?: string[]; runtimeExtensions?: string[] } };
     try {
       pkg = await readInstalledPackageJson(record.rootDir, pkgRelPath);
     } catch (err) {
@@ -58,9 +59,31 @@ export async function runPostUpgradeProbes(params: {
       continue;
     }
     const entries = pkg.openclaw?.extensions ?? [];
-    for (const entry of entries) {
+    const runtimeExtensions = pkg.openclaw?.runtimeExtensions ?? [];
+    for (const [index, entry] of entries.entries()) {
+      // First, check if there's an explicit runtimeExtensions entry at this index
+      const runtimeEntry = runtimeExtensions[index];
+      if (runtimeEntry) {
+        const absRuntimeEntry = path.resolve(record.rootDir, runtimeEntry);
+        if (await fileExists(absRuntimeEntry)) {
+          // Runtime entry exists, so we're good; skip to next entry
+          continue;
+        }
+        // Runtime entry doesn't exist; flag it
+        findings.push({
+          level: "error",
+          code: "plugin.entry_unresolved",
+          message: `Plugin ${record.pluginId} declares runtimeExtensions entry ${runtimeEntry} but the file does not exist at ${absRuntimeEntry}.`,
+          plugin: record.pluginId,
+          entry: runtimeEntry,
+        });
+        continue;
+      }
+
+      // No explicit runtime entry; try the source entry
       const absEntry = path.resolve(record.rootDir, entry);
       if (!(await fileExists(absEntry))) {
+        // Source entry doesn't exist either; flag it
         findings.push({
           level: "error",
           code: "plugin.entry_unresolved",
