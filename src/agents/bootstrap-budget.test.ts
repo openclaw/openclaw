@@ -211,7 +211,8 @@ describe("bootstrap prompt warnings", () => {
       mode: "once",
     });
     expect(first.warningShown).toBe(true);
-    expect(first.signature).toEqual(expect.any(String));
+    expect(first.signature).toBeTypeOf("string");
+    expect(first.signature).not.toBe("");
     expect(JSON.parse(first.signature ?? "{}")).toMatchObject({
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
