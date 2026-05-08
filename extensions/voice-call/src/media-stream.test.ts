@@ -40,12 +40,15 @@ const createDeferred = (): {
   resolve: () => void;
   reject: (error: Error) => void;
 } => {
-  let resolve!: () => void;
-  let reject!: (error: Error) => void;
+  let resolve: (() => void) | undefined;
+  let reject: ((error: Error) => void) | undefined;
   const promise = new Promise<void>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
     reject = rejectPromise;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 };
 
@@ -80,10 +83,13 @@ describe("MediaStreamHandler TTS queue", () => {
     const started: number[] = [];
     const finished: number[] = [];
 
-    let resolveFirst!: () => void;
+    let resolveFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       resolveFirst = resolve;
     });
+    if (!resolveFirst) {
+      throw new Error("Expected first TTS gate resolver to be initialized");
+    }
 
     const first = handler.queueTts("stream-1", async () => {
       started.push(1);
