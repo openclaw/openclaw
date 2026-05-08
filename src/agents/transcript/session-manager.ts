@@ -74,13 +74,6 @@ function resolveAgentIdFromSessionPath(sessionFile: string): string {
   return DEFAULT_AGENT_ID;
 }
 
-function resolveFallbackSessionIdFromPath(sessionFile: string): string {
-  const basename = path.basename(sessionFile);
-  const stem = basename.endsWith(".jsonl") ? basename.slice(0, -".jsonl".length) : basename;
-  const timestampIdMatch = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*_([^_]+)$/.exec(stem);
-  return timestampIdMatch?.[1] ?? stem;
-}
-
 function createTranscriptStateFromEvents(events: unknown[]): TranscriptState {
   const fileEntries = events.filter((event): event is FileEntry =>
     Boolean(event && typeof event === "object"),
@@ -126,12 +119,13 @@ function loadTranscriptState(params: { sessionFile: string; sessionId?: string; 
       `Legacy transcript has not been imported into SQLite: ${transcriptPath}. Run "openclaw doctor --fix" to build the session database.`,
     );
   }
+  const sessionId = existingScope?.sessionId ?? params.sessionId;
+  if (!sessionId) {
+    throw new Error(`SQLite transcript scope is missing session id for: ${transcriptPath}`);
+  }
   const scope = {
     agentId: existingScope?.agentId ?? resolveAgentIdFromSessionPath(transcriptPath),
-    sessionId:
-      existingScope?.sessionId ??
-      params.sessionId ??
-      resolveFallbackSessionIdFromPath(transcriptPath),
+    sessionId,
     transcriptPath,
   };
   const sqliteEvents = loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
@@ -428,8 +422,7 @@ export class TranscriptSessionManager implements SessionManager {
     });
     this.state = new TranscriptState({ header, entries: [] });
     if (this.persist) {
-      this.sessionFile =
-        this.sessionFile ?? createSessionFileIdentifier(header, this.sqliteScope?.agentId);
+      this.sessionFile = createSessionFileIdentifier(header, this.sqliteScope?.agentId);
       this.sqliteScope = {
         agentId: resolveAgentIdFromSessionPath(this.sessionFile),
         sessionId: header.id,

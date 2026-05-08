@@ -209,6 +209,9 @@ The remaining cleanup is mostly consolidation and deletion:
   `agents/<agentId>/sessions/*.jsonl` paths. The old path builders remain for
   doctor imports, explicit debug/export artifacts, and path-compatibility
   tests.
+- Starting a new persisted transcript session now always allocates a fresh
+  SQLite locator. The session manager no longer reuses a previous file-era
+  transcript path as the identity for the new session.
 - Plugin runtime no longer exposes `api.runtime.agent.session.resolveSessionFilePath`;
   plugin code either uses the SQLite row helpers or creates a
   `sqlite-transcript://...` locator through `session-store-runtime`.
