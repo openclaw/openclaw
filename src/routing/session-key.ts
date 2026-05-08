@@ -7,6 +7,7 @@ export {
   getSubagentDepth,
   isCronSessionKey,
   isAcpSessionKey,
+  isDashboardSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,
   parseThreadSessionSuffix,

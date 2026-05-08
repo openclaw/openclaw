@@ -96,6 +96,14 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("acp:") === true;
 }
 
+export function isDashboardSessionKey(sessionKey: string | undefined | null): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  return normalizeOptionalLowercaseString(parsed.rest)?.startsWith("dashboard:") === true;
+}
+
 export function parseThreadSessionSuffix(
   sessionKey: string | undefined | null,
 ): ParsedThreadSessionSuffix {

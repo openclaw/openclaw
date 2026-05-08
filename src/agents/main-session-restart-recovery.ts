@@ -17,7 +17,7 @@ import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
-import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import { isAcpSessionKey, isCronSessionKey, isDashboardSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -35,7 +35,10 @@ function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolea
     return true;
   }
   return (
-    isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) || isAcpSessionKey(sessionKey)
+    isSubagentSessionKey(sessionKey) ||
+    isCronSessionKey(sessionKey) ||
+    isAcpSessionKey(sessionKey) ||
+    isDashboardSessionKey(sessionKey)
   );
 }
 
