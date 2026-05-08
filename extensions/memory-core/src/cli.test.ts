@@ -575,7 +575,7 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status", "--fix"]);
 
-      expectLogged(log, "Repair: no changes");
+      expectLogged(log, "Repair: rewrote store");
       const entries = await readShortTermRecallEntries({ workspaceDir });
       expect(entries[0]?.conceptTags).toContain("router");
       expect(close).toHaveBeenCalled();
