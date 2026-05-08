@@ -68,7 +68,7 @@ import {
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   buildBootstrapContextForFiles,
-  hasCompletedBootstrapTurn,
+  hasCompletedBootstrapTranscriptTurn,
   isWorkspaceBootstrapPending,
   makeBootstrapWarn,
   resolveBootstrapFilesForRun,
@@ -1133,7 +1133,7 @@ export async function runEmbeddedAttempt(
       bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
       bootstrapMode,
       sessionFile: params.sessionFile,
-      hasCompletedBootstrapTurn,
+      hasCompletedBootstrapTranscriptTurn,
       resolveBootstrapContextForRun: async () => {
         const bootstrapFiles =
           preloadedBootstrapFiles ??

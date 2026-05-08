@@ -261,6 +261,9 @@ The remaining cleanup is mostly consolidation and deletion:
   `src/gateway/session-transcript-readers.ts` instead of the old
   `session-utils.fs` module name. The fallback retry history check is named for
   SQLite transcript content instead of session-file content.
+- Bootstrap continuation detection now checks SQLite transcript locators through
+  `hasCompletedBootstrapTranscriptTurn`; it no longer exposes a
+  session-file-shaped helper name.
 - Memory indexing helpers now use SQLite transcript terminology end to end:
   host exports list/build session transcript entries, targeted sync queues
   `sessionTranscripts`, and QMD/builtin indexers no longer expose session-file

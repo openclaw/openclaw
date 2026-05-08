@@ -57,8 +57,10 @@ export function resolveContextInjectionMode(config?: OpenClawConfig): AgentConte
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
 
-export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {
-  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile });
+export async function hasCompletedBootstrapTranscriptTurn(
+  transcriptLocator: string,
+): Promise<boolean> {
+  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: transcriptLocator });
   if (!scope) {
     return false;
   }

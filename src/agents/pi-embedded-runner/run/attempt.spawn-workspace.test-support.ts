@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi, type Mock } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../../../config/sessions/paths.js";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -12,6 +13,7 @@ import type {
   IngestResult,
 } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { DEFAULT_AGENT_ID, resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -70,7 +72,7 @@ type AttemptSpawnWorkspaceHoisted = {
   resolveBootstrapContextForRunMock: Mock<() => Promise<BootstrapContext>>;
   isWorkspaceBootstrapPendingMock: Mock<(workspaceDir: string) => Promise<boolean>>;
   resolveContextInjectionModeMock: Mock<() => "always" | "continuation-skip">;
-  hasCompletedBootstrapTurnMock: Mock<() => Promise<boolean>>;
+  hasCompletedBootstrapTranscriptTurnMock: Mock<() => Promise<boolean>>;
   resolveEmbeddedRunSkillEntriesMock: UnknownMock;
   resolveSkillsPromptForRunMock: UnknownMock;
   supportsModelToolsMock: Mock<(model?: unknown) => boolean>;
@@ -150,7 +152,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const resolveContextInjectionModeMock = vi.fn<() => "always" | "continuation-skip">(
     () => "always",
   );
-  const hasCompletedBootstrapTurnMock = vi.fn<() => Promise<boolean>>(async () => false);
+  const hasCompletedBootstrapTranscriptTurnMock = vi.fn<() => Promise<boolean>>(async () => false);
   const resolveEmbeddedRunSkillEntriesMock = vi.fn(() => ({
     shouldLoadSkillEntries: false,
     skillEntries: undefined,
@@ -201,7 +203,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     resolveBootstrapContextForRunMock,
     isWorkspaceBootstrapPendingMock,
     resolveContextInjectionModeMock,
-    hasCompletedBootstrapTurnMock,
+    hasCompletedBootstrapTranscriptTurnMock,
     resolveEmbeddedRunSkillEntriesMock,
     resolveSkillsPromptForRunMock,
     supportsModelToolsMock,
@@ -355,7 +357,7 @@ vi.mock("../../bootstrap-files.js", async () => {
     resolveBootstrapFilesForRun: hoisted.resolveBootstrapFilesForRunMock,
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
     resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
-    hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
+    hasCompletedBootstrapTranscriptTurn: hoisted.hasCompletedBootstrapTranscriptTurnMock,
   };
 });
 
@@ -899,7 +901,7 @@ export function resetEmbeddedAttemptHarness(
   });
   hoisted.isWorkspaceBootstrapPendingMock.mockReset().mockResolvedValue(false);
   hoisted.resolveContextInjectionModeMock.mockReset().mockReturnValue("always");
-  hoisted.hasCompletedBootstrapTurnMock.mockReset().mockResolvedValue(false);
+  hoisted.hasCompletedBootstrapTranscriptTurnMock.mockReset().mockResolvedValue(false);
   hoisted.resolveEmbeddedRunSkillEntriesMock.mockReset().mockReturnValue({
     shouldLoadSkillEntries: false,
     skillEntries: undefined,
@@ -1084,7 +1086,11 @@ export async function createContextEngineAttemptRunner(params: {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-workspace-"));
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-agent-"));
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-state-"));
-  const sessionFile = path.join(workspaceDir, "session.jsonl");
+  const sessionId = "embedded-session";
+  const sessionFile = createSqliteSessionTranscriptLocator({
+    agentId: resolveAgentIdFromSessionKey(params.sessionKey) ?? DEFAULT_AGENT_ID,
+    sessionId,
+  });
   params.tempPaths.push(workspaceDir, agentDir, stateDir);
   const seedMessages: AgentMessage[] =
     params.sessionMessages ?? ([{ role: "user", content: "seed", timestamp: 1 }] as AgentMessage[]);
@@ -1124,7 +1130,7 @@ export async function createContextEngineAttemptRunner(params: {
     const result = await (
       await loadRunEmbeddedAttempt()
     )({
-      sessionId: "embedded-session",
+      sessionId,
       sessionKey: params.sessionKey,
       sessionFile,
       workspaceDir,
