@@ -13,6 +13,7 @@ import {
   FsSafeError,
   readLocalFileSafely,
   root as openRoot,
+  writeExternalFileWithinRoot,
 } from "./fs-safe.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -126,6 +127,21 @@ describe("fs-safe", () => {
     const err = await readLocalFileSafely({ filePath: dir }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(FsSafeError);
     expect((err as FsSafeError).message).not.toMatch(/EISDIR/i);
+  });
+
+  it("writes external command output within an allowed root", async () => {
+    const dir = await tempDirs.make("openclaw-fs-safe-output-");
+
+    const result = await writeExternalFileWithinRoot({
+      rootDir: dir,
+      path: "artifact.txt",
+      write: async (tempPath) => {
+        await fs.writeFile(tempPath, "artifact");
+      },
+    });
+
+    expect(result.path).toBe(path.join(dir, "artifact.txt"));
+    await expect(fs.readFile(path.join(dir, "artifact.txt"), "utf8")).resolves.toBe("artifact");
   });
 
   it("enforces maxBytes", async () => {
