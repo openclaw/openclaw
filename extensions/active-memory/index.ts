@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  createSqliteSessionTranscriptLocator,
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -21,8 +21,6 @@ import {
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
-import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
-import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -472,42 +470,6 @@ function resolveQmdSearchMode(value: unknown): ActiveMemoryQmdSearchMode {
 function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
   const raw = asRecord(pluginConfig);
   return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
-}
-
-function resolveSafeTranscriptDir(baseTranscriptDir: string, transcriptDir: string): string {
-  const normalized = transcriptDir.trim();
-  if (!normalized || normalized.includes(":") || path.isAbsolute(normalized)) {
-    return path.resolve(baseTranscriptDir, DEFAULT_TRANSCRIPT_DIR);
-  }
-  const resolvedBase = path.resolve(baseTranscriptDir);
-  const candidate = path.resolve(resolvedBase, normalized);
-  if (!isPathInside(resolvedBase, candidate)) {
-    return path.resolve(resolvedBase, DEFAULT_TRANSCRIPT_DIR);
-  }
-  return candidate;
-}
-
-function toSafeTranscriptAgentDirName(agentId: string): string {
-  const encoded = encodeURIComponent(agentId.trim());
-  return encoded ? encoded : "unknown-agent";
-}
-
-function resolvePersistentTranscriptBaseDir(api: OpenClawPluginApi, agentId: string): string {
-  return path.join(
-    api.runtime.state.resolveStateDir(),
-    "plugins",
-    "active-memory",
-    "transcripts",
-    "agents",
-    toSafeTranscriptAgentDirName(agentId),
-  );
-}
-
-function requireTransientWorkspaceDir(tempDir: string | undefined): string {
-  if (!tempDir) {
-    throw new Error("Active memory transient workspace was not initialized.");
-  }
-  return tempDir;
 }
 
 function resolveCanonicalSessionKeyFromSessionId(params: {
@@ -2364,28 +2326,11 @@ async function runRecallSubagent(params: {
   const subagentSessionKey = parentSessionKey
     ? `${parentSessionKey}:${subagentSuffix}`
     : `agent:${params.agentId}:${subagentSuffix}`;
-  const transientWorkspace = params.config.persistTranscripts
-    ? undefined
-    : await tempWorkspace({
-        rootDir: resolvePreferredOpenClawTmpDir(),
-        prefix: "openclaw-active-memory-",
-      });
-  const tempDir = transientWorkspace?.dir;
-  const persistedDir = params.config.persistTranscripts
-    ? resolveSafeTranscriptDir(
-        resolvePersistentTranscriptBaseDir(params.api, params.agentId),
-        params.config.transcriptDir,
-      )
-    : undefined;
-  const sessionFile =
-    persistedDir !== undefined
-      ? path.join(persistedDir, `${subagentSessionId}.jsonl`)
-      : path.join(requireTransientWorkspaceDir(tempDir), "session.jsonl");
+  const sessionFile = createSqliteSessionTranscriptLocator({
+    agentId: params.agentId,
+    sessionId: subagentSessionId,
+  });
   params.onSessionFile?.(sessionFile);
-  if (persistedDir) {
-    await fs.mkdir(persistedDir, { recursive: true, mode: 0o700 });
-    await fs.chmod(persistedDir, 0o700).catch(() => undefined);
-  }
   const prompt = buildRecallPrompt({
     config: params.config,
     query: params.query,
@@ -2479,8 +2424,6 @@ async function runRecallSubagent(params: {
       return { rawReply: "NONE", resultStatus: "failed" };
     }
     throw error;
-  } finally {
-    await transientWorkspace?.cleanup();
   }
 }
 

@@ -148,6 +148,7 @@ export {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
 } from "../config/sessions/transcript-store.sqlite.js";
+export { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   buildSessionContext,

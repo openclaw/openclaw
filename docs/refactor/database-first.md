@@ -196,6 +196,10 @@ The remaining cleanup is mostly consolidation and deletion:
   `agents/<agentId>/sessions/*.jsonl` paths. The old path builders remain for
   doctor imports, explicit debug/export artifacts, and path-compatibility
   tests.
+- Active-memory blocking subagent runs now pass virtual SQLite transcript
+  locators to embedded agents instead of creating temporary or persisted
+  `session.jsonl` files under plugin state. The old `transcriptDir` option is
+  now a compatibility no-op.
 - Parent transcript fork decisions and fork creation no longer accept
   `storePath` or `sessionsDir`; they use `{agentId, sessionId}` SQLite
   transcript scope and derive any retained path metadata from the parent
@@ -885,6 +889,8 @@ is newer than the backup.
   preview, lifecycle, command session-entry updates, auto-reply reset/trace, and
   memory-core dreaming fixtures, approval target routing, session transcript
   repair, security permission repair, trajectory export, and session export.
+  Active-memory transcript tests now assert SQLite locators and no temporary or
+  persisted JSONL file creation.
   The old heartbeat transcript-pruning regression was removed because
   runtime no longer truncates JSONL transcripts.
   Agent session-list tool tests no longer model legacy `sessions.json` paths
