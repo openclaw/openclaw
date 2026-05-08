@@ -63,8 +63,7 @@ describe("printCronList", () => {
       // sessionTarget is intentionally omitted to simulate the bug
     });
 
-    // This should not throw "Cannot read properties of undefined (reading 'trim')"
-    expect(() => printCronList([jobWithUndefinedTarget], runtime)).not.toThrow();
+    printCronList([jobWithUndefinedTarget], runtime);
 
     // Verify output contains the job
     expect(logs.length).toBeGreaterThan(1);
@@ -79,7 +78,7 @@ describe("printCronList", () => {
       sessionTarget: "isolated",
     });
 
-    expect(() => printCronList([jobWithTarget], runtime)).not.toThrow();
+    printCronList([jobWithTarget], runtime);
     expectLogsToInclude(logs, "isolated");
   });
 
@@ -95,7 +94,7 @@ describe("printCronList", () => {
       state: undefined,
     } as unknown as CronJob;
 
-    expect(() => printCronList([malformedJob], runtime)).not.toThrow();
+    printCronList([malformedJob], runtime);
     expectLogsToInclude(logs, "malformed-job");
   });
 

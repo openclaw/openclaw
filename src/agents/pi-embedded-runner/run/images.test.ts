@@ -80,7 +80,7 @@ describe("detectImageReferences", () => {
       1,
     );
 
-    expect(refs.some((r) => r.type === "path")).toBe(true);
+    expect(refs.map((ref) => ref.type)).toContain("path");
   });
 
   it("does not leak parser state between calls", () => {

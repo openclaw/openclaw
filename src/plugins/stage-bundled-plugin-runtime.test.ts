@@ -518,7 +518,7 @@ describe("stageBundledPluginRuntime", () => {
       return realSymlinkSync(String(target), linkPath, type);
     }) as typeof fs.symlinkSync);
 
-    expect(() => stageBundledPluginRuntime({ repoRoot })).not.toThrow();
+    stageBundledPluginRuntime({ repoRoot });
 
     const runtimeAssetPath = path.join(
       repoRoot,

@@ -428,12 +428,9 @@ describe("ollama setup", () => {
       "qwen3-coder:480b-cloud",
       "gpt-oss:120b-cloud",
     ]);
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).endsWith("/api/show"))).toBe(
-      false,
-    );
-    expect(
-      fetchMock.mock.calls.some((call) => requestUrl(call[0]) === "https://ollama.com/api/tags"),
-    ).toBe(true);
+    const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
+    expect(requestUrls.filter((url) => url.endsWith("/api/show"))).toEqual([]);
+    expect(requestUrls).toContain("https://ollama.com/api/tags");
   });
 
   it("uses /api/show context windows when building Ollama model configs", async () => {
@@ -699,9 +696,8 @@ describe("ollama setup", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).endsWith("/api/pull"))).toBe(
-      false,
-    );
+    const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
+    expect(requestUrls.filter((url) => url.endsWith("/api/pull"))).toEqual([]);
     expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toEqual([
       "gemma4:latest",
     ]);

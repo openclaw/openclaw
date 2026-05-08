@@ -3628,13 +3628,11 @@ describe("active-memory plugin", () => {
       ),
     );
     expect(
-      vi
-        .mocked(api.logger.info)
-        .mock.calls.some((call: unknown[]) =>
-          String(call[0]).includes(`transcript=${expectedDir}${path.sep}`),
-        ),
-    ).toBe(true);
-    expect(rmSpy.mock.calls.some(([target]) => String(target).startsWith(expectedDir))).toBe(false);
+      vi.mocked(api.logger.info).mock.calls.map((call: unknown[]) => String(call[0])),
+    ).toContainEqual(expect.stringContaining(`transcript=${expectedDir}${path.sep}`));
+    expect(rmSpy.mock.calls.filter(([target]) => String(target).startsWith(expectedDir))).toEqual(
+      [],
+    );
   });
 
   it("falls back to the default transcript directory when transcriptDir is unsafe", async () => {

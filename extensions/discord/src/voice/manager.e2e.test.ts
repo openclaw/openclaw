@@ -412,7 +412,7 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1002");
   });
 
-  it("does not throw when stale tracked voice connections are already destroyed", async () => {
+  it("skips destroying stale tracked voice connections that are already destroyed", async () => {
     const staleConnection = createConnectionMock();
     staleConnection.state.status = "destroyed";
     staleConnection.destroy.mockImplementation(() => {
@@ -429,7 +429,7 @@ describe("DiscordVoiceManager", () => {
     expect(staleConnection.destroy).not.toHaveBeenCalled();
   });
 
-  it("does not throw when leaving an already destroyed voice connection", async () => {
+  it("skips destroying an already destroyed voice connection on leave", async () => {
     const connection = createConnectionMock();
     connection.destroy.mockImplementation(() => {
       throw new Error("Cannot destroy VoiceConnection - it has already been destroyed");
@@ -1095,7 +1095,7 @@ describe("DiscordVoiceManager", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
-  it("DiscordVoiceReadyListener: propagates autoJoin errors fire-and-forget without throwing", async () => {
+  it("DiscordVoiceReadyListener: starts autoJoin fire-and-forget on ready", async () => {
     const manager = createManager();
     const autoJoinSpy = vi
       .spyOn(manager, "autoJoin")
@@ -1104,7 +1104,7 @@ describe("DiscordVoiceManager", () => {
     const { DiscordVoiceReadyListener } = managerModule;
     const listener = new DiscordVoiceReadyListener(manager);
 
-    await expect(listener.handle(undefined, undefined as never)).resolves.not.toThrow();
+    await expect(listener.handle(undefined, undefined as never)).resolves.toBeUndefined();
     expect(autoJoinSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -1115,7 +1115,7 @@ describe("DiscordVoiceManager", () => {
     const { DiscordVoiceResumedListener } = managerModule;
     const listener = new DiscordVoiceResumedListener(manager);
 
-    await expect(listener.handle(undefined, undefined as never)).resolves.not.toThrow();
+    await expect(listener.handle(undefined, undefined as never)).resolves.toBeUndefined();
     expect(autoJoinSpy).toHaveBeenCalledTimes(1);
   });
 });

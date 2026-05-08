@@ -1865,9 +1865,9 @@ describe("google-meet plugin", () => {
           }),
         ]),
       );
-      expect(result.details.checks?.some((check) => check.id === "chrome-local-audio-device")).toBe(
-        false,
-      );
+      expect(
+        result.details.checks?.filter((check) => check.id === "chrome-local-audio-device"),
+      ).toEqual([]);
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });

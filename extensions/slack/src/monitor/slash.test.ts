@@ -910,7 +910,7 @@ describe("Slack native command argument menus", () => {
     );
   });
 
-  it("treats malformed percent-encoding as an invalid button (no throw)", async () => {
+  it("treats malformed percent-encoding as an invalid button", async () => {
     await runArgMenuAction(argMenuHandler, {
       action: { value: "cmdarg|%E0%A4%A|mode|on|U1" },
       includeRespond: false,

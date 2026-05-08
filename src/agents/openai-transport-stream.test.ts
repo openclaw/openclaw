@@ -998,9 +998,10 @@ describe("openai transport stream", () => {
     };
 
     expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
-    expect(params.input?.some((item) => item.role === "system" || item.role === "developer")).toBe(
-      false,
-    );
+    expect(params.input).toEqual(expect.any(Array));
+    expect(
+      params.input?.filter((item) => item.role === "system" || item.role === "developer"),
+    ).toEqual([]);
     expect(params.prompt_cache_key).toBe("session-123");
     expect(params.store).toBe(false);
     expect(params).not.toHaveProperty("metadata");
@@ -1299,7 +1300,7 @@ describe("openai transport stream", () => {
       }>;
     };
 
-    expect(params.input?.some((item) => item.type === "reasoning")).toBe(true);
+    expect(params.input?.filter((item) => item.type === "reasoning")).toHaveLength(1);
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );
@@ -3386,9 +3387,9 @@ describe("openai transport stream", () => {
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("stop");
-    expect(output.content.some((block) => (block as { type?: string }).type === "toolCall")).toBe(
-      false,
-    );
+    expect(
+      output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
+    ).toEqual([]);
   });
 
   it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {

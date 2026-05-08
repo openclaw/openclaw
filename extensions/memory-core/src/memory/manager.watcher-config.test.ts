@@ -268,7 +268,7 @@ describe("memory watcher config", () => {
 
     const watcher = createdWatchers[0];
     expect(watcher?.on).toHaveBeenCalledWith("error", expect.any(Function));
-    expect(() => watcher?.emit("error", new Error("watcher error: ENOSPC"))).not.toThrow();
+    expect(watcher?.emit("error", new Error("watcher error: ENOSPC"))).toBeUndefined();
     expect(memoryLoggerWarn).toHaveBeenCalledWith("memory watcher error: watcher error: ENOSPC");
   });
 });

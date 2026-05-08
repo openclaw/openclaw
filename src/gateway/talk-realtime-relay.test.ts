@@ -552,6 +552,6 @@ describe("talk realtime gateway relay", () => {
     expect(() => createSession("conn-1")).toThrow(
       "Too many active realtime relay sessions for this connection",
     );
-    expect(() => createSession("conn-2")).not.toThrow();
+    expect(createSession("conn-2")).toBeDefined();
   });
 });

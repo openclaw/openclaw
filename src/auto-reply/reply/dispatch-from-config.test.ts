@@ -727,14 +727,15 @@ function requireBlockReplyHandler(
 }
 
 async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs, "dispatcher">) {
-  await dispatchReplyFromConfig({
+  const first = await dispatchReplyFromConfig({
     ...params,
     dispatcher: createDispatcher(),
   });
-  await dispatchReplyFromConfig({
+  const second = await dispatchReplyFromConfig({
     ...params,
     dispatcher: createDispatcher(),
   });
+  return [first, second] as const;
 }
 
 describe("dispatchReplyFromConfig", () => {
@@ -2725,6 +2726,54 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps message-tool-only delivery mode on duplicate inbound returns", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "channel",
+      To: "telegram:chat:123",
+      MessageSid: "msg-tool-only-duplicate",
+      SessionKey: "agent:main:telegram:channel:123",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    const [first, duplicate] = await dispatchTwiceWithFreshDispatchers({
+      ctx,
+      cfg,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(first.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(duplicate.sourceReplyDeliveryMode).toBe("message_tool_only");
+  });
+
+  it("does not mark duplicate inbound returns as tool-only when message is unavailable", async () => {
+    setNoAbort();
+    const cfg = { tools: { allow: ["read"] } } as OpenClawConfig;
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "channel",
+      To: "telegram:chat:123",
+      MessageSid: "msg-tool-unavailable-duplicate",
+      SessionKey: "agent:main:telegram:channel:123",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "visible fallback" }) as ReplyPayload);
+
+    const [first, duplicate] = await dispatchTwiceWithFreshDispatchers({
+      ctx,
+      cfg,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(first.sourceReplyDeliveryMode).toBeUndefined();
+    expect(duplicate.sourceReplyDeliveryMode).toBeUndefined();
   });
 
   it("keeps local discord exec approval tool prompts when the native runtime is inactive", async () => {

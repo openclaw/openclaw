@@ -1483,7 +1483,7 @@ describe("exec approval handlers", () => {
       },
     });
     const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    expect(requested).toBeTruthy();
+    expect(requested).toEqual(expect.objectContaining({ event: "exec.approval.requested" }));
     const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
     expect(request["commandAnalysis"]).toEqual(
       expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),

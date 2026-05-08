@@ -515,36 +515,36 @@ describe("assertGatewayAuthNotKnownWeak", () => {
     },
   );
 
-  it("does not throw on an empty token (falls through to generation path)", () => {
-    expect(() =>
+  it("allows an empty token to fall through to generation path", () => {
+    expect(
       assertGatewayAuthNotKnownWeak({
         mode: "token",
         modeSource: "config",
         token: "",
         allowTailscale: false,
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
-  it("does not throw on a real token", () => {
-    expect(() =>
+  it("allows a real token", () => {
+    expect(
       assertGatewayAuthNotKnownWeak({
         mode: "token",
         modeSource: "config",
         token: "a-legit-random-token-0123456789abcdef",
         allowTailscale: false,
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
-  it("does not throw on the none mode", () => {
-    expect(() =>
+  it("allows the none mode", () => {
+    expect(
       assertGatewayAuthNotKnownWeak({
         mode: "none",
         modeSource: "default",
         allowTailscale: false,
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 });
 
@@ -569,7 +569,7 @@ describe("assertHooksTokenSeparateFromGatewayAuth", () => {
   });
 
   it("allows hooks token when gateway auth is not token mode", () => {
-    expect(() =>
+    expect(
       assertHooksTokenSeparateFromGatewayAuth({
         cfg: {
           hooks: {
@@ -584,11 +584,11 @@ describe("assertHooksTokenSeparateFromGatewayAuth", () => {
           allowTailscale: false,
         },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("allows matching values when hooks are disabled", () => {
-    expect(() =>
+    expect(
       assertHooksTokenSeparateFromGatewayAuth({
         cfg: {
           hooks: {
@@ -603,6 +603,6 @@ describe("assertHooksTokenSeparateFromGatewayAuth", () => {
           allowTailscale: false,
         },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 });

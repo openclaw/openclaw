@@ -327,9 +327,9 @@ describe("monitorDiscordProvider", () => {
 
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
     expect(disconnect).toHaveBeenCalledTimes(1);
-    expect(() =>
+    expect(
       emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1005")),
-    ).not.toThrow();
+    ).toBe(true);
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
     );
