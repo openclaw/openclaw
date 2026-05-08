@@ -61,11 +61,10 @@ describe("resolveParentForkTokenCountRuntime", () => {
   it("falls back to recent transcript usage when cached totals are stale", async () => {
     const root = await makeRoot("openclaw-parent-fork-token-estimate-");
     useStateRoot(root);
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
+    const transcriptDir = path.join(root, "transcript-fixtures");
 
     const sessionId = "parent-overflow-transcript";
-    const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+    const sessionFile = path.join(transcriptDir, `${sessionId}.jsonl`);
     const events: unknown[] = [
       {
         type: "session",
@@ -119,11 +118,10 @@ describe("resolveParentForkTokenCountRuntime", () => {
   it("falls back to a conservative byte estimate when stale parent transcript has no usage", async () => {
     const root = await makeRoot("openclaw-parent-fork-byte-estimate-");
     useStateRoot(root);
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
+    const transcriptDir = path.join(root, "transcript-fixtures");
 
     const sessionId = "parent-no-usage-transcript";
-    const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+    const sessionFile = path.join(transcriptDir, `${sessionId}.jsonl`);
     const events: unknown[] = [
       {
         type: "session",
@@ -162,11 +160,10 @@ describe("resolveParentForkTokenCountRuntime", () => {
   it("uses the latest usage snapshot instead of tail aggregates for parent fork checks", async () => {
     const root = await makeRoot("openclaw-parent-fork-latest-usage-");
     useStateRoot(root);
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
+    const transcriptDir = path.join(root, "transcript-fixtures");
 
     const sessionId = "parent-multiple-usage-transcript";
-    const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+    const sessionFile = path.join(transcriptDir, `${sessionId}.jsonl`);
     seedTranscript({
       sessionId,
       transcriptPath: sessionFile,
@@ -213,11 +210,10 @@ describe("resolveParentForkTokenCountRuntime", () => {
   it("keeps parent fork checks conservative for content appended after latest usage", async () => {
     const root = await makeRoot("openclaw-parent-fork-post-usage-tail-");
     useStateRoot(root);
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
+    const transcriptDir = path.join(root, "transcript-fixtures");
 
     const sessionId = "parent-post-usage-tail";
-    const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+    const sessionFile = path.join(transcriptDir, `${sessionId}.jsonl`);
     seedTranscript({
       sessionId,
       transcriptPath: sessionFile,
@@ -265,12 +261,11 @@ describe("forkSessionFromParentRuntime", () => {
   it("forks the active branch without synchronously opening the session manager", async () => {
     const root = await makeRoot("openclaw-parent-fork-");
     useStateRoot(root);
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
+    const transcriptDir = path.join(root, "transcript-fixtures");
     const cwd = path.join(root, "workspace");
     await fs.mkdir(cwd);
     const parentSessionId = "parent-session";
-    const parentSessionFile = path.join(sessionsDir, `${parentSessionId}.jsonl`);
+    const parentSessionFile = path.join(transcriptDir, `${parentSessionId}.jsonl`);
     const events = [
       {
         type: "session",
@@ -351,10 +346,9 @@ describe("forkSessionFromParentRuntime", () => {
   it("creates a header-only child when the parent has no entries", async () => {
     const root = await makeRoot("openclaw-parent-fork-empty-");
     useStateRoot(root);
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
+    const transcriptDir = path.join(root, "transcript-fixtures");
     const parentSessionId = "parent-empty";
-    const parentSessionFile = path.join(sessionsDir, `${parentSessionId}.jsonl`);
+    const parentSessionFile = path.join(transcriptDir, `${parentSessionId}.jsonl`);
     seedTranscript({
       sessionId: parentSessionId,
       transcriptPath: parentSessionFile,

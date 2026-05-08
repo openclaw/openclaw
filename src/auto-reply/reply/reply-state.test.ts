@@ -47,28 +47,26 @@ async function createCompactionSessionFixture(entry: SessionEntry) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
   tempDirs.push(tmp);
   vi.stubEnv("OPENCLAW_STATE_DIR", tmp);
-  const sessionsDir = path.join(tmp, "agents", "main", "sessions");
+  const transcriptDir = path.join(tmp, "transcript-fixtures", "main");
   const sessionKey = "main";
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-  await fs.mkdir(sessionsDir, { recursive: true });
   await seedMainAgentSessionRow({ sessionKey, entry });
-  return { sessionsDir, sessionKey, sessionStore };
+  return { transcriptDir, sessionKey, sessionStore };
 }
 
 async function rotateCompactionSessionFile(params: {
   tempPrefix: string;
-  sessionFile: (sessionsDir: string) => string;
+  sessionFile: (transcriptDir: string) => string;
   newSessionId: string;
 }) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
   tempDirs.push(tmp);
   vi.stubEnv("OPENCLAW_STATE_DIR", tmp);
-  const sessionsDir = path.join(tmp, "agents", "main", "sessions");
+  const transcriptDir = path.join(tmp, "transcript-fixtures", "main");
   const sessionKey = "main";
-  await fs.mkdir(sessionsDir, { recursive: true });
   const entry = {
     sessionId: "s1",
-    sessionFile: params.sessionFile(sessionsDir),
+    sessionFile: params.sessionFile(transcriptDir),
     updatedAt: Date.now(),
     compactionCount: 0,
   } as SessionEntry;
@@ -81,7 +79,7 @@ async function rotateCompactionSessionFile(params: {
     newSessionId: params.newSessionId,
   });
   const stored = readStoredMainAgentSessionRows();
-  const expectedDir = await fs.realpath(sessionsDir);
+  const expectedDir = path.join(await fs.realpath(tmp), "transcript-fixtures", "main");
   return { stored, sessionKey, expectedDir };
 }
 
@@ -609,7 +607,9 @@ describe("incrementCompactionCount", () => {
       updatedAt: Date.now(),
       compactionCount: 1,
     } as SessionEntry;
-    const { sessionsDir, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { transcriptDir, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    entry.sessionFile = path.join(transcriptDir, "old-session-id.jsonl");
+    sessionStore[sessionKey] = entry;
 
     await incrementCompactionCount({
       sessionEntry: entry,
@@ -619,7 +619,11 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = readStoredMainAgentSessionRows();
-    const expectedSessionDir = await fs.realpath(sessionsDir);
+    const expectedSessionDir = path.join(
+      await fs.realpath(path.dirname(path.dirname(transcriptDir))),
+      "transcript-fixtures",
+      "main",
+    );
     expect(stored[sessionKey].sessionId).toBe("new-session-id");
     expect(stored[sessionKey].sessionFile).toBe(
       path.join(expectedSessionDir, "new-session-id.jsonl"),
@@ -656,8 +660,8 @@ describe("incrementCompactionCount", () => {
       updatedAt: Date.now(),
       compactionCount: 0,
     } as SessionEntry;
-    const { sessionsDir, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
-    const rotatedSessionFile = path.join(sessionsDir, "rotated-same-id.jsonl");
+    const { transcriptDir, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const rotatedSessionFile = path.join(transcriptDir, "rotated-same-id.jsonl");
 
     await incrementCompactionCount({
       sessionEntry: entry,

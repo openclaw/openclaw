@@ -49,11 +49,10 @@ function setupState(prefix = "openclaw-session-utils-sqlite-") {
   previousStateDir = process.env.OPENCLAW_STATE_DIR;
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   process.env.OPENCLAW_STATE_DIR = stateDir;
-  fs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
 }
 
 function transcriptPath(sessionId: string, agentId = "main"): string {
-  return path.join(stateDir, "agents", agentId, "sessions", `${sessionId}.jsonl`);
+  return path.join(stateDir, "transcript-fixtures", agentId, `${sessionId}.jsonl`);
 }
 
 function seedTranscript(params: {
