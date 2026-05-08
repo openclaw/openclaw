@@ -19,15 +19,16 @@ export async function collectDeepCodeSafetyFindings(params: {
   }
 
   const auditDeep = await loadAuditDeepModule();
-  return [
-    ...(await auditDeep.collectPluginsCodeSafetyFindings({
+  const [pluginFindings, skillFindings] = await Promise.all([
+    auditDeep.collectPluginsCodeSafetyFindings({
       stateDir: params.stateDir,
       summaryCache: params.summaryCache,
-    })),
-    ...(await auditDeep.collectInstalledSkillsCodeSafetyFindings({
+    }),
+    auditDeep.collectInstalledSkillsCodeSafetyFindings({
       cfg: params.cfg,
       stateDir: params.stateDir,
       summaryCache: params.summaryCache,
-    })),
-  ];
+    }),
+  ]);
+  return [...pluginFindings, ...skillFindings];
 }

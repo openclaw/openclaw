@@ -29,6 +29,7 @@ export type SkillScanSummary = {
 export type SkillScanOptions = {
   excludeTestFiles?: boolean;
   includeFiles?: string[];
+  concurrency?: number;
   maxFiles?: number;
   maxFileBytes?: number;
 };
@@ -50,6 +51,7 @@ const SCANNABLE_EXTENSIONS = new Set([
 
 const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
+const DEFAULT_SCAN_CONCURRENCY = 8;
 const FILE_SCAN_CACHE_MAX = 5000;
 const DIR_ENTRY_CACHE_MAX = 5000;
 const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
@@ -425,9 +427,36 @@ function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOption
   return {
     excludeTestFiles: opts?.excludeTestFiles ?? false,
     includeFiles: opts?.includeFiles ?? [],
+    concurrency: Math.max(1, Math.floor(opts?.concurrency ?? DEFAULT_SCAN_CONCURRENCY)),
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
     maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
   };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const results: R[] = [];
+  results.length = items.length;
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index] as T, index);
+      }
+    }),
+  );
+
+  return results;
 }
 
 function isExcludedTestDirectoryName(name: string): boolean {
@@ -655,11 +684,13 @@ export async function scanDirectory(
   const files = await collectScannableFiles(dirPath, scanOptions);
   const allFindings: SkillScanFinding[] = [];
 
-  for (const file of files) {
-    const scanResult = await scanFileWithCache({
+  const scanResults = await mapWithConcurrency(files, scanOptions.concurrency, async (file) =>
+    scanFileWithCache({
       filePath: file,
       maxFileBytes: scanOptions.maxFileBytes,
-    });
+    }),
+  );
+  for (const scanResult of scanResults) {
     if (!scanResult.scanned) {
       continue;
     }
@@ -681,11 +712,13 @@ export async function scanDirectoryWithSummary(
   let warn = 0;
   let info = 0;
 
-  for (const file of files) {
-    const scanResult = await scanFileWithCache({
+  const scanResults = await mapWithConcurrency(files, scanOptions.concurrency, async (file) =>
+    scanFileWithCache({
       filePath: file,
       maxFileBytes: scanOptions.maxFileBytes,
-    });
+    }),
+  );
+  for (const scanResult of scanResults) {
     if (!scanResult.scanned) {
       continue;
     }

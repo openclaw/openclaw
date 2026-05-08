@@ -95,6 +95,7 @@ function runSyncNamedCase(name: string, run: () => void) {
 
 function normalizeSkillScanOptions(
   options?: Readonly<{
+    concurrency?: number;
     maxFiles?: number;
     maxFileBytes?: number;
     includeFiles?: readonly string[];
@@ -105,6 +106,7 @@ function normalizeSkillScanOptions(
     return undefined;
   }
   return {
+    ...(options.concurrency != null ? { concurrency: options.concurrency } : {}),
     ...(options.maxFiles != null ? { maxFiles: options.maxFiles } : {}),
     ...(options.maxFileBytes != null ? { maxFileBytes: options.maxFileBytes } : {}),
     ...(options.includeFiles ? { includeFiles: [...options.includeFiles] } : {}),
@@ -627,6 +629,44 @@ describe("scanDirectoryWithSummary", () => {
 
     try {
       await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("limits concurrent file reads during summary scans", async () => {
+    const root = makeTmpDir();
+    writeFixtureFiles(root, {
+      "a.js": `export const a = 1;`,
+      "b.js": `export const b = 2;`,
+      "c.js": `export const c = 3;`,
+      "d.js": `export const d = 4;`,
+      "e.js": `export const e = 5;`,
+      "f.js": `export const f = 6;`,
+    });
+
+    const realReadFile = fs.readFile;
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    const spy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      const pathArg = args[0];
+      if (typeof pathArg === "string" && pathArg.startsWith(root)) {
+        activeReads += 1;
+        maxActiveReads = Math.max(maxActiveReads, activeReads);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return await realReadFile(...args);
+        } finally {
+          activeReads -= 1;
+        }
+      }
+      return await realReadFile(...args);
+    });
+
+    try {
+      const summary = await scanDirectoryWithSummary(root, { concurrency: 2 });
+      expect(summary.scannedFiles).toBe(6);
+      expect(maxActiveReads).toBe(2);
     } finally {
       spy.mockRestore();
     }
