@@ -278,8 +278,8 @@ export function formatClaudeCliFallbackPrelude(
 
 /**
  * Read the Claude CLI session pointed to by `cliSessionId` and format a
- * fallback prelude. Returns `""` when no session file is found or when the
- * harvested seed has no usable content.
+ * fallback prelude. Returns `""` when no Claude CLI session JSONL is found or
+ * when the harvested seed has no usable content.
  */
 export function buildClaudeCliFallbackContextPrelude(params: {
   cliSessionId: string | undefined;

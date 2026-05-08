@@ -76,7 +76,7 @@ export function buildAssistantMessageWithZeroUsage(params: {
 // that failed before the model produced its own content. AWS Bedrock Converse
 // rejects assistant messages with `content: []` during replay ("The content
 // field in the Message object at messages.N is empty."), which can persist into
-// the session file and trap subsequent turns in a validation-failure loop. The
+// the transcript and trap subsequent turns in a validation-failure loop. The
 // raw provider error text is intentionally NOT placed in `content` because that
 // array is replayed back to the model on the next turn — provider error strings
 // can carry hostnames or upstream metadata, and replaying them as assistant

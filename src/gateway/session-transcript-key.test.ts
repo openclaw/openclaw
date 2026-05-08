@@ -117,7 +117,7 @@ describe("resolveSessionKeyForTranscriptLocator", () => {
     expect(loadCombinedSessionEntriesForGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("prefers the deterministic session key when duplicate sessionIds share a transcript path", () => {
+  it("prefers the deterministic session key when duplicate sessionIds share a transcript locator", () => {
     const store = {
       "agent:other:main": { sessionId: "run-dup", updatedAt: now + 1 },
       "agent:main:acp:run-dup": { sessionId: "run-dup", updatedAt: now },
@@ -148,7 +148,7 @@ describe("resolveSessionKeyForTranscriptLocator", () => {
   });
 
   it("evicts oldest entry when cache exceeds 256 entries (#63643)", () => {
-    // Fill cache with 256 unique transcript paths
+    // Fill cache with 256 unique transcript locators.
     for (let i = 0; i < 256; i++) {
       const sessionKey = `agent:main:session-${i}`;
       const transcriptPath = locator(`session-${i}`);
