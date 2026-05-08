@@ -900,7 +900,7 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toEqual(expect.any(String));
+    expect(saved.sessionId).toBeTypeOf("string");
     expect(saved.sessionId.trim().length).toBeGreaterThan(0);
   });
 
@@ -928,7 +928,7 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toEqual(expect.any(String));
+    expect(saved.sessionId).toBeTypeOf("string");
     expect(saved.sessionId.trim().length).toBeGreaterThan(0);
   });
 
