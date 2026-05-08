@@ -140,8 +140,8 @@ function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
   return event;
 }
 
-function parseSseData<T>(event: SseEvent): T {
-  return JSON.parse(event.data) as T;
+function parseSseData(event: SseEvent): unknown {
+  return JSON.parse(event.data);
 }
 
 function requireSessionKey(value: string | undefined, label: string): string {
@@ -934,12 +934,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const text = await res.text();
     const events = parseSseEvents(text);
     const outputTextDone = findSseEvent(events, "response.output_text.done");
-    expect(parseSseData<{ text?: string }>(outputTextDone).text).toBe("Let me check that.");
+    expect((parseSseData(outputTextDone) as { text?: string }).text).toBe("Let me check that.");
 
     const completed = findSseEvent(events, "response.completed");
-    const response = parseSseData<{
-      response?: { status?: string; output?: Array<Record<string, unknown>> };
-    }>(completed).response;
+    const response = (
+      parseSseData(completed) as {
+        response?: { status?: string; output?: Array<Record<string, unknown>> };
+      }
+    ).response;
     expect(response?.status).toBe("incomplete");
     expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
     expect(response?.output?.[0]?.phase).toBe("commentary");
@@ -1076,9 +1078,11 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(doneFunctionCalls.map((evt) => evt.output_index)).toEqual([1, 2, 3]);
 
     const completed = findSseEvent(events, "response.completed");
-    const response = parseSseData<{
-      response?: { status?: string; output?: Array<Record<string, unknown>> };
-    }>(completed).response;
+    const response = (
+      parseSseData(completed) as {
+        response?: { status?: string; output?: Array<Record<string, unknown>> };
+      }
+    ).response;
     expect(response?.status).toBe("incomplete");
     expect(response?.output?.map((item) => item.type)).toEqual([
       "message",

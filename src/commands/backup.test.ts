@@ -244,17 +244,17 @@ describe("backup commands", () => {
         path.posix.join(
           buildBackupArchiveRoot(nowMs),
           "payload",
-          encodeAbsolutePathForBackupArchive(stateAsset!.sourcePath),
+          encodeAbsolutePathForBackupArchive(stateAsset.sourcePath),
         ),
       );
 
-      const remappedWorkspaceEntry = { path: workspaceAsset!.sourcePath };
+      const remappedWorkspaceEntry = { path: workspaceAsset.sourcePath };
       onWriteEntry(remappedWorkspaceEntry);
       expect(remappedWorkspaceEntry.path).toBe(
         path.posix.join(
           buildBackupArchiveRoot(nowMs),
           "payload",
-          encodeAbsolutePathForBackupArchive(workspaceAsset!.sourcePath),
+          encodeAbsolutePathForBackupArchive(workspaceAsset.sourcePath),
         ),
       );
     } finally {
@@ -385,7 +385,7 @@ describe("backup commands", () => {
       });
 
       expect(result.includeWorkspace).toBe(false);
-      expect(result.assets.some((asset) => asset.kind === "workspace")).toBe(false);
+      expect(result.assets.map((asset) => asset.kind)).not.toContain("workspace");
 
       const configOnly = await backupCreateCommand(runtime, {
         dryRun: true,

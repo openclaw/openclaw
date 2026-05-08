@@ -157,7 +157,7 @@ describe("printDaemonStatus", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Capability: write-capable"));
   });
 
-  it("prints CLI and gateway versions with stale wrapper guidance when they differ", () => {
+  it("prints CLI and gateway versions with readable guidance when they differ", () => {
     printDaemonStatus(
       {
         cli: {
@@ -195,10 +195,12 @@ describe("printDaemonStatus", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Gateway version: 2026.5.6"));
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("CLI/runtime version skew detected"),
+      expect.stringContaining("this OpenClaw command is version 2026.4.23"),
     );
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("stale PATH/global wrappers"),
+      expect.stringContaining(
+        "if this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
+      ),
     );
   });
 

@@ -95,7 +95,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       stateDir,
       installRecords: {},
     });
-    expect(staleIndex.plugins.some((plugin) => plugin.pluginId === "whatsapp")).toBe(false);
+    expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("whatsapp");
     writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
 
     const result = loadPluginRegistrySnapshotWithMetadata({

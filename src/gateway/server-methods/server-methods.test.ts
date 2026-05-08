@@ -947,6 +947,28 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("rejects whitespace-only approval commands without trimming display text", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        command: "   ",
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+      },
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "command is required",
+      }),
+    );
+  });
+
   it("returns pending approval details for exec.approval.get", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 
@@ -1440,6 +1462,57 @@ describe("exec approval handlers", () => {
       "Diagnostics line one\n\nOpenAI Codex harness:\nSend feedback\\u{200B}",
     );
     expect(request["warningText"]).not.toContain("\\u{A}");
+  });
+
+  it("preserves command analysis and normalizes command spans", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 5, endIndex: 11 },
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 1, endIndex: 4 },
+          { startIndex: 12, endIndex: 999 },
+          { startIndex: 11, endIndex: 11 },
+        ],
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["commandAnalysis"]).toEqual(
+      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
+    );
+    expect(request["commandSpans"]).toEqual([
+      { startIndex: 0, endIndex: 2 },
+      { startIndex: 5, endIndex: 11 },
+    ]);
+  });
+
+  it("drops command spans when command display sanitization changes offsets", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls\u0000 | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 6, endIndex: 12 },
+        ],
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).not.toBe("ls\u0000 | python -c 'print(1)'");
+    expect(request["commandSpans"]).toBeUndefined();
   });
 
   it("accepts resolve during broadcast", async () => {

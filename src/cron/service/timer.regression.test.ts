@@ -30,7 +30,7 @@ const timerRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-timer-regressions-",
 });
 
-function requireJob(state: { store?: { jobs?: CronJob[] } }, id: string): CronJob {
+function requireJob(state: { store?: { jobs?: CronJob[] } | null }, id: string): CronJob {
   const job = state.store?.jobs?.find((candidate) => candidate.id === id);
   if (!job) {
     throw new Error(`expected cron job ${id}`);

@@ -193,12 +193,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     if (status.cli?.version && status.cli.version !== gatewayVersion) {
       defaultRuntime.error(
         warnText(
-          `Warning: CLI/runtime version skew detected. CLI is ${status.cli.version}; gateway is ${gatewayVersion}.`,
+          `Warning: this OpenClaw command is version ${status.cli.version}, but the running Gateway is version ${gatewayVersion}.`,
         ),
       );
       defaultRuntime.error(
         warnText(
-          `Fix: check for stale PATH/global wrappers with \`command -v openclaw\`, \`readlink -f "$(command -v openclaw)"\`, and \`openclaw --version\`; reinstall the gateway service from the intended binary if needed.`,
+          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`; if this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
         ),
       );
     }

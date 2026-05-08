@@ -630,7 +630,9 @@ describe("clearPluginLoaderCache", () => {
     ]);
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/stale.md");
-    expect(requireMemoryRuntime().resolveMemoryBackendConfig()).toEqual({ backend: "builtin" });
+    expect(
+      requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
+    ).toEqual({ backend: "builtin" });
     expect(requireMemoryEmbeddingProvider("stale").id).toBe("stale");
 
     clearPluginLoaderCache();

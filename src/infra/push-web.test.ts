@@ -222,7 +222,7 @@ describe("sending", () => {
     const results = await broadcastWebPush({ title: "Broadcast" }, tmpDir);
 
     expect(results).toHaveLength(2);
-    expect(results.every((result) => result.ok)).toBe(true);
+    expect(results.filter((result) => !result.ok)).toEqual([]);
     expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledTimes(2);
   });

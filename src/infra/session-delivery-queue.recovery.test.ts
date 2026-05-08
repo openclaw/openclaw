@@ -138,9 +138,11 @@ describe("session-delivery queue recovery", () => {
         throw new Error("expected failed session delivery to remain pending");
       }
       expect(failedEntry.retryCount).toBe(1);
-      expect(typeof failedEntry.lastAttemptAt).toBe("number");
 
       const lastAttemptAt = failedEntry.lastAttemptAt;
+      if (typeof lastAttemptAt !== "number") {
+        throw new Error("expected failed delivery attempt timestamp");
+      }
       const notReady = isSessionDeliveryEligibleForRetry(failedEntry, lastAttemptAt + 4_999);
       expect(notReady).toEqual({ eligible: false, remainingBackoffMs: 1 });
 

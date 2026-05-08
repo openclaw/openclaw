@@ -519,7 +519,7 @@ describe("plugin-sdk root alias", () => {
           throw new Error("expected onDiagnosticEvent export");
         }
         const unsubscribe = (value as (listener: () => void) => () => void)(() => undefined);
-        expect(unsubscribe).toEqual(expect.any(Function));
+        unsubscribe();
       },
     },
   ])("$name", ({ exportName, exportValue, expectIdentity, assertForwarded }) => {

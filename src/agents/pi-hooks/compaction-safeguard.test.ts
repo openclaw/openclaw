@@ -116,7 +116,7 @@ const createCompactionHandler = () => {
   if (!compactionHandler) {
     throw new Error("expected compaction safeguard handler");
   }
-  return compactionHandler as CompactionHandler;
+  return compactionHandler;
 };
 
 const createCompactionEvent = (params: { messageText: string; tokensBefore: number }) => ({

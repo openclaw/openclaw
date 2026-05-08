@@ -109,7 +109,7 @@ describe("config io paths", () => {
     });
   });
 
-  it("hints at stale wrappers when config was written by a newer OpenClaw", async () => {
+  it("explains what to check when config was written by a newer OpenClaw", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -138,12 +138,19 @@ describe("config io paths", () => {
       io.loadConfig();
 
       expect(logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining("stale PATH or global wrappers"),
+        expect.stringContaining(
+          "Your OpenClaw config was written by version 9999.1.1, but this command is running",
+        ),
       );
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("command -v openclaw"));
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw --version"));
       expect(logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining("openclaw gateway status --deep"),
+        expect.stringContaining(
+          "Check: `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
+        ),
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "If unexpected, update PATH so `openclaw` points to the version you want",
+        ),
       );
     });
   });
