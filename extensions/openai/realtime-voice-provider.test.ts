@@ -266,6 +266,26 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(options?.headers).not.toHaveProperty("OpenAI-Beta");
   });
 
+  it("does not fall back to Codex OAuth for custom realtime endpoints", async () => {
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-token");
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      cfg: {} as never,
+      providerConfig: {
+        azureEndpoint: "https://example.openai.azure.com",
+        model: "gpt-realtime-2",
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await expect(bridge.connect()).rejects.toThrow("OpenAI API key missing");
+
+    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   it("does not open a native websocket after slow OAuth resolution times out", async () => {
     vi.useFakeTimers();
     resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-token");

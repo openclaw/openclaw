@@ -629,6 +629,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
     const directApiKey = resolveOpenAIRealtimeApiKey(cfg.apiKey);
     if (directApiKey.status === "missing") {
+      if (cfg.azureEndpoint) {
+        throw new Error("OpenAI API key missing");
+      }
       return this.resolveOAuthConnectionParams();
     }
     const apiKey = directApiKey.value;
