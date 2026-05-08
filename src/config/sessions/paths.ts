@@ -99,33 +99,6 @@ export function isSqliteSessionTranscriptLocator(locator: string | undefined): b
   return typeof locator === "string" && parseSqliteSessionTranscriptLocator(locator) !== undefined;
 }
 
-export function resolveSessionTranscriptPathInDir(
-  sessionId: string,
-  sessionsDir: string,
-  topicId?: string | number,
-): string {
-  const safeSessionId = validateSessionId(sessionId);
-  const safeTopicId =
-    typeof topicId === "string"
-      ? encodeURIComponent(topicId)
-      : typeof topicId === "number"
-        ? String(topicId)
-        : undefined;
-  const fileName =
-    safeTopicId !== undefined
-      ? `${safeSessionId}-topic-${safeTopicId}.jsonl`
-      : `${safeSessionId}.jsonl`;
-  return path.resolve(sessionsDir, fileName);
-}
-
-export function resolveSessionTranscriptPath(
-  sessionId: string,
-  agentId?: string,
-  topicId?: string | number,
-): string {
-  return resolveSessionTranscriptPathInDir(sessionId, resolveAgentSessionsDir(agentId), topicId);
-}
-
 export function resolveSessionFilePath(
   sessionId: string,
   entry?: { sessionFile?: string },

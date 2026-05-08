@@ -84,7 +84,7 @@ const normalizeVerboseLevelMock = createMock();
 export const isThinkingLevelSupportedMock = createMock();
 export const resolveSupportedThinkingLevelMock = createMock();
 const supportsXHighThinkingMock = createMock();
-const resolveSessionTranscriptPathMock = createMock();
+const createSqliteSessionTranscriptLocatorMock = createMock();
 const setSessionRuntimeModelMock = createMock();
 const registerAgentRunContextMock = createMock();
 const buildSafeExternalPromptMock = createMock();
@@ -117,7 +117,7 @@ vi.mock("./run.runtime.js", () => ({
   isThinkingLevelSupported: isThinkingLevelSupportedMock,
   resolveSupportedThinkingLevel: resolveSupportedThinkingLevelMock,
   supportsXHighThinking: supportsXHighThinkingMock,
-  resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
+  createSqliteSessionTranscriptLocator: createSqliteSessionTranscriptLocatorMock,
   setSessionRuntimeModel: setSessionRuntimeModelMock,
   setCliSessionId: vi.fn(),
   logWarn: (...args: unknown[]) => logWarnMock(...args),
@@ -174,7 +174,6 @@ vi.mock("./run-execution.runtime.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,
   listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
   normalizeVerboseLevel: normalizeVerboseLevelMock,
-  resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
 }));
@@ -357,7 +356,10 @@ function resetRunExecutionMocks(): void {
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
   resolveCronAgentLaneMock.mockReturnValue(undefined);
   normalizeVerboseLevelMock.mockImplementation((value: unknown) => value ?? "off");
-  resolveSessionTranscriptPathMock.mockReturnValue("/tmp/transcript.jsonl");
+  createSqliteSessionTranscriptLocatorMock.mockImplementation(
+    ({ agentId = "main", sessionId }: { agentId?: string; sessionId: string }) =>
+      `sqlite-transcript://${agentId}/${sessionId}.jsonl`,
+  );
   registerAgentRunContextMock.mockReturnValue(undefined);
   runWithModelFallbackMock.mockReset();
   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());

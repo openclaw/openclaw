@@ -24,7 +24,7 @@ export function resolveBtwSessionTranscriptPath(params: {
     return createSqliteSessionTranscriptLocator({ agentId, sessionId: params.sessionId });
   } catch (error) {
     diag.debug(
-      `resolveSessionTranscriptPath failed: sessionId=${params.sessionId} err=${String(error)}`,
+      `createSqliteSessionTranscriptLocator failed: sessionId=${params.sessionId} err=${String(error)}`,
     );
     return undefined;
   }
