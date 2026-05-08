@@ -54,7 +54,10 @@ export type WsInputItemDebugSummary = {
 
 export type PlannedWsRequestDebug = {
   mode: "full_context" | "incremental";
+  /** Set only when the wire payload actually carries previous_response_id (incremental mode). */
   previousResponseId?: string;
+  /** Set when previous_response_id was requested but stripped before send (full_context mode). */
+  requestedPreviousResponseIdStripped?: string;
   baselineLength: number;
   fullInputLength: number;
   suffixLength: number;
@@ -154,9 +157,19 @@ function buildRequestDebug(params: {
   fullInputItems: InputItem[];
   suffixItems: InputItem[];
 }): PlannedWsRequestDebug {
+  // In full_context mode the planner strips previous_response_id from the wire
+  // payload, so the debug record must not advertise a chain that did not go on
+  // the wire. The "requested but stripped" id is reported under a distinct
+  // field so on-call can tell "chain landed" from "chain dropped intentionally".
+  const previousResponseIdField =
+    params.mode === "incremental" && params.previousResponseId
+      ? { previousResponseId: params.previousResponseId }
+      : params.mode === "full_context" && params.previousResponseId
+        ? { requestedPreviousResponseIdStripped: params.previousResponseId }
+        : {};
   return {
     mode: params.mode,
-    ...(params.previousResponseId ? { previousResponseId: params.previousResponseId } : {}),
+    ...previousResponseIdField,
     baselineLength: params.baselineLength,
     fullInputLength: params.fullInputItems.length,
     suffixLength: params.suffixItems.length,

@@ -1863,9 +1863,13 @@ describe("planOpenAIWebSocketRequestPayload", () => {
     expect(plan.mode).toBe("full_context");
     expect(plan.payload.previous_response_id).toBeUndefined();
     expect(plan.payload.input).toEqual(fullPayload.input);
+    // The wire payload strips previous_response_id in full_context mode, so
+    // the debug record must not advertise a chain that did not go on the wire.
+    // The "requested but stripped" id is reported under a distinct field.
+    expect(plan.debug.previousResponseId).toBeUndefined();
     expect(plan.debug).toMatchObject({
       mode: "full_context",
-      previousResponseId: "resp_prev",
+      requestedPreviousResponseIdStripped: "resp_prev",
       baselineLength: 2,
       fullInputLength: 3,
       suffixLength: 3,

@@ -92,7 +92,7 @@ function summarizeWsContextLineage(messages: ReadonlyArray<unknown>): WsContextL
   const tail = messages.at(-1);
   const tailRecord =
     tail && typeof tail === "object" ? (tail as Record<string, unknown>) : undefined;
-  const latestUser = [...messages].reverse().find((message) => {
+  const latestUser = messages.findLast((message) => {
     if (!message || typeof message !== "object") {
       return false;
     }
@@ -135,7 +135,10 @@ function logWsCompletionLineage(params: {
   sessionId: string;
   requestId: string;
   requestMode: PlannedWsRequestDebug["mode"];
-  requestedPreviousResponseId?: string;
+  /** Set only when previous_response_id actually went on the wire (incremental). */
+  chainedPreviousResponseId?: string;
+  /** Set when previous_response_id was requested but stripped before send (full_context). */
+  requestedPreviousResponseIdStripped?: string;
   acceptedResponseId: string;
   managerPreviousResponseId?: string | null;
   acceptedInputItemCount: number;
@@ -145,7 +148,12 @@ function logWsCompletionLineage(params: {
     `[ws-stream] session=${params.sessionId} request=${params.requestId}: accepted response lineage ${JSON.stringify(
       {
         requestMode: params.requestMode,
-        requestedPreviousResponseId: params.requestedPreviousResponseId,
+        ...(params.chainedPreviousResponseId
+          ? { chainedPreviousResponseId: params.chainedPreviousResponseId }
+          : {}),
+        ...(params.requestedPreviousResponseIdStripped
+          ? { requestedPreviousResponseIdStripped: params.requestedPreviousResponseIdStripped }
+          : {}),
         acceptedResponseId: params.acceptedResponseId,
         managerPreviousResponseId: params.managerPreviousResponseId ?? undefined,
         acceptedInputItemCount: params.acceptedInputItemCount,
@@ -1287,7 +1295,15 @@ export function createOpenAIWebSocketStreamFn(
                   sessionId,
                   requestId: requestLineageId,
                   requestMode: plannedPayload.debug.mode,
-                  requestedPreviousResponseId: plannedPayload.debug.previousResponseId,
+                  ...(plannedPayload.debug.previousResponseId
+                    ? { chainedPreviousResponseId: plannedPayload.debug.previousResponseId }
+                    : {}),
+                  ...(plannedPayload.debug.requestedPreviousResponseIdStripped
+                    ? {
+                        requestedPreviousResponseIdStripped:
+                          plannedPayload.debug.requestedPreviousResponseIdStripped,
+                      }
+                    : {}),
                   acceptedResponseId: event.response.id,
                   managerPreviousResponseId: session.manager.previousResponseId,
                   acceptedInputItemCount: session.lastResponseInputItems.length,
