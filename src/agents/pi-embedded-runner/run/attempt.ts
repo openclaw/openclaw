@@ -5,11 +5,10 @@ import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
-  loadSessionStore,
-  runQuotaSuspensionMaintenance,
-  updateSessionStoreEntry,
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
 } from "../../../config/sessions/store.js";
 import { hasSqliteSessionTranscriptEvents } from "../../../config/sessions/transcript-store.sqlite.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
@@ -2451,15 +2450,14 @@ export async function runEmbeddedAttempt(
           });
 
           if (params.sessionKey && !isRawModelRun) {
-            const storePath = resolveStorePath(params.config?.session?.store, {
+            const sessionEntry = getSessionEntry({
               agentId: sessionAgentId,
+              sessionKey: params.sessionKey,
             });
-            await runQuotaSuspensionMaintenance({ storePath });
-            const store = loadSessionStore(storePath);
-            const sessionEntry = store[params.sessionKey];
             const suspension = sessionEntry?.quotaSuspension;
             if (suspension?.state === "resuming") {
-              const subagents = Object.values(store)
+              const subagents = listSessionEntries({ agentId: sessionAgentId })
+                .map(({ entry }) => entry)
                 .filter((s) => s.spawnedBy === sessionEntry.sessionId)
                 .map((s) => ({
                   sessionId: s.sessionId,
@@ -2471,8 +2469,8 @@ export async function runEmbeddedAttempt(
                 activeSubagents: subagents,
               });
               validated.push(handoffMsg);
-              await updateSessionStoreEntry({
-                storePath,
+              await patchSessionEntry({
+                agentId: sessionAgentId,
                 sessionKey: params.sessionKey,
                 update: async (entry) => {
                   if (entry.quotaSuspension?.state !== "resuming") {

@@ -171,9 +171,7 @@ export const registerTelegramHandlers = ({
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
   const messageCache = createTelegramMessageCache({
-    persistedPath: resolveTelegramMessageCachePath(
-      telegramDeps.resolveStorePath(cfg.session?.store),
-    ),
+    persistedPath: resolveTelegramMessageCachePath(accountId),
   });
 
   type TextFragmentEntry = {

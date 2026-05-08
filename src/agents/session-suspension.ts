@@ -1,6 +1,6 @@
 import path from "node:path";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
-import { updateSessionStoreEntry } from "../config/sessions.js";
+import { patchSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
@@ -85,7 +85,7 @@ export async function suspendSession(params: {
     return;
   }
 
-  const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
+  const { sessionKey, agentId } = resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
     agentId: params.agentDir ? path.basename(params.agentDir) : undefined,
@@ -99,8 +99,8 @@ export async function suspendSession(params: {
   const now = Date.now();
 
   try {
-    await updateSessionStoreEntry({
-      storePath,
+    await patchSessionEntry({
+      agentId,
       sessionKey,
       update: async () => ({
         quotaSuspension: {
