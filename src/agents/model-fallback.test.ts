@@ -137,7 +137,11 @@ const authRuntimeMock = vi.hoisted(() => {
           if (isActive(cooldownUntil, ts)) {
             expiry = cooldownUntil;
           }
-          if (isActive(disabledUntil, ts) && (expiry === undefined || disabledUntil < expiry)) {
+          if (
+            disabledUntil !== undefined &&
+            isActive(disabledUntil, ts) &&
+            (expiry === undefined || disabledUntil < expiry)
+          ) {
             expiry = disabledUntil;
           }
           if (expiry !== undefined && (soonest === null || expiry < soonest)) {
