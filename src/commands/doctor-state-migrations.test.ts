@@ -104,13 +104,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
   };
 });
 
-vi.mock("../config/sessions.js", () => ({
-  saveSessionStore: async (storePath: string, store: Record<string, unknown>) => {
-    await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.promises.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
-  },
-}));
-
 vi.mock("../infra/json-files.js", async () => {
   const actual =
     await vi.importActual<typeof import("../infra/json-files.js")>("../infra/json-files.js");

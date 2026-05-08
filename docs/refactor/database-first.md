@@ -143,8 +143,9 @@ The remaining cleanup is mostly consolidation and deletion:
   `saveSessionStore(storePath, store)` compatibility type is gone.
 - Plugin runtime, extension API, root library, and `config/sessions` barrel
   surfaces no longer export `resolveStorePath`; plugin code uses SQLite-backed
-  session row helpers. The remaining legacy resolver is explicitly named
-  `resolveLegacySessionStorePath` and is scoped to doctor/migration/test code.
+  session row helpers. The old `resolveLegacySessionStorePath` helper is gone;
+  legacy `sessions.json` path construction is now local to migration and test
+  fixtures.
 - `src/config/sessions/store-backend.sqlite.ts` now stores canonical session
   entries in the per-agent database and has row-level read/upsert/delete patch
   support. Runtime upsert/patch/delete no longer scans for case variants or
@@ -804,8 +805,8 @@ is newer than the backup.
 - Replace whole-store delete/insert with `upsertSessionEntry`,
   `deleteSessionEntry`, `listSessionEntries`, and SQL cleanup queries.
   Done for runtime: hot paths now use row APIs and conflict-retried row patches;
-  remaining whole-store import/replace helpers are limited to migration and
-  tests.
+  remaining whole-store import/replace helpers are limited to migration import
+  code and SQLite backend tests.
   - Delete `store-writer.ts` and writer-queue tests. Done.
   - Delete runtime legacy-key pruning and alias-delete parameters from session
     row upserts/patches. Done.
