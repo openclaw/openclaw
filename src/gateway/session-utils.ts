@@ -887,6 +887,111 @@ export function parseGroupKey(
   return null;
 }
 
+function parseDirectChannelKey(
+  key: string,
+): { agentId?: string; channel?: string; accountId?: string; peerId?: string } | null {
+  const agentParsed = parseAgentSessionKey(key);
+  const rawKey = agentParsed?.rest ?? key;
+  const parts = rawKey.split(":").filter(Boolean);
+  if (parts.length >= 3 && parts[1] === "direct") {
+    return {
+      agentId: agentParsed?.agentId,
+      channel: parts[0],
+      peerId: parts.slice(2).join(":"),
+    };
+  }
+  if (parts.length >= 4 && parts[2] === "direct") {
+    return {
+      agentId: agentParsed?.agentId,
+      channel: parts[0],
+      accountId: parts[1],
+      peerId: parts.slice(3).join(":"),
+    };
+  }
+  return null;
+}
+
+function readConfiguredChannelAccountName(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  accountId?: string;
+}): string | undefined {
+  const channelId = normalizeOptionalString(params.channel);
+  const accountId = normalizeOptionalString(params.accountId);
+  if (!channelId || !accountId) {
+    return undefined;
+  }
+  const channelConfig = params.cfg.channels?.[channelId];
+  if (!channelConfig || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
+    return undefined;
+  }
+  const accounts = (channelConfig as { accounts?: unknown }).accounts;
+  if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
+    return undefined;
+  }
+  const accountConfig = (accounts as Record<string, unknown>)[accountId];
+  if (!accountConfig || typeof accountConfig !== "object" || Array.isArray(accountConfig)) {
+    return undefined;
+  }
+  return normalizeOptionalString((accountConfig as { name?: unknown }).name);
+}
+
+function originLabelLooksLikeDirectSessionId(params: {
+  originLabel?: string;
+  channel?: string;
+  accountId?: string;
+  peerId?: string;
+}): boolean {
+  const label = normalizeLowercaseStringOrEmpty(params.originLabel);
+  const peerId = normalizeLowercaseStringOrEmpty(params.peerId);
+  if (!label || !peerId) {
+    return false;
+  }
+  if (label === peerId) {
+    return true;
+  }
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
+  const accountId = normalizeLowercaseStringOrEmpty(params.accountId);
+  const candidates = [
+    channel ? `${channel}:direct:${peerId}` : undefined,
+    channel && accountId ? `${channel}:${accountId}:direct:${peerId}` : undefined,
+  ];
+  return candidates.some((candidate) => candidate === label);
+}
+
+function resolveDirectSessionAccountDisplayName(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  entry?: SessionEntry;
+}): string | undefined {
+  const parsed = parseDirectChannelKey(params.key);
+  if (!parsed) {
+    return undefined;
+  }
+  const channel =
+    normalizeOptionalString(params.entry?.origin?.provider) ??
+    normalizeOptionalString(params.entry?.channel) ??
+    normalizeOptionalString(params.entry?.lastChannel) ??
+    parsed?.channel;
+  const accountIdCandidates = [
+    params.entry?.origin?.accountId,
+    params.entry?.lastAccountId,
+    parsed?.accountId,
+    parsed?.agentId,
+  ];
+  for (const accountId of accountIdCandidates) {
+    const name = readConfiguredChannelAccountName({
+      cfg: params.cfg,
+      channel,
+      accountId,
+    });
+    if (name) {
+      return name;
+    }
+  }
+  return undefined;
+}
+
 function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
 }
@@ -1576,6 +1681,21 @@ export function buildGatewaySessionRow(params: {
   const id = parsed?.id;
   const origin = entry?.origin;
   const originLabel = origin?.label;
+  const parsedDirect = parseDirectChannelKey(key);
+  const originLabelIsDirectId = originLabelLooksLikeDirectSessionId({
+    originLabel,
+    channel:
+      normalizeOptionalString(origin?.provider) ??
+      normalizeOptionalString(entry?.channel) ??
+      normalizeOptionalString(entry?.lastChannel) ??
+      parsedDirect?.channel,
+    accountId:
+      normalizeOptionalString(origin?.accountId) ??
+      normalizeOptionalString(entry?.lastAccountId) ??
+      parsedDirect?.accountId,
+    peerId: parsedDirect?.peerId,
+  });
+  const directAccountDisplayName = resolveDirectSessionAccountDisplayName({ cfg, key, entry });
   const displayName =
     entry?.displayName ??
     (channel
@@ -1589,6 +1709,8 @@ export function buildGatewaySessionRow(params: {
         })
       : undefined) ??
     entry?.label ??
+    (originLabelIsDirectId ? undefined : originLabel) ??
+    directAccountDisplayName ??
     originLabel;
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
