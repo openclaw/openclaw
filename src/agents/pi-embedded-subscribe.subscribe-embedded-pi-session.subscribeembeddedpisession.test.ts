@@ -469,7 +469,10 @@ describe("subscribeEmbeddedPiSession", () => {
         text: "Generated 1 image.",
       }),
     );
-    expect(onBlockReply.mock.calls.some(([payload]) => payload.mediaUrls?.length)).toBe(false);
+    const earlyMediaPayloads = onBlockReply.mock.calls
+      .map(([payload]) => payload)
+      .filter((payload) => payload.mediaUrls?.length);
+    expect(earlyMediaPayloads).toEqual([]);
 
     emitAssistantTextDelta(emit, "MEDIA:/tmp/generated.png");
     emit({
@@ -611,7 +614,10 @@ describe("subscribeEmbeddedPiSession", () => {
           text: firstChunk.trim(),
         }),
       );
-      expect(onBlockReply.mock.calls.some(([payload]) => payload.mediaUrls?.length)).toBe(false);
+      const earlyMediaPayloads = onBlockReply.mock.calls
+        .map(([payload]) => payload)
+        .filter((payload) => payload.mediaUrls?.length);
+      expect(earlyMediaPayloads).toEqual([]);
 
       emitAssistantTextDelta(emit, `MEDIA:${mediaUrl}`);
       emit({
