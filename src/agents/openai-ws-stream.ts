@@ -1197,9 +1197,6 @@ export function createOpenAIWebSocketStreamFn(
                   log.warn(
                     `[ws-stream] session=${sessionId}: ignored response.completed for stale turn metadata response_id=${event.response.id}`,
                   );
-                  outputItemPhaseById.clear();
-                  outputTextByPart.clear();
-                  emittedTextByPart.clear();
                   return;
                 }
                 outputItemPhaseById.clear();
@@ -1233,9 +1230,6 @@ export function createOpenAIWebSocketStreamFn(
                   log.warn(
                     `[ws-stream] session=${sessionId}: ignored response.failed for stale turn metadata response_id=${event.response.id}`,
                   );
-                  outputItemPhaseById.clear();
-                  outputTextByPart.clear();
-                  emittedTextByPart.clear();
                   return;
                 }
                 outputItemPhaseById.clear();

@@ -3157,6 +3157,159 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(doneEvent?.message?.content?.[0]?.text).toBe("Answer B after tool work");
   });
 
+  it("preserves active turn text deltas when a stale completed event arrives between deltas", async () => {
+    const sessionId = "sess-stale-final-interleaved";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const ctx1 = {
+      systemPrompt: "You are helpful.",
+      messages: [userMsg("Question A")] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx1 as Parameters<typeof streamFn>[1],
+    );
+    const done1 = (async () => {
+      for await (const _ of await resolveStream(stream1)) {
+        /* consume */
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    const sent1 = manager.sentEvents[0] as { metadata?: Record<string, string> };
+    const turn1Response = {
+      ...makeResponseObject("resp_turn_a", "Answer A"),
+      metadata: sent1.metadata,
+    };
+    manager.simulateEvent({ type: "response.completed", response: turn1Response });
+    await done1;
+
+    const ctx2 = {
+      systemPrompt: "You are helpful.",
+      messages: [
+        userMsg("Question A"),
+        buildAssistantMessageFromResponse(turn1Response, modelStub),
+        userMsg("Question B"),
+      ] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx2 as Parameters<typeof streamFn>[1],
+    );
+    type CapturedEvent = {
+      type?: string;
+      delta?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    const events2: CapturedEvent[] = [];
+    const done2 = (async () => {
+      for await (const ev of await resolveStream(stream2)) {
+        events2.push(ev as CapturedEvent);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const sent2 = manager.sentEvents[1] as { metadata?: Record<string, string> };
+
+    // Turn B starts streaming output deltas for the active answer.
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_b",
+        role: "assistant",
+        phase: "final_answer",
+        content: [],
+      },
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_b",
+      output_index: 0,
+      content_index: 0,
+      delta: "Hello ",
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_b",
+      output_index: 0,
+      content_index: 0,
+      delta: "world",
+    });
+
+    // Stale response.completed for turn A arrives mid-stream. The handler must
+    // ignore it WITHOUT clearing the active turn-B output buffers; otherwise a
+    // subsequent delta would either be silently dropped (phase metadata gone)
+    // or duplicate previously emitted text (emitted-text tracker gone).
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        ...makeResponseObject("resp_stale_replay", "Answer A"),
+        metadata: sent1.metadata,
+      },
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(events2.some((event) => event.type === "done")).toBe(false);
+
+    // Another delta arrives after the stale event. It must still be emitted to
+    // the consumer with the correct accumulated full text — proving phase and
+    // emitted-text state survived the stale ignore.
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_b",
+      output_index: 0,
+      content_index: 0,
+      delta: "!",
+    });
+    await new Promise((r) => setImmediate(r));
+
+    manager.simulateEvent({
+      type: "response.output_text.done",
+      item_id: "item_b",
+      output_index: 0,
+      content_index: 0,
+      text: "Hello world!",
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        id: "resp_turn_b",
+        object: "response",
+        created_at: Date.now(),
+        status: "completed",
+        model: "gpt-5.4",
+        output: [
+          {
+            type: "message",
+            id: "item_b",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Hello world!" }],
+          },
+        ],
+        usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+        metadata: sent2.metadata,
+      },
+    });
+    await done2;
+
+    const textDeltas = events2
+      .filter((event) => event.type === "text_delta")
+      .map((event) => event.delta ?? "");
+    // Each delta from the active turn must reach the consumer exactly once and
+    // in order — no drops, no duplicates.
+    expect(textDeltas).toEqual(["Hello ", "world", "!"]);
+
+    const doneEvent = events2.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("Hello world!");
+  });
+
   it("uses an empty incremental payload when replay context exactly matches the response chain", async () => {
     const sessionId = "sess-full-context-replay";
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
