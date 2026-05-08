@@ -400,13 +400,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("can emit file-only transcript refresh events for exact assistant appends", async () => {
+  it("can emit signal-only transcript refresh events for exact assistant appends", async () => {
     await writeTranscriptStore();
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
 
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
-      updateMode: "file-only",
+      updateMode: "signal-only",
       message: createExactAssistantMessage({
         text: "Done.",
         provider: "openclaw",

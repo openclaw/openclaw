@@ -469,10 +469,11 @@ export function chunkMarkdown(
  * source file positions using a lineMap.  Each entry in lineMap gives the
  * 1-indexed source line for the corresponding 0-indexed content line.
  *
- * This is used for session JSONL files where buildSessionTranscriptEntry() flattens
- * messages into a plain-text string before chunking.  Without remapping the
- * stored line numbers would reference positions in the flattened text rather
- * than the original JSONL file.
+ * This is used for SQLite-backed session transcripts where
+ * buildSessionTranscriptEntry() flattens messages into a plain-text string
+ * before chunking. Without remapping the stored line numbers would reference
+ * positions in the flattened text rather than the original transcript event
+ * sequence.
  */
 export function remapChunkLines(chunks: MemoryChunk[], lineMap: number[] | undefined): void {
   if (!lineMap || lineMap.length === 0) {

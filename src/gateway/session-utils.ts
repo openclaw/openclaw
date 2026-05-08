@@ -2045,8 +2045,9 @@ export function listSessionsFromStore(params: {
  * batches of session row builds. This prevents large session row sets from
  * blocking the event loop during sessions.list requests.
  *
- * The synchronous file I/O in readSessionTitleFieldsFromTranscript (head/tail
- * reads for derived titles and last-message previews) is the dominant blocker.
+ * The synchronous transcript lookup in readSessionTitleFieldsFromTranscript
+ * (SQLite event scans for derived titles and last-message previews) is the
+ * dominant blocker.
  * By yielding every SESSIONS_LIST_YIELD_BATCH_SIZE rows, we keep the event
  * loop responsive for WebSocket heartbeats, channel I/O, and concurrent RPC.
  */

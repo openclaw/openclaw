@@ -80,7 +80,7 @@ async function appendTranscriptMessage(params: {
 }): Promise<string> {
   const appended = await appendExactAssistantMessageToSessionTranscript({
     sessionKey: params.sessionKey,
-    updateMode: params.emitInlineMessage === false ? "file-only" : "inline",
+    updateMode: params.emitInlineMessage === false ? "signal-only" : "inline",
     message: params.message,
   });
   expect(appended.ok).toBe(true);
