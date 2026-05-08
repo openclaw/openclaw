@@ -4177,7 +4177,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
   api.registerHook("gateway:startup", () => {}, { name: "shared-hook" });
 } };`,
         selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
-          registry.hooks.filter((entry) => entry.entry.hook.name === "shared-hook").length,
+          countMatching(registry.hooks, (entry) => entry.entry.hook.name === "shared-hook"),
         duplicateMessage: "hook already registered: shared-hook (hook-owner-a)",
         assert: expectDuplicateRegistrationResult,
       },
@@ -4189,7 +4189,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
   api.registerService({ id: "shared-service", start() {} });
 } };`,
         selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
-          registry.services.filter((entry) => entry.service.id === "shared-service").length,
+          countMatching(registry.services, (entry) => entry.service.id === "shared-service"),
         duplicateMessage: "service already registered: shared-service (service-owner-a)",
         assert: expectDuplicateRegistrationResult,
       },
