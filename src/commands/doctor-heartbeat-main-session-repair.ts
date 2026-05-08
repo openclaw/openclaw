@@ -182,7 +182,6 @@ export function moveHeartbeatMainSessionEntry(params: {
 export async function repairHeartbeatPoisonedMainSession(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
-  absoluteStorePath: string;
   stateDir: string;
   sessionPathOpts: ReturnType<typeof resolveSessionFilePathOptions>;
   prompter: DoctorPrompterLike;

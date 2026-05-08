@@ -429,7 +429,6 @@ function groupRepairsByOwner(
 export async function runPluginSessionStateDoctorRepairs(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
-  absoluteStorePath: string;
   prompter: DoctorPrompterLike;
   env?: NodeJS.ProcessEnv;
   warnings: string[];

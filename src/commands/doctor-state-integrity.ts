@@ -15,7 +15,6 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
-  resolveLegacySessionStorePath,
 } from "../config/sessions/paths.js";
 import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
 import {
@@ -648,13 +647,9 @@ export async function noteStateIntegrity(
   const oauthDir = resolveOAuthDir(env, stateDir);
   const agentId = resolveDefaultAgentId(cfg);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
-  const storePath = resolveLegacySessionStorePath(undefined, { agentId });
-  const storeDir = path.dirname(storePath);
-  const absoluteStorePath = path.resolve(storePath);
   const displayStateDir = shortenHomePath(stateDir);
   const displayOauthDir = shortenHomePath(oauthDir);
   const displaySessionsDir = shortenHomePath(sessionsDir);
-  const displayStoreDir = shortenHomePath(storeDir);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
@@ -781,7 +776,6 @@ export async function noteStateIntegrity(
   if (stateDirExists) {
     const dirCandidates = new Map<string, string>();
     dirCandidates.set(sessionsDir, "Sessions dir");
-    dirCandidates.set(storeDir, "Session store dir");
     if (requireOAuthDir) {
       dirCandidates.set(oauthDir, "OAuth dir");
     } else if (!existsDir(oauthDir)) {
@@ -792,9 +786,6 @@ export async function noteStateIntegrity(
     const displayDirFor = (dir: string) => {
       if (dir === sessionsDir) {
         return displaySessionsDir;
-      }
-      if (dir === storeDir) {
-        return displayStoreDir;
       }
       if (dir === oauthDir) {
         return displayOauthDir;
@@ -964,7 +955,6 @@ export async function noteStateIntegrity(
     await runPluginSessionStateDoctorRepairs({
       cfg,
       store,
-      absoluteStorePath,
       prompter,
       env,
       warnings,
@@ -974,7 +964,6 @@ export async function noteStateIntegrity(
     await repairHeartbeatPoisonedMainSession({
       cfg,
       store,
-      absoluteStorePath,
       stateDir,
       sessionPathOpts,
       prompter,
