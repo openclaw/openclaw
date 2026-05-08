@@ -215,8 +215,10 @@ describe("backup commands", () => {
       if (capturedManifest === null || capturedOnWriteEntry === null) {
         throw new Error("Expected backup manifest and archive entry callback");
       }
-      const manifest = capturedManifest;
-      const onWriteEntry = capturedOnWriteEntry;
+      const manifest = capturedManifest as unknown as {
+        assets: Array<{ kind: string; archivePath: string }>;
+      };
+      const onWriteEntry = capturedOnWriteEntry as unknown as (entry: { path: string }) => void;
       expect(manifest.assets).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ kind: "state" }),
