@@ -389,7 +389,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+    expect(conversationInfo["timestamp"]).toBe("Sun 2026-02-15 13:35 GMT");
   });
 
   it("honors envelope user timezone for conversation timestamps", () => {
