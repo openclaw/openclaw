@@ -16,7 +16,6 @@ import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionEntriesOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
-  sourcePath?: string;
   now?: () => number;
 };
 
