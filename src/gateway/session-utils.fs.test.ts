@@ -1806,7 +1806,7 @@ describe("resolveSessionTranscriptCandidates safety", () => {
     const normalizedCandidates = candidates.map((value) => path.resolve(value));
     const expectedFallback = path.resolve(path.dirname(storePath), "sess-safe.jsonl");
 
-    expect(candidates.some((value) => value.includes("etc/passwd"))).toBe(false);
+    expect(candidates).not.toEqual(expect.arrayContaining([expect.stringContaining("etc/passwd")]));
     expect(normalizedCandidates).toContain(expectedFallback);
   });
 
