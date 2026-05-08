@@ -42,6 +42,23 @@ const legacyStoreMarkers = [
   { label: "workspace setup JSON", pattern: /\bworkspace-state\.json\b/u },
   { label: "ACPX process leases JSON", pattern: /\bprocess-leases\.json\b/u },
   { label: "ACPX gateway instance id file", pattern: /\bgateway-instance-id\b/u },
+  {
+    label: "memory-core dreaming event JSONL",
+    pattern: /\bmemory[/\\]\.dreams[/\\]events\.jsonl\b/u,
+  },
+  {
+    label: "memory-core dreaming session corpus",
+    pattern: /\bmemory[/\\]\.dreams[/\\]session-corpus\b/u,
+  },
+  {
+    label: "memory-core dreaming checkpoint JSON",
+    pattern:
+      /\bmemory[/\\]\.dreams[/\\](?:daily-ingestion|session-ingestion|short-term-recall|phase-signals)\.json\b/u,
+  },
+  {
+    label: "memory-core dreaming promotion lock",
+    pattern: /\bmemory[/\\]\.dreams[/\\]short-term-promotion\.lock\b/u,
+  },
   { label: "gateway restart sentinel JSON", pattern: /\brestart-sentinel\.json\b/u },
   { label: "gateway restart intent JSON", pattern: /\bgateway-restart-intent\.json\b/u },
   {
@@ -137,7 +154,7 @@ const legacyStoreMarkers = [
 ];
 
 const writeApiPattern =
-  /\b(?:appendFile|appendFileSync|appendRegularFile|appendRegularFileSync|createWriteStream|getQueuedFileWriter|openSync|renameSync|rmSync|writeFile|writeFileSync|writeJson|writeJsonAtomic)\b/u;
+  /\b(?:appendFile|appendFileSync|appendRegularFile|appendRegularFileSync|createWriteStream|getQueuedFileWriter|openSync|rename|renameSync|rm|rmSync|unlink|unlinkSync|writeFile|writeFileSync|writeJson|writeJsonAtomic)\b/u;
 const legacySessionStoreApiPattern =
   /\b(?:loadSessionStore|saveSessionStore|updateSessionStore|updateSessionStoreEntry|resolveStorePath|resolveLegacySessionStorePath)\b/u;
 
@@ -157,8 +174,19 @@ const allowedExactPaths = new Set([
   "extensions/qqbot/src/state-migrations.ts",
   "extensions/telegram/src/state-migrations.ts",
   "src/infra/state-migrations.ts",
+  "src/acp/event-ledger.ts",
+  "src/agents/pi-embedded-runner/openrouter-model-capabilities.ts",
+  "src/agents/subagent-registry.store.ts",
+  "src/config/io.audit.ts",
+  "src/cron/store.ts",
+  "src/infra/voicewake-routing.ts",
+  "src/infra/voicewake.ts",
+  "src/memory-host-sdk/dreaming-state-migration.ts",
+  "src/plugins/conversation-binding.ts",
   "src/trajectory/export.ts",
   "src/trajectory/paths.ts",
+  "extensions/memory-wiki/src/chatgpt-import.ts",
+  "extensions/memory-wiki/src/log.ts",
 ]);
 
 const allowedPrefixes = [

@@ -1068,6 +1068,13 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `jobs-state.json`
 - `device-pair-notify.json`
 - `session-toggles.json`
+- Memory-core `.dreams/events.jsonl`
+- Memory-core `.dreams/session-corpus/`
+- Memory-core `.dreams/daily-ingestion.json`
+- Memory-core `.dreams/session-ingestion.json`
+- Memory-core `.dreams/short-term-recall.json`
+- Memory-core `.dreams/phase-signals.json`
+- Memory-core `.dreams/short-term-promotion.lock`
 - Skill Workshop `skill-workshop/<workspace>.json`
 - Skill Workshop `skill-workshop/skill-workshop-review-*.json`
 - Nostr `bus-state-*.json`
