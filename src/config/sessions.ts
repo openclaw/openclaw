@@ -10,7 +10,6 @@ export {
   isSqliteSessionTranscriptLocator,
   parseSqliteSessionTranscriptLocator,
   resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
   resolveSessionTranscriptsDir,

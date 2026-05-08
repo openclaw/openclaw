@@ -268,7 +268,6 @@ describe("generateVoiceResponse", () => {
       resolveAgentDir,
       resolveAgentWorkspaceDir,
       resolveAgentIdentity,
-      resolveSessionFilePath,
     } = createAgentRuntime([{ text: '{"spoken":"Default agent."}' }]);
     const coreConfig = {} as CoreConfig;
 
@@ -285,16 +284,13 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "main");
-    expect(resolveSessionFilePath).toHaveBeenCalledWith(expect.any(String), expect.any(Object), {
-      agentId: "main",
-    });
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw/agents/main",
         agentId: "main",
         sandboxSessionKey: "agent:main:voice:15550001111",
         workspaceDir: "/tmp/openclaw/workspace/main",
-        sessionFile: "/tmp/openclaw/main/sessions/session.jsonl",
+        sessionFile: expect.stringMatching(/^sqlite-transcript:\/\/main\/.+\.jsonl$/),
       }),
     );
   });
@@ -306,7 +302,6 @@ describe("generateVoiceResponse", () => {
       resolveAgentDir,
       resolveAgentWorkspaceDir,
       resolveAgentIdentity,
-      resolveSessionFilePath,
     } = createAgentRuntime([{ text: '{"spoken":"Voice agent."}' }]);
     const coreConfig = {} as CoreConfig;
 
@@ -327,16 +322,13 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "voice");
-    expect(resolveSessionFilePath).toHaveBeenCalledWith(expect.any(String), expect.any(Object), {
-      agentId: "voice",
-    });
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw/agents/voice",
         agentId: "voice",
         sandboxSessionKey: "agent:voice:voice:15550001111",
         workspaceDir: "/tmp/openclaw/workspace/voice",
-        sessionFile: "/tmp/openclaw/voice/sessions/session.jsonl",
+        sessionFile: expect.stringMatching(/^sqlite-transcript:\/\/voice\/.+\.jsonl$/),
       }),
     );
   });
