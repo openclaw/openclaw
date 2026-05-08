@@ -160,6 +160,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/transcript: dedupe exact replayed transcript entries during overflow-recovery rewrites so cloned user prompts, compactions, and bootstrap context records do not keep amplifying session JSONL growth. Refs #69208 and fixes #66443. Thanks @BradGroux.
 - Gateway/watch: leave `OPENCLAW_TRACE_SYNC_IO` disabled by default in `pnpm gateway:watch:raw` so watch mode avoids noisy Node sync-I/O stack traces unless explicitly requested.
 - Providers: preserve non-OK `text/event-stream` response bodies so provider HTTP errors keep their JSON detail instead of collapsing to generic streaming failures. Fixes #78180.
 - Gateway/auth: make explicit `trusted-proxy` mode fail closed instead of accepting local password fallback credentials after trusted-proxy identity checks fail. Fixes #78684.
