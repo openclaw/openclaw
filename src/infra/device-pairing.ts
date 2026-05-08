@@ -628,10 +628,11 @@ export async function approveDevicePairing(
       });
       nextTokenScopesByRole.set(roleForToken, nextScopes);
       if (roleForToken === OPERATOR_ROLE && nextScopes.length > 0) {
-        const callerRequiredScopes = mergeScopes(
-          resolveRoleScopedDeviceTokenScopes(roleForToken, pending.scopes),
-          nextScopes,
-        );
+        const callerRequiredScopes =
+          mergeScopes(
+            resolveRoleScopedDeviceTokenScopes(roleForToken, pending.scopes),
+            nextScopes,
+          ) ?? nextScopes;
         if (!options?.callerScopes) {
           return {
             status: "forbidden",
