@@ -320,7 +320,7 @@ function renderDeleteConfirmFixture() {
     { onDelete },
   );
   const deleteButton = container.querySelector<HTMLButtonElement>(".chat-group-delete");
-  expect(deleteButton).not.toBeNull();
+  expect(deleteButton).toBeInstanceOf(HTMLButtonElement);
   return { container, deleteButton: deleteButton!, onDelete };
 }
 
@@ -347,7 +347,7 @@ function setupArmedDeleteConfirm() {
 
   const outsideClickListener = getLastCaptureClickListener(addListenerSpy.mock.calls);
   expect(outsideClickListener).not.toBeNull();
-  expect(fixture.container.querySelector(".chat-delete-confirm")).not.toBeNull();
+  expect(fixture.container.querySelectorAll(".chat-delete-confirm")).toHaveLength(1);
 
   return { ...fixture, outsideClickListener, removeListenerSpy };
 }
@@ -451,25 +451,23 @@ describe("grouped chat rendering", () => {
     const userDeleteButton = container.querySelector<HTMLButtonElement>(
       ".chat-group.user .chat-group-delete",
     );
-    expect(userDeleteButton).not.toBeNull();
-    userDeleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(userDeleteButton).toBeInstanceOf(HTMLButtonElement);
+    userDeleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const userConfirm = container.querySelector<HTMLElement>(
       ".chat-group.user .chat-delete-confirm",
     );
-    expect(userConfirm).not.toBeNull();
     expect(userConfirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
 
     const assistantDeleteButton = container.querySelector<HTMLButtonElement>(
       ".chat-group.assistant .chat-group-delete",
     );
-    expect(assistantDeleteButton).not.toBeNull();
-    assistantDeleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(assistantDeleteButton).toBeInstanceOf(HTMLButtonElement);
+    assistantDeleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const assistantConfirm = container.querySelector<HTMLElement>(
       ".chat-group.assistant .chat-delete-confirm",
     );
-    expect(assistantConfirm).not.toBeNull();
     expect(assistantConfirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
   });
 
@@ -479,8 +477,8 @@ describe("grouped chat rendering", () => {
       ".chat-delete-confirm__cancel",
     );
 
-    expect(cancel).not.toBeNull();
-    cancel?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(cancel).toBeInstanceOf(HTMLButtonElement);
+    cancel!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expectDeleteConfirmDismissed(fixture);
     expect(fixture.onDelete).not.toHaveBeenCalled();
@@ -490,8 +488,8 @@ describe("grouped chat rendering", () => {
     const fixture = setupArmedDeleteConfirm();
     const confirm = fixture.container.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes");
 
-    expect(confirm).not.toBeNull();
-    confirm?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(confirm).toBeInstanceOf(HTMLButtonElement);
+    confirm!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expectDeleteConfirmDismissed(fixture);
     expect(fixture.onDelete).toHaveBeenCalledTimes(1);
