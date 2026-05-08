@@ -12,8 +12,8 @@ import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
+  resolveLegacySessionTranscriptsDirForAgent,
   resolveSessionTranscriptLocator,
-  resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
 import {
@@ -645,7 +645,7 @@ export async function noteStateIntegrity(
   const defaultStateDir = path.join(homedir(), ".openclaw");
   const oauthDir = resolveOAuthDir(env, stateDir);
   const agentId = resolveDefaultAgentId(cfg);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
+  const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(agentId, env, homedir);
   const displayStateDir = shortenHomePath(stateDir);
   const displayOauthDir = shortenHomePath(oauthDir);
   const displaySessionsDir = shortenHomePath(sessionsDir);
