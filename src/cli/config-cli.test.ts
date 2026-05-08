@@ -673,7 +673,8 @@ describe("config cli", () => {
         properties?: Record<string, unknown>;
       };
       expect(payload.properties?.$schema).toEqual({ type: "string" });
-      expect(payload.properties?.channels).toEqual(expect.any(Object));
+      expect(payload.properties?.channels).toBeTypeOf("object");
+      expect(payload.properties?.channels).not.toBeNull();
       expect(payload.properties?.plugins).toBeUndefined();
       expect(mockError).not.toHaveBeenCalled();
     });
