@@ -318,6 +318,36 @@ export async function fetchNpmRegistryVersionForChannel(params: {
   };
 }
 
+const DEFAULT_NPM_REGISTRY = "https://registry.npmjs.org";
+
+/**
+ * Resolves the npm registry base URL to use for OpenClaw update metadata
+ * lookups. Honors the standard npm/pnpm `npm_config_registry` (and uppercase
+ * `NPM_CONFIG_REGISTRY`) environment variable so that users behind a registry
+ * mirror (e.g. `registry.npmmirror.com`) are not forced to reach
+ * `registry.npmjs.org`. Falls back to the public registry when no override is
+ * configured.
+ *
+ * Trailing slashes are stripped so callers can safely append `/openclaw/<tag>`.
+ */
+export function resolveNpmRegistryBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const candidates = [env.npm_config_registry, env.NPM_CONFIG_REGISTRY];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const trimmed = candidate.trim();
+    if (trimmed === "") {
+      continue;
+    }
+    if (!/^https?:\/\//i.test(trimmed)) {
+      continue;
+    }
+    return trimmed.replace(/\/+$/, "");
+  }
+  return DEFAULT_NPM_REGISTRY;
+}
+
 export async function fetchNpmPackageTargetStatus(params: {
   target: string;
   timeoutMs?: number;
@@ -325,8 +355,9 @@ export async function fetchNpmPackageTargetStatus(params: {
   const timeoutMs = params.timeoutMs ?? 3500;
   const target = params.target;
   try {
+    const registryBase = resolveNpmRegistryBaseUrl();
     const res = await fetchWithTimeout(
-      `https://registry.npmjs.org/openclaw/${encodeURIComponent(target)}`,
+      `${registryBase}/openclaw/${encodeURIComponent(target)}`,
       {},
       Math.max(250, timeoutMs),
     );

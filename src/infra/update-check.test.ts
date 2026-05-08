@@ -13,6 +13,7 @@ import {
   fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveNpmChannelTag,
+  resolveNpmRegistryBaseUrl,
 } from "./update-check.js";
 
 describe("compareSemverStrings", () => {
@@ -41,16 +42,64 @@ describe("compareSemverStrings", () => {
   });
 });
 
+describe("resolveNpmRegistryBaseUrl", () => {
+  it("defaults to the public npm registry when no env override is set", () => {
+    expect(resolveNpmRegistryBaseUrl({})).toBe("https://registry.npmjs.org");
+  });
+
+  it("honors npm_config_registry and strips trailing slashes", () => {
+    expect(
+      resolveNpmRegistryBaseUrl({ npm_config_registry: "https://registry.npmmirror.com/" }),
+    ).toBe("https://registry.npmmirror.com");
+    expect(
+      resolveNpmRegistryBaseUrl({ npm_config_registry: "https://registry.npmmirror.com//" }),
+    ).toBe("https://registry.npmmirror.com");
+  });
+
+  it("honors uppercase NPM_CONFIG_REGISTRY when lowercase is unset", () => {
+    expect(resolveNpmRegistryBaseUrl({ NPM_CONFIG_REGISTRY: "https://registry.example.com" })).toBe(
+      "https://registry.example.com",
+    );
+  });
+
+  it("prefers lowercase npm_config_registry over uppercase when both are set", () => {
+    expect(
+      resolveNpmRegistryBaseUrl({
+        npm_config_registry: "https://lower.example.com",
+        NPM_CONFIG_REGISTRY: "https://upper.example.com",
+      }),
+    ).toBe("https://lower.example.com");
+  });
+
+  it("falls back to the default for empty, whitespace, or non-http values", () => {
+    expect(resolveNpmRegistryBaseUrl({ npm_config_registry: "" })).toBe(
+      "https://registry.npmjs.org",
+    );
+    expect(resolveNpmRegistryBaseUrl({ npm_config_registry: "   " })).toBe(
+      "https://registry.npmjs.org",
+    );
+    expect(resolveNpmRegistryBaseUrl({ npm_config_registry: "not-a-url" })).toBe(
+      "https://registry.npmjs.org",
+    );
+    expect(resolveNpmRegistryBaseUrl({ npm_config_registry: "file:///tmp/registry" })).toBe(
+      "https://registry.npmjs.org",
+    );
+  });
+});
+
 describe("resolveNpmChannelTag", () => {
   let versionByTag: Record<string, string | null>;
+  let lastFetchedUrl: string | null;
 
   beforeEach(() => {
     versionByTag = {};
+    lastFetchedUrl = null;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        lastFetchedUrl = url;
         const tag = decodeURIComponent(url.split("/").pop() ?? "");
         const version = versionByTag[tag] ?? null;
         return {
@@ -67,6 +116,8 @@ describe("resolveNpmChannelTag", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    delete process.env.npm_config_registry;
+    delete process.env.NPM_CONFIG_REGISTRY;
   });
 
   it("falls back to latest when beta is older", async () => {
@@ -140,6 +191,26 @@ describe("resolveNpmChannelTag", () => {
       version: null,
       error: "HTTP 404",
     });
+  });
+
+  it("queries the public npm registry by default", async () => {
+    versionByTag.latest = "1.0.6";
+    delete process.env.npm_config_registry;
+    delete process.env.NPM_CONFIG_REGISTRY;
+
+    await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 });
+
+    expect(lastFetchedUrl).toBe("https://registry.npmjs.org/openclaw/latest");
+  });
+
+  it("uses npm_config_registry when set so registry mirrors are honored", async () => {
+    versionByTag.latest = "1.0.7";
+    process.env.npm_config_registry = "https://registry.npmmirror.com/";
+
+    const status = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 });
+
+    expect(lastFetchedUrl).toBe("https://registry.npmmirror.com/openclaw/latest");
+    expect(status.version).toBe("1.0.7");
   });
 });
 
