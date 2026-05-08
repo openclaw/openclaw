@@ -21,6 +21,10 @@ import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-m
 
 type DeliveryQueueTestDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 type KvTestDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
+type CurrentConversationBindingsTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "current_conversation_bindings"
+>;
 type PluginStateTestDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
 type MigrationSourceRow = {
   migration_kind: string;
@@ -588,7 +592,7 @@ describe("state migrations", () => {
     await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("imports legacy current conversation bindings into SQLite KV", async () => {
+  it("imports legacy current conversation bindings into SQLite rows", async () => {
     const { root, stateDir, env, cfg } = await createLegacyStateFixture();
     const sourcePath = path.join(stateDir, "bindings", "current-conversations.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -637,26 +641,31 @@ describe("state migrations", () => {
     );
 
     const stateDatabase = openOpenClawStateDatabase({ env });
-    const db = getNodeSqliteKysely<KvTestDatabase>(stateDatabase.db);
-    const row = executeSqliteQuerySync<{ key: string; value_json: string }>(
+    const db = getNodeSqliteKysely<CurrentConversationBindingsTestDatabase>(stateDatabase.db);
+    const row = executeSqliteQuerySync<{
+      binding_key: string;
+      binding_id: string;
+      target_session_key: string;
+      record_json: string;
+    }>(
       stateDatabase.db,
       db
-        .selectFrom("kv")
-        .select(["key", "value_json"])
-        .where("scope", "=", "current-conversation-bindings"),
+        .selectFrom("current_conversation_bindings")
+        .select(["binding_key", "binding_id", "target_session_key", "record_json"]),
     ).rows[0];
 
-    expect(row?.key).toBe("forum\u241fdefault\u241f\u241f6098642967");
-    expect(JSON.parse(row?.value_json ?? "{}")).toMatchObject({
-      version: 1,
-      binding: {
-        bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
-        targetSessionKey: "agent:worker-1:acp:forum-dm",
-        conversation: {
-          channel: "forum",
-          accountId: "default",
-          conversationId: "6098642967",
-        },
+    expect(row).toMatchObject({
+      binding_key: "forum\u241fdefault\u241f\u241f6098642967",
+      binding_id: "generic:forum\u241fdefault\u241f\u241f6098642967",
+      target_session_key: "agent:worker-1:acp:forum-dm",
+    });
+    expect(JSON.parse(row?.record_json ?? "{}")).toMatchObject({
+      bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
+      targetSessionKey: "agent:worker-1:acp:forum-dm",
+      conversation: {
+        channel: "forum",
+        accountId: "default",
+        conversationId: "6098642967",
       },
     });
     await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });

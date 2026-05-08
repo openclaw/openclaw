@@ -104,8 +104,9 @@ The branch already has a real shared SQLite base:
   `plugin_state_entries`, `plugin_blob_entries`, `transcript_files`,
   `capture_sessions`, `capture_events`, `capture_blobs`,
   `sandbox_registry_entries`, `cron_run_logs`, `cron_jobs`, `commitments`,
-  `delivery_queue_entries`, `task_runs`, `task_delivery_state`, `flow_runs`,
-  `subagent_runs`, `migration_runs`, and `backup_runs`.
+  `delivery_queue_entries`, `current_conversation_bindings`, `task_runs`,
+  `task_delivery_state`, `flow_runs`, `subagent_runs`, `migration_runs`, and
+  `backup_runs`.
 - `src/state/openclaw-agent-db.ts` opens
   `agents/<agentId>/agent/openclaw-agent.sqlite`, registers the database in the
   global DB, and owns agent-local session, transcript, VFS, artifact, and cache
@@ -115,6 +116,9 @@ The branch already has a real shared SQLite base:
 - Subagent run recovery state now lives in typed shared `subagent_runs` rows
   with indexed child, requester, and controller session keys. The old
   `subagent_runs` KV scope is migration input only.
+- Current conversation bindings now live in typed shared
+  `current_conversation_bindings` rows keyed by normalized conversation id and
+  indexed by target session. The old KV scope is migration input only.
 - `src/agents/filesystem/virtual-agent-fs.sqlite.ts` implements a SQLite VFS
   over the agent database `vfs_entries` table.
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
@@ -529,6 +533,7 @@ task_runs(...)
 task_delivery_state(...)
 flow_runs(...)
 subagent_runs(run_id, child_session_key, requester_session_key, controller_session_key, created_at, ended_at, cleanup_handled, payload_json)
+current_conversation_bindings(binding_key, binding_id, channel, account_id, conversation_id, target_session_key, status, bound_at, expires_at, record_json)
 plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
 media_blobs(subdir, id, content_type, size_bytes, blob, created_at, updated_at)

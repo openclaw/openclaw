@@ -129,6 +129,23 @@ export interface CronRunLogs {
   ts: number;
 }
 
+export interface CurrentConversationBindings {
+  account_id: string;
+  binding_id: string;
+  binding_key: string;
+  bound_at: number;
+  channel: string;
+  conversation_id: string;
+  expires_at: number | null;
+  metadata_json: string | null;
+  parent_conversation_id: string | null;
+  record_json: string;
+  status: string;
+  target_kind: string;
+  target_session_key: string;
+  updated_at: number;
+}
+
 export interface DeliveryQueueEntries {
   enqueued_at: number;
   entry_json: string;
@@ -339,6 +356,7 @@ export interface DB {
   commitments: Commitments;
   cron_jobs: CronJobs;
   cron_run_logs: CronRunLogs;
+  current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
   flow_runs: FlowRuns;
   kv: Kv;

@@ -411,7 +411,6 @@ type LegacyCurrentConversationBindingsFile = {
   bindings?: unknown;
 };
 
-const CURRENT_CONVERSATION_BINDINGS_KV_SCOPE = "current-conversation-bindings";
 const CURRENT_CONVERSATION_BINDINGS_ID_PREFIX = "generic:";
 
 function readLegacyQueueJson(filePath: string, id: string, enqueuedAt: number): string {
@@ -997,7 +996,9 @@ function importLegacyCurrentConversationBindingsToSqlite(
   let imported = 0;
   runOpenClawStateWriteTransaction(
     (stateDatabase) => {
-      const db = getNodeSqliteKysely<KvMigrationDatabase>(stateDatabase.db);
+      const db = getNodeSqliteKysely<CurrentConversationBindingsMigrationDatabase>(
+        stateDatabase.db,
+      );
       for (const candidate of bindings) {
         if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
           continue;
@@ -1017,16 +1018,38 @@ function importLegacyCurrentConversationBindingsToSqlite(
         executeSqliteQuerySync(
           stateDatabase.db,
           db
-            .insertInto("kv")
+            .insertInto("current_conversation_bindings")
             .values({
-              scope: CURRENT_CONVERSATION_BINDINGS_KV_SCOPE,
-              key,
-              value_json: JSON.stringify({ version: 1, binding: normalized }),
+              binding_key: key,
+              binding_id: normalized.bindingId,
+              channel: normalized.conversation.channel,
+              account_id: normalized.conversation.accountId,
+              parent_conversation_id: normalized.conversation.parentConversationId ?? null,
+              conversation_id: normalized.conversation.conversationId,
+              target_session_key: normalized.targetSessionKey,
+              target_kind: normalized.targetKind,
+              status: normalized.status,
+              bound_at: normalized.boundAt,
+              expires_at: normalized.expiresAt ?? null,
+              metadata_json:
+                normalized.metadata == null ? null : JSON.stringify(normalized.metadata),
+              record_json: JSON.stringify(normalized),
               updated_at: updatedAt,
             })
             .onConflict((conflict) =>
-              conflict.columns(["scope", "key"]).doUpdateSet({
-                value_json: (eb) => eb.ref("excluded.value_json"),
+              conflict.column("binding_key").doUpdateSet({
+                binding_id: (eb) => eb.ref("excluded.binding_id"),
+                channel: (eb) => eb.ref("excluded.channel"),
+                account_id: (eb) => eb.ref("excluded.account_id"),
+                parent_conversation_id: (eb) => eb.ref("excluded.parent_conversation_id"),
+                conversation_id: (eb) => eb.ref("excluded.conversation_id"),
+                target_session_key: (eb) => eb.ref("excluded.target_session_key"),
+                target_kind: (eb) => eb.ref("excluded.target_kind"),
+                status: (eb) => eb.ref("excluded.status"),
+                bound_at: (eb) => eb.ref("excluded.bound_at"),
+                expires_at: (eb) => eb.ref("excluded.expires_at"),
+                metadata_json: (eb) => eb.ref("excluded.metadata_json"),
+                record_json: (eb) => eb.ref("excluded.record_json"),
                 updated_at: (eb) => eb.ref("excluded.updated_at"),
               }),
             ),
@@ -1842,6 +1865,10 @@ type AgentToolArtifactMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "too
 type LegacyGlobalAgentOwnedMigrationDatabase = Pick<OpenClawStateKyselyDatabase, never>;
 type DeliveryQueueMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 type KvMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
+type CurrentConversationBindingsMigrationDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "current_conversation_bindings"
+>;
 type PluginStateMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
 
 const CLAWHUB_SKILL_STATE_OWNER_ID = "core:clawhub-skills";

@@ -17,7 +17,7 @@ import {
 } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
-const OPENCLAW_STATE_SCHEMA_VERSION = 20;
+const OPENCLAW_STATE_SCHEMA_VERSION = 21;
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
@@ -346,6 +346,117 @@ function migrateSubagentRunsFromKv(db: DatabaseSync): void {
   db.prepare("DELETE FROM kv WHERE scope = 'subagent_runs'").run();
 }
 
+function migrateCurrentConversationBindingsFromKv(db: DatabaseSync): void {
+  const legacyRows = db
+    .prepare(
+      "SELECT key, value_json, updated_at FROM kv WHERE scope = 'current-conversation-bindings'",
+    )
+    .all() as Array<{ key?: unknown; value_json?: unknown; updated_at?: unknown }>;
+  if (legacyRows.length === 0) {
+    return;
+  }
+
+  const insert = db.prepare(`
+    INSERT OR REPLACE INTO current_conversation_bindings (
+      binding_key,
+      binding_id,
+      channel,
+      account_id,
+      parent_conversation_id,
+      conversation_id,
+      target_session_key,
+      target_kind,
+      status,
+      bound_at,
+      expires_at,
+      metadata_json,
+      record_json,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const row of legacyRows) {
+    if (typeof row.key !== "string" || typeof row.value_json !== "string") {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.value_json);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      continue;
+    }
+    const binding =
+      (parsed as { version?: unknown; binding?: unknown }).version === 1
+        ? (parsed as { binding?: unknown }).binding
+        : parsed;
+    if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
+      continue;
+    }
+    const record = binding as Record<string, unknown>;
+    const conversation = record.conversation;
+    if (!conversation || typeof conversation !== "object" || Array.isArray(conversation)) {
+      continue;
+    }
+    const conversationRecord = conversation as Record<string, unknown>;
+    const channel = readString(conversationRecord.channel)?.toLowerCase();
+    const accountId = readString(conversationRecord.accountId) ?? "default";
+    const conversationId = readString(conversationRecord.conversationId);
+    const parentConversationIdRaw = readString(conversationRecord.parentConversationId);
+    const parentConversationId =
+      parentConversationIdRaw && parentConversationIdRaw !== conversationId
+        ? parentConversationIdRaw
+        : null;
+    const targetSessionKey = readString(record.targetSessionKey);
+    if (!channel || !conversationId || !targetSessionKey) {
+      continue;
+    }
+    const bindingKey = [channel, accountId, parentConversationId ?? "", conversationId].join(
+      "\u241f",
+    );
+    const bindingId = `generic:${bindingKey}`;
+    const targetKind = record.targetKind === "subagent" ? "subagent" : "session";
+    const status =
+      record.status === "ending" || record.status === "ended" ? record.status : "active";
+    const updatedAt = readFiniteNumber(row.updated_at) ?? Date.now();
+    const normalized = {
+      ...record,
+      bindingId,
+      targetSessionKey,
+      targetKind,
+      status,
+      conversation: {
+        ...conversationRecord,
+        channel,
+        accountId,
+        conversationId,
+        ...(parentConversationId ? { parentConversationId } : {}),
+      },
+    };
+    insert.run(
+      bindingKey,
+      bindingId,
+      channel,
+      accountId,
+      parentConversationId,
+      conversationId,
+      targetSessionKey,
+      targetKind,
+      status,
+      readFiniteNumber(record.boundAt) ?? updatedAt,
+      readFiniteNumber(record.expiresAt),
+      readJsonText(record.metadata),
+      JSON.stringify(normalized),
+      updatedAt,
+    );
+  }
+
+  db.prepare("DELETE FROM kv WHERE scope = 'current-conversation-bindings'").run();
+}
+
 function rebuildTaskDeliveryStateWithForeignKey(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_delivery_state_next (
@@ -424,6 +535,9 @@ function migrateStateSchema(db: DatabaseSync, fromVersion: number): void {
   }
   if (fromVersion < 20) {
     migrateSubagentRunsFromKv(db);
+  }
+  if (fromVersion < 21) {
+    migrateCurrentConversationBindingsFromKv(db);
   }
 }
 
