@@ -200,8 +200,10 @@ describe("setup surface helpers", () => {
       );
 
       // Should return config with username and clientId
-      expect(result).not.toBeNull();
-      const defaultAccount = result?.cfg.channels?.twitch?.accounts?.default as
+      if (!result) {
+        throw new Error("expected Twitch env-token setup result");
+      }
+      const defaultAccount = result.cfg.channels?.twitch?.accounts?.default as
         | { username?: string; clientId?: string }
         | undefined;
       expect(defaultAccount?.username).toBe("testbot");

@@ -83,7 +83,6 @@ function requireFirstPairingRequest(
 ) {
   expect(requests).toHaveLength(1);
   const [request] = requests;
-  expect(request).toBeDefined();
   if (!request) {
     throw new Error("expected pairing request");
   }
