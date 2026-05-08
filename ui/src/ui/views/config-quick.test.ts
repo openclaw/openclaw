@@ -78,21 +78,26 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
   };
 }
 
+function collectQuickSettingsCardKinds(container: Element): string[] {
+  const kinds: string[] = [];
+  for (const card of container.querySelectorAll(".qs-card")) {
+    const kind = Array.from(card.classList).find(
+      (className) => className.startsWith("qs-card--") && className !== "qs-card--span-all",
+    );
+    if (kind) {
+      kinds.push(kind);
+    }
+  }
+  return kinds;
+}
+
 describe("renderQuickSettings", () => {
   it("uses direct dashboard cards for the compact settings layout", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(
-      Array.from(container.querySelectorAll(".qs-card"))
-        .map((card) =>
-          Array.from(card.classList).find(
-            (className) => className.startsWith("qs-card--") && className !== "qs-card--span-all",
-          ),
-        )
-        .filter(Boolean),
-    ).toEqual([
+    expect(collectQuickSettingsCardKinds(container)).toEqual([
       "qs-card--model",
       "qs-card--channels",
       "qs-card--security",
