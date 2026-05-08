@@ -191,6 +191,51 @@ describe("Codex app-server config", () => {
     );
   });
 
+  it("defaults native Codex approvals to guardian when requirements disallow never approval", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: 'allowed_approval_policies = ["on-request"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("selects an allowed guardian approval policy when on-request is unavailable", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: 'allowed_approval_policies = ["on-failure"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-failure",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("keeps native Codex approvals unchained when requirements allow never approval", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: 'allowed_approval_policies = ["never"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
   it("ignores quoted sandbox modes inside requirements comments", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {},

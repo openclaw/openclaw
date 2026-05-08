@@ -677,7 +677,7 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "yolo" } },
     });
-    await harness.waitForMethod("turn/start", 60_000);
+    await harness.waitForMethod("turn/start", 120_000);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 

@@ -11,6 +11,7 @@ type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
 type CodexAppServerDefaultPolicy = {
   mode: CodexAppServerPolicyMode;
+  approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
@@ -373,6 +374,7 @@ export function resolveCodexAppServerRuntimeOptions(
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
+      defaultPolicy?.approvalPolicy ??
       (policyMode === "guardian" ? "on-request" : "never"),
     sandbox:
       resolveSandbox(config.sandbox) ??
@@ -539,12 +541,18 @@ function resolveDefaultCodexAppServerPolicy(params: {
     return { mode: "yolo" };
   }
   const allowedSandboxModes = parseAllowedSandboxModesFromCodexRequirements(content);
-  if (allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access")) {
+  const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
+  const yoloSandboxAllowed =
+    allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access");
+  const yoloApprovalAllowed =
+    allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("never");
+  if (yoloSandboxAllowed && yoloApprovalAllowed) {
     return { mode: "yolo" };
   }
   return {
     mode: "guardian",
-    sandbox: allowedSandboxModes.has("workspace-write") ? "workspace-write" : "read-only",
+    approvalPolicy: selectGuardianApprovalPolicy(allowedApprovalPolicies),
+    sandbox: selectGuardianSandbox(allowedSandboxModes),
   };
 }
 
@@ -582,8 +590,32 @@ function resolveCodexRequirementsPath(env: NodeJS.ProcessEnv, platform: NodeJS.P
 function parseAllowedSandboxModesFromCodexRequirements(
   content: string,
 ): Set<CodexAppServerSandboxMode> | undefined {
+  const values = parseTopLevelRequirementsStringArray(content, "allowed_sandbox_modes");
+  if (values === undefined) {
+    return undefined;
+  }
+  const normalizedModes = values
+    .map((entry) => normalizeRequirementsSandboxMode(entry))
+    .filter((entry): entry is CodexAppServerSandboxMode => entry !== undefined);
+  return normalizedModes.length > 0 ? new Set(normalizedModes) : undefined;
+}
+
+function parseAllowedApprovalPoliciesFromCodexRequirements(
+  content: string,
+): Set<CodexAppServerApprovalPolicy> | undefined {
+  const values = parseTopLevelRequirementsStringArray(content, "allowed_approval_policies");
+  if (values === undefined) {
+    return undefined;
+  }
+  const normalizedPolicies = values
+    .map((entry) => normalizeRequirementsApprovalPolicy(entry))
+    .filter((entry): entry is CodexAppServerApprovalPolicy => entry !== undefined);
+  return normalizedPolicies.length > 0 ? new Set(normalizedPolicies) : undefined;
+}
+
+function parseTopLevelRequirementsStringArray(content: string, key: string): string[] | undefined {
   const topLevelContent = stripTomlLineComments(content).slice(0, firstTomlTableOffset(content));
-  const match = topLevelContent.match(/(?:^|\n)\s*allowed_sandbox_modes\s*=\s*\[([\s\S]*?)\]/);
+  const match = topLevelContent.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
   if (!match) {
     return undefined;
   }
@@ -592,10 +624,7 @@ function parseAllowedSandboxModesFromCodexRequirements(
   if (stringMatches.length === 0 && arrayBody.trim().length > 0) {
     return undefined;
   }
-  const normalizedModes = stringMatches
-    .map((entry) => normalizeRequirementsSandboxMode(entry[1] ?? entry[2] ?? ""))
-    .filter((entry): entry is CodexAppServerSandboxMode => entry !== undefined);
-  return normalizedModes.length > 0 ? new Set(normalizedModes) : undefined;
+  return stringMatches.map((entry) => entry[1] ?? entry[2] ?? "");
 }
 
 function firstTomlTableOffset(content: string): number {
@@ -655,6 +684,46 @@ function normalizeRequirementsSandboxMode(value: string): CodexAppServerSandboxM
     return "danger-full-access";
   }
   return undefined;
+}
+
+function normalizeRequirementsApprovalPolicy(
+  value: string,
+): CodexAppServerApprovalPolicy | undefined {
+  const normalized = value.trim().toLowerCase();
+  return resolveApprovalPolicy(normalized);
+}
+
+function selectGuardianApprovalPolicy(
+  allowedApprovalPolicies: Set<CodexAppServerApprovalPolicy> | undefined,
+): CodexAppServerApprovalPolicy {
+  if (allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("on-request")) {
+    return "on-request";
+  }
+  if (allowedApprovalPolicies.has("on-failure")) {
+    return "on-failure";
+  }
+  if (allowedApprovalPolicies.has("untrusted")) {
+    return "untrusted";
+  }
+  if (allowedApprovalPolicies.has("never")) {
+    return "never";
+  }
+  return "on-request";
+}
+
+function selectGuardianSandbox(
+  allowedSandboxModes: Set<CodexAppServerSandboxMode> | undefined,
+): CodexAppServerSandboxMode {
+  if (allowedSandboxModes === undefined || allowedSandboxModes.has("workspace-write")) {
+    return "workspace-write";
+  }
+  if (allowedSandboxModes.has("read-only")) {
+    return "read-only";
+  }
+  if (allowedSandboxModes.has("danger-full-access")) {
+    return "danger-full-access";
+  }
+  return "workspace-write";
 }
 
 function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
