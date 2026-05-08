@@ -157,6 +157,67 @@ describe("hardenManualCompactionBoundary", () => {
     ]);
   });
 
+  it("keeps the recent tail when manual compaction produced an empty summary", async () => {
+    const dir = await makeTmpDir();
+    const session = SessionManager.create(dir, dir);
+
+    session.appendMessage({ role: "user", content: "old question", timestamp: 1 });
+    session.appendMessage(createAssistantTextMessage("old answer", 2));
+    session.appendMessage({ role: "user", content: "fresh question", timestamp: 3 });
+    const keepId = requireString(session.getBranch().at(-1)?.id, "keep id");
+    session.appendMessage(createAssistantTextMessage("fresh answer", 4));
+    session.appendCompaction("", keepId, 200);
+    const sessionFile = requireString(session.getSessionFile(), "session file");
+
+    const hardened = await hardenManualCompactionBoundary({ sessionFile });
+    expect(hardened.applied).toBe(false);
+    expect(hardened.firstKeptEntryId).toBe(keepId);
+    expect(hardened.messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "user",
+      "assistant",
+    ]);
+    expect(hardened.messages.map((message) => messageText(message)).join("\n")).toContain(
+      "fresh question",
+    );
+
+    const reopened = SessionManager.open(sessionFile);
+    const latest = reopened.getLeafEntry();
+    expect(latest?.type).toBe("compaction");
+    if (!latest || latest.type !== "compaction") {
+      throw new Error("expected latest leaf to be a compaction entry");
+    }
+    expect(latest.firstKeptEntryId).toBe(keepId);
+  });
+
+  it("keeps the recent tail when manual compaction had no messages to summarize", async () => {
+    const dir = await makeTmpDir();
+    const session = SessionManager.create(dir, dir);
+
+    session.appendMessage({ role: "user", content: "fresh question", timestamp: 1 });
+    const keepId = requireString(session.getBranch().at(-1)?.id, "keep id");
+    session.appendMessage(createAssistantTextMessage("fresh answer", 2));
+    session.appendCompaction("No prior history.", keepId, 200);
+    const sessionFile = requireString(session.getSessionFile(), "session file");
+
+    const hardened = await hardenManualCompactionBoundary({ sessionFile });
+    expect(hardened.applied).toBe(false);
+    expect(hardened.firstKeptEntryId).toBe(keepId);
+    expect(hardened.messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "user",
+      "assistant",
+    ]);
+
+    const reopened = SessionManager.open(sessionFile);
+    const latest = reopened.getLeafEntry();
+    expect(latest?.type).toBe("compaction");
+    if (!latest || latest.type !== "compaction") {
+      throw new Error("expected latest leaf to be a compaction entry");
+    }
+    expect(latest.firstKeptEntryId).toBe(keepId);
+  });
+
   it("is a no-op when the latest leaf is not a compaction entry", async () => {
     const dir = await makeTmpDir();
     const session = SessionManager.create(dir, dir);
