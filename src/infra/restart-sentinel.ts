@@ -1,7 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveStateDir } from "../config/paths.js";
 import {
   deleteOpenClawStateKvJson,
   readOpenClawStateKvJson,
@@ -71,7 +68,6 @@ export type RestartSentinel = {
 export const DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE =
   "The gateway restart completed successfully. Tell the user OpenClaw restarted successfully and continue any pending work.";
 
-const SENTINEL_FILENAME = "restart-sentinel.json";
 const RESTART_SENTINEL_KV_SCOPE = "gateway.restart-sentinel";
 const RESTART_SENTINEL_KV_KEY = "current";
 
@@ -79,10 +75,6 @@ export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string {
   return `Run: ${formatCliCommand("openclaw doctor --non-interactive", env)}`;
-}
-
-export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), SENTINEL_FILENAME);
 }
 
 export async function writeRestartSentinel(
@@ -96,7 +88,6 @@ export async function writeRestartSentinel(
     data as unknown as OpenClawStateJsonValue,
     { env },
   );
-  return resolveRestartSentinelPath(env);
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -163,15 +154,8 @@ export async function markUpdateRestartSentinelFailure(
   }, env);
 }
 
-export async function removeRestartSentinelFile(
-  filePath: string | null | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-) {
+export async function clearRestartSentinel(env: NodeJS.ProcessEnv = process.env) {
   deleteOpenClawStateKvJson(RESTART_SENTINEL_KV_SCOPE, RESTART_SENTINEL_KV_KEY, { env });
-  if (!filePath) {
-    return;
-  }
-  await fs.unlink(filePath).catch(() => {});
 }
 
 export function buildRestartSuccessContinuation(params: {
@@ -211,12 +195,11 @@ export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): 
 export async function consumeRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  const filePath = resolveRestartSentinelPath(env);
   const parsed = await readRestartSentinel(env);
   if (!parsed) {
     return null;
   }
-  await removeRestartSentinelFile(filePath, env);
+  await clearRestartSentinel(env);
   return parsed;
 }
 

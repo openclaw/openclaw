@@ -14,8 +14,8 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
   buildRestartSuccessContinuation,
+  clearRestartSentinel,
   formatDoctorNonInteractiveHint,
-  removeRestartSentinelFile,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -695,16 +695,15 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const sentinelPayload = buildRestartCommandSentinel(params);
   if (hasSigusr1Listener) {
-    let sentinelPath: string | null = null;
     scheduleGatewaySigusr1Restart({
       reason: "/restart",
       emitHooks: sentinelPayload
         ? {
             beforeEmit: async () => {
-              sentinelPath = await writeRestartSentinel(sentinelPayload);
+              await writeRestartSentinel(sentinelPayload);
             },
             afterEmitRejected: async () => {
-              await removeRestartSentinelFile(sentinelPath);
+              await clearRestartSentinel();
             },
           }
         : undefined,
@@ -716,10 +715,9 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  let sentinelPath: string | null = null;
   try {
     if (sentinelPayload) {
-      sentinelPath = await writeRestartSentinel(sentinelPayload);
+      await writeRestartSentinel(sentinelPayload);
     }
   } catch (err) {
     logVerbose(`failed to write /restart sentinel: ${String(err)}`);
@@ -732,7 +730,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
-    await removeRestartSentinelFile(sentinelPath);
+    await clearRestartSentinel();
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,
