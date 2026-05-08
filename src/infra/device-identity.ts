@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   readOpenClawStateKvJson,
   writeOpenClawStateKvJson,
@@ -32,6 +31,7 @@ type StoredSwiftIdentity = {
 
 const DEVICE_IDENTITY_SCOPE = "identity.device";
 const DEVICE_IDENTITY_KEY = "default";
+const DEVICE_IDENTITY_PATH_KEY_PREFIX = "path:";
 
 function resolveDefaultIdentityPath(): string {
   return path.join(resolveStateDir(), "identity", "device.json");
@@ -41,8 +41,9 @@ function resolveIdentityPathForEnv(env: NodeJS.ProcessEnv = process.env): string
   return path.join(resolveStateDir(env), "identity", "device.json");
 }
 
-function sqliteOptionsForIdentityPath(filePath: string): OpenClawStateDatabaseOptions {
+function stateDbOptionsForIdentityPath(filePath: string): { env: NodeJS.ProcessEnv } {
   const resolved = path.resolve(filePath);
+  const envStateDir = resolveStateDir(process.env);
   if (resolved.endsWith(path.join("identity", "device.json"))) {
     return {
       env: {
@@ -51,7 +52,28 @@ function sqliteOptionsForIdentityPath(filePath: string): OpenClawStateDatabaseOp
       },
     };
   }
-  return { path: `${resolved}.sqlite` };
+  if (resolved.startsWith(`${path.resolve(envStateDir)}${path.sep}`)) {
+    return {
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: envStateDir,
+      },
+    };
+  }
+  return {
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.dirname(resolved),
+    },
+  };
+}
+
+function identityKeyForPath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  if (resolved.endsWith(path.join("identity", "device.json"))) {
+    return DEVICE_IDENTITY_KEY;
+  }
+  return `${DEVICE_IDENTITY_PATH_KEY_PREFIX}${crypto.createHash("sha256").update(resolved).digest("hex")}`;
 }
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -171,8 +193,8 @@ function readStoredIdentity(filePath: string): StoredIdentity | null {
   return parseStoredIdentity(
     readOpenClawStateKvJson(
       DEVICE_IDENTITY_SCOPE,
-      DEVICE_IDENTITY_KEY,
-      sqliteOptionsForIdentityPath(filePath),
+      identityKeyForPath(filePath),
+      stateDbOptionsForIdentityPath(filePath),
     ),
   );
 }
@@ -186,9 +208,9 @@ function readStoredIdentityForEnv(env: NodeJS.ProcessEnv): StoredIdentity | null
 function writeStoredIdentity(filePath: string, stored: StoredIdentity): void {
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     DEVICE_IDENTITY_SCOPE,
-    DEVICE_IDENTITY_KEY,
+    identityKeyForPath(filePath),
     stored as unknown as OpenClawStateJsonValue,
-    sqliteOptionsForIdentityPath(filePath),
+    stateDbOptionsForIdentityPath(filePath),
   );
 }
 

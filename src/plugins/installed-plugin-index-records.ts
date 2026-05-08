@@ -26,7 +26,6 @@ export const PLUGIN_INSTALLS_CONFIG_PATH = ["plugins", "installs"] as const;
 export type InstalledPluginIndexRecordStoreOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
-  filePath?: string;
 };
 
 type InstalledPluginIndexRecordRefreshOptions = InstalledPluginIndexRecordStoreOptions &

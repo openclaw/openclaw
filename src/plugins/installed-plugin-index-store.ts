@@ -95,18 +95,6 @@ export function writePersistedInstalledPluginIndexSync(
 export function deletePersistedInstalledPluginIndexSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): boolean {
-  if (options.filePath) {
-    try {
-      fs.unlinkSync(resolveInstalledPluginIndexStorePath(options));
-      clearCurrentPluginMetadataSnapshotState();
-      return true;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw err;
-      }
-      return false;
-    }
-  }
   const removed = deleteOpenClawStateKvJson(
     INSTALLED_PLUGIN_INDEX_KV_SCOPE,
     INSTALLED_PLUGIN_INDEX_KV_KEY,

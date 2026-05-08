@@ -1,13 +1,10 @@
 import { z } from "zod";
-import { tryReadJson, tryReadJsonSync } from "../infra/json-files.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
-import {
-  resolveInstalledPluginIndexStorePath,
-  type InstalledPluginIndexStoreOptions,
-} from "./installed-plugin-index-store-path.js";
+import { type InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,
@@ -153,9 +150,6 @@ export function resolveInstalledPluginIndexStateDbOptions(
 function readPersistedInstalledPluginIndexJsonSync(
   options: InstalledPluginIndexStoreOptions,
 ): unknown {
-  if (options.filePath) {
-    return tryReadJsonSync(resolveInstalledPluginIndexStorePath(options));
-  }
   try {
     return readOpenClawStateKvJson(
       INSTALLED_PLUGIN_INDEX_KV_SCOPE,
@@ -170,9 +164,7 @@ function readPersistedInstalledPluginIndexJsonSync(
 export async function readPersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndex | null> {
-  const parsed = options.filePath
-    ? await tryReadJson<unknown>(resolveInstalledPluginIndexStorePath(options))
-    : readPersistedInstalledPluginIndexJsonSync(options);
+  const parsed = readPersistedInstalledPluginIndexJsonSync(options);
   return parseInstalledPluginIndex(parsed);
 }
 

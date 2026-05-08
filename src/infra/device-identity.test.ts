@@ -38,6 +38,8 @@ describe("device identity crypto helpers", () => {
       const created = loadOrCreateDeviceIdentity(identityPath);
 
       expect(loadDeviceIdentityIfPresent(identityPath)).toEqual(created);
+      expect(fs.existsSync(identityPath)).toBe(false);
+      expect(fs.existsSync(`${identityPath}.sqlite`)).toBe(false);
     });
   });
 
