@@ -509,8 +509,9 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
     const sessionFile = updatedFirst?.sessionFile;
+    expect(sessionFile).toBeTruthy();
     if (!sessionFile) {
-      throw new Error("expected embedded gap-fill persistence to create a session file");
+      throw new Error("Expected CLI transcript session file.");
     }
 
     await appendSessionTranscriptMessage({
