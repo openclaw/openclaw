@@ -54,7 +54,7 @@ export function setJsonlOcPath(
       value: newValue,
       raw: target.raw,
     };
-    return finalize(ast, lineIdx, newLine);
+    return finalize(ast, lineIdx, newLine, path.file);
   }
 
   if (target.kind !== 'value') {return { ok: false, reason: 'not-a-value-line' };}
@@ -75,7 +75,7 @@ export function setJsonlOcPath(
     value: replaced,
     raw: target.raw,
   };
-  return finalize(ast, lineIdx, newLine);
+  return finalize(ast, lineIdx, newLine, path.file);
 }
 
 function replaceAt(
@@ -191,11 +191,19 @@ function pickLineIndex(ast: JsonlAst, addr: string): number {
   return ast.lines.findIndex((l) => l.line === target);
 }
 
-function finalize(ast: JsonlAst, lineIdx: number, newLine: JsonlLine): JsonlEditResult {
+function finalize(ast: JsonlAst, lineIdx: number, newLine: JsonlLine, fileName?: string): JsonlEditResult {
   const newLines = ast.lines.slice();
   newLines[lineIdx] = newLine;
-  const next: JsonlAst = { kind: 'jsonl', raw: '', lines: newLines };
-  const rendered = emitJsonl(next, { mode: 'render' });
+  const next: JsonlAst = {
+    kind: 'jsonl',
+    raw: '',
+    lines: newLines,
+    ...(ast.lineEnding !== undefined ? { lineEnding: ast.lineEnding } : {}),
+  };
+  const opts = fileName !== undefined
+    ? { mode: 'render' as const, fileNameForGuard: fileName }
+    : { mode: 'render' as const };
+  const rendered = emitJsonl(next, opts);
   return { ok: true, ast: { ...next, raw: rendered } };
 }
 

@@ -68,13 +68,13 @@ export function setJsoncOcPath(
   // Empty path — replace the root.
   if (segments.length === 0) {
     const next = { ...ast, root: newValue };
-    return { ok: true, ast: rebuildRaw(next) };
+    return { ok: true, ast: rebuildRaw(next, path.file) };
   }
 
   const replaced = replaceAt(ast.root, segments, 0, newValue);
   if (replaced === null) {return { ok: false, reason: 'unresolved' };}
   const next = { ...ast, root: replaced };
-  return { ok: true, ast: rebuildRaw(next) };
+  return { ok: true, ast: rebuildRaw(next, path.file) };
 }
 
 function replaceAt(
@@ -168,8 +168,17 @@ function replaceAt(
  * `setJsoncOcPath` does a `raw.slice(0,start) + newBytes + raw.slice(end)`
  * splice, leaving trivia untouched. Tracked as PR follow-up.
  */
-function rebuildRaw(ast: JsoncAst): JsoncAst {
+function rebuildRaw(ast: JsoncAst, fileName?: string): JsoncAst {
+  // Plumb fileName so render-mode emit's sentinel guard reports the
+  // file context (`oc://gateway.jsonc/[path]`) instead of the empty
+  // fallback (`oc:///[path]`). The throw originates here when a
+  // caller-injected sentinel reaches a leaf — without the file
+  // context, forensics + audit pipelines see "rejected somewhere"
+  // with no way to identify the file.
+  const opts = fileName !== undefined
+    ? { mode: 'render' as const, fileNameForGuard: fileName }
+    : { mode: 'render' as const };
   const next: JsoncAst = { kind: 'jsonc', raw: '', root: ast.root };
-  const rendered = emitJsonc(next, { mode: 'render' });
+  const rendered = emitJsonc(next, opts);
   return { ...ast, raw: rendered };
 }

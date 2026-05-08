@@ -164,7 +164,8 @@ function resolvePositionalSegments(
     }
     out.push(segNorm);
     if (isMap(node)) {
-      const pair = (node as { items: Pair[] }).items.find((p) => {
+      const pairs: readonly Pair[] = (node as { items: readonly Pair[] }).items;
+      const pair: Pair | undefined = pairs.find((p) => {
         const k = isScalar(p.key) ? p.key.value : p.key;
         return String(k) === segNorm;
       });
@@ -187,12 +188,14 @@ function resolvePositionalSegments(
 
 function positionalForYamlNode(node: Node, seg: string): string | null {
   if (isMap(node)) {
-    const pairs = (node as { items: Pair[] }).items;
-    const keys = pairs.map((p) => String(isScalar(p.key) ? p.key.value : p.key));
+    const pairs: readonly Pair[] = (node as { items: readonly Pair[] }).items;
+    const keys: readonly string[] = pairs.map((p) =>
+      String(isScalar(p.key) ? p.key.value : p.key),
+    );
     return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
   }
   if (isSeq(node)) {
-    const items = (node as { items: Node[] }).items;
+    const items: readonly Node[] = (node as { items: readonly Node[] }).items;
     return resolvePositionalSeg(seg, { indexable: true, size: items.length });
   }
   return null;
