@@ -439,34 +439,40 @@ describe("scoped vitest configs", () => {
       [defaultExtensionSignalConfig, "signal/**/*.test.ts"],
       [defaultExtensionImessageConfig, "imessage/**/*.test.ts"],
     ] as const) {
-      expect(config.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-      expect(config.test?.include).toEqual([include]);
+      const testConfig = requireTestConfig(config);
+      expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+      expect(testConfig.include).toEqual([include]);
     }
   });
 
   it("normalizes acpx extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionAcpxConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionAcpxConfig.test?.include).toEqual(["acpx/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultExtensionAcpxConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(["acpx/**/*.test.ts"]);
   });
 
   it("normalizes diffs extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionDiffsConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionDiffsConfig.test?.include).toEqual(["diffs/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultExtensionDiffsConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(["diffs/**/*.test.ts"]);
   });
 
   it("normalizes feishu extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionFeishuConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionFeishuConfig.test?.include).toEqual(["feishu/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultExtensionFeishuConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(["feishu/**/*.test.ts"]);
   });
 
   it("normalizes irc extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionIrcConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionIrcConfig.test?.include).toEqual(["irc/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultExtensionIrcConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(["irc/**/*.test.ts"]);
   });
 
   it("normalizes extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionsConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionsConfig.test?.include).toEqual(["**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultExtensionsConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(["**/*.test.ts"]);
   });
 
   it("normalizes extension provider include patterns relative to the scoped dir", () => {
