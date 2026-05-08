@@ -29,17 +29,10 @@ const mocks = vi.hoisted(() => {
         },
       },
     })),
-    removeRestartSentinelFile: vi.fn(async () => undefined),
-    resolveRestartSentinelPath: vi.fn(() => "/tmp/restart-sentinel.json"),
+    clearRestartSentinel: vi.fn(async () => undefined),
     formatRestartSentinelMessage: vi.fn(() => "restart message"),
     summarizeRestartSentinel: vi.fn(() => "restart summary"),
     resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
-    parseSessionThreadInfo: vi.fn(
-      (): { baseSessionKey: string | null | undefined; threadId: string | undefined } => ({
-        baseSessionKey: null,
-        threadId: undefined,
-      }),
-    ),
     loadSessionEntry: vi.fn(
       (): LoadedSessionEntry => ({
         cfg: {},
@@ -50,13 +43,15 @@ const mocks = vi.hoisted(() => {
         store: {},
         agentId: "main",
         canonicalKey: "agent:main:main",
-        legacyKey: undefined,
       }),
     ),
-    deliveryContextFromSession: vi.fn(
+    readSqliteSessionDeliveryContext: vi.fn(
       ():
         | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
         | undefined => undefined,
+    ),
+    readSqliteSessionRoutingInfo: vi.fn(
+      (): { chatType?: string; channel?: string; sessionScope?: string } | undefined => undefined,
     ),
     mergeDeliveryContext: vi.fn((a?: Record<string, unknown>, b?: Record<string, unknown>) => ({
       ...b,
@@ -169,8 +164,7 @@ vi.mock("../agents/agent-scope.js", async () => {
 
 vi.mock("../infra/restart-sentinel.js", () => ({
   readRestartSentinel: mocks.readRestartSentinel,
-  removeRestartSentinelFile: mocks.removeRestartSentinelFile,
-  resolveRestartSentinelPath: mocks.resolveRestartSentinelPath,
+  clearRestartSentinel: mocks.clearRestartSentinel,
   formatRestartSentinelMessage: mocks.formatRestartSentinelMessage,
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
 }));
@@ -186,9 +180,9 @@ vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
 }));
 
-vi.mock("../config/sessions/thread-info.js", () => ({
-  parseSessionThreadInfoFast: mocks.parseSessionThreadInfo,
-  parseSessionThreadInfo: mocks.parseSessionThreadInfo,
+vi.mock("../config/sessions/session-entries.sqlite.js", () => ({
+  readSqliteSessionDeliveryContext: mocks.readSqliteSessionDeliveryContext,
+  readSqliteSessionRoutingInfo: mocks.readSqliteSessionRoutingInfo,
 }));
 
 vi.mock("./session-utils.js", () => ({
@@ -196,7 +190,6 @@ vi.mock("./session-utils.js", () => ({
 }));
 
 vi.mock("../utils/delivery-context.shared.js", () => ({
-  deliveryContextFromSession: mocks.deliveryContextFromSession,
   mergeDeliveryContext: mocks.mergeDeliveryContext,
   normalizeSessionDeliveryFields: mocks.normalizeSessionDeliveryFields,
 }));
@@ -374,22 +367,21 @@ describe("scheduleRestartSentinelWake", () => {
         },
       },
     });
-    mocks.parseSessionThreadInfo.mockReset();
-    mocks.parseSessionThreadInfo.mockReturnValue({ baseSessionKey: null, threadId: undefined });
     mocks.loadSessionEntry.mockReset();
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
+      agentId: "main",
       entry: {
         sessionId: "agent:main:main",
         updatedAt: 0,
       },
       store: {},
-      agentId: "main",
       canonicalKey: "agent:main:main",
-      legacyKey: undefined,
     });
-    mocks.deliveryContextFromSession.mockReset();
-    mocks.deliveryContextFromSession.mockReturnValue(undefined);
+    mocks.readSqliteSessionDeliveryContext.mockReset();
+    mocks.readSqliteSessionDeliveryContext.mockReturnValue(undefined);
+    mocks.readSqliteSessionRoutingInfo.mockReset();
+    mocks.readSqliteSessionRoutingInfo.mockReturnValue(undefined);
     mocks.getChannelPlugin.mockReset();
     mocks.getChannelPlugin.mockReturnValue(undefined);
     mocks.normalizeChannelId.mockClear();
@@ -407,7 +399,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.loadPendingSessionDelivery.mockClear();
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
-    mocks.removeRestartSentinelFile.mockClear();
+    mocks.clearRestartSentinel.mockClear();
     mocks.injectTimestamp.mockClear();
     mocks.timestampOptsFromConfig.mockClear();
     mocks.recordInboundSessionAndDispatchReply.mockReset();
@@ -638,16 +630,15 @@ describe("scheduleRestartSentinelWake", () => {
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
+      agentId: "main",
       entry: {
         sessionId: "agent:main:group",
         updatedAt: 0,
-        origin: { provider: "telegram", chatType: "group" },
       },
       store: {},
-      agentId: "main",
       canonicalKey: "agent:main:group",
-      legacyKey: undefined,
     });
+    mocks.readSqliteSessionRoutingInfo.mockReturnValue({ chatType: "group" });
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "telegram:-1001" });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
@@ -676,28 +667,23 @@ describe("scheduleRestartSentinelWake", () => {
         },
       },
     } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.parseSessionThreadInfo.mockReturnValue({
-      baseSessionKey: "agent:main:telegram:group:-1003826723328",
-      threadId: "13757",
-    });
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
+      agentId: "main",
       entry: {
         sessionId: "agent:main:telegram:group:-1003826723328:topic:13757",
         updatedAt: 0,
-        origin: { provider: "telegram", chatType: "group" },
       },
       store: {},
-      storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:telegram:group:-1003826723328:topic:13757",
-      legacyKey: undefined,
     });
-    mocks.deliveryContextFromSession.mockReturnValue({
+    mocks.readSqliteSessionDeliveryContext.mockReturnValue({
       channel: "telegram",
       to: "telegram:-1003826723328:topic:13757",
       accountId: "default",
       threadId: 13757,
     });
+    mocks.readSqliteSessionRoutingInfo.mockReturnValue({ chatType: "group" });
     mocks.resolveOutboundTarget.mockReturnValue({
       ok: true as const,
       to: "telegram:-1003826723328:topic:13757",
@@ -871,7 +857,7 @@ describe("scheduleRestartSentinelWake", () => {
         },
       },
     } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.deliveryContextFromSession.mockReturnValue({
+    mocks.readSqliteSessionDeliveryContext.mockReturnValue({
       channel: "telegram",
       to: "telegram:200482621",
       accountId: "default",
@@ -1025,12 +1011,6 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.logWarn.mock.calls).toEqual([
-      [
-        "restart continuation dispatch failed during final: Error: route failed",
-        {
-          sessionKey: "agent:main:main",
-        },
-      ],
       ["restart continuation: retry failed for entry session-delivery-1: Error: route failed"],
     ]);
   });
@@ -1147,7 +1127,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.removeRestartSentinelFile).not.toHaveBeenCalled();
+    expect(mocks.clearRestartSentinel).not.toHaveBeenCalled();
     expect(mocks.drainPendingSessionDeliveries).not.toHaveBeenCalled();
     expect(mocks.logWarn).toHaveBeenCalledWith("startup task failed", {
       source: "restart-sentinel",
@@ -1232,12 +1212,6 @@ describe("scheduleRestartSentinelWake", () => {
         sessionKey: "agent:main:matrix:channel:!lowercased:example.org",
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.parseSessionThreadInfo.mockReturnValue({
-      baseSessionKey: "agent:main:matrix:channel:!lowercased:example.org",
-      threadId: undefined,
-    });
-    mocks.deliveryContextFromSession.mockReturnValue(undefined);
-
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mockCallArg(mocks.enqueueSystemEvent)).toBe("restart message");
@@ -1255,16 +1229,12 @@ describe("scheduleRestartSentinelWake", () => {
         sessionKey: "agent:main:qa-channel:channel:qa-room",
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.parseSessionThreadInfo.mockReturnValue({
-      baseSessionKey: "agent:main:qa-channel:channel:qa-room",
-      threadId: undefined,
-    });
-    mocks.deliveryContextFromSession.mockReturnValue({
+    mocks.readSqliteSessionDeliveryContext.mockReturnValue({
       channel: "qa-channel",
       to: "channel:qa-room",
     });
     mocks.requestHeartbeat.mockImplementation(() => {
-      mocks.deliveryContextFromSession.mockReturnValue({
+      mocks.readSqliteSessionDeliveryContext.mockReturnValue({
         channel: "qa-channel",
         to: "heartbeat",
       });
@@ -1287,49 +1257,27 @@ describe("scheduleRestartSentinelWake", () => {
     });
   });
 
-  it("merges base session routing into partial thread metadata", async () => {
+  it("does not merge base session routing into partial thread metadata", async () => {
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.parseSessionThreadInfo.mockReturnValue({
-      baseSessionKey: "agent:main:matrix:channel:!lowercased:example.org",
+    mocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
+        updatedAt: 0,
+      },
+      store: {},
+      agentId: "main",
+      canonicalKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
+    });
+    mocks.readSqliteSessionDeliveryContext.mockReturnValueOnce({
+      channel: "matrix",
+      accountId: "acct-thread",
       threadId: "$thread-event",
     });
-    mocks.loadSessionEntry
-      .mockReturnValueOnce({
-        cfg: {},
-        entry: {
-          sessionId: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
-          updatedAt: 0,
-          origin: { provider: "matrix", accountId: "acct-thread", threadId: "$thread-event" },
-        },
-        store: {},
-        agentId: "main",
-        canonicalKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
-        legacyKey: undefined,
-      })
-      .mockReturnValueOnce({
-        cfg: {},
-        entry: {
-          sessionId: "agent:main:matrix:channel:!lowercased:example.org",
-          updatedAt: 0,
-          lastChannel: "matrix",
-          lastTo: "room:!MixedCase:example.org",
-        },
-        store: {},
-        agentId: "main",
-        canonicalKey: "agent:main:matrix:channel:!lowercased:example.org",
-        legacyKey: undefined,
-      });
-    mocks.deliveryContextFromSession
-      .mockReturnValueOnce({
-        channel: "matrix",
-        accountId: "acct-thread",
-        threadId: "$thread-event",
-      })
-      .mockReturnValueOnce({ channel: "matrix", to: "room:!MixedCase:example.org" });
     mocks.resolveOutboundTarget.mockReturnValue({
       ok: true as const,
       to: "room:!MixedCase:example.org",
@@ -1337,16 +1285,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expectMockCallFields(mocks.resolveOutboundTarget, {
-      channel: "matrix",
-      to: "room:!MixedCase:example.org",
-      accountId: "acct-thread",
-    });
-    expectMockCallFields(mocks.deliverOutboundPayloads, {
-      channel: "matrix",
-      to: "room:!MixedCase:example.org",
-      accountId: "acct-thread",
-      threadId: "$thread-event",
-    });
+    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 });

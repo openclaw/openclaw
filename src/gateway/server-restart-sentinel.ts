@@ -2,12 +2,15 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import type { ChatType } from "../channels/chat-type.js";
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { recordInboundSession } from "../channels/session.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
-import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
+import {
+  readSqliteSessionDeliveryContext,
+  readSqliteSessionRoutingInfo,
+} from "../config/sessions/session-entries.sqlite.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
@@ -15,13 +18,12 @@ import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/de
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
+  clearRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   readRestartSentinel,
-  removeRestartSentinelFile,
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
-  resolveRestartSentinelPath,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import {
@@ -39,10 +41,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordChannelMessageReplyDispatch } from "../plugin-sdk/channel-message.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
-import {
-  deliveryContextFromSession,
-  mergeDeliveryContext,
-} from "../utils/delivery-context.shared.js";
+import { mergeDeliveryContext } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./server-methods/agent-timestamp.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -66,13 +66,6 @@ function cloneRestartSentinelPayload(
     return null;
   }
   return JSON.parse(JSON.stringify(payload)) as RestartSentinelPayload;
-}
-
-function hasRoutableDeliveryContext(context?: {
-  channel?: string;
-  to?: string;
-}): context is { channel: string; to: string } {
-  return Boolean(context?.channel && context?.to);
 }
 
 function enqueueRestartSentinelWake(
@@ -476,7 +469,6 @@ async function loadRestartSentinelStartupTask(params: {
   if (!sentinel) {
     return null;
   }
-  const sentinelPath = resolveRestartSentinelPath();
   const payload = sentinel.payload;
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
@@ -498,30 +490,22 @@ async function loadRestartSentinelStartupTask(params: {
           continuationKind: payload.continuation.kind,
         });
       }
-      await removeRestartSentinelFile(sentinelPath);
+      await clearRestartSentinel();
       return { status: "ran" as const };
     }
 
-    const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
-
-    const { cfg, entry, canonicalKey } = loadSessionEntry(sessionKey);
+    const { cfg, agentId, entry, canonicalKey } = loadSessionEntry(sessionKey);
 
     const sentinelContext = payload.deliveryContext;
-    let sessionDeliveryContext = deliveryContextFromSession(entry);
-    let chatType = entry?.origin?.chatType ?? "direct";
-    if (
-      !hasRoutableDeliveryContext(sessionDeliveryContext) &&
-      baseSessionKey &&
-      baseSessionKey !== sessionKey
-    ) {
-      const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
-      chatType = entry?.origin?.chatType ?? baseEntry?.origin?.chatType ?? "direct";
-      sessionDeliveryContext = mergeDeliveryContext(
-        sessionDeliveryContext,
-        deliveryContextFromSession(baseEntry),
-      );
-    }
-
+    let sessionDeliveryContext: DeliveryContext | undefined = readSqliteSessionDeliveryContext({
+      agentId,
+      sessionKey: canonicalKey,
+    });
+    const routingInfo = readSqliteSessionRoutingInfo({
+      agentId,
+      sessionKey: canonicalKey,
+    });
+    let chatType = normalizeChatType(routingInfo?.chatType ?? entry?.chatType) ?? "direct";
     const origin = mergeDeliveryContext(sentinelContext, sessionDeliveryContext);
 
     const channelRaw = origin?.channel;
@@ -529,7 +513,6 @@ async function loadRestartSentinelStartupTask(params: {
     const to = origin?.to;
     const threadId =
       payload.threadId ??
-      sessionThreadId ??
       (origin?.threadId != null ? stringifyRouteThreadId(origin.threadId) : undefined);
     let resolvedTo: string | undefined;
     let replyToId: string | undefined;
@@ -591,7 +574,7 @@ async function loadRestartSentinelStartupTask(params: {
       );
     }
 
-    await removeRestartSentinelFile(sentinelPath);
+    await clearRestartSentinel();
     const routedAgentTurnContinuation =
       payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
     if (!routedAgentTurnContinuation) {
