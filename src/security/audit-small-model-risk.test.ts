@@ -7,7 +7,6 @@ function requireFirstSmallModelFinding(
   label: string,
 ) {
   const [finding] = findings;
-  expect(finding, label).toBeDefined();
   if (!finding) {
     throw new Error(`Expected small-model risk finding for ${label}`);
   }

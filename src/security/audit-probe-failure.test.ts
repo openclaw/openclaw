@@ -3,7 +3,6 @@ import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 
 function requireProbeFailure(findings: ReturnType<typeof collectDeepProbeFindings>) {
   const finding = findings.find((entry) => entry.checkId === "gateway.probe_failed");
-  expect(finding).toBeDefined();
   if (!finding) {
     throw new Error("Expected gateway probe failure finding");
   }
