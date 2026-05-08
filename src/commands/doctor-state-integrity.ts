@@ -13,7 +13,6 @@ import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
@@ -868,7 +867,7 @@ export async function noteStateIntegrity(
   const store = Object.fromEntries(
     listSessionEntries({ agentId, env }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
-  const sessionPathOpts = resolveSessionFilePathOptions({ agentId });
+  const sessionPathOpts = { agentId };
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
     const recent = entries

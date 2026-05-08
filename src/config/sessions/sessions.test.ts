@@ -9,7 +9,6 @@ import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import {
   createSqliteSessionTranscriptLocator,
   resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
@@ -55,19 +54,6 @@ describe("session path safety", () => {
       { sessionsDir },
     );
     expect(resolved).toBe(createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }));
-  });
-
-  it("derives session file options from an explicit sessions dir", () => {
-    expect(
-      resolveSessionFilePathOptions({
-        agentId: "worker",
-        sessionsDir: "/tmp/openclaw/agents/worker/sessions",
-      }),
-    ).toEqual({
-      agentId: "worker",
-      sessionsDir: path.resolve("/tmp/openclaw/agents/worker/sessions"),
-    });
-    expect(resolveSessionFilePathOptions({})).toBeUndefined();
   });
 
   it("uses SQLite transcript locators instead of runtime JSONL paths by default", () => {

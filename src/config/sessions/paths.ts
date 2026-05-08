@@ -32,26 +32,7 @@ export function resolveSessionTranscriptsDirForAgent(
 
 export type SessionFilePathOptions = {
   agentId?: string;
-  sessionsDir?: string;
 };
-
-export function resolveSessionFilePathOptions(params: {
-  agentId?: string;
-  sessionsDir?: string;
-}): SessionFilePathOptions | undefined {
-  const agentId = params.agentId?.trim();
-  const sessionsDir = params.sessionsDir?.trim();
-  if (sessionsDir) {
-    const resolvedSessionsDir = path.resolve(sessionsDir);
-    return agentId
-      ? { sessionsDir: resolvedSessionsDir, agentId }
-      : { sessionsDir: resolvedSessionsDir };
-  }
-  if (agentId) {
-    return { agentId };
-  }
-  return undefined;
-}
 
 export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 export const SQLITE_SESSION_TRANSCRIPT_LOCATOR_PREFIX = "sqlite-transcript://";

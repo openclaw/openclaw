@@ -1,8 +1,4 @@
-import {
-  createSqliteSessionTranscriptLocator,
-  isSqliteSessionTranscriptLocator,
-  type SessionFilePathOptions,
-} from "./paths.js";
+import { createSqliteSessionTranscriptLocator, isSqliteSessionTranscriptLocator } from "./paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
@@ -32,13 +28,11 @@ function parseTimestampMs(value: unknown): number | undefined {
 export function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
-  pathOptions?: SessionFilePathOptions;
 }): number | undefined {
   const sessionId = params.entry?.sessionId?.trim();
   if (!sessionId) {
     return undefined;
   }
-  void params.pathOptions;
   const storedSessionFile = params.entry?.sessionFile?.trim();
   const sessionFile = isSqliteSessionTranscriptLocator(storedSessionFile)
     ? storedSessionFile
@@ -82,7 +76,6 @@ export function readSessionHeaderStartedAtMs(params: {
 export function resolveSessionLifecycleTimestamps(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
-  pathOptions?: SessionFilePathOptions;
 }): { sessionStartedAt?: number; lastInteractionAt?: number } {
   const entry = params.entry;
   if (!entry) {
@@ -94,7 +87,6 @@ export function resolveSessionLifecycleTimestamps(params: {
       readSessionHeaderStartedAtMs({
         entry,
         agentId: params.agentId,
-        pathOptions: params.pathOptions,
       }),
     lastInteractionAt: resolveTimestamp(entry.lastInteractionAt),
   };

@@ -5,6 +5,7 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { createSqliteSessionTranscriptLocator } from "openclaw/plugin-sdk/session-store-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
 import { normalizeSkillName } from "./skills.js";
@@ -247,13 +248,10 @@ export async function reviewTranscriptForProposal(params: {
     api: params.api,
     agentId: params.ctx.agentId,
   });
-  const sessionFile = params.api.runtime.agent.session.resolveSessionFilePath(
+  const sessionFile = createSqliteSessionTranscriptLocator({
+    agentId: params.ctx.agentId,
     sessionId,
-    undefined,
-    {
-      agentId: params.ctx.agentId,
-    },
-  );
+  });
   const result = await params.api.runtime.agent.runEmbeddedPiAgent({
     sessionId,
     sessionKey: params.ctx.sessionKey,

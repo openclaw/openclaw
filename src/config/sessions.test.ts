@@ -10,7 +10,6 @@ import {
   createSqliteSessionTranscriptLocator,
   deriveSessionKey,
   resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
@@ -76,56 +75,12 @@ describe("sessions", () => {
     );
   }
 
-  function expectedBot1FallbackSessionPath() {
-    return path.join(
-      path.resolve("/different/state"),
-      "agents",
-      "bot1",
-      "sessions",
-      "sess-1.jsonl",
-    );
-  }
-
   function buildMainSessionEntry(overrides: Record<string, unknown> = {}) {
     return {
       sessionId: "sess-1",
       updatedAt: 123,
       ...overrides,
     };
-  }
-
-  async function createAgentSessionsLayout(label: string): Promise<{
-    stateDir: string;
-    mainSessionsDir: string;
-    bot2SessionPath: string;
-    outsidePath: string;
-  }> {
-    const stateDir = await createCaseDir(label);
-    const mainSessionsDir = path.join(stateDir, "agents", "main", "sessions");
-    const bot1SessionsDir = path.join(stateDir, "agents", "bot1", "sessions");
-    const bot2SessionsDir = path.join(stateDir, "agents", "bot2", "sessions");
-    await fs.mkdir(mainSessionsDir, { recursive: true });
-    await fs.mkdir(bot1SessionsDir, { recursive: true });
-    await fs.mkdir(bot2SessionsDir, { recursive: true });
-
-    const bot2SessionPath = path.join(bot2SessionsDir, "sess-1.jsonl");
-    await fs.writeFile(bot2SessionPath, "{}", "utf-8");
-
-    const outsidePath = path.join(stateDir, "outside", "not-a-session.jsonl");
-    await fs.mkdir(path.dirname(outsidePath), { recursive: true });
-    await fs.writeFile(outsidePath, "{}", "utf-8");
-
-    return { stateDir, mainSessionsDir, bot2SessionPath, outsidePath };
-  }
-
-  async function normalizePathForComparison(filePath: string): Promise<string> {
-    const canonicalFile = await fs.realpath(filePath).catch(() => null);
-    if (canonicalFile) {
-      return canonicalFile;
-    }
-    const parentDir = path.dirname(filePath);
-    const canonicalParent = await fs.realpath(parentDir).catch(() => parentDir);
-    return path.join(canonicalParent, path.basename(filePath));
   }
 
   const deriveSessionKeyCases = [
@@ -680,99 +635,51 @@ describe("sessions", () => {
     });
   });
 
-  it("resolves cross-agent absolute sessionFile paths", async () => {
-    const { stateDir, bot2SessionPath } = await createAgentSessionsLayout("cross-agent");
-    const sessionFile = withStateDir(stateDir, () =>
-      // Agent bot1 resolves a sessionFile that belongs to agent bot2
-      resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, { agentId: "bot1" }),
-    );
-    expect(await normalizePathForComparison(sessionFile)).toBe(
-      await normalizePathForComparison(bot2SessionPath),
-    );
-  });
-
-  it("resolves cross-agent paths when OPENCLAW_STATE_DIR differs from stored paths", () => {
+  it("does not reuse legacy cross-agent absolute sessionFile paths", () => {
     withStateDir(path.resolve("/different/state"), () => {
       const originalBase = path.resolve("/original/state");
       const bot2Session = path.join(originalBase, "agents", "bot2", "sessions", "sess-1.jsonl");
-      // sessionFile was created under a different state dir than current env
       const sessionFile = resolveSessionFilePath(
         "sess-1",
         { sessionFile: bot2Session },
         { agentId: "bot1" },
       );
-      expect(sessionFile).toBe(bot2Session);
+      expect(sessionFile).toBe(
+        createSqliteSessionTranscriptLocator({ agentId: "bot1", sessionId: "sess-1" }),
+      );
     });
   });
 
-  it("falls back when structural cross-root path traverses after sessions", () => {
+  it("keeps matching SQLite transcript locators", () => {
     withStateDir(path.resolve("/different/state"), () => {
-      const originalBase = path.resolve("/original/state");
-      const unsafe = path.join(originalBase, "agents", "bot2", "sessions", "..", "..", "etc");
-      const sessionFile = resolveSessionFilePath(
-        "sess-1",
-        { sessionFile: path.join(unsafe, "passwd") },
-        { agentId: "bot1" },
-      );
-      expect(sessionFile).toBe(expectedBot1FallbackSessionPath());
-    });
-  });
-
-  it("falls back when structural cross-root path nests under sessions", () => {
-    withStateDir(path.resolve("/different/state"), () => {
-      const originalBase = path.resolve("/original/state");
-      const nested = path.join(
-        originalBase,
-        "agents",
-        "bot2",
-        "sessions",
-        "nested",
-        "sess-1.jsonl",
-      );
-      const sessionFile = resolveSessionFilePath(
-        "sess-1",
-        { sessionFile: nested },
-        { agentId: "bot1" },
-      );
-      expect(sessionFile).toBe(expectedBot1FallbackSessionPath());
-    });
-  });
-
-  it("resolveSessionFilePathOptions keeps explicit agentId alongside absolute sessions dir", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-    const resolved = resolveSessionFilePathOptions({
-      agentId: "bot2",
-      sessionsDir,
-    });
-    expect(resolved?.agentId).toBe("bot2");
-    expect(resolved?.sessionsDir).toBe(path.resolve(sessionsDir));
-  });
-
-  it("resolves sibling agent absolute sessionFile using alternate agentId from options", async () => {
-    const { stateDir, mainSessionsDir, bot2SessionPath } =
-      await createAgentSessionsLayout("sibling-agent");
-    const sessionFile = withStateDir(stateDir, () => {
-      const opts = resolveSessionFilePathOptions({
-        agentId: "bot2",
-        sessionsDir: mainSessionsDir,
+      const locator = createSqliteSessionTranscriptLocator({
+        agentId: "bot1",
+        sessionId: "sess-1",
       });
-
-      return resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, opts);
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: locator },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(locator);
     });
-    expect(await normalizePathForComparison(sessionFile)).toBe(
-      await normalizePathForComparison(bot2SessionPath),
-    );
   });
 
-  it("falls back to derived transcript path when sessionFile is outside agent sessions directories", async () => {
-    const { stateDir, outsidePath } = await createAgentSessionsLayout("outside-fallback");
-    const sessionFile = withStateDir(stateDir, () =>
-      resolveSessionFilePath("sess-1", { sessionFile: outsidePath }, { agentId: "bot1" }),
-    );
-    const expectedPath = path.join(stateDir, "agents", "bot1", "sessions", "sess-1.jsonl");
-    expect(await normalizePathForComparison(sessionFile)).toBe(
-      await normalizePathForComparison(expectedPath),
-    );
+  it("does not reuse SQLite transcript locators for a different agent", () => {
+    withStateDir(path.resolve("/different/state"), () => {
+      const bot2Locator = createSqliteSessionTranscriptLocator({
+        agentId: "bot2",
+        sessionId: "sess-1",
+      });
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: bot2Locator },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(
+        createSqliteSessionTranscriptLocator({ agentId: "bot1", sessionId: "sess-1" }),
+      );
+    });
   });
 
   it("patchSessionEntry merges concurrent patches", async () => {

@@ -5,6 +5,7 @@
 
 import crypto from "node:crypto";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
+import { createSqliteSessionTranscriptLocator } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { SessionEntry } from "../api.js";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
@@ -255,8 +256,9 @@ export async function generateVoiceResponse(
   }
   const sessionId = sessionEntry.sessionId;
 
-  const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
+  const sessionFile = createSqliteSessionTranscriptLocator({
     agentId,
+    sessionId,
   });
 
   // Resolve thinking level
