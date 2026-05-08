@@ -505,6 +505,12 @@ export async function deliverAgentCommandResult(params: {
   return {
     payloads: normalizedPayloads,
     meta: resultMeta,
+    // Backward-compat field for `src/agents/agent-command.ts` which reads
+    // `deliveryResult?.deliverySucceeded === true` to decide whether to
+    // clear the durable `pendingFinalDelivery` retry marker. Mirrors
+    // `deliveryStatus.succeeded` but narrowed to `boolean` (partial sends
+    // intentionally keep the marker, matching pre-rebase semantics).
+    deliverySucceeded: deliverySucceeded === true,
     deliveryStatus,
   };
 }
