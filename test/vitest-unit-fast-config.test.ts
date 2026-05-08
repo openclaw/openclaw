@@ -30,6 +30,24 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
+type UnitFastAnalysisEntry = ReturnType<typeof collectUnitFastTestFileAnalysis>[number];
+
+function collectUnroutedForcedFiles(
+  analysis: readonly UnitFastAnalysisEntry[],
+  forcedFiles: ReadonlySet<string>,
+): Array<{ file: string; forced: boolean; unitFast: boolean }> {
+  const unrouted: Array<{ file: string; forced: boolean; unitFast: boolean }> = [];
+  for (const entry of analysis) {
+    if (!forcedFiles.has(entry.file)) {
+      continue;
+    }
+    if (!entry.forced || !entry.unitFast) {
+      unrouted.push({ file: entry.file, forced: entry.forced, unitFast: entry.unitFast });
+    }
+  }
+  return unrouted;
+}
+
 describe("unit-fast vitest lane", () => {
   it("runs cache-friendly tests without the reset-heavy runner or runtime setup", () => {
     const config = createUnitFastVitestConfig({});
@@ -110,17 +128,16 @@ describe("unit-fast vitest lane", () => {
 
   it("routes audited stateful-looking tests through the fast lane", () => {
     const analysis = collectUnitFastTestFileAnalysis();
-    const forcedAnalysis = analysis.filter((entry) => forcedUnitFastTestFiles.includes(entry.file));
+    const forcedFileSet = new Set(forcedUnitFastTestFiles);
+    const forcedAnalysisCount = countMatching(analysis, (entry) => forcedFileSet.has(entry.file));
     const unitFastTestFiles = getUnitFastTestFiles();
 
-    expect(forcedAnalysis).toHaveLength(forcedUnitFastTestFiles.length);
+    expect(forcedAnalysisCount).toBe(forcedUnitFastTestFiles.length);
     for (const file of forcedUnitFastTestFiles) {
       expect(unitFastTestFiles).toContain(file);
       expect(isUnitFastTestFile(file)).toBe(true);
     }
-    const unroutedForcedFiles = forcedAnalysis
-      .filter((entry) => !entry.forced || !entry.unitFast)
-      .map((entry) => ({ file: entry.file, forced: entry.forced, unitFast: entry.unitFast }));
+    const unroutedForcedFiles = collectUnroutedForcedFiles(analysis, forcedFileSet);
     expect(unroutedForcedFiles).toEqual([]);
   });
 
