@@ -109,8 +109,8 @@ describe("buildApiErrorObservationFields", () => {
       `{"type":"error","error":{"type":"server_error","message":"${longMessage}"},"request_id":"req_long"}`,
     );
 
-    expect(observed.rawErrorPreview).toEqual(expect.any(String));
-    expect(observed.providerErrorMessagePreview).toEqual(expect.any(String));
+    expect(observed.rawErrorPreview).toBeTypeOf("string");
+    expect(observed.providerErrorMessagePreview).toBeTypeOf("string");
     expect(observed.rawErrorPreview?.length).toBeLessThanOrEqual(401);
     expect(observed.providerErrorMessagePreview?.length).toBeLessThanOrEqual(201);
     expect(observed.providerErrorMessagePreview?.endsWith("…")).toBe(true);
