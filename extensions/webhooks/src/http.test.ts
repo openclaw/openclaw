@@ -226,6 +226,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
       controllerId: "webhooks/zapier",
       goal: "Triage inbox",
     });
+    const childSessionKey = target.taskFlow.sessionKey + ":subagent:child";
     const res = await dispatchJsonRequest({
       handler,
       path: target.path,
@@ -234,7 +235,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         action: "run_task",
         flowId: flow.flowId,
         runtime: "acp",
-        childSessionKey: "agent:main:subagent:child",
+        childSessionKey: childSessionKey,
         task: "Inspect the next message batch",
         status: "running",
         startedAt: 10,
@@ -248,11 +249,38 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(parsed.result.created).toBe(true);
     expect(parsed.result.task).toMatchObject({
       parentFlowId: flow.flowId,
-      childSessionKey: "agent:main:subagent:child",
+      childSessionKey: childSessionKey,
       runtime: "acp",
     });
     expect(parsed.result.task.ownerKey).toBeUndefined();
     expect(parsed.result.task.requesterSessionKey).toBeUndefined();
+  });
+
+  it("rejects childSessionKey outside the route's session tree", async () => {
+    const { handler, target, secret } = createHandler();
+    const flow = target.taskFlow.createManaged({
+      controllerId: "webhooks/zapier",
+      goal: "Triage inbox",
+    });
+    const res = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      secret,
+      body: {
+        action: "run_task",
+        flowId: flow.flowId,
+        runtime: "acp",
+        childSessionKey: "agent:main:subagent:unrelated",
+        task: "Inspect the next message batch",
+        status: "running",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const parsed = parseJsonBody(res);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.result.created).toBe(false);
+    expect(parsed.result.reason).toMatch(/session tree/);
   });
 
   it("returns 404 for missing flow mutations", async () => {

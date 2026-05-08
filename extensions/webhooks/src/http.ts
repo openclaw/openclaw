@@ -627,6 +627,25 @@ async function executeWebhookAction(params: {
       };
     }
     case "run_task": {
+      // Validate childSessionKey belongs to the route's session tree before
+      // delegating to the task runtime. Without this check, a webhook route
+      // bound to session A could specify childSessionKey for session B and
+      // subsequently cancel or manipulate that unrelated session.
+      if (action.childSessionKey != null) {
+        const routeSessionKey = target.taskFlow.sessionKey;
+        const childKey = action.childSessionKey;
+        if (
+          childKey === routeSessionKey ||
+          !childKey.toLowerCase().startsWith(routeSessionKey.toLowerCase() + ":")
+        ) {
+          return {
+            created: false,
+            found: true,
+            reason:
+              "childSessionKey must be a descendant of the route's session tree",
+          };
+        }
+      }
       const result = target.taskFlow.runTask({
         flowId: action.flowId,
         runtime: action.runtime,
