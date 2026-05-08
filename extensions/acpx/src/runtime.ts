@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import {
   ACPX_BACKEND_ID,
@@ -110,6 +111,18 @@ function readOpenClawLeaseIdFromRecord(record: AcpLoadedSessionRecord): string |
   }
   const { openclawLeaseId } = record as { openclawLeaseId?: unknown };
   return typeof openclawLeaseId === "string" ? openclawLeaseId.trim() || undefined : undefined;
+}
+
+function readEventLogActivePathFromRecord(record: AcpLoadedSessionRecord): string | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { eventLog } = record as { eventLog?: unknown };
+  if (typeof eventLog !== "object" || eventLog === null) {
+    return undefined;
+  }
+  const { active_path } = eventLog as { active_path?: unknown };
+  return typeof active_path === "string" ? active_path.trim() || undefined : undefined;
 }
 
 function extractGeneratedWrapperPath(command: string | undefined): string {
@@ -864,7 +877,26 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
-    yield* (await this.resolveDelegateForHandle(input.handle)).runTurn(input);
+    const record = await this.sessionStore.load(
+      input.handle.acpxRecordId ?? input.handle.sessionKey,
+    );
+    const eventLogActivePath = readEventLogActivePathFromRecord(record);
+    const delegate = this.resolveDelegateForLoadedRecord(input.handle, record);
+    for await (const event of delegate.runTurn(input)) {
+      yield event;
+      if (eventLogActivePath) {
+        // LOSSY CAPTURE: appends projector-translated AcpRuntimeEvent envelopes,
+        // NOT raw JSON-RPC session/update frames from the wire. A faithful raw-byte
+        // writer would require upstream acpx to expose onAcpMessage through
+        // AcpRuntimeOptions. Tracked separately; see catalog finding #4.
+        const frame = JSON.stringify({
+          params: { update: { sessionUpdate: event.type, ...event } },
+        });
+        fs.appendFile(eventLogActivePath, frame + "\n").catch((err: unknown) => {
+          console.error(`[acpx] event_log.active_path write failed (${eventLogActivePath}):`, err);
+        });
+      }
+    }
   }
 
   getCapabilities(): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
