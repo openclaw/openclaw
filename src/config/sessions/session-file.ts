@@ -8,7 +8,6 @@ export async function resolveAndPersistSessionFile(params: {
   sessionKey: string;
   sessionEntry?: SessionEntry;
   agentId?: string;
-  sessionsDir?: string;
   fallbackSessionFile?: string;
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry }> {
   const { sessionId, sessionKey } = params;
