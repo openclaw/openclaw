@@ -87,8 +87,10 @@ function sqliteTranscriptHasAssistantMessage(sessionFile: string | undefined): b
 }
 
 /** Check whether the SQLite transcript contains at least one assistant message. */
-export async function sessionFileHasContent(sessionFile: string | undefined): Promise<boolean> {
-  return sqliteTranscriptHasAssistantMessage(sessionFile);
+export async function sessionTranscriptHasContent(
+  transcriptLocator: string | undefined,
+): Promise<boolean> {
+  return sqliteTranscriptHasAssistantMessage(transcriptLocator);
 }
 
 export async function claudeCliSessionTranscriptHasContent(params: {

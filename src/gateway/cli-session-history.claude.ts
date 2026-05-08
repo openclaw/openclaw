@@ -9,7 +9,7 @@ import {
 } from "../chat/tool-content.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { attachOpenClawTranscriptMeta } from "./session-utils.fs.js";
+import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");

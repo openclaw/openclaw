@@ -10,7 +10,7 @@ import {
   createAcpVisibleTextAccumulator,
   formatClaudeCliFallbackPrelude,
   resolveFallbackRetryPrompt,
-  sessionFileHasContent,
+  sessionTranscriptHasContent,
 } from "./attempt-execution.helpers.js";
 
 describe("resolveFallbackRetryPrompt", () => {
@@ -281,7 +281,7 @@ describe("buildClaudeCliFallbackContextPrelude", () => {
   });
 });
 
-describe("sessionFileHasContent", () => {
+describe("sessionTranscriptHasContent", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -304,38 +304,38 @@ describe("sessionFileHasContent", () => {
     });
   }
 
-  it("returns false for undefined sessionFile", async () => {
-    expect(await sessionFileHasContent(undefined)).toBe(false);
+  it("returns false for undefined transcript locator", async () => {
+    expect(await sessionTranscriptHasContent(undefined)).toBe(false);
   });
 
-  it("returns false when session file does not exist", async () => {
-    expect(await sessionFileHasContent(path.join(tmpDir, "nonexistent.jsonl"))).toBe(false);
+  it("returns false when transcript locator has no SQLite rows", async () => {
+    expect(await sessionTranscriptHasContent(path.join(tmpDir, "nonexistent.jsonl"))).toBe(false);
   });
 
-  it("returns false when session file is empty", async () => {
+  it("returns false when transcript has no SQLite rows", async () => {
     const file = path.join(tmpDir, "empty.jsonl");
-    expect(await sessionFileHasContent(file)).toBe(false);
+    expect(await sessionTranscriptHasContent(file)).toBe(false);
   });
 
-  it("returns false when session file has only user message (no assistant flush)", async () => {
+  it("returns false when transcript has only user message (no assistant flush)", async () => {
     const file = path.join(tmpDir, "user-only.jsonl");
     writeTranscript(file, [{ type: "message", message: { role: "user", content: "hello" } }]);
-    expect(await sessionFileHasContent(file)).toBe(false);
+    expect(await sessionTranscriptHasContent(file)).toBe(false);
   });
 
-  it("returns true when session file has assistant message (flushed)", async () => {
+  it("returns true when transcript has assistant message (flushed)", async () => {
     const file = path.join(tmpDir, "with-assistant.jsonl");
     writeTranscript(file, [
       { type: "message", message: { role: "user", content: "hello" } },
       { type: "message", message: { role: "assistant", content: "hi" } },
     ]);
-    expect(await sessionFileHasContent(file)).toBe(true);
+    expect(await sessionTranscriptHasContent(file)).toBe(true);
   });
 
-  it("returns true when session file has spaced JSON (role : assistant)", async () => {
+  it("returns true when transcript has assistant message metadata", async () => {
     const file = path.join(tmpDir, "spaced.jsonl");
     writeTranscript(file, [{ type: "message", message: { role: "assistant", content: "hi" } }]);
-    expect(await sessionFileHasContent(file)).toBe(true);
+    expect(await sessionTranscriptHasContent(file)).toBe(true);
   });
 
   it("returns true when assistant message appears after large user content", async () => {
@@ -347,15 +347,15 @@ describe("sessionFileHasContent", () => {
       { type: "message", message: { role: "user", content: bigContent } },
       { type: "message", message: { role: "assistant", content: "done" } },
     ]);
-    expect(await sessionFileHasContent(file)).toBe(true);
+    expect(await sessionTranscriptHasContent(file)).toBe(true);
   });
 
-  it("returns false when session file is a symbolic link", async () => {
+  it("returns false when transcript locator is an unimported symbolic link", async () => {
     const realFile = path.join(tmpDir, "real.jsonl");
     await fs.writeFile(realFile, "", "utf-8");
     const link = path.join(tmpDir, "link.jsonl");
     await fs.symlink(realFile, link);
-    expect(await sessionFileHasContent(link)).toBe(false);
+    expect(await sessionTranscriptHasContent(link)).toBe(false);
   });
 });
 

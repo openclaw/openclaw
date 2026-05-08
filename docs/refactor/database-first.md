@@ -257,6 +257,10 @@ The remaining cleanup is mostly consolidation and deletion:
   session id as the retained transcript identity.
 - ACP session metadata APIs now read/list/upsert SQLite rows by `agentId` and
   no longer expose `storePath` as part of the ACP session entry contract.
+- Gateway transcript reader helpers now live in
+  `src/gateway/session-transcript-readers.ts` instead of the old
+  `session-utils.fs` module name. The fallback retry history check is named for
+  SQLite transcript content instead of session-file content.
 - Memory indexing helpers now use SQLite transcript terminology end to end:
   host exports list/build session transcript entries, targeted sync queues
   `sessionTranscripts`, and QMD/builtin indexers no longer expose session-file

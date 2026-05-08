@@ -88,7 +88,7 @@ import {
   readRecentSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionTitleFieldsFromTranscript,
-} from "./session-utils.fs.js";
+} from "./session-transcript-readers.js";
 import type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -116,8 +116,8 @@ export {
   readSessionMessagesAsync,
   visitSessionMessagesAsync,
   resolveSessionTranscriptCandidates,
-} from "./session-utils.fs.js";
-export type { ReadSessionMessagesAsyncOptions } from "./session-utils.fs.js";
+} from "./session-transcript-readers.js";
+export type { ReadSessionMessagesAsyncOptions } from "./session-transcript-readers.js";
 export { canonicalizeSpawnedByForAgent, resolveSessionRowKey } from "./session-row-key.js";
 export type {
   GatewayAgentRow,

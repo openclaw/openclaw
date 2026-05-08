@@ -63,7 +63,7 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   persistSessionEntry: vi.fn(),
   prependInternalEventContext: (_body: string) => _body,
   runAgentAttempt: (...args: unknown[]) => state.runAgentAttemptMock(...args),
-  sessionFileHasContent: vi.fn(async () => false),
+  sessionTranscriptHasContent: vi.fn(async () => false),
 }));
 
 vi.mock("./command/delivery.runtime.js", () => ({
