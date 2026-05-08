@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { emitDiagnosticEvent } from "./diagnostic-events.js";
 
 export const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
@@ -24,8 +23,6 @@ export type SqliteWalMaintenanceOptions = {
   databasePath?: string;
   onCheckpointError?: (error: unknown) => void;
 };
-
-const log = createSubsystemLogger("sqlite/wal");
 
 function normalizeNonNegativeInteger(value: number, label: string): number {
   if (!Number.isInteger(value) || value < 0) {
@@ -57,12 +54,6 @@ export function configureSqliteWalMaintenance(
       db.exec(`PRAGMA wal_checkpoint(${checkpointMode});`);
       return true;
     } catch (error) {
-      log.warn("sqlite WAL checkpoint failed", {
-        checkpointMode,
-        databaseLabel,
-        ...(options.databasePath ? { databasePath: options.databasePath } : {}),
-        error: error instanceof Error ? (error.stack ?? error.message) : String(error),
-      });
       emitDiagnosticEvent({
         type: "sqlite.wal.checkpoint.error",
         databaseLabel,

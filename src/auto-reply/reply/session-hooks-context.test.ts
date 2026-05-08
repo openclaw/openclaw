@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { createSqliteSessionTranscriptLocator, type SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntry } from "../../config/sessions/store.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { HookRunner } from "../../plugins/hooks.js";
@@ -162,7 +162,7 @@ describe("session hook context wiring", () => {
 
   it("passes sessionKey to session_end hook context on reset", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
-    const { transcriptPath } = await createStoredSession({
+    await createStoredSession({
       prefix: "openclaw-session-hook-end",
       sessionKey,
       sessionId: "old-session",
@@ -184,7 +184,9 @@ describe("session hook context wiring", () => {
     });
     expect(context).toMatchObject({ sessionKey, agentId: "main" });
     expect(context).toMatchObject({ sessionId: event?.sessionId });
-    expect(event?.sessionFile).toBe(transcriptPath);
+    expect(event?.sessionFile).toBe(
+      createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "old-session" }),
+    );
 
     const [startEvent, startContext] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
     expect(startEvent).toMatchObject({ resumedFrom: "old-session" });

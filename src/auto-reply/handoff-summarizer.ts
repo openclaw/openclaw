@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "../agents/agent-core-contract.js";
 
 export interface HandoffSnapshot {
   summary: string;

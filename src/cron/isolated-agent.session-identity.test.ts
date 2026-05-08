@@ -105,7 +105,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       };
       expect(call?.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
       expect(call?.workspaceDir).toBe(opsWorkspace);
-      expect(call?.sessionFile).toContain(path.join("agents", "ops"));
+      expect(call?.sessionFile).toMatch(/^sqlite-transcript:\/\/ops\/.+\.jsonl$/u);
     });
   });
 
@@ -118,10 +118,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         sessionFile?: string;
       };
 
-      expect(call?.sessionFile).toContain(
-        path.join(home, ".openclaw", "agents", "main", "sessions"),
-      );
-      expect(call?.sessionFile?.endsWith(".jsonl")).toBe(true);
+      expect(call?.sessionFile).toMatch(/^sqlite-transcript:\/\/main\/.+\.jsonl$/u);
     });
   });
 

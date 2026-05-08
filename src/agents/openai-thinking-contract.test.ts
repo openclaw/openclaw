@@ -1,5 +1,3 @@
-import { streamSimpleOpenAICodexResponses } from "@mariozechner/pi-ai/openai-codex-responses";
-import { streamSimpleOpenAIResponses } from "@mariozechner/pi-ai/openai-responses";
 import { Agent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,6 +7,8 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from "./pi-ai-contract.js";
+import { streamSimpleOpenAICodexResponses } from "./pi-ai-openai-codex-responses-contract.js";
+import { streamSimpleOpenAIResponses } from "./pi-ai-openai-responses-contract.js";
 
 type ResponsesModel = Model<"openai-responses"> | Model<"openai-codex-responses">;
 

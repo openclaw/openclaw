@@ -12,6 +12,8 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   "extensions/matrix/src/plugin-entry.runtime.js",
   "extensions/memory-core/src/memory-tool-manager-mock.ts",
   "extensions/skill-workshop/src/state-migrations.ts",
+  "src/agents/pi-ai-openai-codex-responses-contract.ts",
+  "src/agents/pi-ai-openai-responses-contract.ts",
   "src/agents/subagent-registry.runtime.ts",
   "src/auto-reply/inbound.group-require-mention-test-plugins.ts",
   "src/auto-reply/reply/get-reply.test-loader.ts",

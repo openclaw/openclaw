@@ -56,6 +56,7 @@ export {
 export {
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
 } from "../../../../src/config/sessions/transcript-store.sqlite.js";
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
@@ -74,6 +75,7 @@ export {
 export type { SecretInput } from "../../../../src/config/types.secrets.js";
 export type { MemorySearchConfig } from "../../../../src/config/types.tools.js";
 export { isVerbose, setVerbose } from "../../../../src/globals.js";
+export { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 
 // IO, network, and logging helpers.
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";

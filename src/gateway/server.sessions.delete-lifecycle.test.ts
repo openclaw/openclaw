@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expect, test } from "vitest";
-import { getSessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator, getSessionEntry } from "../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { embeddedRunMock, rpcReq, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
@@ -210,7 +210,9 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
     sessionKey: "agent:main:discord:group:delete",
     reason: "deleted",
   });
-  expect((event as { sessionFile?: string } | undefined)?.sessionFile).toBe(transcriptPath);
+  expect((event as { sessionFile?: string } | undefined)?.sessionFile).toBe(
+    createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "sess-delete" }),
+  );
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
   expect(context).toMatchObject({
     sessionId: "sess-delete",

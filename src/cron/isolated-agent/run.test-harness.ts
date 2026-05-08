@@ -170,6 +170,7 @@ vi.mock("./run-execution.runtime.js", () => ({
   LiveSessionModelSwitchError,
   runWithModelFallback: runWithModelFallbackMock,
   isCliProvider: isCliProviderMock,
+  createSqliteSessionTranscriptLocator: createSqliteSessionTranscriptLocatorMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
   countActiveDescendantRuns: countActiveDescendantRunsMock,
   listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
