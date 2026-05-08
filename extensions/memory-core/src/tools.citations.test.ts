@@ -70,6 +70,15 @@ beforeEach(() => {
 });
 
 describe("memory search citations", () => {
+  function expectFirstMemoryResult<T>(details: { results: T[] }): T {
+    expect(details.results).toHaveLength(1);
+    const [result] = details.results;
+    if (!result) {
+      throw new Error("Expected memory search result");
+    }
+    return result;
+  }
+
   it("appends source information when citations are enabled", async () => {
     setMemoryBackend("builtin");
     const cfg = asOpenClawConfig({
@@ -79,8 +88,9 @@ describe("memory search citations", () => {
     const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_on", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
-    expect(details.results[0]?.snippet).toMatch(/Source: MEMORY.md#L5-L7/);
-    expect(details.results[0]?.citation).toBe("MEMORY.md#L5-L7");
+    const firstResult = expectFirstMemoryResult(details);
+    expect(firstResult.snippet).toMatch(/Source: MEMORY.md#L5-L7/);
+    expect(firstResult.citation).toBe("MEMORY.md#L5-L7");
   });
 
   it("leaves snippet untouched when citations are off", async () => {
@@ -92,8 +102,9 @@ describe("memory search citations", () => {
     const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_off", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
-    expect(details.results[0]?.snippet).not.toMatch(/Source:/);
-    expect(details.results[0]?.citation).toBeUndefined();
+    const firstResult = expectFirstMemoryResult(details);
+    expect(firstResult.snippet).not.toMatch(/Source:/);
+    expect(firstResult.citation).toBeUndefined();
   });
 
   it("clamps decorated snippets to qmd injected budget", async () => {
@@ -105,7 +116,8 @@ describe("memory search citations", () => {
     const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_qmd", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
-    expect(details.results[0]?.snippet.length).toBeLessThanOrEqual(20);
+    const firstResult = expectFirstMemoryResult(details);
+    expect(firstResult.snippet.length).toBeLessThanOrEqual(20);
   });
 
   it("honors auto mode for direct chats", async () => {
@@ -113,7 +125,8 @@ describe("memory search citations", () => {
     const tool = createAutoCitationsMemorySearchTool("agent:main:discord:dm:u123");
     const result = await tool.execute("auto_mode_direct", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string }> };
-    expect(details.results[0]?.snippet).toMatch(/Source:/);
+    const firstResult = expectFirstMemoryResult(details);
+    expect(firstResult.snippet).toMatch(/Source:/);
   });
 
   it("suppresses citations for auto mode in group chats", async () => {
@@ -121,7 +134,8 @@ describe("memory search citations", () => {
     const tool = createAutoCitationsMemorySearchTool("agent:main:discord:group:c123");
     const result = await tool.execute("auto_mode_group", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string }> };
-    expect(details.results[0]?.snippet).not.toMatch(/Source:/);
+    const firstResult = expectFirstMemoryResult(details);
+    expect(firstResult.snippet).not.toMatch(/Source:/);
   });
 });
 
