@@ -344,11 +344,11 @@ describe("agentCliCommand", () => {
         runtime,
       );
 
-      const fallbackOpts = agentCommand.mock.calls[0]?.[0] as {
+      const fallbackOpts = requireFirstCallArg<{
         sessionId?: string;
         sessionKey?: string;
         to?: string;
-      };
+      }>(agentCommand, "embedded agent");
       expect(fallbackOpts.to).toBe("+1555");
       expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
       expect(fallbackOpts.sessionKey).toBe(`agent:main:explicit:${fallbackOpts.sessionId}`);
@@ -436,11 +436,12 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+      const localOpts = requireFirstCallArg(agentCommand, "embedded agent");
+      expect(localOpts).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
         cleanupCliLiveSessionOnRunEnd: true,
       });
-      expect(agentCommand.mock.calls[0]?.[0]).not.toHaveProperty("resultMetaOverrides");
+      expect(localOpts).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
@@ -453,7 +454,8 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent");
+      expect(fallbackOpts).toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
         cleanupCliLiveSessionOnRunEnd: true,
       });
