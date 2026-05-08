@@ -37,11 +37,11 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:memory`     | `memory_search`, `memory_get`                                                                                           |
 | `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                   |
 | `group:ui`         | `browser`, `canvas`                                                                                                     |
-| `group:automation` | `cron`, `gateway`                                                                                                       |
+| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                  |
 | `group:messaging`  | `message`                                                                                                               |
 | `group:nodes`      | `nodes`                                                                                                                 |
-| `group:agents`     | `agents_list`                                                                                                           |
-| `group:media`      | `image`, `image_generate`, `video_generate`, `tts`                                                                      |
+| `group:agents`     | `agents_list`, `update_plan`                                                                                            |
+| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                    |
 | `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                          |
 
 ### `tools.allow` / `tools.deny`
@@ -51,6 +51,14 @@ Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildca
 ```json5
 {
   tools: { deny: ["browser", "canvas"] },
+}
+```
+
+`write` and `apply_patch` are separate tool ids. `allow: ["write"]` also enables `apply_patch` for compatible models, but `deny: ["write"]` does not deny `apply_patch`. To block all file mutation, deny `group:fs` or list each mutating tool explicitly:
+
+```json5
+{
+  tools: { deny: ["write", "edit", "apply_patch"] },
 }
 ```
 
@@ -201,7 +209,7 @@ Configures inbound media understanding (image/audio/video):
     media: {
       concurrency: 2,
       asyncCompletion: {
-        directSend: false, // opt-in: send finished async music/video directly to the channel
+        directSend: false, // deprecated: completions stay agent-mediated
       },
       audio: {
         enabled: true,
@@ -254,7 +262,7 @@ Configures inbound media understanding (image/audio/video):
 
     **Async completion fields:**
 
-    - `asyncCompletion.directSend`: when `true`, completed async `music_generate` and `video_generate` tasks try direct channel delivery first. Default: `false` (legacy requester-session wake/model-delivery path).
+    - `asyncCompletion.directSend`: deprecated compatibility flag. Completed async media tasks stay requester-session mediated so the agent receives the result, decides how to tell the user, and uses the message tool when source delivery requires it.
 
   </Accordion>
 </AccordionGroup>

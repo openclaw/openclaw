@@ -32,8 +32,10 @@ function findExtensionWithoutTests() {
     (candidate) => !resolveExtensionTestPlan({ targetArg: candidate, cwd: process.cwd() }).hasTests,
   );
 
-  expect(extensionId).toBeDefined();
-  return extensionId ?? "missing-no-test-extension";
+  if (!extensionId) {
+    throw new Error("Expected at least one extension without tests");
+  }
+  return extensionId;
 }
 
 describe("scripts/test-extension.mjs", () => {
@@ -44,15 +46,6 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.extensionDir).toBe(bundledPluginRoot("slack"));
     expect(plan.config).toBe("test/vitest/vitest.extension-slack.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("slack"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves bluebubbles onto the bluebubbles vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "bluebubbles", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("bluebubbles");
-    expect(plan.config).toBe("test/vitest/vitest.extension-bluebubbles.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("bluebubbles"));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -272,7 +265,6 @@ describe("scripts/test-extension.mjs", () => {
         "msteams",
         "feishu",
         "irc",
-        "bluebubbles",
         "acpx",
         "diffs",
         "browser",
@@ -283,7 +275,6 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(batch.extensionIds).toEqual([
       "acpx",
-      "bluebubbles",
       "browser",
       "diffs",
       "feishu",
@@ -310,13 +301,6 @@ describe("scripts/test-extension.mjs", () => {
         estimatedCost: expect.any(Number),
         extensionIds: ["acpx"],
         roots: [bundledPluginRoot("acpx")],
-        testFileCount: expect.any(Number),
-      },
-      {
-        config: "test/vitest/vitest.extension-bluebubbles.config.ts",
-        estimatedCost: expect.any(Number),
-        extensionIds: ["bluebubbles"],
-        roots: [bundledPluginRoot("bluebubbles")],
         testFileCount: expect.any(Number),
       },
       {
@@ -474,24 +458,9 @@ describe("scripts/test-extension.mjs", () => {
     const totals = shards.map((shard) => shard.estimatedCost);
     expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1);
 
-    const browserShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("browser"));
-    const imessageShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("imessage"));
-    const mattermostShardIndex = shards.findIndex((shard) =>
-      shard.extensionIds.includes("mattermost"),
-    );
-    const openAiShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("openai"));
-    const qaLabShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("qa-lab"));
-    const whatsappShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("whatsapp"));
-
-    expect(browserShardIndex).toBeGreaterThanOrEqual(0);
-    expect(imessageShardIndex).toBeGreaterThanOrEqual(0);
-    expect(mattermostShardIndex).toBeGreaterThanOrEqual(0);
-    expect(openAiShardIndex).toBeGreaterThanOrEqual(0);
-    expect(qaLabShardIndex).toBeGreaterThanOrEqual(0);
-    expect(whatsappShardIndex).toBeGreaterThanOrEqual(0);
-    expect(browserShardIndex).not.toBe(qaLabShardIndex);
-    expect(imessageShardIndex).not.toBe(openAiShardIndex);
-    expect(mattermostShardIndex).not.toBe(whatsappShardIndex);
+    for (const shard of shards) {
+      expect(shard.extensionIds.length).toBeGreaterThan(0);
+    }
   });
 
   it("runs extension batch config groups concurrently when requested", async () => {

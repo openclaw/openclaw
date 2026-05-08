@@ -1,3 +1,17 @@
+import {
+  createPreviewMessageReceipt,
+  defineFinalizableLivePreviewAdapter,
+  deliverWithFinalizableLivePreviewAdapter,
+  type MessageReceipt,
+} from "openclaw/plugin-sdk/channel-message";
+import {
+  createChannelProgressDraftGate,
+  formatChannelProgressDraftLine,
+  formatChannelProgressDraftLineForEntry,
+  formatChannelProgressDraftText,
+  isChannelProgressDraftWorkToolName,
+  resolveChannelProgressDraftMaxLines,
+} from "openclaw/plugin-sdk/channel-streaming";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-gating";
 import {
   evaluateSupplementalContextVisibility,
@@ -5,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -12,6 +27,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CoreConfig,
+  MatrixConfig,
   MatrixRoomConfig,
   MatrixStreamingMode,
   ReplyToMode,
@@ -38,7 +54,7 @@ import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
-import { resolveMatrixAllowListMatch } from "./allowlist.js";
+import { normalizeMatrixUserId, resolveMatrixAllowListMatch } from "./allowlist.js";
 import {
   resolveMatrixMonitorLiveUserAllowlist,
   type MatrixResolvedAllowlistEntry,
@@ -156,6 +172,7 @@ export type MatrixMonitorHandlerParams = {
   core: PluginRuntime;
   cfg: CoreConfig;
   accountId: string;
+  accountConfig?: MatrixConfig;
   runtime: RuntimeEnv;
   logger: RuntimeLogger;
   logVerboseMessage: (message: string) => void;
@@ -365,23 +382,6 @@ function formatMatrixToolProgressMarkdownCode(text: string): string {
       : `${text.slice(0, MATRIX_TOOL_PROGRESS_MAX_CHARS - 1).trimEnd()}...`;
   const safe = clipped.replaceAll("`", "'");
   return `\`${safe}\``;
-}
-
-function formatMatrixCommandOutputToolProgress(payload: {
-  exitCode?: number | null;
-  name?: string;
-  title?: string;
-}) {
-  if (!payload.name) {
-    return payload.title;
-  }
-  if (payload.exitCode === 0) {
-    return `${payload.name} ok`;
-  }
-  if (payload.exitCode != null) {
-    return `${payload.name} (exit ${payload.exitCode})`;
-  }
-  return payload.name;
 }
 
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
@@ -740,6 +740,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           isRoom,
         });
         const {
+          effectiveAllowFrom,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
           groupAllowConfigured,
@@ -899,14 +900,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return undefined;
         }
 
-        const _messageId = event.event_id ?? "";
-        const _threadRootId = resolveMatrixThreadRootId({ event, content });
+        const messageId = event.event_id ?? "";
+        const threadRootId = resolveMatrixThreadRootId({ event, content });
         const thread = resolveMatrixThreadRouting({
           isDirectMessage,
           threadReplies,
           dmThreadReplies,
-          messageId: _messageId,
-          threadRootId: _threadRootId,
+          messageId,
+          threadRootId,
         });
         const {
           route: _route,
@@ -1006,7 +1007,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               sender: senderId,
               body: pendingHistoryBody,
               timestamp: eventTs ?? undefined,
-              messageId: _messageId,
+              messageId,
             };
             roomHistoryTracker.recordPending(roomId, pendingEntry);
           }
@@ -1121,7 +1122,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 sender: senderName,
                 body: bodyText,
                 timestamp: eventTs ?? undefined,
-                messageId: _messageId,
+                messageId,
               })
             : undefined;
         const inboundHistory = preparedTrigger?.history;
@@ -1144,10 +1145,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           commandBodyText,
           media,
           locationPayload,
-          messageId: _messageId,
+          messageId,
           triggerSnapshot,
-          threadRootId: _threadRootId,
+          threadRootId,
           thread,
+          effectiveAllowFrom,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
         };
@@ -1198,9 +1200,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         commandBodyText,
         media,
         locationPayload,
-        messageId: _messageId,
+        messageId,
         triggerSnapshot,
-        threadRootId: _threadRootId,
+        threadRootId,
         thread,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
@@ -1237,8 +1239,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           kind,
           senderAllowed: isRoomContextSenderAllowed(contextSenderId),
         }).include;
-      let threadContext = _threadRootId
-        ? await resolveThreadContext({ roomId, threadRootId: _threadRootId })
+      let threadContext = threadRootId
+        ? await resolveThreadContext({ roomId, threadRootId })
         : undefined;
       let threadContextBlockedByPolicy = false;
       if (
@@ -1250,7 +1252,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         threadContext = undefined;
       }
       let replyContext: Awaited<ReturnType<typeof resolveReplyContext>> | undefined;
-      if (replyToEventId && replyToEventId === _threadRootId && threadContext?.summary) {
+      if (replyToEventId && replyToEventId === threadRootId && threadContext?.summary) {
         replyContext = {
           replyToBody: threadContext.summary,
           replyToSender: threadContext.senderLabel,
@@ -1258,7 +1260,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         };
       } else if (
         replyToEventId &&
-        replyToEventId === _threadRootId &&
+        replyToEventId === threadRootId &&
         threadContextBlockedByPolicy
       ) {
         replyContext = await resolveReplyContext({ roomId, eventId: replyToEventId });
@@ -1277,7 +1279,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
       const roomName = roomInfo?.name;
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
-      const textWithId = `${bodyText}\n[matrix event id: ${_messageId} room: ${roomId}]`;
+      const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
       const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
         agentId: _route.agentId,
       });
@@ -1334,7 +1336,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         Provider: "matrix" as const,
         Surface: "matrix" as const,
         WasMentioned: isRoom ? wasMentioned : undefined,
-        MessageSid: _messageId,
+        MessageSid: messageId,
         ReplyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
         ReplyToBody: replyContext?.replyToBody,
         ReplyToSender: replyContext?.replyToSender,
@@ -1381,22 +1383,22 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             shouldBypassMention,
           }),
         );
-      if (shouldAckReaction() && _messageId) {
+      if (shouldAckReaction() && messageId) {
         loadMatrixSendModule()
           .then(({ reactMatrixMessage }) =>
-            reactMatrixMessage(roomId, _messageId, ackReaction, client),
+            reactMatrixMessage(roomId, messageId, ackReaction, client),
           )
           .catch((err) => {
             logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
           });
       }
 
-      if (_messageId) {
+      if (messageId) {
         loadMatrixSendModule()
-          .then(({ sendReadReceiptMatrix }) => sendReadReceiptMatrix(roomId, _messageId, client))
+          .then(({ sendReadReceiptMatrix }) => sendReadReceiptMatrix(roomId, messageId, client))
           .catch((err) => {
             logVerboseMessage(
-              `matrix: read receipt failed room=${roomId} id=${_messageId}: ${String(err)}`,
+              `matrix: read receipt failed room=${roomId} id=${messageId}: ${String(err)}`,
             );
           });
       }
@@ -1445,8 +1447,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
       });
       const draftStreamingEnabled = streaming !== "off";
-      const quietDraftStreaming = streaming === "quiet";
-      const draftReplyToId = replyToMode !== "off" && !threadTarget ? _messageId : undefined;
+      const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
+      const progressDraftStreaming = streaming === "progress";
+      const draftReplyToId = replyToMode !== "off" && !threadTarget ? messageId : undefined;
       const draftStream: MatrixDraftStreamHandle | undefined = draftStreamingEnabled
         ? await loadMatrixDraftStream().then(({ createMatrixDraftStream }) =>
             createMatrixDraftStream({
@@ -1464,6 +1467,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         : undefined;
       draftStreamRef = draftStream;
       const shouldStreamPreviewToolProgress = Boolean(draftStream) && previewToolProgressEnabled;
+      const shouldSuppressDefaultToolProgressMessages =
+        Boolean(draftStream) &&
+        (shouldStreamPreviewToolProgress || params.streaming === "progress");
       type PendingDraftBoundary = {
         messageGeneration: number;
         endOffset: number;
@@ -1479,30 +1485,77 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       let currentDraftReplyToId = draftReplyToId;
       let previewToolProgressSuppressed = false;
       let previewToolProgressLines: string[] = [];
+      const progressConfigEntry = params.accountConfig ?? cfg.channels?.matrix;
+      const progressSeed = `${_route.accountId}:${roomId}`;
       // Set after the first final payload consumes or discards the draft event
       // so subsequent finals go through normal delivery.
 
-      const pushPreviewToolProgress = (line?: string) => {
-        if (!draftStream || !shouldStreamPreviewToolProgress || previewToolProgressSuppressed) {
+      const renderProgressDraft = () => {
+        if (!draftStream || !progressDraftStreaming) {
+          return;
+        }
+        const previewText = formatChannelProgressDraftText({
+          entry: progressConfigEntry,
+          lines: previewToolProgressLines,
+          seed: progressSeed,
+          formatLine: formatMatrixToolProgressMarkdownCode,
+          bullet: "-",
+        });
+        if (!previewText) {
+          return;
+        }
+        draftStream.update(previewText);
+      };
+      const progressDraftGate = createChannelProgressDraftGate({
+        onStart: renderProgressDraft,
+      });
+
+      const pushPreviewToolProgress = async (line?: string, options?: { toolName?: string }) => {
+        if (!draftStream) {
+          return;
+        }
+        if (
+          options?.toolName !== undefined &&
+          !isChannelProgressDraftWorkToolName(options.toolName)
+        ) {
           return;
         }
         const normalized = line?.replace(/\s+/g, " ").trim();
-        if (!normalized) {
+        if (!progressDraftStreaming) {
+          if (!shouldStreamPreviewToolProgress || previewToolProgressSuppressed || !normalized) {
+            return;
+          }
+          const previous = previewToolProgressLines.at(-1);
+          if (previous === normalized) {
+            return;
+          }
+          previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+            -resolveChannelProgressDraftMaxLines(progressConfigEntry),
+          );
+          draftStream.update(
+            formatChannelProgressDraftText({
+              entry: progressConfigEntry,
+              lines: previewToolProgressLines,
+              seed: progressSeed,
+              formatLine: formatMatrixToolProgressMarkdownCode,
+              bullet: "-",
+            }),
+          );
           return;
         }
-        const previous = previewToolProgressLines.at(-1);
-        if (previous === normalized) {
-          return;
+        if (shouldStreamPreviewToolProgress && !previewToolProgressSuppressed && normalized) {
+          const previous = previewToolProgressLines.at(-1);
+          if (previous !== normalized) {
+            previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+              -resolveChannelProgressDraftMaxLines(progressConfigEntry),
+            );
+          }
         }
-        previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);
-        draftStream.update(
-          [
-            "Working...",
-            ...previewToolProgressLines.map(
-              (entry) => `- ${formatMatrixToolProgressMarkdownCode(entry)}`,
-            ),
-          ].join("\n"),
-        );
+        const alreadyStarted = progressDraftGate.hasStarted;
+        await progressDraftGate.noteWork();
+        if (alreadyStarted && progressDraftGate.hasStarted) {
+          renderProgressDraft();
+        }
       };
 
       const suppressPreviewToolProgressForAnswerText = (text: string | undefined) => {
@@ -1519,45 +1572,108 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       };
 
       const buildPreviewToolProgressReplyOptions = (): Partial<GetReplyOptions> => {
-        if (!shouldStreamPreviewToolProgress) {
+        if (!shouldSuppressDefaultToolProgressMessages) {
           return {};
         }
-        return {
+        const options: Partial<GetReplyOptions> = {
           suppressDefaultToolProgressMessages: true,
+        };
+        if (!shouldStreamPreviewToolProgress) {
+          return options;
+        }
+        return {
+          ...options,
           onToolStart: async (payload) => {
             const toolName = payload.name?.trim();
-            pushPreviewToolProgress(toolName ? `tool: ${toolName}` : "tool running");
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLineForEntry(
+                progressConfigEntry,
+                {
+                  event: "tool",
+                  name: toolName,
+                  phase: payload.phase,
+                  args: payload.args,
+                },
+                payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+              ),
+              { toolName },
+            );
           },
           onItemEvent: async (payload) => {
-            pushPreviewToolProgress(
-              payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLineForEntry(progressConfigEntry, {
+                event: "item",
+                itemKind: payload.kind,
+                title: payload.title,
+                name: payload.name,
+                phase: payload.phase,
+                status: payload.status,
+                summary: payload.summary,
+                progressText: payload.progressText,
+                meta: payload.meta,
+              }),
             );
           },
           onPlanUpdate: async (payload) => {
             if (payload.phase !== "update") {
               return;
             }
-            pushPreviewToolProgress(payload.explanation ?? payload.steps?.[0] ?? "planning");
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "plan",
+                phase: payload.phase,
+                title: payload.title,
+                explanation: payload.explanation,
+                steps: payload.steps,
+              }),
+            );
           },
           onApprovalEvent: async (payload) => {
             if (payload.phase !== "requested") {
               return;
             }
-            pushPreviewToolProgress(
-              payload.command ? `approval: ${payload.command}` : "approval requested",
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "approval",
+                phase: payload.phase,
+                title: payload.title,
+                command: payload.command,
+                reason: payload.reason,
+                message: payload.message,
+              }),
             );
           },
           onCommandOutput: async (payload) => {
             if (payload.phase !== "end") {
               return;
             }
-            pushPreviewToolProgress(formatMatrixCommandOutputToolProgress(payload));
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "command-output",
+                phase: payload.phase,
+                title: payload.title,
+                name: payload.name,
+                status: payload.status,
+                exitCode: payload.exitCode,
+              }),
+            );
           },
           onPatchSummary: async (payload) => {
             if (payload.phase !== "end") {
               return;
             }
-            pushPreviewToolProgress(payload.summary ?? payload.title ?? "patch applied");
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "patch",
+                phase: payload.phase,
+                title: payload.title,
+                name: payload.name,
+                added: payload.added,
+                modified: payload.modified,
+                deleted: payload.deleted,
+                summary: payload.summary,
+              }),
+            );
           },
         };
       };
@@ -1675,39 +1791,77 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 !payloadReplyMismatch &&
                 !mustDeliverFinalNormally
               ) {
-                try {
-                  const requiresFinalEdit =
-                    quietDraftStreaming || !draftStream.matchesPreparedText(payload.text);
-                  if (requiresFinalEdit) {
-                    const { editMessageMatrix } = await loadMatrixSendModule();
-                    await editMessageMatrix(roomId, draftEventId, payload.text, {
-                      client,
+                const finalPreviewText = payload.text;
+                await deliverWithFinalizableLivePreviewAdapter<
+                  ReplyPayload,
+                  string,
+                  {
+                    text: string;
+                    finalizeLive: boolean;
+                    extraContent?: Record<string, unknown>;
+                  }
+                >({
+                  kind: "final",
+                  payload,
+                  adapter: defineFinalizableLivePreviewAdapter({
+                    draft: {
+                      flush: async () => {},
+                      clear: async () => {},
+                      discardPending: async () => {},
+                      id: () => draftEventId,
+                    },
+                    buildFinalEdit: () => ({
+                      text: finalPreviewText,
+                      finalizeLive: !(
+                        quietDraftStreaming || !draftStream.matchesPreparedText(finalPreviewText)
+                      ),
+                      ...(quietDraftStreaming
+                        ? { extraContent: buildMatrixFinalizedPreviewContent() }
+                        : {}),
+                    }),
+                    editFinal: async (_draftEventId, edit) => {
+                      if (edit.finalizeLive) {
+                        if (!(await draftStream.finalizeLive())) {
+                          throw new Error("Matrix draft live finalize failed");
+                        }
+                        return;
+                      }
+                      const { editMessageMatrix } = await loadMatrixSendModule();
+                      await editMessageMatrix(roomId, _draftEventId, edit.text, {
+                        client,
+                        cfg,
+                        threadId: threadTarget,
+                        accountId: _route.accountId,
+                        extraContent: edit.extraContent,
+                      });
+                    },
+                    createPreviewReceipt: (id): MessageReceipt =>
+                      createPreviewMessageReceipt({
+                        id,
+                        ...(threadTarget ? { threadId: threadTarget } : {}),
+                        ...(currentDraftReplyToId ? { replyToId: currentDraftReplyToId } : {}),
+                      }),
+                    logPreviewEditFailure: (err) => {
+                      logVerboseMessage(`matrix: preview final edit failed: ${String(err)}`);
+                    },
+                  }),
+                  deliverNormally: async () => {
+                    await redactMatrixDraftEvent(client, roomId, draftEventId);
+                    await deliverMatrixReplies({
                       cfg,
+                      replies: [payload],
+                      roomId,
+                      client,
+                      runtime,
+                      textLimit,
+                      replyToMode,
                       threadId: threadTarget,
                       accountId: _route.accountId,
-                      extraContent: quietDraftStreaming
-                        ? buildMatrixFinalizedPreviewContent()
-                        : undefined,
+                      mediaLocalRoots,
+                      tableMode,
                     });
-                  } else if (!(await draftStream.finalizeLive())) {
-                    throw new Error("Matrix draft live finalize failed");
-                  }
-                } catch {
-                  await redactMatrixDraftEvent(client, roomId, draftEventId);
-                  await deliverMatrixReplies({
-                    cfg,
-                    replies: [payload],
-                    roomId,
-                    client,
-                    runtime,
-                    textLimit,
-                    replyToMode,
-                    threadId: threadTarget,
-                    accountId: _route.accountId,
-                    mediaLocalRoots,
-                    tableMode,
-                  });
-                }
+                  },
+                });
                 draftConsumed = true;
               } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
                 let textEditOk = !mustDeliverFinalNormally;
@@ -1828,6 +1982,29 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onReplyStart: typingCallbacks.onReplyStart,
           onIdle: typingCallbacks.onIdle,
         });
+      const pinnedMainDmOwner = isDirectMessage
+        ? await (async () => {
+            const livePinnedCfg = core.config.current() as CoreConfig;
+            const livePinnedAllowlists = resolveMatrixAccountAllowlistConfig({
+              cfg: livePinnedCfg,
+              accountId,
+            });
+            const livePinnedDmAllowFrom = await resolveCachedLiveAllowlist({
+              cfg: livePinnedCfg,
+              entries: livePinnedAllowlists.dmAllowFrom,
+              startupResolvedEntries: allowFromResolvedEntries,
+              cache: liveDmAllowlistCache,
+              updateCache: (next) => {
+                liveDmAllowlistCache = next;
+              },
+            });
+            return resolvePinnedMainDmOwnerFromAllowlist({
+              dmScope: livePinnedCfg.session?.dmScope,
+              allowFrom: livePinnedDmAllowFrom,
+              normalizeEntry: normalizeMatrixUserId,
+            });
+          })()
+        : null;
 
       const turnResult = await core.channel.turn.run({
         channel: "matrix",
@@ -1835,7 +2012,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         raw: event,
         adapter: {
           ingest: () => ({
-            id: _messageId,
+            id: messageId,
             rawText: bodyText,
             textForAgent: ctxPayload.BodyForAgent,
             textForCommands: ctxPayload.CommandBody,
@@ -1855,6 +2032,23 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                     channel: "matrix",
                     to: `room:${roomId}`,
                     accountId: _route.accountId,
+                    mainDmOwnerPin: pinnedMainDmOwner
+                      ? {
+                          ownerRecipient: pinnedMainDmOwner,
+                          senderRecipient: normalizeMatrixUserId(senderId),
+                          onSkip: ({
+                            ownerRecipient,
+                            senderRecipient,
+                          }: {
+                            ownerRecipient: string;
+                            senderRecipient: string;
+                          }) => {
+                            logVerboseMessage(
+                              `matrix: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                            );
+                          },
+                        }
+                      : undefined,
                   }
                 : undefined,
               onRecordError: (err) => {
@@ -1911,6 +2105,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                         disableBlockStreaming: !blockStreamingEnabled,
                         onPartialReply: draftStream
                           ? (payload) => {
+                              if (progressDraftStreaming) {
+                                return;
+                              }
                               latestDraftFullText = payload.text ?? "";
                               suppressPreviewToolProgressForAnswerText(latestDraftFullText);
                               updateDraftFromLatestFullText();
@@ -1938,6 +2135,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                       },
                     });
                   } finally {
+                    progressDraftGate.cancel();
                     markRunComplete();
                   }
                 },
@@ -1954,13 +2152,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (finalReplyDeliveryFailed) {
         if (retryableReplyDeliveryFailed) {
           logVerboseMessage(
-            `matrix: final reply delivery failed room=${roomId} id=${_messageId}; leaving event uncommitted`,
+            `matrix: final reply delivery failed room=${roomId} id=${messageId}; leaving event uncommitted`,
           );
           // Explicit retryable failures reopen replay so the same history can be retried.
           return;
         }
         logVerboseMessage(
-          `matrix: final reply delivery failed room=${roomId} id=${_messageId}; keeping replay committed`,
+          `matrix: final reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
         );
         await commitInboundEventIfClaimed();
         return;
@@ -1968,13 +2166,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (!queuedFinal && nonFinalReplyDeliveryFailed) {
         if (retryableReplyDeliveryFailed) {
           logVerboseMessage(
-            `matrix: non-final reply delivery failed room=${roomId} id=${_messageId}; leaving event uncommitted`,
+            `matrix: non-final reply delivery failed room=${roomId} id=${messageId}; leaving event uncommitted`,
           );
           // Explicit retryable failures reopen replay.
           return;
         }
         logVerboseMessage(
-          `matrix: non-final reply delivery failed room=${roomId} id=${_messageId}; keeping replay committed`,
+          `matrix: non-final reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
         );
         await commitInboundEventIfClaimed();
         return;
@@ -1983,7 +2181,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // Only advance to the snapshot position — messages added during async processing remain
       // visible for the next trigger.
       if (isRoom && triggerSnapshot) {
-        roomHistoryTracker.consumeHistory(_route.agentId, roomId, triggerSnapshot, _messageId);
+        roomHistoryTracker.consumeHistory(_route.agentId, roomId, triggerSnapshot, messageId);
       }
       if (!hasFinalInboundReplyDispatch({ queuedFinal, counts })) {
         await commitInboundEventIfClaimed();

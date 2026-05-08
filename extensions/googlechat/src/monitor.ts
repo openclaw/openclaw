@@ -1,17 +1,16 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
-  createChannelReplyPipeline,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
 } from "../runtime-api.js";
 import { type ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { type GoogleChatAudienceType } from "./auth.js";
-import { applyGoogleChatInboundAccessPolicy, isSenderAllowed } from "./monitor-access.js";
+import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
+import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
 import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
 import {
-  handleGoogleChatWebhookRequest,
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
 } from "./monitor-routing.js";
@@ -24,12 +23,6 @@ import type {
 import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
-export type { GoogleChatMonitorOptions, GoogleChatRuntimeEnv } from "./monitor-types.js";
-export {
-  handleGoogleChatWebhookRequest,
-  registerGoogleChatWebhookTarget,
-} from "./monitor-routing.js";
-export { isSenderAllowed };
 
 setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
 
@@ -288,13 +281,6 @@ async function processMessageWithPipeline(params: {
     }
   }
 
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-    cfg: config,
-    agentId: route.agentId,
-    channel: "googlechat",
-    accountId: route.accountId,
-  });
-
   await core.channel.turn.run({
     channel: "googlechat",
     accountId: route.accountId,
@@ -320,6 +306,13 @@ async function processMessageWithPipeline(params: {
         dispatchReplyWithBufferedBlockDispatcher:
           core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
         delivery: {
+          durable: (payload, info) =>
+            resolveGoogleChatDurableReplyOptions({
+              payload,
+              infoKind: info.kind,
+              spaceId,
+              typingMessageName,
+            }),
           deliver: async (payload) => {
             await deliverGoogleChatReply({
               payload,
@@ -334,16 +327,16 @@ async function processMessageWithPipeline(params: {
             // Only use typing message for first delivery
             typingMessageName = undefined;
           },
+          onDelivered: () => {
+            statusSink?.({ lastOutboundAt: Date.now() });
+          },
           onError: (err, info) => {
             runtime.error?.(
               `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
             );
           },
         },
-        dispatcherOptions: replyPipeline,
-        replyOptions: {
-          onModelSelected,
-        },
+        replyPipeline: {},
         record: {
           onRecordError: (err) => {
             runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
@@ -376,7 +369,7 @@ async function downloadAttachment(
   return { path: saved.path, contentType: saved.contentType };
 }
 
-export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): () => void {
+function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): () => void {
   const core = getGoogleChatRuntime();
   const webhookPath = resolveWebhookPath({
     webhookPath: options.webhookPath,
@@ -432,8 +425,4 @@ export function resolveGoogleChatWebhookPath(params: {
       defaultPath: "/googlechat",
     }) ?? "/googlechat"
   );
-}
-
-export function computeGoogleChatMediaMaxMb(params: { account: ResolvedGoogleChatAccount }) {
-  return params.account.config.mediaMaxMb ?? 20;
 }

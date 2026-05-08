@@ -280,7 +280,7 @@ test("session:patch hook mutations cannot change the response path", async () =>
     resolved: {
       modelProvider: string;
       model: string;
-      agentRuntime: { id: string; fallback?: string; source: string };
+      agentRuntime: { id: string; source: string };
     };
   }>(ws, "sessions.patch", {
     key: "agent:main:main",
@@ -291,7 +291,7 @@ test("session:patch hook mutations cannot change the response path", async () =>
   expect(patched.payload?.resolved).toEqual({
     modelProvider: "anthropic",
     model: "claude-opus-4-6",
-    agentRuntime: { id: "pi", source: "implicit" },
+    agentRuntime: { id: "auto", source: "implicit" },
   });
   expect(patched.payload?.entry.label).toBe("cfg-isolation");
 

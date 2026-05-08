@@ -100,6 +100,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
               "sessions.send",
               "tools.catalog",
               "tools.effective",
+              "tools.invoke",
             ],
             events: ["agent", "sessions.changed"],
           },
@@ -250,6 +251,11 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
 
       if (frame.method === "tools.effective") {
         reply({ tools: [{ name: "shell", enabled: true }] });
+        return;
+      }
+
+      if (frame.method === "tools.invoke") {
+        reply({ ok: true, toolName: "shell", output: { ok: true } });
         return;
       }
 
@@ -414,6 +420,9 @@ describe("OpenClaw SDK websocket e2e", () => {
       await expect(oc.tools.effective({ sessionKey: "sdk-session" })).resolves.toMatchObject({
         tools: [{ name: "shell", enabled: true }],
       });
+      await expect(
+        oc.tools.invoke("shell", { args: { command: "pwd" }, sessionKey: "sdk-session" }),
+      ).resolves.toMatchObject({ ok: true, toolName: "shell", output: { ok: true } });
       await expect(oc.approvals.list()).resolves.toMatchObject({ approvals: [] });
       await expect(
         oc.approvals.respond("approval-1", { decision: "approve" }),
@@ -437,6 +446,7 @@ describe("OpenClaw SDK websocket e2e", () => {
         "models.authStatus",
         "tools.catalog",
         "tools.effective",
+        "tools.invoke",
         "exec.approval.list",
         "exec.approval.resolve",
       ]);
@@ -568,8 +578,12 @@ liveGatewayDescribe("OpenClaw SDK live Gateway e2e", () => {
 
     try {
       await oc.connect();
-      await expect(oc.agents.list()).resolves.toBeDefined();
-      await expect(oc.models.status({ probe: false })).resolves.toBeDefined();
+      await expect(oc.agents.list()).resolves.toEqual(
+        expect.objectContaining({ agents: expect.any(Array) }),
+      );
+      await expect(oc.models.status({ probe: false })).resolves.toEqual(
+        expect.objectContaining({ providers: expect.any(Array) }),
+      );
 
       const agent = await oc.agents.get(process.env.OPENCLAW_SDK_LIVE_AGENT_ID ?? "main");
       const run = await agent.run({

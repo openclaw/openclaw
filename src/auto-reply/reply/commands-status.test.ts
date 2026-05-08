@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -10,6 +10,7 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -25,7 +26,28 @@ import {
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
 
+vi.mock("../../agents/harness/builtin-pi.js", () => ({
+  createPiAgentHarness: () => ({
+    id: "pi",
+    label: "OpenClaw Pi",
+    supports: () => ({ supported: true, priority: 0 }),
+    runAttempt: async () => {
+      throw new Error("not used in status tests");
+    },
+  }),
+}));
+
 const baseCfg = baseCommandTestConfig;
+const codexStatusModel: ModelDefinitionConfig = {
+  id: "gpt-5.5",
+  name: "GPT-5.5",
+  reasoning: true,
+  input: ["text", "image"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 1_050_000,
+  contextTokens: 1_000_000,
+  maxTokens: 128_000,
+};
 
 async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: boolean }) {
   const commandParams = buildCommandTestParams("/status", baseCfg);
@@ -483,6 +505,37 @@ describe("buildStatusReply subagent summary", () => {
     });
   });
 
+  it("shows gateway and system uptime in /status output", async () => {
+    vi.spyOn(process, "uptime").mockReturnValue(2 * 60 * 60 + 5 * 60);
+    vi.spyOn(os, "uptime").mockReturnValue(4 * 24 * 60 * 60 + 3 * 60 * 60);
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-uptime",
+        updatedAt: 0,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Uptime: gateway 2h 5m · system 4d 3h");
+  });
+
   it("shows the effective non-PI embedded harness in /status", async () => {
     registerStatusCodexHarness();
 
@@ -521,6 +574,196 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalized).toContain("Runtime: OpenAI Codex");
     expect(normalized).toContain("Fast");
     expect(normalized).not.toContain("Fast · codex");
+  });
+
+  it("uses Codex OAuth auth labels for openai models running on the Codex harness", async () => {
+    registerStatusCodexHarness();
+
+    await withTempHome(
+      async (dir) => {
+        const authPath = path.join(
+          dir,
+          ".openclaw",
+          "agents",
+          "main",
+          "agent",
+          "auth-profiles.json",
+        );
+        fs.mkdirSync(path.dirname(authPath), { recursive: true });
+        fs.writeFileSync(
+          authPath,
+          JSON.stringify({
+            version: 1,
+            profiles: {
+              "openai-codex:status": {
+                type: "oauth",
+                provider: "openai-codex",
+                access: "access-token",
+                refresh: "refresh-token",
+                expires: Date.now() + 60_000,
+              },
+            },
+          }),
+          "utf8",
+        );
+
+        const commonParams = {
+          sessionEntry: {
+            sessionId: "sess-status-codex-oauth",
+            updatedAt: 0,
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender" as const,
+          statusChannel: "mobilechat",
+          provider: "openai",
+          model: "gpt-5.5",
+          contextTokens: 32_000,
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off" as const,
+          resolvedReasoningLevel: "off" as const,
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention" as const,
+        };
+
+        const codexText = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+          ...commonParams,
+        });
+        const implicitCodexText = await buildStatusText({
+          cfg: baseCfg,
+          ...commonParams,
+        });
+
+        const normalizedCodex = normalizeTestText(codexText);
+        const normalizedImplicitCodex = normalizeTestText(implicitCodexText);
+        expect(normalizedCodex).toContain("Model: openai/gpt-5.5");
+        expect(normalizedCodex).toContain("oauth (openai-codex:status)");
+        expect(normalizedCodex).toContain("openai-codex:status");
+        expect(normalizedImplicitCodex).toContain("Model: openai/gpt-5.5");
+        expect(normalizedImplicitCodex).toContain("oauth (openai-codex:status)");
+        expect(normalizedImplicitCodex).toContain("Runtime: OpenAI Codex");
+      },
+      {
+        env: {
+          OPENAI_API_KEY: undefined,
+          OPENAI_OAUTH_TOKEN: undefined,
+        },
+      },
+    );
+  });
+
+  it("uses Claude CLI OAuth auth labels for anthropic models running on the Claude CLI runtime", async () => {
+    await withTempHome(
+      async (dir) => {
+        const authPath = path.join(dir, ".claude", ".credentials.json");
+        fs.mkdirSync(path.dirname(authPath), { recursive: true });
+        fs.writeFileSync(
+          authPath,
+          JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "access-token",
+              refreshToken: "refresh-token",
+              expiresAt: Date.now() + 60_000,
+            },
+          }),
+          "utf8",
+        );
+
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "claude-cli" },
+              },
+            },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-claude-cli-oauth",
+            updatedAt: 0,
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "mobilechat",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          contextTokens: 32_000,
+          resolvedHarness: "claude-cli",
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
+        expect(normalized).toContain("oauth (claude-cli)");
+      },
+      {
+        env: {
+          ANTHROPIC_API_KEY: undefined,
+          ANTHROPIC_OAUTH_TOKEN: undefined,
+        },
+      },
+    );
+  });
+
+  it("uses Codex OAuth context overrides for openai models running on the Codex harness", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [codexStatusModel],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-codex-context",
+        updatedAt: 0,
+        totalTokens: 25_000,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.5",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth",
+      activeModelAuthOverride: "oauth",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-5.5");
+    expect(normalized).toContain("Context: 25k/1.0m");
   });
 
   it("uses workspace-scoped auth evidence in /status auth labels", async () => {
@@ -564,6 +807,8 @@ describe("buildStatusReply subagent summary", () => {
         {
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
           OPENCLAW_STATE_DIR: stateDir,
+          ANTHROPIC_API_KEY: undefined,
+          ANTHROPIC_OAUTH_TOKEN: undefined,
           WORKSPACE_STATUS_CREDENTIALS: credentialPath,
         },
         async () => {

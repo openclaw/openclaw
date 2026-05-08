@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Model } from "@mariozechner/pi-ai";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
@@ -18,6 +18,7 @@ let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildG
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
 let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
+let resetGoogleVertexAuthorizedUserTokenCacheForTest: typeof import("./vertex-adc.js").resetGoogleVertexAuthorizedUserTokenCacheForTest;
 
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
   "openclaw.modelProviderRequestTransport",
@@ -91,17 +92,24 @@ describe("google transport stream", () => {
       createGoogleGenerativeAiTransportStreamFn,
       createGoogleVertexTransportStreamFn,
     } = await import("./transport-stream.js"));
-    ({ hasGoogleVertexAuthorizedUserAdcSync } = await import("./vertex-adc.js"));
+    ({ hasGoogleVertexAuthorizedUserAdcSync, resetGoogleVertexAuthorizedUserTokenCacheForTest } =
+      await import("./vertex-adc.js"));
   });
 
   beforeEach(() => {
     buildGuardedModelFetchMock.mockReset();
     guardedFetchMock.mockReset();
     buildGuardedModelFetchMock.mockReturnValue(guardedFetchMock);
+    resetGoogleVertexAuthorizedUserTokenCacheForTest();
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/provider-transport-runtime");
+    vi.resetModules();
   });
 
   it("uses the guarded fetch transport and parses Gemini SSE output", async () => {
@@ -377,7 +385,7 @@ describe("google transport stream", () => {
       }),
       "utf8",
     );
-    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", undefined);
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
     vi.stubEnv("HOME", homeDir);
     vi.stubEnv("APPDATA", appDataDir);
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
@@ -499,6 +507,80 @@ describe("google transport stream", () => {
         },
       ],
     });
+  });
+
+  it("uses Gemini skip-validator thought signatures for cross-provider tool-call replay", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-opus-4-7",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "skip_thought_signature_validator",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
+  it("does not trust cross-provider tool-call thought signatures for non-Gemini-3 models", () => {
+    const model = buildGeminiModel({
+      id: "gemini-2.5-pro",
+      name: "Gemini 2.5 Pro",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-opus-4-7",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+              thoughtSignature: "foreign_sig",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [{ functionCall: { name: "lookup", args: { q: "hello" } } }],
+    });
+    expect(JSON.stringify(params.contents)).not.toContain("foreign_sig");
+    expect(JSON.stringify(params.contents)).not.toContain("skip_thought_signature_validator");
   });
 
   it("builds direct Gemini payloads without negative fallback thinking budgets", () => {
@@ -740,5 +822,144 @@ describe("google transport stream", () => {
     } as never);
 
     expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
+  });
+
+  it.each([
+    ["gemini-2.5-flash-lite", "minimal", 512],
+    ["gemini-2.5-flash-lite", "low", 2048],
+    ["gemini-2.5-flash", "minimal", 128],
+    ["gemini-2.5-flash", "low", 2048],
+    ["gemini-2.5-pro", "minimal", 128],
+    ["gemini-2.5-pro", "low", 2048],
+    ["gemini-2.5-flash", "medium", 8192],
+    ["gemini-2.5-pro", "medium", 8192],
+  ] as const)("%s with reasoning=%s uses thinkingBudget %i", (id, reasoning, expectedBudget) => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      { reasoning },
+    );
+
+    expect(params.generationConfig).toMatchObject({
+      thinkingConfig: { includeThoughts: true, thinkingBudget: expectedBudget },
+    });
+  });
+
+  it("emits thinking activity for thoughtSignature-only parts to keep the stream active", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { thought: true, text: "draft", thoughtSignature: "sig_1" },
+                  { thoughtSignature: "sig_2" },
+                  { text: "answer" },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 10,
+            candidatesTokenCount: 5,
+            thoughtsTokenCount: 3,
+            totalTokenCount: 18,
+          },
+        },
+      ]),
+    );
+
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          systemPrompt: "You are a helpful assistant.",
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as never,
+        { reasoning: "high" },
+      ),
+    );
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+    const result = await stream.result();
+
+    expect(result.content).toEqual([
+      { type: "thinking", thinking: "draft", thinkingSignature: "sig_2" },
+      { type: "text", text: "answer" },
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_delta",
+      "thinking_end",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(events[3]).toMatchObject({ type: "thinking_delta", delta: "" });
+  });
+
+  it("starts a thinking block for thoughtSignature-only parts that arrive before any text", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { thoughtSignature: "sig_1" },
+                  { thought: true, text: "draft" },
+                  { text: "answer" },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 10,
+            candidatesTokenCount: 5,
+            thoughtsTokenCount: 3,
+            totalTokenCount: 18,
+          },
+        },
+      ]),
+    );
+
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          systemPrompt: "You are a helpful assistant.",
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as never,
+        { reasoning: "high" },
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content).toEqual([
+      { type: "thinking", thinking: "draft", thinkingSignature: "sig_1" },
+      { type: "text", text: "answer" },
+    ]);
   });
 });

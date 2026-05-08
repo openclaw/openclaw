@@ -3,7 +3,7 @@ import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
 import { buildAllowedModelSet, buildConfiguredModelCatalog, modelKey } from "./model-selection.js";
 
-export type ModelCatalogVisibilityView = "default" | "configured" | "all";
+type ModelCatalogVisibilityView = "default" | "configured" | "all";
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
   return entries.toSorted(
@@ -35,6 +35,7 @@ export function resolveVisibleModelCatalog(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   view?: ModelCatalogVisibilityView;
+  runtimeAuthDiscovery?: boolean;
 }): ModelCatalogEntry[] {
   if (params.view === "all") {
     return params.catalog;
@@ -59,6 +60,8 @@ export function resolveVisibleModelCatalog(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     env: params.env,
+    allowPluginSyntheticAuth: params.runtimeAuthDiscovery,
+    discoverExternalCliAuth: params.runtimeAuthDiscovery,
   });
   const authBackedCatalog = params.catalog.filter((entry) => hasAuth(entry.provider));
   return sortModelCatalogEntries(

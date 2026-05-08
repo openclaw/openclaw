@@ -18,9 +18,11 @@ import {
   resolveProviderAuthProfileId,
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
+  ensureProviderRuntimePluginHandle,
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
+  type ProviderRuntimePluginHandle,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
@@ -188,13 +190,15 @@ export function resolveProviderSystemPromptContribution(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   context: ProviderSystemPromptContributionContext;
 }): ProviderSystemPromptContribution | undefined {
-  const plugin = resolveProviderRuntimePlugin(params);
+  const plugin = ensureProviderRuntimePluginHandle(params).plugin;
   const baseOverlay = resolveGpt5SystemPromptContribution({
     config: params.context.config ?? params.config,
     providerId: params.context.provider ?? params.provider,
     modelId: params.context.modelId,
+    trigger: params.context.trigger,
   });
   const providerOverlay =
     plugin?.resolvePromptOverlay?.({
@@ -239,9 +243,10 @@ export function transformProviderSystemPrompt(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   context: ProviderTransformSystemPromptContext;
 }): string {
-  const plugin = resolveProviderRuntimePlugin(params);
+  const plugin = ensureProviderRuntimePluginHandle(params).plugin;
   const textTransforms = mergePluginTextTransforms(
     resolveRuntimeTextTransforms(),
     plugin?.textTransforms,
@@ -256,10 +261,11 @@ export function resolveProviderTextTransforms(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
 }): PluginTextTransforms | undefined {
   return mergePluginTextTransforms(
     resolveRuntimeTextTransforms(),
-    resolveProviderRuntimePlugin(params)?.textTransforms,
+    ensureProviderRuntimePluginHandle(params).plugin?.textTransforms,
   );
 }
 
@@ -525,7 +531,7 @@ export function resolveProviderReplayPolicyWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderReplayPolicyContext;
 }): ProviderReplayPolicy | undefined {
-  return resolveProviderHookPlugin(params)?.buildReplayPolicy?.(params.context) ?? undefined;
+  return resolveProviderRuntimePlugin(params)?.buildReplayPolicy?.(params.context) ?? undefined;
 }
 
 export async function sanitizeProviderReplayHistoryWithPlugin(params: {
@@ -535,7 +541,7 @@ export async function sanitizeProviderReplayHistoryWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderSanitizeReplayHistoryContext;
 }) {
-  return await resolveProviderHookPlugin(params)?.sanitizeReplayHistory?.(params.context);
+  return await resolveProviderRuntimePlugin(params)?.sanitizeReplayHistory?.(params.context);
 }
 
 export async function validateProviderReplayTurnsWithPlugin(params: {
@@ -545,7 +551,7 @@ export async function validateProviderReplayTurnsWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderValidateReplayTurnsContext;
 }) {
-  return await resolveProviderHookPlugin(params)?.validateReplayTurns?.(params.context);
+  return await resolveProviderRuntimePlugin(params)?.validateReplayTurns?.(params.context);
 }
 
 export function normalizeProviderToolSchemasWithPlugin(params: {
@@ -553,9 +559,13 @@ export function normalizeProviderToolSchemasWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   context: ProviderNormalizeToolSchemasContext;
 }) {
-  return resolveProviderHookPlugin(params)?.normalizeToolSchemas?.(params.context) ?? undefined;
+  return (
+    ensureProviderRuntimePluginHandle(params).plugin?.normalizeToolSchemas?.(params.context) ??
+    undefined
+  );
 }
 
 export function inspectProviderToolSchemasWithPlugin(params: {
@@ -563,9 +573,13 @@ export function inspectProviderToolSchemasWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   context: ProviderNormalizeToolSchemasContext;
 }) {
-  return resolveProviderHookPlugin(params)?.inspectToolSchemas?.(params.context) ?? undefined;
+  return (
+    ensureProviderRuntimePluginHandle(params).plugin?.inspectToolSchemas?.(params.context) ??
+    undefined
+  );
 }
 
 export function resolveProviderReasoningOutputModeWithPlugin(params: {
@@ -575,7 +589,7 @@ export function resolveProviderReasoningOutputModeWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderReasoningOutputModeContext;
 }): ProviderReasoningOutputMode | undefined {
-  const mode = resolveProviderHookPlugin(params)?.resolveReasoningOutputMode?.(params.context);
+  const mode = resolveProviderRuntimePlugin(params)?.resolveReasoningOutputMode?.(params.context);
   return mode === "native" || mode === "tagged" ? mode : undefined;
 }
 
@@ -597,7 +611,7 @@ export function resolveProviderTransportTurnStateWithPlugin(params: {
   context: ProviderResolveTransportTurnStateContext;
 }): ProviderTransportTurnState | undefined {
   return (
-    resolveProviderHookPlugin(params)?.resolveTransportTurnState?.(params.context) ?? undefined
+    resolveProviderRuntimePlugin(params)?.resolveTransportTurnState?.(params.context) ?? undefined
   );
 }
 
@@ -609,7 +623,8 @@ export function resolveProviderWebSocketSessionPolicyWithPlugin(params: {
   context: ProviderResolveWebSocketSessionPolicyContext;
 }): ProviderWebSocketSessionPolicy | undefined {
   return (
-    resolveProviderHookPlugin(params)?.resolveWebSocketSessionPolicy?.(params.context) ?? undefined
+    resolveProviderRuntimePlugin(params)?.resolveWebSocketSessionPolicy?.(params.context) ??
+    undefined
   );
 }
 
@@ -761,6 +776,10 @@ export function resolveProviderThinkingProfile(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderDefaultThinkingPolicyContext;
 }): ProviderThinkingProfile | null | undefined {
+  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
+  if (bundledSurface?.resolveThinkingProfile) {
+    return bundledSurface.resolveThinkingProfile(params.context) ?? undefined;
+  }
   return resolveProviderRuntimePlugin(params)?.resolveThinkingProfile?.(params.context);
 }
 
@@ -860,7 +879,6 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
     applyAutoEnable: false,
     bundledProviderAllowlistCompat: false,
     bundledProviderVitestCompat: false,
-    installBundledRuntimeDeps: false,
   })?.resolveSyntheticAuth?.(params.context);
   if (runtimeResolved) {
     return runtimeResolved;
@@ -875,7 +893,6 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
       applyAutoEnable: false,
       bundledProviderAllowlistCompat: false,
       bundledProviderVitestCompat: false,
-      installBundledRuntimeDeps: false,
     })?.resolveSyntheticAuth?.(params.context);
     if (runtimeProviderResolved) {
       return runtimeProviderResolved;

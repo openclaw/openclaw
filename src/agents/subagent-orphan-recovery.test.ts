@@ -29,7 +29,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../gateway/session-utils.fs.js", () => ({
-  readSessionMessages: vi.fn(() => []),
+  readSessionMessagesAsync: vi.fn(async () => []),
 }));
 
 vi.mock("./subagent-announce-delivery.js", () => ({
@@ -92,7 +92,9 @@ async function expectSkippedRecovery(store: ReturnType<typeof sessions.loadSessi
 
 function getResumeMessage() {
   const call = vi.mocked(gateway.callGateway).mock.calls[0];
-  expect(call).toBeDefined();
+  if (call === undefined) {
+    throw new Error("expected resume gateway call");
+  }
   const params = call[0].params as Record<string, unknown>;
   return params.message as string;
 }
@@ -465,7 +467,7 @@ describe("subagent-orphan-recovery", () => {
   it("includes last human message in resume when available", async () => {
     mockSingleAbortedSession({ sessionFile: "session-abc.jsonl" });
 
-    vi.mocked(sessionUtils.readSessionMessages).mockReturnValue([
+    vi.mocked(sessionUtils.readSessionMessagesAsync).mockResolvedValue([
       { role: "user", content: [{ type: "text", text: "Please build feature Y" }] },
       { role: "assistant", content: [{ type: "text", text: "Working on it..." }] },
       { role: "user", content: [{ type: "text", text: "Also add tests for it" }] },
@@ -484,7 +486,7 @@ describe("subagent-orphan-recovery", () => {
   it("adds config change hint when assistant messages reference config modifications", async () => {
     mockSingleAbortedSession();
 
-    vi.mocked(sessionUtils.readSessionMessages).mockReturnValue([
+    vi.mocked(sessionUtils.readSessionMessagesAsync).mockResolvedValue([
       { role: "user", content: "Update the config" },
       { role: "assistant", content: "I've modified openclaw.json to add the new setting." },
     ]);

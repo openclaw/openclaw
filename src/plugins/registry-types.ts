@@ -30,6 +30,7 @@ import type { PluginManifestContracts } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { PluginDependencyStatus } from "./status-dependencies.js";
 import type {
   CliBackendPlugin,
   ImageGenerationProviderPlugin,
@@ -43,7 +44,9 @@ import type {
   OpenClawGatewayDiscoveryService,
   OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteHandler,
+  OpenClawPluginHttpRouteUpgradeHandler,
   OpenClawPluginHttpRouteMatch,
+  OpenClawPluginHostedMediaResolver,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
@@ -68,6 +71,7 @@ export type PluginToolRegistration = {
   pluginName?: string;
   factory: OpenClawPluginToolFactory;
   names: string[];
+  declaredNames?: string[];
   optional: boolean;
   source: string;
   rootDir?: string;
@@ -77,6 +81,7 @@ export type PluginCliRegistration = {
   pluginId: string;
   pluginName?: string;
   register: OpenClawPluginCliRegistrar;
+  parentPath: string[];
   commands: string[];
   descriptors: OpenClawPluginCliCommandDescriptor[];
   source: string;
@@ -87,10 +92,23 @@ export type PluginHttpRouteRegistration = {
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
+  handleUpgrade?: OpenClawPluginHttpRouteUpgradeHandler;
   auth: OpenClawPluginHttpRouteAuth;
   match: OpenClawPluginHttpRouteMatch;
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
+  nodeCapability?: {
+    surface: string;
+    ttlMs?: number;
+  };
   source?: string;
+};
+
+export type PluginHostedMediaResolverRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  resolver: OpenClawPluginHostedMediaResolver;
+  source: string;
+  rootDir?: string;
 };
 
 export type PluginChannelRegistration = {
@@ -203,6 +221,7 @@ export type PluginServiceRegistration = {
   service: OpenClawPluginService;
   source: string;
   origin: PluginOrigin;
+  trustedOfficialInstall?: boolean;
   rootDir?: string;
 };
 
@@ -325,6 +344,7 @@ export type PluginRecord = {
   id: string;
   name: string;
   version?: string;
+  packageName?: string;
   description?: string;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
@@ -334,6 +354,7 @@ export type PluginRecord = {
   rootDir?: string;
   origin: PluginOrigin;
   workspaceDir?: string;
+  trustedOfficialInstall?: boolean;
   enabled: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;
@@ -376,6 +397,7 @@ export type PluginRecord = {
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
   memorySlotSelected?: boolean;
+  dependencyStatus?: PluginDependencyStatus;
 };
 
 export type PluginRegistry = {
@@ -403,8 +425,10 @@ export type PluginRegistry = {
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
+  coreGatewayMethodNames?: string[];
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
+  hostedMediaResolvers?: PluginHostedMediaResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
   reloads?: PluginReloadRegistration[];
   nodeHostCommands?: PluginNodeHostCommandRegistration[];

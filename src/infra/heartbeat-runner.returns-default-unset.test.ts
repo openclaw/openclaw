@@ -1134,19 +1134,25 @@ describe("runHeartbeatOnce", () => {
     typedCases<{
       name: string;
       caseDir: string;
-      replies: Array<{ text: string }>;
+      replies: Array<{ text: string; isReasoning?: boolean }>;
       expectedTexts: string[];
     }>([
       {
-        name: "reasoning + final payload",
+        name: "legacy-prefixed reasoning + final payload",
         caseDir: "hb-reasoning",
         replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "Final alert" }],
         expectedTexts: ["Reasoning:\n_Because it helps_", "Final alert"],
       },
       {
-        name: "reasoning + HEARTBEAT_OK",
+        name: "raw flagged reasoning + final payload",
+        caseDir: "hb-reasoning-raw",
+        replies: [{ text: "Because it helps", isReasoning: true }, { text: "Final alert" }],
+        expectedTexts: ["Reasoning:\n_Because it helps_", "Final alert"],
+      },
+      {
+        name: "raw flagged reasoning + HEARTBEAT_OK",
         caseDir: "hb-reasoning-heartbeat-ok",
-        replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "HEARTBEAT_OK" }],
+        replies: [{ text: "Because it helps", isReasoning: true }, { text: "HEARTBEAT_OK" }],
         expectedTexts: ["Reasoning:\n_Because it helps_"],
       },
     ]),
@@ -1389,6 +1395,11 @@ describe("runHeartbeatOnce", () => {
       .mockResolvedValue({ messageId: "m1", toJid: "jid" });
     const res = await runHeartbeatOnce({
       cfg,
+      ...(params.reason === "wake"
+        ? { source: "hook" as const, intent: "immediate" as const }
+        : params.reason === "interval"
+          ? { source: "interval" as const, intent: "scheduled" as const }
+          : {}),
       reason: params.reason,
       deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
     });
@@ -1736,6 +1747,8 @@ tasks:
     try {
       const res = await runHeartbeatOnce({
         cfg,
+        source: "interval",
+        intent: "scheduled",
         reason: "interval",
         deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
       });
@@ -1791,6 +1804,8 @@ tasks:
     try {
       const res = await runHeartbeatOnce({
         cfg,
+        source: "exec-event",
+        intent: "event",
         reason: "exec-event",
         deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
       });

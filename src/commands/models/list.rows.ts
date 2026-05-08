@@ -9,6 +9,7 @@ import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ModelListAuthIndex } from "./list.auth-index.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
@@ -36,23 +37,26 @@ export type RowBuilderContext = {
   skipRuntimeModelSuppression?: boolean;
 };
 
-let modelCatalogModulePromise: Promise<ModelCatalogModule> | undefined;
-let modelResolverModulePromise: Promise<ModelResolverModule> | undefined;
-let providerCatalogModulePromise: Promise<ProviderCatalogModule> | undefined;
+const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
+  () => import("../../agents/model-catalog.js"),
+);
+const modelResolverModuleLoader = createLazyImportLoader<ModelResolverModule>(
+  () => import("../../agents/pi-embedded-runner/model.js"),
+);
+const providerCatalogModuleLoader = createLazyImportLoader<ProviderCatalogModule>(
+  () => import("./list.provider-catalog.js"),
+);
 
 function loadModelCatalogModule(): Promise<ModelCatalogModule> {
-  modelCatalogModulePromise ??= import("../../agents/model-catalog.js");
-  return modelCatalogModulePromise;
+  return modelCatalogModuleLoader.load();
 }
 
 function loadModelResolverModule(): Promise<ModelResolverModule> {
-  modelResolverModulePromise ??= import("../../agents/pi-embedded-runner/model.js");
-  return modelResolverModulePromise;
+  return modelResolverModuleLoader.load();
 }
 
 function loadProviderCatalogModule(): Promise<ProviderCatalogModule> {
-  providerCatalogModulePromise ??= import("./list.provider-catalog.js");
-  return providerCatalogModulePromise;
+  return providerCatalogModuleLoader.load();
 }
 
 function matchesRowFilter(filter: RowFilter, model: { provider: string; baseUrl?: string }) {
@@ -72,15 +76,19 @@ async function buildRow(params: {
   allowProviderAvailabilityFallback?: boolean;
 }): Promise<ModelRow> {
   const configured = params.context.configuredByKey.get(params.key);
+  const allowProviderAvailabilityFallback =
+    params.allowProviderAvailabilityFallback === true ||
+    (configured !== undefined &&
+      params.context.authIndex.allowsProviderAuthAvailabilityFallback(params.model.provider));
   const shouldResolveProviderAuth =
-    params.context.availableKeys === undefined || params.allowProviderAvailabilityFallback === true;
+    params.context.availableKeys === undefined || allowProviderAvailabilityFallback;
   return toModelRow({
     model: params.model,
     key: params.key,
     tags: configured ? Array.from(configured.tags) : [],
     aliases: configured?.aliases ?? [],
     availableKeys: params.context.availableKeys,
-    allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback ?? false,
+    allowProviderAvailabilityFallback,
     hasAuthForProvider: shouldResolveProviderAuth
       ? (provider) => params.context.authIndex.hasProviderAuth(provider)
       : undefined,
@@ -451,10 +459,12 @@ export async function appendConfiguredRows(params: {
     if (model && shouldSuppressListModel({ model, context: params.context })) {
       continue;
     }
-    const shouldResolveProviderAuth =
+    const allowProviderAvailabilityFallback =
       model &&
-      (params.context.availableKeys === undefined ||
-        !params.context.discoveredKeys.has(modelKey(model.provider, model.id)));
+      (!params.context.discoveredKeys.has(modelKey(model.provider, model.id)) ||
+        params.context.authIndex.allowsProviderAuthAvailabilityFallback(model.provider));
+    const shouldResolveProviderAuth =
+      model && (params.context.availableKeys === undefined || allowProviderAvailabilityFallback);
     params.rows.push(
       toModelRow({
         model,
@@ -462,9 +472,7 @@ export async function appendConfiguredRows(params: {
         tags: Array.from(entry.tags),
         aliases: entry.aliases,
         availableKeys: params.context.availableKeys,
-        allowProviderAvailabilityFallback: model
-          ? !params.context.discoveredKeys.has(modelKey(model.provider, model.id))
-          : false,
+        allowProviderAvailabilityFallback: allowProviderAvailabilityFallback === true,
         hasAuthForProvider: shouldResolveProviderAuth
           ? (provider) => params.context.authIndex.hasProviderAuth(provider)
           : undefined,

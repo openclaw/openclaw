@@ -214,6 +214,12 @@ describe("isBillingErrorMessage", () => {
     expect(isBillingErrorMessage(msg)).toBe(true);
     expect(classifyFailoverReason(msg)).toBe("billing");
   });
+  it("matches provider spending-limit exhaustion messages", () => {
+    const msg =
+      "Your team has either used all available credits or reached its monthly spending limit.";
+    expect(isBillingErrorMessage(msg)).toBe(true);
+    expect(classifyFailoverReason(msg)).toBe("billing");
+  });
   it("classifies flat JSON billing payloads with string error code (#74079)", () => {
     const raw =
       '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}';
@@ -424,17 +430,6 @@ describe("isContextOverflowError", () => {
     expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
     expect(isContextOverflowError("Something is causing context overflow messages")).toBe(false);
   });
-
-  it("excludes reasoning-required invalid-request errors", () => {
-    const samples = [
-      "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
-      '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
-      "This model requires reasoning to be enabled",
-    ];
-    for (const sample of samples) {
-      expect(isContextOverflowError(sample)).toBe(false);
-    }
-  });
 });
 
 describe("error classifiers", () => {
@@ -521,17 +516,6 @@ describe("isLikelyContextOverflowError", () => {
     expect(classifyFailoverReason(sample)).toBeNull();
   });
 
-  it("excludes reasoning-required invalid-request errors", () => {
-    const samples = [
-      "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
-      '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
-      "This endpoint requires reasoning",
-    ];
-    for (const sample of samples) {
-      expect(isLikelyContextOverflowError(sample)).toBe(false);
-    }
-  });
-
   it("excludes billing errors even when text matches context overflow patterns", () => {
     const samples = [
       "402 Payment Required: request token limit exceeded for this billing plan",
@@ -541,6 +525,33 @@ describe("isLikelyContextOverflowError", () => {
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
       expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
+});
+
+describe("reasoning-required invalid-request errors", () => {
+  it.each([
+    {
+      name: "strict context overflow classifier",
+      classifier: isContextOverflowError,
+      samples: [
+        "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+        '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
+        "This model requires reasoning to be enabled",
+      ],
+    },
+    {
+      name: "likely context overflow classifier",
+      classifier: isLikelyContextOverflowError,
+      samples: [
+        "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+        '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
+        "This endpoint requires reasoning",
+      ],
+    },
+  ])("excludes reasoning-required invalid-request errors from $name", ({ classifier, samples }) => {
+    for (const sample of samples) {
+      expect(classifier(sample)).toBe(false);
     }
   });
 });
@@ -682,7 +693,7 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
   });
 });
 
-describe("classifyFailoverReason", () => {
+describe("classifyFailoverReason HTTP 410 handling", () => {
   it("treats generic 410 text as retryable timeout", () => {
     expect(classifyFailoverReason("410")).toBe("timeout");
     expect(classifyFailoverReason("HTTP 410")).toBe("timeout");
@@ -1058,7 +1069,7 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
   });
 });
 
-describe("classifyFailoverReason", () => {
+describe("classifyFailoverReason provider messages", () => {
   it("classifies documented provider error messages", () => {
     expect(classifyFailoverReason(OPENAI_RATE_LIMIT_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(GEMINI_RESOURCE_EXHAUSTED_MESSAGE)).toBe("rate_limit");

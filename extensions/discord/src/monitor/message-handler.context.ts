@@ -3,6 +3,7 @@ import {
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { buildPendingHistoryContextFromMap } from "openclaw/plugin-sdk/reply-history";
@@ -13,7 +14,7 @@ import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/sess
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { ChannelType } from "../internal/discord.js";
-import { normalizeDiscordSlug } from "./allow-list.js";
+import { normalizeDiscordAllowList, normalizeDiscordSlug } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import {
   buildDiscordInboundAccessContext,
@@ -27,6 +28,12 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
+
+function normalizeDiscordDmOwnerEntry(entry: string): string | undefined {
+  const normalized = normalizeDiscordAllowList([entry], ["discord:", "user:", "pk:"]);
+  const candidate = normalized?.ids.values().next().value;
+  return typeof candidate === "string" && /^\d+$/.test(candidate) ? candidate : undefined;
+}
 
 export async function buildDiscordMessageProcessContext(params: {
   ctx: DiscordMessagePreflightContext;
@@ -45,6 +52,7 @@ export async function buildDiscordMessageProcessContext(params: {
     message,
     author,
     sender,
+    canonicalMessageId,
     data,
     client,
     channelInfo,
@@ -104,6 +112,13 @@ export async function buildDiscordMessageProcessContext(params: {
     channelTopic: channelInfo?.topic,
     messageBody: text,
   });
+  const pinnedMainDmOwner = isDirectMessage
+    ? resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: cfg.session?.dmScope,
+        allowFrom: channelConfig?.users ?? guildInfo?.users,
+        normalizeEntry: normalizeDiscordDmOwnerEntry,
+      })
+    : null;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "discord",
@@ -260,17 +275,17 @@ export async function buildDiscordMessageProcessContext(params: {
   const effectiveFrom = isDirectMessage
     ? `discord:${author.id}`
     : (autoThreadContext?.From ?? `discord:channel:${messageChannelId}`);
-  const effectiveTo = autoThreadContext?.To ?? replyTarget;
-  if (!effectiveTo) {
-    runtime.error?.(danger("discord: missing reply target"));
-    return null;
-  }
   const dmConversationTarget = isDirectMessage
     ? resolveDiscordConversationIdentity({
         isDirectMessage,
         userId: author.id,
       })
     : undefined;
+  const effectiveTo = autoThreadContext?.To ?? dmConversationTarget ?? replyTarget;
+  if (!effectiveTo) {
+    runtime.error?.(danger("discord: missing reply target"));
+    return null;
+  }
   const lastRouteTo = dmConversationTarget ?? effectiveTo;
   const inboundHistory =
     shouldIncludeChannelHistory && historyLimit > 0
@@ -281,6 +296,15 @@ export async function buildDiscordMessageProcessContext(params: {
         }))
       : undefined;
   const originatingTo = autoThreadContext?.OriginatingTo ?? dmConversationTarget ?? replyTarget;
+  const effectiveSessionKey =
+    boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey;
+  const effectivePreviousTimestamp =
+    effectiveSessionKey === route.sessionKey
+      ? previousTimestamp
+      : readSessionUpdatedAt({
+          storePath,
+          sessionKey: effectiveSessionKey,
+        });
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -291,7 +315,7 @@ export async function buildDiscordMessageProcessContext(params: {
     ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
     From: effectiveFrom,
     To: effectiveTo,
-    SessionKey: boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
+    SessionKey: effectiveSessionKey,
     AccountId: route.accountId,
     ChatType: isDirectMessage ? "direct" : "channel",
     ConversationLabel: fromLabel,
@@ -309,7 +333,10 @@ export async function buildDiscordMessageProcessContext(params: {
     Provider: "discord" as const,
     Surface: "discord" as const,
     WasMentioned: ctx.effectiveWasMentioned,
-    MessageSid: message.id,
+    MessageSid: canonicalMessageId ?? message.id,
+    ...(canonicalMessageId && canonicalMessageId !== message.id
+      ? { MessageSidFull: message.id }
+      : {}),
     ReplyToId: filteredReplyContext?.id,
     ReplyToBody: filteredReplyContext?.body,
     ReplyToSender: filteredReplyContext?.sender,
@@ -317,7 +344,7 @@ export async function buildDiscordMessageProcessContext(params: {
     ModelParentSessionKey:
       autoThreadContext?.ModelParentSessionKey ?? modelParentSessionKey ?? undefined,
     MessageThreadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
-    ThreadStarterBody: threadStarterBody,
+    ThreadStarterBody: !effectivePreviousTimestamp ? threadStarterBody : undefined,
     ThreadLabel: threadLabel,
     Timestamp: resolveTimestampMs(message.timestamp),
     ...mediaPayload,
@@ -347,6 +374,24 @@ export async function buildDiscordMessageProcessContext(params: {
           channel: "discord",
           to: lastRouteTo,
           accountId: route.accountId,
+          mainDmOwnerPin:
+            isDirectMessage && persistedSessionKey === route.mainSessionKey && pinnedMainDmOwner
+              ? {
+                  ownerRecipient: pinnedMainDmOwner,
+                  senderRecipient: author.id,
+                  onSkip: ({
+                    ownerRecipient,
+                    senderRecipient,
+                  }: {
+                    ownerRecipient: string;
+                    senderRecipient: string;
+                  }) => {
+                    logVerbose(
+                      `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                    );
+                  },
+                }
+              : undefined,
         },
         onRecordError: (err: unknown) => {
           logVerbose(`discord: failed updating session meta: ${String(err)}`);

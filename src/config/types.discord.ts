@@ -23,6 +23,8 @@ export type DiscordPluralKitConfig = {
   token?: string;
 };
 
+export type DiscordMentionAliasesConfig = Record<string, string>;
+
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
   enabled?: boolean;
@@ -127,17 +129,52 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
+export type DiscordVoiceMode = "stt-tts" | "talk-buffer" | "bidi";
+
+export type DiscordVoiceRealtimeConsultPolicy = "auto" | "always";
+
+export type DiscordVoiceRealtimeToolPolicy = "safe-read-only" | "owner" | "none";
+
+export type DiscordVoiceRealtimeConfig = {
+  /** Realtime voice provider id, for example "openai". */
+  provider?: string;
+  /** Provider realtime session model, for example "gpt-realtime-2". */
+  model?: string;
+  /** Provider realtime output voice, for example "cedar". */
+  voice?: string;
+  /** System instructions passed to the realtime provider. */
+  instructions?: string;
+  /** Tool policy for bidi realtime consult calls. */
+  toolPolicy?: DiscordVoiceRealtimeToolPolicy;
+  /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
+  consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
+  /** Debounce window before buffered transcripts are sent to the OpenClaw agent. */
+  debounceMs?: number;
+  /** Provider-specific realtime voice config keyed by provider id. */
+  providers?: Record<string, Record<string, unknown> | undefined>;
+};
+
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
+  /** Voice conversation mode. Default: stt-tts. */
+  mode?: DiscordVoiceMode;
   /** Optional LLM model override for Discord voice channel responses. */
   model?: string;
+  /** Realtime provider settings for talk-buffer or bidi modes. */
+  realtime?: DiscordVoiceRealtimeConfig;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
   decryptionFailureTolerance?: number;
+  /** Initial @discordjs/voice Ready wait in milliseconds (default: 30000). */
+  connectTimeoutMs?: number;
+  /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
+  reconnectGraceMs?: number;
+  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2500). */
+  captureSilenceGraceMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
@@ -191,13 +228,21 @@ export type DiscordThreadBindingsConfig = {
    */
   maxAgeHours?: number;
   /**
-   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Discord
-   * threads for subagent sessions. Default: false (opt-in).
+   * Allow session spawns to auto-create + bind Discord threads.
+   * Applies to native subagent and ACP thread spawns. Default: true.
+   */
+  spawnSessions?: boolean;
+  /**
+   * Default context mode for native subagents spawned into a bound Discord thread.
+   * Default: "fork".
+   */
+  defaultSpawnContext?: "isolated" | "fork";
+  /**
+   * @deprecated Use spawnSessions instead.
    */
   spawnSubagentSessions?: boolean;
   /**
-   * Allow `/acp spawn` to auto-create + bind Discord threads for ACP
-   * sessions. Default: false (opt-in).
+   * @deprecated Use spawnSessions instead.
    */
   spawnAcpSessions?: boolean;
 };
@@ -247,6 +292,10 @@ export type DiscordAccountConfig = {
   proxy?: string;
   /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */
   gatewayInfoTimeoutMs?: number;
+  /** Startup wait for the gateway READY event before restarting the socket. Default: 15000. */
+  gatewayReadyTimeoutMs?: number;
+  /** Runtime reconnect wait for the gateway READY event before force-stopping the lifecycle. Default: 30000. */
+  gatewayRuntimeReadyTimeoutMs?: number;
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
   /**
@@ -254,6 +303,11 @@ export type DiscordAccountConfig = {
    * Default behavior is ID-only matching.
    */
   dangerouslyAllowNameMatching?: boolean;
+  /**
+   * Deterministic outbound @handle rewrites for known Discord users.
+   * Keys are handles without the leading @; values are Discord user IDs.
+   */
+  mentionAliases?: DiscordMentionAliasesConfig;
   /**
    * Controls how guild channel messages are handled:
    * - "open": guild channels bypass allowlists; mention-gating applies

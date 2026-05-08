@@ -7,6 +7,7 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizePollDurationHours,
   normalizePollInput,
+  type OutboundMediaAccess,
   type PollInput,
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -327,16 +328,21 @@ async function sendDiscordText(
     )) as { id: string; channel_id: string };
   };
   if (chunks.length === 1) {
-    return await sendChunk(chunks[0], true);
+    const result = await sendChunk(chunks[0], true);
+    return { ...result, platformMessageIds: result.id ? [result.id] : [] };
   }
+  const platformMessageIds: string[] = [];
   let last: { id: string; channel_id: string } | null = null;
   for (const [index, chunk] of chunks.entries()) {
     last = await sendChunk(chunk, index === 0);
+    if (last.id) {
+      platformMessageIds.push(last.id);
+    }
   }
   if (!last) {
     throw new Error("Discord send failed (empty chunk result)");
   }
-  return last;
+  return { ...last, platformMessageIds };
 }
 
 async function sendDiscordMedia(
@@ -345,6 +351,7 @@ async function sendDiscordMedia(
   text: string,
   mediaUrl: string,
   filename: string | undefined,
+  mediaAccess: OutboundMediaAccess | undefined,
   mediaLocalRoots: readonly string[] | undefined,
   mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined,
   maxBytes: number | undefined,
@@ -359,7 +366,7 @@ async function sendDiscordMedia(
 ) {
   const media = await loadWebMedia(
     mediaUrl,
-    buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots, mediaReadFile }),
+    buildOutboundMediaLoadOptions({ maxBytes, mediaAccess, mediaLocalRoots, mediaReadFile }),
   );
   const requestedFileName = filename?.trim();
   const resolvedFileName =
@@ -396,11 +403,12 @@ async function sendDiscordMedia(
     () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
     "media",
   )) as { id: string; channel_id: string };
+  const platformMessageIds = res.id ? [res.id] : [];
   for (const chunk of chunks.slice(1)) {
     if (!chunk.trim()) {
       continue;
     }
-    await sendDiscordText(
+    const followup = await sendDiscordText(
       rest,
       channelId,
       chunk,
@@ -413,8 +421,13 @@ async function sendDiscordMedia(
       silent,
       maxChars,
     );
+    for (const id of followup.platformMessageIds) {
+      if (id) {
+        platformMessageIds.push(id);
+      }
+    }
   }
-  return res;
+  return { ...res, platformMessageIds };
 }
 
 function buildReactionIdentifier(emoji: { id?: string | null; name?: string | null }) {

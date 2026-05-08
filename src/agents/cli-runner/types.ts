@@ -29,6 +29,7 @@ export type RunCliAgentParams = {
   thinkLevel?: ThinkLevel;
   timeoutMs: number;
   runId: string;
+  lane?: string;
   jobId?: string;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -49,6 +50,9 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
+  /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
+  toolsAllow?: string[];
+  disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   replyOperation?: ReplyOperation;
@@ -76,7 +80,12 @@ export type CliPreparedBackend = {
 
 export type CliReusableSession = {
   sessionId?: string;
-  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
+  invalidatedReason?:
+    | "auth-profile"
+    | "auth-epoch"
+    | "system-prompt"
+    | "mcp"
+    | "missing-transcript";
 };
 
 export type PreparedCliRunContext = {

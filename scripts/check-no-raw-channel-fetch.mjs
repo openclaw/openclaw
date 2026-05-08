@@ -14,12 +14,10 @@ const sourceRoots = ["src/channels", "src/routing", "src/line", "extensions"];
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
 const allowedRawFetchCallsites = new Set([
-  bundledPluginCallsite("bluebubbles", "src/test-harness.ts", 132),
-  bundledPluginCallsite("bluebubbles", "src/types.ts", 204),
   bundledPluginCallsite("browser", "src/browser/cdp.helpers.ts", 268),
   bundledPluginCallsite("browser", "src/browser/client-fetch.ts", 192),
-  bundledPluginCallsite("chutes", "models.ts", 535),
-  bundledPluginCallsite("chutes", "models.ts", 542),
+  bundledPluginCallsite("chutes", "models.ts", 536),
+  bundledPluginCallsite("chutes", "models.ts", 543),
   bundledPluginCallsite("discord", "src/monitor/gateway-plugin.ts", 417),
   bundledPluginCallsite("discord", "src/monitor/gateway-plugin.ts", 483),
   bundledPluginCallsite("discord", "src/voice-message.ts", 298),
@@ -30,7 +28,7 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("github-copilot", "login.ts", 69),
   bundledPluginCallsite("github-copilot", "login.ts", 101),
   bundledPluginCallsite("googlechat", "src/auth.ts", 83),
-  bundledPluginCallsite("huggingface", "models.ts", 142),
+  bundledPluginCallsite("huggingface", "models.ts", 143),
   bundledPluginCallsite("kilocode", "provider-models.ts", 130),
   bundledPluginCallsite("matrix", "src/matrix/sdk/transport.ts", 112),
   bundledPluginCallsite("microsoft-foundry", "onboard.ts", 479),

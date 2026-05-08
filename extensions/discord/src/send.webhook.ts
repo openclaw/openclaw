@@ -2,7 +2,15 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordClientAccountContext } from "./client.js";
+import {
+  DiscordError,
+  RateLimitError,
+  readDiscordCode,
+  readDiscordMessage,
+  readRetryAfter,
+} from "./internal/rest-errors.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { createDiscordSendResult } from "./send.receipt.js";
 import type { DiscordSendResult } from "./send.types.js";
 
 type DiscordWebhookSendOpts = {
@@ -33,6 +41,34 @@ function resolveWebhookExecutionUrl(params: {
   return baseUrl.toString();
 }
 
+function coerceWebhookErrorBody(raw: string): unknown {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { message: raw.slice(0, 200) };
+  }
+}
+
+async function throwWebhookResponseError(response: Response): Promise<never> {
+  const raw = await response.text().catch(() => "");
+  const parsed = coerceWebhookErrorBody(raw);
+  if (response.status === 429) {
+    throw new RateLimitError(response, {
+      message: readDiscordMessage(parsed, "Rate limited"),
+      retry_after: readRetryAfter(parsed, response, 1),
+      code: readDiscordCode(parsed),
+      global:
+        parsed && typeof parsed === "object" && "global" in parsed
+          ? Boolean((parsed as { global?: unknown }).global)
+          : false,
+    });
+  }
+  throw new DiscordError(response, parsed);
+}
+
 export async function sendWebhookMessageDiscord(
   text: string,
   opts: DiscordWebhookSendOpts,
@@ -51,6 +87,7 @@ export async function sendWebhookMessageDiscord(
   });
   const rewrittenText = rewriteDiscordKnownMentions(text, {
     accountId: account.accountId,
+    mentionAliases: account.config.mentionAliases,
   });
 
   const response = await (proxyFetch ?? fetch)(
@@ -74,10 +111,7 @@ export async function sendWebhookMessageDiscord(
     },
   );
   if (!response.ok) {
-    const raw = await response.text().catch(() => "");
-    throw new Error(
-      `Discord webhook send failed (${response.status}${raw ? `: ${raw.slice(0, 200)}` : ""})`,
-    );
+    await throwWebhookResponseError(response);
   }
 
   const payload = (await response.json().catch(() => ({}))) as {
@@ -93,8 +127,11 @@ export async function sendWebhookMessageDiscord(
   } catch {
     // Best-effort telemetry only.
   }
-  return {
-    messageId: payload.id || "unknown",
-    channelId: payload.channel_id ? payload.channel_id : opts.threadId ? String(opts.threadId) : "",
-  };
+  return createDiscordSendResult({
+    result: payload,
+    fallbackChannelId: opts.threadId ? String(opts.threadId) : "",
+    kind: "text",
+    ...(opts.threadId != null ? { threadId: opts.threadId } : {}),
+    ...(replyTo ? { replyToId: replyTo } : {}),
+  });
 }

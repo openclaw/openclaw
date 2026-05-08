@@ -44,7 +44,7 @@ type SendContext = {
   deleteActivity: (activityId: string) => Promise<void>;
 };
 
-export type MSTeamsConversationReference = {
+type MSTeamsConversationReference = {
   activityId?: string;
   user?: { id?: string; name?: string; aadObjectId?: string };
   agent?: { id?: string; name?: string; aadObjectId?: string } | null;
@@ -81,7 +81,7 @@ export type MSTeamsAdapter = {
   deleteActivity: (context: unknown, reference: { activityId?: string }) => Promise<void>;
 };
 
-export type MSTeamsReplyRenderOptions = {
+type MSTeamsReplyRenderOptions = {
   textChunkLimit: number;
   chunkText?: boolean;
   mediaMode?: "split" | "inline";
@@ -98,13 +98,13 @@ export type MSTeamsRenderedMessage = {
   mediaUrl?: string;
 };
 
-export type MSTeamsSendRetryOptions = {
+type MSTeamsSendRetryOptions = {
   maxAttempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
 };
 
-export type MSTeamsSendRetryEvent = {
+type MSTeamsSendRetryEvent = {
   messageIndex: number;
   messageCount: number;
   nextAttempt: number;
@@ -572,7 +572,7 @@ export async function sendMSTeamsMessages(params: {
   if (params.replyStyle === "thread") {
     const ctx = params.context;
     if (!ctx) {
-      throw new Error("Missing context for replyStyle=thread");
+      return await sendProactively(messages, 0, resolvedThreadId);
     }
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {

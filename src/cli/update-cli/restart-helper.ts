@@ -85,16 +85,32 @@ export async function prepareRestartScript(
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
+exec 3>&2
 ${logSetup}
 printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&2
-if systemctl --user restart '${escaped}'; then
-  status=0
-  printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
+if systemctl --user is-active --quiet '${escaped}' || systemctl --user is-enabled --quiet '${escaped}'; then
+  if systemctl --user restart '${escaped}'; then
+    status=0
+    printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
+  else
+    status=$?
+    printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  fi
+elif systemctl is-active --quiet '${escaped}' || systemctl is-enabled --quiet '${escaped}'; then
+  status=78
+  printf '[%s] system-scoped openclaw gateway unit detected; update cannot restart it without sudo. Run: sudo systemctl restart %s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&2
+  printf '[%s] system-scoped openclaw gateway unit detected; update cannot restart it without sudo. Run: sudo systemctl restart %s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&3 2>/dev/null || true
 else
-  status=$?
-  printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  if systemctl --user restart '${escaped}'; then
+    status=0
+    printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
+  else
+    status=$?
+    printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  fi
 fi
 # Self-cleanup
+exec 3>&-
 rm -f "$0"
 exit "$status"
 `;
@@ -121,14 +137,19 @@ ${logSetup}
 printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${shellEscapeRestartLogValue(label)}' >&2
 # Try kickstart first (works when the service is still registered).
 # If it fails (e.g. after bootout), clear any persisted disabled state,
-# then re-register via bootstrap and kickstart. The final status is captured
+# then re-register via bootstrap. Bootstrap loads RunAtLoad agents, so the
+# fallback must not immediately kickstart -k the freshly spawned gateway.
+# The final status is captured
 # before self-cleanup so a genuine failure remains observable.
 status=0
 if ! launchctl kickstart -k 'gui/${uid}/${escaped}'; then
   launchctl enable 'gui/${uid}/${escaped}'
-  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'
-  launchctl kickstart -k 'gui/${uid}/${escaped}'
-  status=$?
+  if launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'; then
+    status=0
+  else
+    launchctl kickstart -k 'gui/${uid}/${escaped}'
+    status=$?
+  fi
 fi
 if [ "$status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2

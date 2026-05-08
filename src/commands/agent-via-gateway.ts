@@ -39,7 +39,7 @@ const EMBEDDED_FALLBACK_META = {
 } as const;
 const GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
 
-export type AgentCliOpts = {
+type AgentCliOpts = {
   message: string;
   agent?: string;
   model?: string;
@@ -105,6 +105,10 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("gateway request timeout for agent");
 }
 
+function isGatewayAgentEmbeddedFallbackError(err: unknown): boolean {
+  return isGatewayTransportError(err);
+}
+
 function createGatewayTimeoutFallbackSessionId(): string {
   return `${GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX}${randomUUID()}`;
 }
@@ -120,7 +124,7 @@ function createGatewayTimeoutFallbackSession(agentId?: string): {
   };
 }
 
-export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
+async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   protectJsonStdout(opts);
   const body = (opts.message ?? "").trim();
   if (!body) {
@@ -201,7 +205,9 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? response.summary : "No reply from agent.");
+    if (response?.status !== "ok") {
+      runtime.log(response?.summary ? response.summary : "No reply from agent.");
+    }
     return response;
   }
 
@@ -252,6 +258,10 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
         runtime,
         deps,
       );
+    }
+
+    if (!isGatewayAgentEmbeddedFallbackError(err)) {
+      throw err;
     }
 
     runtime.error?.(

@@ -5,6 +5,7 @@ import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
+import type { GatewayServiceStartRepairIssue, GatewayServiceState } from "../../daemon/service.js";
 import { describeGatewayServiceRestart, startGatewayService } from "../../daemon/service.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
@@ -12,10 +13,12 @@ import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import {
   clearGatewayRestartIntentSync,
+  type GatewayRestartIntent,
   writeGatewayRestartIntentSync,
 } from "../../infra/restart.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatCliCommand } from "../command-format.js";
 import { resolveGatewayTokenForDriftCheck } from "./gateway-token-drift.js";
 import {
   buildDaemonServiceSnapshot,
@@ -26,6 +29,10 @@ import { filterContainerGenericHints } from "./shared.js";
 
 type DaemonLifecycleOptions = {
   json?: boolean;
+  force?: boolean;
+  wait?: string;
+  restartIntent?: GatewayRestartIntent;
+  disable?: boolean;
 };
 
 type RestartPostCheckContext = {
@@ -46,6 +53,11 @@ type ServiceRecoveryContext = {
   json: boolean;
   stdout: Writable;
   fail: (message: string, hints?: string[]) => void;
+};
+
+type ServiceStartRepairContext = ServiceRecoveryContext & {
+  state: GatewayServiceState;
+  issues: GatewayServiceStartRepairIssue[];
 };
 
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
@@ -221,6 +233,7 @@ export async function runServiceStart(params: {
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult | null>;
+  repairLoadedService?: (ctx: ServiceStartRepairContext) => Promise<ServiceRecoveryResult | null>;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "start", json });
@@ -298,6 +311,41 @@ export async function runServiceStart(params: {
       });
       return;
     }
+    if (startResult.outcome === "repair-required") {
+      try {
+        const handled = await params.repairLoadedService?.({
+          json,
+          stdout,
+          fail,
+          state: startResult.state,
+          issues: startResult.issues,
+        });
+        if (handled) {
+          emit({
+            ok: true,
+            result: handled.result,
+            message: handled.message,
+            warnings: handled.warnings,
+            service: buildDaemonServiceSnapshot(params.service, handled.loaded ?? true),
+          });
+          if (!json && handled.message) {
+            defaultRuntime.log(handled.message);
+          }
+          return;
+        }
+      } catch (err) {
+        const hints = params.renderStartHints();
+        fail(`${params.serviceNoun} repair failed: ${String(err)}`, hints);
+        return;
+      }
+      fail(
+        `${params.serviceNoun} service needs repair before it can start: ${startResult.issues
+          .map((issue) => issue.message)
+          .join("; ")}`,
+        [formatCliCommand("openclaw gateway install --force")],
+      );
+      return;
+    }
     emit({
       ok: true,
       result: "started",
@@ -315,6 +363,7 @@ export async function runServiceStop(params: {
   service: GatewayService;
   opts?: DaemonLifecycleOptions;
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult | null>;
+  stopWhenNotLoaded?: boolean;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "stop", json });
@@ -335,6 +384,20 @@ export async function runServiceStop(params: {
     }
   }
   if (!loaded) {
+    if (params.stopWhenNotLoaded) {
+      try {
+        await params.service.stop({ env: process.env, stdout, disable: params.opts?.disable });
+      } catch (err) {
+        fail(`${params.serviceNoun} stop failed: ${String(err)}`);
+        return;
+      }
+      emit({
+        ok: true,
+        result: "stopped",
+        service: buildDaemonServiceSnapshot(params.service, false),
+      });
+      return;
+    }
     try {
       const handled = await params.onNotLoaded?.({ json, stdout, fail });
       if (handled) {
@@ -366,7 +429,7 @@ export async function runServiceStop(params: {
     return;
   }
   try {
-    await params.service.stop({ env: process.env, stdout });
+    await params.service.stop({ env: process.env, stdout, disable: params.opts?.disable });
   } catch (err) {
     fail(`${params.serviceNoun} stop failed: ${String(err)}`);
     return;
@@ -397,6 +460,7 @@ export async function runServiceRestart(params: {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "restart", json });
   const warnings: string[] = [];
+  const restartIntent = params.opts?.restartIntent;
   let handledRecovery: ServiceRecoveryResult | null = null;
   let recoveredLoadedState: boolean | null = null;
   const emitScheduledRestart = (
@@ -509,6 +573,7 @@ export async function runServiceRestart(params: {
         const runtime = await params.service.readRuntime(process.env).catch(() => null);
         wroteRestartIntent = writeGatewayRestartIntentSync({
           targetPid: runtime?.pid,
+          ...(restartIntent ? { intent: restartIntent } : {}),
         });
       }
       try {

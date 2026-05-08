@@ -1,4 +1,3 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { createDiscordRuntimeAccountContext } from "../client.js";
 import {
@@ -13,6 +12,11 @@ import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
 
 export type DiscordMessagingActionOptions = {
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+    workspaceDir?: string;
+  };
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
@@ -32,10 +36,6 @@ export type DiscordMessagingActionContext = {
   ) => DiscordReactOpts & T;
   normalizeMessage: (message: unknown) => unknown;
 };
-
-export type DiscordMessagingActionHandler = (
-  ctx: DiscordMessagingActionContext,
-) => Promise<AgentToolResult<unknown> | undefined>;
 
 export function createDiscordMessagingActionContext(params: {
   action: string;

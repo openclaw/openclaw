@@ -40,10 +40,8 @@ describe("skills-remote", () => {
 
   it("supports idempotent remote node removal", () => {
     const nodeId = `node-${randomUUID()}`;
-    expect(() => {
-      removeRemoteNodeInfo(nodeId);
-      removeRemoteNodeInfo(nodeId);
-    }).not.toThrow();
+    expect(removeRemoteNodeInfo(nodeId)).toBeUndefined();
+    expect(removeRemoteNodeInfo(nodeId)).toBeUndefined();
   });
 
   it("bumps the skills snapshot version when an eligible remote node disconnects", async () => {

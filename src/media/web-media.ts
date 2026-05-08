@@ -1,10 +1,10 @@
 import path from "node:path";
-import { resolveCanvasHttpPathToLocalPath } from "../gateway/canvas-documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
+import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { fetchRemoteMedia } from "./fetch.js";
@@ -70,6 +70,25 @@ async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | nu
     }
     throw err;
   }
+}
+
+async function resolveHostedPluginMediaUrl(mediaUrl: string): Promise<string | null> {
+  const registry = getActivePluginRegistry();
+  for (const entry of registry?.hostedMediaResolvers ?? []) {
+    try {
+      const resolved = await entry.resolver(mediaUrl);
+      if (typeof resolved === "string" && resolved.trim()) {
+        return resolved;
+      }
+    } catch (err) {
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `Hosted media resolver failed (${entry.pluginId ?? "unknown"}): ${formatErrorMessage(err)}`,
+        );
+      }
+    }
+  }
+  return null;
 }
 
 function resolveWebMediaOptions(params: {
@@ -203,6 +222,23 @@ function formatCapLimit(label: string, cap: number, size: number): string {
 
 function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
+}
+
+function isOptionalImageOptimizerUnavailable(err: unknown): boolean {
+  const messages: string[] = [];
+  let current: unknown = err;
+  while (current instanceof Error) {
+    messages.push(current.message);
+    current = current.cause;
+  }
+  const detail = messages.join("\n").toLowerCase();
+  return (
+    detail.includes("optional dependency sharp is required") ||
+    detail.includes("cannot find package 'sharp'") ||
+    detail.includes('cannot find package "sharp"') ||
+    detail.includes("cannot find module 'sharp'") ||
+    detail.includes('cannot find module "sharp"')
+  );
 }
 
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
@@ -384,7 +420,7 @@ async function loadWebMediaInternal(
       throw new LocalMediaAccessError("invalid-file-url", (err as Error).message, { cause: err });
     }
   }
-  mediaUrl = resolveCanvasHttpPathToLocalPath(mediaUrl) ?? mediaUrl;
+  mediaUrl = (await resolveHostedPluginMediaUrl(mediaUrl)) ?? mediaUrl;
 
   const optimizeAndClampImage = async (
     buffer: Buffer,
@@ -392,7 +428,29 @@ async function loadWebMediaInternal(
     meta?: { contentType?: string; fileName?: string },
   ) => {
     const originalSize = buffer.length;
-    const optimized = await optimizeImageWithFallback({ buffer, cap, meta });
+    let optimized: OptimizedImage;
+    try {
+      optimized = await optimizeImageWithFallback({ buffer, cap, meta });
+    } catch (err) {
+      if (
+        isOptionalImageOptimizerUnavailable(err) &&
+        !isHeicSource(meta ?? {}) &&
+        buffer.length <= cap
+      ) {
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `Image optimizer unavailable; sending original ${formatMb(buffer.length)}MB media without optimization`,
+          );
+        }
+        return {
+          buffer,
+          contentType: meta?.contentType,
+          kind: "image" as const,
+          fileName: meta?.fileName,
+        };
+      }
+      throw err;
+    }
     logOptimizedImage({ originalSize, optimized });
 
     if (optimized.buffer.length > cap) {
@@ -519,7 +577,7 @@ async function loadWebMediaInternal(
     try {
       data = (await readLocalFileSafely({ filePath: mediaUrl })).buffer;
     } catch (err) {
-      if (err instanceof SafeOpenError) {
+      if (err instanceof FsSafeError) {
         if (err.code === "not-found") {
           throw new LocalMediaAccessError("not-found", `Local media file not found: ${mediaUrl}`, {
             cause: err,

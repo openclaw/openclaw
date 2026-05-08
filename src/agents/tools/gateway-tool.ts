@@ -34,12 +34,14 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "agents.defaults.promptOverlays",
   "agents.defaults.model",
   "agents.defaults.thinkingDefault",
+  "agents.defaults.subagents.thinking",
   "agents.defaults.reasoningDefault",
   "agents.defaults.fastModeDefault",
   "agents.list[].id",
   "agents.list[].systemPromptOverride",
   "agents.list[].model",
   "agents.list[].thinkingDefault",
+  "agents.list[].subagents.thinking",
   "agents.list[].reasoningDefault",
   "agents.list[].fastModeDefault",
   // Mention gating is an agent-facing scope knob across channel adapters.
@@ -517,6 +519,7 @@ export function createGatewayTool(opts?: {
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
+        const continuationMessage = normalizeOptionalString(params.continuationMessage);
         const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
         const updateGatewayOpts = {
           ...gatewayOpts,
@@ -525,6 +528,7 @@ export function createGatewayTool(opts?: {
         const result = await callGatewayTool("update.run", updateGatewayOpts, {
           sessionKey,
           note,
+          continuationMessage,
           restartDelayMs,
           timeoutMs: updateTimeoutMs,
         });

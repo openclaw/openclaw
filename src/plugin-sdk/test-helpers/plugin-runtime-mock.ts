@@ -353,6 +353,16 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           .mockResolvedValue(
             undefined,
           ) as unknown as PluginRuntime["agent"]["session"]["saveSessionStore"],
+        updateSessionStore: vi
+          .fn()
+          .mockResolvedValue(
+            undefined,
+          ) as unknown as PluginRuntime["agent"]["session"]["updateSessionStore"],
+        updateSessionStoreEntry: vi
+          .fn()
+          .mockResolvedValue(
+            null,
+          ) as unknown as PluginRuntime["agent"]["session"]["updateSessionStoreEntry"],
         resolveSessionFilePath: vi.fn(
           (sessionId: string) => `/tmp/${sessionId}.json`,
         ) as unknown as PluginRuntime["agent"]["session"]["resolveSessionFilePath"],
@@ -360,6 +370,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     system: {
       enqueueSystemEvent: vi.fn() as unknown as PluginRuntime["system"]["enqueueSystemEvent"],
+      requestHeartbeat: vi.fn() as unknown as PluginRuntime["system"]["requestHeartbeat"],
       requestHeartbeatNow: vi.fn() as unknown as PluginRuntime["system"]["requestHeartbeatNow"],
       runHeartbeatOnce: vi.fn(async () => ({
         status: "ran" as const,
@@ -381,6 +392,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     tts: {
       textToSpeech: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeech"],
+      textToSpeechStream: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechStream"],
       textToSpeechTelephony: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechTelephony"],
       listVoices: vi.fn() as unknown as PluginRuntime["tts"]["listVoices"],
     },
@@ -709,6 +721,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSessionMessages: vi.fn(),
       getSession: vi.fn(),
       deleteSession: vi.fn(),
+    },
+    llm: {
+      complete: vi.fn(),
     },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),

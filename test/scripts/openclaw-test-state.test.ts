@@ -15,6 +15,10 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
 describe("scripts/lib/openclaw-test-state", () => {
   it("creates a sourceable env file and JSON description", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-state-script-"));
@@ -88,7 +92,10 @@ describe("scripts/lib/openclaw-test-state", () => {
         "update-stable",
       ]);
       expect(stdout).toContain(
-        "mktemp -d '/tmp/openclaw-update-channel-switch-update-stable-home.XXXXXX'",
+        'OPENCLAW_TEST_STATE_TMP_ROOT="${OPENCLAW_TEST_STATE_TMPDIR:-${TMPDIR:-/tmp}}"',
+      );
+      expect(stdout).toContain(
+        'mktemp -d "$OPENCLAW_TEST_STATE_TMP_ROOT/openclaw-update-channel-switch-update-stable-home.XXXXXX"',
       );
       expect(stdout).toContain("OPENCLAW_TEST_STATE_JSON");
       expect(stdout).toContain('"channel": "stable"');
@@ -100,10 +107,26 @@ describe("scripts/lib/openclaw-test-state", () => {
       ]);
 
       const payload = JSON.parse(probe.stdout);
-      expect(payload.home).toMatch(/^\/tmp\/openclaw-update-channel-switch-update-stable-home\./u);
+      expect(payload.home.startsWith(os.tmpdir())).toBe(true);
+      expect(path.basename(payload.home)).toMatch(
+        /^openclaw-update-channel-switch-update-stable-home\./u,
+      );
       expect(payload.openclawHome).toBe(payload.home);
       expect(payload.workspace).toBe(`${payload.home}/workspace`);
       expect(payload.channel).toBe("stable");
+
+      const customTemp = path.join(tempRoot, "state-tmp");
+      const customProbe = await execFileAsync("bash", [
+        "-lc",
+        `export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(customTemp)}; source ${shellQuote(snippetFile)}; node -e 'process.stdout.write(JSON.stringify({home:process.env.HOME,tmpRoot:process.env.OPENCLAW_TEST_STATE_TMP_ROOT}));'; rm -rf "$HOME"`,
+      ]);
+      const customPayload = JSON.parse(customProbe.stdout);
+      expect(customPayload.tmpRoot).toBe(customTemp);
+      expect(customPayload.home).toMatch(
+        new RegExp(
+          `^${escapeRegex(customTemp)}/openclaw-update-channel-switch-update-stable-home\\.`,
+        ),
+      );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
@@ -167,11 +190,12 @@ describe("scripts/lib/openclaw-test-state", () => {
 
       const probe = await execFileAsync("bash", [
         "-lc",
-        `source ${shellQuote(snippetFile)}; export OPENCLAW_AGENT_DIR=/tmp/outside-agent; openclaw_test_state_create "onboard case" minimal; node -e 'const fs=require("node:fs"); const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,"utf8")); process.stdout.write(JSON.stringify({home:process.env.HOME,agentDir:process.env.OPENCLAW_AGENT_DIR || null,workspace:process.env.OPENCLAW_TEST_WORKSPACE_DIR,config}));'; rm -rf "$HOME"`,
+        `export OPENCLAW_TEST_STATE_TMPDIR=${shellQuote(path.join(tempRoot, "function-tmp"))}; source ${shellQuote(snippetFile)}; export OPENCLAW_AGENT_DIR=/tmp/outside-agent; openclaw_test_state_create "onboard case" minimal; node -e 'const fs=require("node:fs"); const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,"utf8")); process.stdout.write(JSON.stringify({home:process.env.HOME,tmpDir:process.env.OPENCLAW_TEST_STATE_TMPDIR,agentDir:process.env.OPENCLAW_AGENT_DIR || null,workspace:process.env.OPENCLAW_TEST_WORKSPACE_DIR,config}));'; rm -rf "$HOME"`,
       ]);
 
       const payload = JSON.parse(probe.stdout);
-      expect(payload.home).toMatch(/^\/tmp\/openclaw-onboard-case-minimal-home\./u);
+      expect(payload.home).toBe(`${payload.tmpDir}/${path.basename(payload.home)}`);
+      expect(payload.home).toContain("/openclaw-onboard-case-minimal-home.");
       expect(payload.agentDir).toBeNull();
       expect(payload.workspace).toBe(`${payload.home}/workspace`);
       expect(payload.config).toEqual({});

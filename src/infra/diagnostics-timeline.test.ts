@@ -134,8 +134,8 @@ describe("diagnostics timeline", () => {
         count: 2,
       },
     });
-    expect(event?.timestamp).toEqual(expect.any(String));
-    expect(event?.pid).toEqual(expect.any(Number));
+    expect(event?.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u);
+    expect(event?.pid).toBe(process.pid);
     expect((event?.attributes as Record<string, unknown>).ignored).toBeUndefined();
   });
 
@@ -168,7 +168,7 @@ describe("diagnostics timeline", () => {
       attributes: { pluginCount: 3 },
     });
     expect(events[1]?.spanId).toBe(events[0]?.spanId);
-    expect(events[1]?.durationMs).toEqual(expect.any(Number));
+    expect(events[1]?.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   it("records span error events and rethrows failures", async () => {
@@ -213,6 +213,49 @@ describe("diagnostics timeline", () => {
     expect(events[1]).toMatchObject({
       type: "span.end",
       name: "plugins.metadata.scan",
+    });
+  });
+
+  it("lets nested spans inherit the active timeline phase and parent span", async () => {
+    const { env, path } = await createTimelineEnv();
+
+    const result = await measureDiagnosticsTimelineSpan(
+      "reply.run_agent_turn",
+      () =>
+        measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => 42, {
+          env,
+        }),
+      {
+        env,
+        phase: "agent-turn",
+      },
+    );
+
+    expect(result).toBe(42);
+    const events = await readTimeline(path);
+    expect(events).toHaveLength(4);
+    const [parentStart, childStart, childEnd, parentEnd] = events;
+    expect(parentStart).toMatchObject({
+      type: "span.start",
+      name: "reply.run_agent_turn",
+      phase: "agent-turn",
+    });
+    expect(childStart).toMatchObject({
+      type: "span.start",
+      name: "plugins.metadata.scan",
+      phase: "agent-turn",
+      parentSpanId: parentStart?.spanId,
+    });
+    expect(childEnd).toMatchObject({
+      type: "span.end",
+      name: "plugins.metadata.scan",
+      phase: "agent-turn",
+      parentSpanId: parentStart?.spanId,
+    });
+    expect(parentEnd).toMatchObject({
+      type: "span.end",
+      name: "reply.run_agent_turn",
+      phase: "agent-turn",
     });
   });
 });

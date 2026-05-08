@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./chat/realtime-talk-shared.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./chat/realtime-talk-webrtc.ts";
 
 class FakeDataChannel extends EventTarget {
@@ -11,11 +12,18 @@ class FakeDataChannel extends EventTarget {
 }
 
 class FakePeerConnection extends EventTarget {
+  static instances: FakePeerConnection[] = [];
+
   connectionState: RTCPeerConnectionState = "new";
   readonly channel = new FakeDataChannel();
   readonly addTrack = vi.fn();
   localDescription: RTCSessionDescriptionInit | null = null;
   remoteDescription: RTCSessionDescriptionInit | null = null;
+
+  constructor() {
+    super();
+    FakePeerConnection.instances.push(this);
+  }
 
   createDataChannel(): RTCDataChannel {
     return this.channel as unknown as RTCDataChannel;
@@ -44,6 +52,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
   });
 
   beforeEach(() => {
+    FakePeerConnection.instances = [];
     const track = { stop: vi.fn() } as unknown as MediaStreamTrack;
     const stream = {
       getAudioTracks: () => [track],
@@ -64,7 +73,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     const transport = new WebRtcSdpRealtimeTalkTransport(
       {
         provider: "openai",
-        transport: "webrtc-sdp",
+        transport: "webrtc",
         clientSecret: "client-secret-123",
         offerUrl: "https://api.openai.com/v1/realtime/calls",
         offerHeaders: {
@@ -92,5 +101,220 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       },
     });
     transport.stop();
+  });
+
+  it("surfaces realtime provider errors from the OpenAI data channel", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
+    );
+    const onStatus = vi.fn();
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      {
+        provider: "openai",
+        transport: "webrtc",
+        clientSecret: "client-secret-123",
+      },
+      {
+        client: {} as never,
+        sessionKey: "main",
+        callbacks: { onStatus },
+      },
+    );
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    peer?.channel.dispatchEvent(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "error",
+          error: { message: "Realtime model rejected the session" },
+        }),
+      }),
+    );
+
+    expect(onStatus).toHaveBeenCalledWith("error", "Realtime model rejected the session");
+    transport.stop();
+  });
+
+  it("surfaces speech and response lifecycle status from the OpenAI data channel", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
+    );
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      {
+        provider: "openai",
+        transport: "webrtc",
+        clientSecret: "client-secret-123",
+      },
+      {
+        client: {} as never,
+        sessionKey: "main",
+        callbacks: { onStatus, onTalkEvent },
+      },
+    );
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    for (const type of [
+      "input_audio_buffer.speech_started",
+      "input_audio_buffer.speech_stopped",
+      "response.created",
+      "response.done",
+    ]) {
+      peer?.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type }) }));
+    }
+
+    expect(onStatus).toHaveBeenCalledWith("listening", "Speech detected");
+    expect(onStatus).toHaveBeenCalledWith("thinking", "Processing speech");
+    expect(onStatus).toHaveBeenCalledWith("thinking", "Generating response");
+    expect(onStatus).toHaveBeenCalledWith("listening", undefined);
+    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
+      "turn.started",
+      "input.audio.committed",
+      "turn.ended",
+    ]);
+    expect(onTalkEvent.mock.calls.map(([event]) => event.turnId)).toEqual([
+      "turn-1",
+      "turn-1",
+      "turn-1",
+    ]);
+    transport.stop();
+  });
+
+  it("emits common Talk transcript events from the OpenAI data channel", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
+    );
+    const onTranscript = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      {
+        provider: "openai",
+        transport: "webrtc",
+        clientSecret: "client-secret-123",
+      },
+      {
+        client: {} as never,
+        sessionKey: "main",
+        callbacks: { onTranscript, onTalkEvent },
+      },
+    );
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    peer?.channel.dispatchEvent(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "input-1",
+          transcript: "hello",
+        }),
+      }),
+    );
+    peer?.channel.dispatchEvent(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "response.audio_transcript.done",
+          item_id: "response-1",
+          transcript: "hi there",
+        }),
+      }),
+    );
+
+    expect(onTranscript).toHaveBeenCalledWith({ role: "user", text: "hello", final: true });
+    expect(onTranscript).toHaveBeenCalledWith({
+      role: "assistant",
+      text: "hi there",
+      final: true,
+    });
+    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
+      "transcript.done",
+      "output.text.done",
+    ]);
+    expect(onTalkEvent.mock.calls.map(([event]) => event.turnId)).toEqual(["turn-1", "turn-1"]);
+    expect(onTalkEvent.mock.calls[0]?.[0]).toMatchObject({
+      itemId: "input-1",
+      payload: { role: "user", text: "hello" },
+      sessionId: "main:openai:webrtc",
+      transport: "webrtc",
+    });
+    expect(onTalkEvent.mock.calls[1]?.[0]).toMatchObject({
+      itemId: "response-1",
+      payload: { text: "hi there" },
+      sessionId: "main:openai:webrtc",
+      transport: "webrtc",
+    });
+    transport.stop();
+  });
+
+  it("aborts an in-flight OpenAI tool consult when the transport stops", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
+    );
+    const listeners = new Set<(event: { event: string; payload?: unknown }) => void>();
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "chat.abort") {
+        expect(params).toEqual({ sessionKey: "main", runId: "run-1" });
+        return { ok: true, aborted: true };
+      }
+      expect(method).toBe("talk.client.toolCall");
+      expect(params).toEqual(
+        expect.objectContaining({
+          callId: "call-1",
+          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        }),
+      );
+      return { runId: "run-1" };
+    });
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      {
+        provider: "openai",
+        transport: "webrtc",
+        clientSecret: "client-secret-123",
+      },
+      {
+        client: {
+          addEventListener: vi.fn(
+            (listener: (event: { event: string; payload?: unknown }) => void) => {
+              listeners.add(listener);
+              return () => listeners.delete(listener);
+            },
+          ),
+          request,
+        } as never,
+        sessionKey: "main",
+        callbacks: {},
+      },
+    );
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    peer?.channel.dispatchEvent(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "response.function_call_arguments.done",
+          item_id: "item-1",
+          call_id: "call-1",
+          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+          arguments: JSON.stringify({ question: "status?" }),
+        }),
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.client.toolCall", expect.anything()),
+    );
+
+    transport.stop();
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId: "run-1" }),
+    );
+    expect(listeners.size).toBe(0);
   });
 });

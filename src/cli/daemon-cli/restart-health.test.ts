@@ -8,6 +8,12 @@ const classifyPortListener = vi.hoisted(() =>
   vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(() => "gateway"),
 );
 const probeGateway = vi.hoisted(() => vi.fn());
+const readBestEffortConfig = vi.hoisted(() => vi.fn(async () => ({})));
+const resolveGatewayProbeAuthSafeWithSecretInputs = vi.hoisted(() =>
+  vi.fn<(_opts: unknown) => Promise<{ auth: { token?: string; password?: string } }>>(async () => ({
+    auth: {},
+  })),
+);
 
 vi.mock("../../infra/ports.js", () => ({
   classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
@@ -17,6 +23,17 @@ vi.mock("../../infra/ports.js", () => ({
 
 vi.mock("../../gateway/probe.js", () => ({
   probeGateway: (opts: unknown) => probeGateway(opts),
+}));
+
+vi.mock("../../config/io.js", () => ({
+  createConfigIO: () => ({
+    readBestEffortConfig: () => readBestEffortConfig(),
+  }),
+}));
+
+vi.mock("../../gateway/probe-auth.js", () => ({
+  resolveGatewayProbeAuthSafeWithSecretInputs: (opts: unknown) =>
+    resolveGatewayProbeAuthSafeWithSecretInputs(opts),
 }));
 
 vi.mock("../../utils.js", async () => {
@@ -112,6 +129,10 @@ async function waitForStoppedFreeGatewayRestart() {
 describe("inspectGatewayRestart", () => {
   beforeEach(() => {
     inspectPortUsage.mockReset();
+    readBestEffortConfig.mockReset();
+    readBestEffortConfig.mockResolvedValue({});
+    resolveGatewayProbeAuthSafeWithSecretInputs.mockReset();
+    resolveGatewayProbeAuthSafeWithSecretInputs.mockResolvedValue({ auth: {} });
     inspectPortUsage.mockResolvedValue({
       port: 0,
       status: "free",
@@ -380,6 +401,58 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.versionMismatch).toBeUndefined();
   });
 
+  it("uses configured local probe auth while waiting for a matching-version restart", async () => {
+    readBestEffortConfig.mockResolvedValue({
+      gateway: { auth: { mode: "token", token: "probe-token" } },
+    });
+    resolveGatewayProbeAuthSafeWithSecretInputs.mockResolvedValue({
+      auth: { token: "probe-token" },
+    });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.24", connId: "new" },
+    });
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    const serviceEnv = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-restart-service-state",
+    } as NodeJS.ProcessEnv;
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      expectedVersion: "2026.4.24",
+      attempts: 1,
+      env: serviceEnv,
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: true,
+      gatewayVersion: "2026.4.24",
+      expectedVersion: "2026.4.24",
+    });
+    expect(resolveGatewayProbeAuthSafeWithSecretInputs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: { gateway: { auth: { mode: "token", token: "probe-token" } } },
+        mode: "local",
+      }),
+    );
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: { token: "probe-token", password: undefined },
+        env: serviceEnv,
+      }),
+    );
+  });
+
   it("stops waiting once the restarted gateway reports the wrong version", async () => {
     probeGateway.mockResolvedValue({
       ok: true,
@@ -425,7 +498,7 @@ describe("inspectGatewayRestart", () => {
               id: "telegram",
               origin: "bundled",
               activated: true,
-              error: "failed to install bundled runtime deps: ENOSPC",
+              error: "failed to load plugin dependency: ENOSPC",
             },
             {
               id: "optional",
@@ -458,7 +531,7 @@ describe("inspectGatewayRestart", () => {
           id: "telegram",
           origin: "bundled",
           activated: true,
-          error: "failed to install bundled runtime deps: ENOSPC",
+          error: "failed to load plugin dependency: ENOSPC",
         },
       ],
     });
@@ -467,7 +540,7 @@ describe("inspectGatewayRestart", () => {
 
     const { renderRestartDiagnostics } = await import("./restart-health.js");
     expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(
-      "Activated plugin load errors:\n- telegram: failed to install bundled runtime deps: ENOSPC",
+      "Activated plugin load errors:\n- telegram: failed to load plugin dependency: ENOSPC",
     );
   });
 
@@ -484,7 +557,7 @@ describe("inspectGatewayRestart", () => {
               id: "telegram",
               origin: "bundled",
               activated: true,
-              error: "failed to install bundled runtime deps: ENOSPC",
+              error: "failed to load plugin dependency: ENOSPC",
             },
           ],
         },

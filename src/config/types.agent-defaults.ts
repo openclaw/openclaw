@@ -17,6 +17,7 @@ import type {
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
+export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 
 export type Gpt5PromptOverlayConfig = {
@@ -33,6 +34,8 @@ export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
   params?: Record<string, unknown>;
+  /** Optional agent execution runtime for this specific provider/model entry. */
+  agentRuntime?: AgentRuntimePolicyConfig;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
 };
@@ -148,6 +151,13 @@ export type CliBackendConfig = {
   serialize?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
+    /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */
+    outputLimits?: {
+      /** Max raw JSONL characters retained for one live CLI turn. */
+      maxTurnRawChars?: number;
+      /** Max raw JSONL lines retained for one live CLI turn. */
+      maxTurnLines?: number;
+    };
     /** No-output watchdog tuning (fresh vs resumed runs). */
     watchdog?: {
       /** Fresh/new sessions (non-resume). */
@@ -225,6 +235,13 @@ export type AgentDefaultsConfig = {
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
   /**
+   * List of optional bootstrap filenames to skip writing to the workspace root.
+   * Applies to: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
+   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
+   * Example: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"]
+   */
+  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
+  /**
    * Controls when workspace bootstrap files (AGENTS.md, SOUL.md, etc.) are
    * injected into the system prompt:
    * - always: inject on every turn (default)
@@ -301,6 +318,12 @@ export type AgentDefaultsConfig = {
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
+  /**
+   * Detail mode for user-visible tool progress in /verbose and editable progress drafts.
+   * - explain: compact human summary (default)
+   * - raw: include raw command/detail when available
+   */
+  toolProgressDetail?: "explain" | "raw";
   /** Default reasoning level when no /reasoning directive is present. */
   reasoningDefault?: "off" | "on" | "stream";
   /** Default elevated level when no /elevated directive is present. */

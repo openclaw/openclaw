@@ -157,6 +157,88 @@ describe("printDaemonStatus", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Capability: write-capable"));
   });
 
+  it("prints CLI and gateway versions with readable guidance when they differ", () => {
+    printDaemonStatus(
+      {
+        cli: {
+          version: "2026.4.23",
+          entrypoint: "/usr/local/bin/openclaw",
+        },
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: true,
+          kind: "connect",
+          capability: "write_capable",
+          url: "ws://127.0.0.1:18789",
+          server: { version: "2026.5.6", connId: "conn-1" },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("CLI version: 2026.4.23 (/usr/local/bin/openclaw)"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Gateway version: 2026.5.6"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("this OpenClaw command is version 2026.4.23"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "if this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
+      ),
+    );
+  });
+
+  it("prints restart handoff diagnostics when deep status gathered one", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "stopped" },
+          restartHandoff: {
+            kind: "gateway-supervisor-restart-handoff",
+            version: 1,
+            intentId: "intent-1",
+            pid: 12_345,
+            createdAt: 10_000,
+            expiresAt: 70_000,
+            reason: "plugin source changed",
+            source: "plugin-change",
+            restartKind: "full-process",
+            supervisorMode: "launchd",
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Recent restart handoff: full-process via launchd"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("reason=plugin source changed"),
+    );
+  });
+
   it("passes daemon TLS state to dashboard link rendering", () => {
     printDaemonStatus(
       {

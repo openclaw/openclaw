@@ -2,7 +2,6 @@ import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
-import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -172,9 +171,8 @@ function isServerNotRunningError(err: unknown): boolean {
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
   tailscaleCleanup: (() => Promise<void>) | null;
-  canvasHost: CanvasHostHandler | null;
-  canvasHostServer: CanvasHostServer | null;
   releasePluginRouteRegistry?: (() => void) | null;
+  channelIds?: readonly ChannelId[];
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
   disposeSessionMcpRuntimes?: () => Promise<void>;
@@ -182,7 +180,7 @@ export function createGatewayCloseHandler(params: {
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
   updateCheckStop?: (() => void) | null;
-  stopTaskRegistryMaintenance?: (() => void) | null;
+  stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   tickInterval: ReturnType<typeof setInterval>;
@@ -264,14 +262,9 @@ export function createGatewayCloseHandler(params: {
       if (params.tailscaleCleanup) {
         await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
       }
-      if (params.canvasHost) {
-        await shutdownStep("canvas-host", () => params.canvasHost!.close(), warnings);
-      }
-      if (params.canvasHostServer) {
-        await shutdownStep("canvas-host-server", () => params.canvasHostServer!.close(), warnings);
-      }
-      for (const plugin of listChannelPlugins()) {
-        await shutdownStep(`channel/${plugin.id}`, () => params.stopChannel(plugin.id), warnings);
+      const channelIds = params.channelIds ?? listChannelPlugins().map((plugin) => plugin.id);
+      for (const channelId of channelIds) {
+        await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId), warnings);
       }
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
       await Promise.all([

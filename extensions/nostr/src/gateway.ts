@@ -3,7 +3,6 @@ import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   createPreCryptoDirectDmAuthorizer,
-  DEFAULT_ACCOUNT_ID,
   type ChannelOutboundAdapter,
   resolveInboundDirectDmAccessWithRuntime,
   type ChannelPlugin,
@@ -19,7 +18,7 @@ type NostrGatewayStart = NonNullable<
 >;
 type NostrOutboundAdapter = Pick<
   ChannelOutboundAdapter,
-  "deliveryMode" | "textChunkLimit" | "sendText"
+  "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
 > & {
   sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
 };
@@ -276,6 +275,12 @@ export const nostrPairingTextAdapter = {
 export const nostrOutboundAdapter: NostrOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      messageSendingHooks: true,
+    },
+  },
   sendText: async ({ cfg, to, text, accountId }) => {
     const core = getNostrRuntime();
     const aid = accountId ?? resolveDefaultNostrAccountId(cfg);
@@ -297,16 +302,6 @@ export const nostrOutboundAdapter: NostrOutboundAdapter = {
     });
   },
 };
-
-export function getNostrMetrics(
-  accountId: string = DEFAULT_ACCOUNT_ID,
-): MetricsSnapshot | undefined {
-  const bus = activeBuses.get(accountId);
-  if (bus) {
-    return bus.getMetrics();
-  }
-  return metricsSnapshots.get(accountId);
-}
 
 export function getActiveNostrBuses(): Map<string, NostrBusHandle> {
   return new Map(activeBuses);

@@ -10,6 +10,7 @@ import type {
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
+  SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -62,7 +63,7 @@ vi.mock("openclaw/plugin-sdk/channel-targets", () => ({
   normalizeChannelId: (channel: string | undefined) => channel?.trim().toLowerCase() ?? null,
   resolveChannelTtsVoiceDelivery: (channel: string | undefined) => {
     const normalized = channel?.trim().toLowerCase();
-    if (normalized === "bluebubbles") {
+    if (normalized === "voice-memo-chat") {
       return {
         synthesisTarget: "audio-file",
         audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
@@ -115,14 +116,7 @@ const {
   textToSpeechTelephony,
 } = await import("./tts.js");
 
-const nativeVoiceNoteChannels = [
-  "bluebubbles",
-  "discord",
-  "feishu",
-  "matrix",
-  "telegram",
-  "whatsapp",
-] as const;
+const nativeVoiceNoteChannels = ["discord", "feishu", "matrix", "telegram", "whatsapp"] as const;
 
 function createMockSpeechProvider(
   id = "mock",
@@ -221,11 +215,11 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
-  it("keeps BlueBubbles synthesis on mp3 audio-file output but delivers it as a voice memo", async () => {
+  it("keeps compatible audio-file synthesis deliverable as a voice memo", async () => {
     await expectTtsPayloadResult({
-      channel: "bluebubbles",
-      prefsName: "openclaw-speech-core-tts-bluebubbles-mp3-test",
-      text: "This BlueBubbles reply should be delivered as an iMessage voice memo.",
+      channel: "voice-memo-chat",
+      prefsName: "openclaw-speech-core-tts-voice-memo-mp3-test",
+      text: "This reply should be delivered as a native voice memo.",
       target: "audio-file",
       audioAsVoice: true,
       mediaExtension: "mp3",
@@ -238,25 +232,25 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
-  it("does not mark unsupported BlueBubbles audio-file output as a voice memo", async () => {
+  it("does not mark unsupported audio-file output as a voice memo", async () => {
     await expectTtsPayloadResult({
-      channel: "bluebubbles",
-      prefsName: "openclaw-speech-core-tts-bluebubbles-ogg-test",
-      text: "This BlueBubbles reply should stay a regular audio attachment.",
+      channel: "voice-memo-chat",
+      prefsName: "openclaw-speech-core-tts-voice-memo-ogg-test",
+      text: "This reply should stay a regular audio attachment.",
       target: "audio-file",
       audioAsVoice: undefined,
     });
   });
 
-  it("pre-transcodes BlueBubbles synthesized mp3 to opus-in-CAF when the host can satisfy preferAudioFileFormat", async () => {
+  it("pre-transcodes synthesized mp3 to opus-in-CAF when the host can satisfy preferAudioFileFormat", async () => {
     transcodeAudioBufferMock.mockResolvedValueOnce({
       ok: true,
       buffer: Buffer.from("transcoded-caf"),
     });
     await expectTtsPayloadResult({
-      channel: "bluebubbles",
-      prefsName: "openclaw-speech-core-tts-bluebubbles-caf-transcode-test",
-      text: "This BlueBubbles reply should be pre-transcoded to a native voice-memo CAF.",
+      channel: "voice-memo-chat",
+      prefsName: "openclaw-speech-core-tts-voice-memo-caf-transcode-test",
+      text: "This reply should be pre-transcoded to a native voice-memo CAF.",
       target: "audio-file",
       audioAsVoice: true,
       mediaExtension: "caf",
@@ -278,15 +272,14 @@ describe("speech-core native voice-note routing", () => {
       reason: "transcoder-failed",
       detail: "exit-1",
     });
-    // Even though the transcode failed, the original mp3 still satisfies
-    // BlueBubbles' audioFileFormats list, so the channel still flips
-    // audioAsVoice. The user gets the v2026.4.26 PCM-CAF behavior (a voice
-    // memo bubble, possibly with bad duration) instead of a regression — and
-    // the failure is logged via the call site in tts.ts so it isn't silent.
+    // Even though the transcode failed, the original mp3 still satisfies the
+    // channel audioFileFormats list, so the channel still flips audioAsVoice.
+    // The user gets a voice memo bubble, possibly with bad duration, instead
+    // of a regression. The failure is logged via the call site in tts.ts.
     await expectTtsPayloadResult({
-      channel: "bluebubbles",
-      prefsName: "openclaw-speech-core-tts-bluebubbles-caf-fallback-test",
-      text: "This BlueBubbles reply should fall back to the original mp3.",
+      channel: "voice-memo-chat",
+      prefsName: "openclaw-speech-core-tts-voice-memo-caf-fallback-test",
+      text: "This reply should fall back to the original mp3.",
       target: "audio-file",
       audioAsVoice: true,
       mediaExtension: "mp3",
@@ -384,6 +377,69 @@ describe("speech-core native voice-note routing", () => {
       text: "Slack replies should be delivered as regular audio attachments.",
       target: "audio-file",
       audioAsVoice: undefined,
+    });
+  });
+
+  it("synthesizes explicitly tagged short hidden TTS text", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-short-hidden-tts-test");
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: {
+          text: "[[tts:text]]hello[[/tts:text]]",
+          audioAsVoice: true,
+        },
+        cfg,
+        channel: "telegram",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalledWith(expect.objectContaining({ text: "hello" }));
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      expect(result.audioAsVoice).toBe(true);
+      expect(result.text).toBeUndefined();
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("keeps skipping untagged short TTS text", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-short-plain-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: {
+        text: "hello",
+        audioAsVoice: true,
+      },
+      cfg,
+      channel: "telegram",
+      kind: "final",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "hello",
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps skipping explicit tagged TTS text that strips to empty markdown", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-empty-hidden-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: {
+        text: "[[tts:text]]***[[/tts:text]]",
+        audioAsVoice: true,
+      },
+      cfg,
+      channel: "telegram",
+      kind: "final",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      audioAsVoice: true,
     });
   });
 
@@ -540,6 +596,55 @@ describe("speech-core native voice-note routing", () => {
       persona: "alfred",
     });
     expect(result.attempts?.[0]).not.toHaveProperty("personaBinding");
+  });
+
+  it("passes directive overrides to telephony synthesis providers", async () => {
+    const synthesizeTelephony = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
+      audioBuffer: Buffer.from("voice"),
+      outputFormat: "pcm",
+      sampleRate: 24000,
+    }));
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        synthesizeTelephony,
+      }),
+    ]);
+
+    const result = await textToSpeechTelephony({
+      text: "Use a directed telephony voice.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            providers: {
+              mock: {
+                modelId: "telephony-model",
+                voiceId: "default-voice",
+              },
+            },
+          },
+        },
+      },
+      overrides: {
+        providerOverrides: {
+          mock: {
+            voice: "directed-voice",
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.providerModel).toBe("telephony-model");
+    expect(result.providerVoice).toBe("directed-voice");
+    expect(synthesizeTelephony).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: {
+          voice: "directed-voice",
+        },
+      }),
+    );
   });
 
   it("uses provider defaults when fallback policy allows missing persona bindings", async () => {

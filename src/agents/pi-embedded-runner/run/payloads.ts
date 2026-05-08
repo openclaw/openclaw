@@ -1,5 +1,9 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import {
+  createHeartbeatToolResponsePayload,
+  type HeartbeatToolResponse,
+} from "../../../auto-reply/heartbeat-tool-response.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
@@ -23,7 +27,6 @@ import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.
 import {
   extractAssistantThinking,
   extractAssistantVisibleText,
-  formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
@@ -184,6 +187,7 @@ export function buildEmbeddedRunPayloads(params: {
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
+  heartbeatToolResponse?: HeartbeatToolResponse;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -194,7 +198,12 @@ export function buildEmbeddedRunPayloads(params: {
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
+  channelData?: Record<string, unknown>;
 }> {
+  if (params.heartbeatToolResponse) {
+    return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
+  }
+
   const replyItems: Array<{
     text: string;
     media?: string[];
@@ -273,7 +282,7 @@ export function buildEmbeddedRunPayloads(params: {
   const reasoningText = suppressAssistantArtifacts
     ? ""
     : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
-      ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
+      ? extractAssistantThinking(params.lastAssistant)
       : "";
   if (reasoningText) {
     replyItems.push({ text: reasoningText, isReasoning: true });

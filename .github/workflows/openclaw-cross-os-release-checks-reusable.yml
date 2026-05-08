@@ -31,6 +31,11 @@ on:
           - fresh
           - upgrade
           - both
+      suite_filter:
+        description: Optional focused cross-OS suite filter, e.g. windows/packaged-upgrade or packaged-fresh
+        required: false
+        default: ""
+        type: string
       previous_version:
         description: Optional baseline version for installer/dev-update and packaged upgrade
         required: false
@@ -76,6 +81,11 @@ on:
         required: false
         default: ""
         type: string
+      openai_model:
+        description: OpenAI model for release cross-OS agent-turn smoke
+        required: false
+        default: ""
+        type: string
   workflow_call:
     inputs:
       ref:
@@ -94,6 +104,11 @@ on:
       mode:
         description: Which release-check lanes to run
         required: true
+        type: string
+      suite_filter:
+        description: Optional focused cross-OS suite filter, e.g. windows/packaged-upgrade or packaged-fresh
+        required: false
+        default: ""
         type: string
       previous_version:
         description: Optional baseline version for the upgrade lane (defaults to npm latest)
@@ -140,6 +155,11 @@ on:
         required: false
         default: ""
         type: string
+      openai_model:
+        description: OpenAI model for release cross-OS agent-turn smoke
+        required: false
+        default: ""
+        type: string
     secrets:
       OPENAI_API_KEY:
         required: false
@@ -166,7 +186,7 @@ env:
   PNPM_VERSION: "10.32.1"
   OPENCLAW_REPOSITORY: openclaw/openclaw
   TSX_VERSION: "4.21.0"
-  OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.4-mini' }}
+  OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.4' }}
 
 jobs:
   prepare:
@@ -472,6 +492,7 @@ jobs:
         env:
           INPUT_REF: ${{ inputs.ref }}
           INPUT_MODE: ${{ inputs.mode }}
+          INPUT_SUITE_FILTER: ${{ inputs.suite_filter }}
           INPUT_UBUNTU_RUNNER: ${{ inputs.ubuntu_runner }}
           INPUT_WINDOWS_RUNNER: ${{ inputs.windows_runner }}
           INPUT_MACOS_RUNNER: ${{ inputs.macos_runner }}
@@ -483,6 +504,7 @@ jobs:
             --resolve-matrix \
             --ref "${INPUT_REF}" \
             --mode "${INPUT_MODE}" \
+            --suite-filter "${INPUT_SUITE_FILTER}" \
             --ubuntu-runner "${INPUT_UBUNTU_RUNNER}" \
             --windows-runner "${INPUT_WINDOWS_RUNNER}" \
             --macos-runner "${INPUT_MACOS_RUNNER}")"

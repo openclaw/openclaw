@@ -305,7 +305,7 @@ function expectPersistedAcpTranscript(params: { userContent: string; assistantTe
   );
 }
 
-async function runAcpSessionWithPolicyOverrides(params: {
+async function runAcpSessionWithPolicyOverridesAndExpectBlocked(params: {
   acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>;
   resolveSession?: Parameters<typeof mockAcpManager>[0]["resolveSession"];
 }) {
@@ -374,7 +374,17 @@ describe("agentCommand ACP runtime routing", () => {
         { text: "bo", delta: "bo" },
         { text: "book", delta: "ok" },
       ]);
-      expect(repeated.logLines.some((line) => line.includes("book"))).toBe(true);
+      expect(repeated.logLines).toEqual(expect.arrayContaining([expect.stringContaining("book")]));
+    });
+  });
+
+  it("keeps no-reply ACP turns silent", async () => {
+    await withAcpSessionEnv(async () => {
+      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents(["NO_REPLY"]);
+
+      expect(assistantEvents.map((event) => event.text).filter(Boolean)).toEqual([]);
+      expect(logLines).not.toEqual(expect.arrayContaining([expect.stringContaining("NO_REPLY")]));
+      expect(logLines).toEqual([]);
     });
   });
 
@@ -424,7 +434,7 @@ describe("agentCommand ACP runtime routing", () => {
       { enabled: false },
       { dispatch: { enabled: false } },
     ] satisfies Array<Partial<NonNullable<OpenClawConfig["acp"]>>>) {
-      await runAcpSessionWithPolicyOverrides({ acpOverrides });
+      await runAcpSessionWithPolicyOverridesAndExpectBlocked({ acpOverrides });
     }
   });
 

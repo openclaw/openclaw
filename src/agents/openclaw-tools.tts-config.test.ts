@@ -37,10 +37,6 @@ vi.mock("./tools/agents-list-tool.js", () => ({
   createAgentsListTool: () => mocks.stubTool("agents_list"),
 }));
 
-vi.mock("./tools/canvas-tool.js", () => ({
-  createCanvasTool: () => mocks.stubTool("canvas"),
-}));
-
 vi.mock("./tools/cron-tool.js", () => ({
   createCronTool: (options: unknown) => {
     mocks.createCronToolOptions(options);
@@ -163,6 +159,27 @@ describe("createOpenClawTools TTS config wiring", () => {
           cfg: injectedConfig,
         }),
       );
+    } finally {
+      __testing.setDepsForTest();
+    }
+  });
+
+  it("keeps direct TTS tool guidance explicit even when the tool is available", async () => {
+    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
+    __testing.setDepsForTest({ config: {} });
+
+    try {
+      const tool = createOpenClawTools({
+        disableMessageTool: true,
+        disablePluginTools: true,
+      }).find((candidate) => candidate.name === "tts");
+
+      if (!tool) {
+        throw new Error("missing tts tool");
+      }
+
+      expect(tool.description).toContain("Use only for explicit audio intent");
+      expect(tool.description).toContain("Never use for ordinary text replies");
     } finally {
       __testing.setDepsForTest();
     }

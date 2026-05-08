@@ -100,7 +100,7 @@ describe("command queue", () => {
 
   it("resetAllLanes is safe when no lanes have been created", () => {
     expect(getActiveTaskCount()).toBe(0);
-    expect(() => resetAllLanes()).not.toThrow();
+    resetAllLanes();
     expect(getActiveTaskCount()).toBe(0);
   });
 
@@ -364,6 +364,35 @@ describe("command queue", () => {
     }
   });
 
+  it("keeps work queued while a lane has zero concurrency and drains after resume", async () => {
+    const lane = `suspended-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 0);
+
+    let ran = false;
+    const task = enqueueCommandInLane(lane, async () => {
+      ran = true;
+      return "resumed";
+    });
+
+    await Promise.resolve();
+    expect(ran).toBe(false);
+    expect(getCommandLaneSnapshot(lane)).toMatchObject({
+      activeCount: 0,
+      queuedCount: 1,
+      maxConcurrent: 0,
+    });
+
+    setCommandLaneConcurrency(lane, 1);
+
+    await expect(task).resolves.toBe("resumed");
+    expect(ran).toBe(true);
+    expect(getCommandLaneSnapshot(lane)).toMatchObject({
+      activeCount: 0,
+      queuedCount: 0,
+      maxConcurrent: 1,
+    });
+  });
+
   it("getCommandLaneSnapshot reports active and queued work for one lane", async () => {
     const lane = `snapshot-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);
@@ -538,7 +567,7 @@ describe("command queue", () => {
       // resetAllLanes calls notifyActiveTaskWaiters → Array.from(state.activeTaskWaiters).
       // Without the migration this would throw:
       //   TypeError: undefined is not iterable
-      expect(() => resetAllLanes()).not.toThrow();
+      resetAllLanes();
 
       // waitForActiveTasks also accesses activeTaskWaiters.
       await expect(waitForActiveTasks(0)).resolves.toEqual({ drained: true });

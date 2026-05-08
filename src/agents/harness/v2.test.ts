@@ -24,6 +24,7 @@ function createAttemptParams(): AgentHarnessAttemptParams {
     modelId: "gpt-5.4",
     model: { id: "gpt-5.4", provider: "codex" } as Model<Api>,
     authStorage: {} as never,
+    authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "low",
     messageChannel: "qa",
@@ -46,6 +47,7 @@ function createAttemptResult(): EmbeddedRunAttemptResult {
     timedOut: false,
     idleTimedOut: false,
     timedOutDuringCompaction: false,
+    timedOutDuringToolExecution: false,
     promptError: null,
     promptErrorSource: null,
     sessionIdUsed: "session-1",
@@ -179,7 +181,7 @@ describe("AgentHarness V2 compatibility adapter", () => {
       "harness.run.started",
       "harness.run.completed",
     ]);
-    expect(diagnostics.events.every(({ metadata }) => metadata.trusted)).toBe(true);
+    expect(diagnostics.events.filter(({ metadata }) => !metadata.trusted)).toEqual([]);
     expect(diagnostics.events[1]?.event).toMatchObject({
       type: "harness.run.completed",
       runId: "run-1",
@@ -236,7 +238,7 @@ describe("AgentHarness V2 compatibility adapter", () => {
       "harness.run.started",
       "harness.run.error",
     ]);
-    expect(diagnostics.events.every(({ metadata }) => metadata.trusted)).toBe(true);
+    expect(diagnostics.events.filter(({ metadata }) => !metadata.trusted)).toEqual([]);
     expect(diagnostics.events[1]?.event).toMatchObject({
       type: "harness.run.error",
       phase: "send",

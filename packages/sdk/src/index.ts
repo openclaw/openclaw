@@ -20,9 +20,15 @@ export { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 export type {
   AgentRunParams,
   ApprovalMode,
+  ArtifactQuery,
   ArtifactSummary,
+  ArtifactsDownloadResult,
+  ArtifactsGetResult,
+  ArtifactsListResult,
   ConnectableOpenClawTransport,
   EnvironmentSelection,
+  EnvironmentSummary,
+  EnvironmentsListResult,
   GatewayEvent,
   GatewayRequestOptions,
   JsonObject,
@@ -38,5 +44,7 @@ export type {
   SessionCreateParams,
   SessionSendParams,
   SessionTarget,
+  ToolInvokeParams,
+  ToolInvokeResult,
   WorkspaceSelection,
 } from "./types.js";

@@ -1,5 +1,4 @@
 import type { webhook } from "@line/bot-sdk";
-import type { NextFunction, Request, Response } from "express";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -12,9 +11,8 @@ import { resolveLineAccount } from "./accounts.js";
 import { createLineWebhookReplayCache, handleLineWebhookEvents } from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
-import { startLineWebhook } from "./webhook.js";
 
-export interface LineBotOptions {
+interface LineBotOptions {
   channelAccessToken: string;
   channelSecret: string;
   accountId?: string;
@@ -24,7 +22,7 @@ export interface LineBotOptions {
   onMessage?: (ctx: LineInboundContext) => Promise<void>;
 }
 
-export interface LineBot {
+interface LineBot {
   handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
   account: ResolvedLineAccount;
 }
@@ -69,18 +67,4 @@ export function createLineBot(opts: LineBotOptions): LineBot {
     handleWebhook,
     account,
   };
-}
-
-export function createLineWebhookCallback(
-  bot: LineBot,
-  channelSecret: string,
-  path = "/line/webhook",
-): { path: string; handler: (req: Request, res: Response, _next: NextFunction) => Promise<void> } {
-  const { handler } = startLineWebhook({
-    channelSecret,
-    onEvents: bot.handleWebhook,
-    path,
-  });
-
-  return { path, handler };
 }

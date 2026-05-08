@@ -1,7 +1,8 @@
 import path from "node:path";
+import { normalizePluginId } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "./types.js";
 import { resolveBundledWebFetchResolutionConfig } from "./web-fetch-providers.shared.js";
 import {
@@ -26,6 +27,24 @@ type BundledCandidateResolution = {
   manifestRecords?: readonly PluginManifestRecord[];
 };
 
+function filterAllowlistedBundledPluginIds(
+  config: PluginLoadOptions["config"] | undefined,
+  pluginIds: readonly string[],
+) {
+  const allow = config?.plugins?.allow;
+  if (
+    config?.plugins?.bundledDiscovery === "compat" ||
+    !Array.isArray(allow) ||
+    allow.length === 0
+  ) {
+    return [...pluginIds];
+  }
+  const allowedPluginIds = new Set(
+    allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean),
+  );
+  return pluginIds.filter((pluginId) => allowedPluginIds.has(pluginId));
+}
+
 function resolveBundledCandidatePluginIds(params: {
   contract: "webSearchProviders" | "webFetchProviders";
   configKey: "webSearch" | "webFetch";
@@ -35,11 +54,11 @@ function resolveBundledCandidatePluginIds(params: {
   bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
 }): BundledCandidateResolution {
-  if (params.onlyPluginIds && params.onlyPluginIds.length > 0) {
+  if (params.onlyPluginIds !== undefined) {
     return {
-      pluginIds: [...new Set(params.onlyPluginIds)].toSorted((left, right) =>
-        left.localeCompare(right),
-      ),
+      pluginIds: filterAllowlistedBundledPluginIds(params.config, [
+        ...new Set(params.onlyPluginIds),
+      ]).toSorted((left, right) => left.localeCompare(right)),
     };
   }
   const resolvedConfig =
@@ -56,7 +75,7 @@ function resolveBundledCandidatePluginIds(params: {
     origin: "bundled",
   });
   return {
-    pluginIds: candidates.pluginIds ?? [],
+    pluginIds: filterAllowlistedBundledPluginIds(resolvedConfig, candidates.pluginIds ?? []),
     ...(candidates.manifestRecords ? { manifestRecords: candidates.manifestRecords } : {}),
   };
 }
@@ -71,11 +90,10 @@ function resolveBundledManifestRecordsByPluginId(params: {
   const allowedPluginIds = new Set(params.onlyPluginIds);
   const manifestRecords =
     params.manifestRecords ??
-    loadPluginManifestRegistryForPluginRegistry({
+    loadManifestMetadataSnapshot({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
-      includeDisabled: true,
     }).plugins;
   return new Map(
     manifestRecords

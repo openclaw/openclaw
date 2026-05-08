@@ -62,6 +62,18 @@ Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 Non-portable profiles remain available through read-through inheritance unless
 the target agent signs in separately and creates its own local profile.
 
+## Config-only auth routes
+
+`auth.profiles` entries with `mode: "aws-sdk"` are routing metadata, not stored
+credentials. They are valid when the target provider uses
+`models.providers.<id>.auth: "aws-sdk"` or the built-in Amazon Bedrock default
+AWS SDK route. These profile ids may appear in `auth.order` and session
+overrides even when no matching entry exists in `auth-profiles.json`.
+
+Do not write `type: "aws-sdk"` into `auth-profiles.json`. If a legacy install
+has such a marker, `openclaw doctor --fix` moves it to `auth.profiles` and
+removes the marker from the credential store.
+
 ## Explicit auth order filtering
 
 - When `auth.order.<provider>` or the auth-store order override is set for a
@@ -85,6 +97,9 @@ the target agent signs in separately and creates its own local profile.
 - Runtime-only credentials owned by external CLIs are discovered only when the
   provider, runtime, or auth profile is in scope for the current operation, or
   when a stored local profile for that external source already exists.
+- Auth-store callers should choose an explicit external-CLI discovery mode:
+  `none` for persisted/plugin auth only, `existing` for refreshing already
+  stored external CLI profiles, or `scoped` for a concrete provider/profile set.
 - Read-only/status paths pass `allowKeychainPrompt: false`; they use file-backed
   external CLI credentials only and do not read or reuse macOS Keychain results.
 

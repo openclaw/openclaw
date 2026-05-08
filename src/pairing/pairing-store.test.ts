@@ -173,7 +173,7 @@ async function expectAccountScopedEntryIsolated(entry: string, accountId = "yy")
   expect(channelScoped).not.toContain(entry);
 }
 
-async function withAllowFromCacheReadSpy(params: {
+async function expectAllowFromCacheInvalidationWithReadSpy(params: {
   stateDir: string;
   createReadSpy: (filePath: string) => FileReadSpy;
   readAllowFrom: () => Promise<string[]>;
@@ -185,6 +185,7 @@ async function withAllowFromCacheReadSpy(params: {
     accountId: "yy",
     allowFrom: ["1001"],
   });
+  clearPairingAllowFromReadCacheForTest();
   const readSpy = params.createReadSpy(filePath);
   try {
     await assertAllowFromCacheInvalidation({
@@ -472,6 +473,32 @@ describe("pairing store", () => {
     });
   });
 
+  it("rethrows unexpected stat errors after allowFrom writes", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const allowFromPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
+      const error = Object.assign(new Error("stat failed"), { code: "EACCES" });
+      const originalStat = fsSync.promises.stat.bind(fsSync.promises);
+      const statSpy = vi.spyOn(fsSync.promises, "stat").mockImplementation(async (target) => {
+        if (String(target) === allowFromPath) {
+          throw error;
+        }
+        return await originalStat(target);
+      });
+
+      try {
+        await expect(
+          addChannelAllowFromStoreEntry({
+            channel: "telegram",
+            accountId: "yy",
+            entry: "12345",
+          }),
+        ).rejects.toBe(error);
+      } finally {
+        statSpy.mockRestore();
+      }
+    });
+  });
+
   it("reads allowFrom variants with account-scoped isolation", async () => {
     await withTempStateDir(async (stateDir) => {
       for (const { setup, accountId, expected, expectedLegacy } of [
@@ -601,7 +628,7 @@ describe("pairing store", () => {
         },
       ]) {
         clearOAuthFixtures(stateDir);
-        await withAllowFromCacheReadSpy({
+        await expectAllowFromCacheInvalidationWithReadSpy({
           stateDir,
           createReadSpy: variant.createReadSpy,
           readAllowFrom: variant.readAllowFrom,

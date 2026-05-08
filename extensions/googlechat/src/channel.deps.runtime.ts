@@ -1,7 +1,6 @@
 export {
   buildChannelConfigSchema,
   chunkTextForOutbound,
-  createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   fetchRemoteMedia,
   GoogleChatConfigSchema,
@@ -9,8 +8,8 @@ export {
   missingTargetError,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
-  runPassiveAccountLifecycle,
   type ChannelMessageActionAdapter,
+  type ChannelMessageActionName,
   type ChannelStatusIssue,
   type OpenClawConfig,
 } from "../runtime-api.js";

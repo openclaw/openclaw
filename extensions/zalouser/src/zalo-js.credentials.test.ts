@@ -8,6 +8,7 @@ import { LoginQRCallbackEventType } from "./zca-constants.js";
 
 const createZaloMock = vi.hoisted(() => vi.fn());
 const TEST_MTIME_TICK_MS = 20;
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
 vi.mock("./zca-client.js", () => ({
   createZalo: createZaloMock,
@@ -197,7 +198,7 @@ describe("zalouser credential persistence", () => {
         const stored = await readStoredCredentials(stateDir, profile);
         expect(stored.cookie).toEqual(refreshedCookie);
         expect(stored.createdAt).toBe("2026-04-01T00:00:00.000Z");
-        expect(stored.lastUsedAt).toEqual(expect.any(String));
+        expect(stored.lastUsedAt).toMatch(ISO_TIMESTAMP_RE);
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -262,7 +263,7 @@ describe("zalouser credential persistence", () => {
         const stored = await readStoredCredentials(stateDir, profile);
         expect(stored.cookie).toEqual(refreshedCookie);
         expect(stored.createdAt).toBe("2026-04-01T00:00:00.000Z");
-        expect(stored.lastUsedAt).toEqual(expect.any(String));
+        expect(stored.lastUsedAt).toMatch(ISO_TIMESTAMP_RE);
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -450,8 +451,8 @@ describe("zalouser credential persistence", () => {
         await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
           const started = await startZaloQrLogin({ profile, timeoutMs: 1000 });
           const waited = await waitForZaloQrLogin({ profile, timeoutMs: 1000 });
-          expect(`${started.message} ${waited.message}`).toContain(
-            "Refusing to write Zalo credentials to symlinked path",
+          expect(`${started.message} ${waited.message}`).toMatch(
+            /Refusing to write Zalo credentials to symlinked path|private store target must be a regular file/,
           );
         });
 

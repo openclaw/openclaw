@@ -21,6 +21,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
+import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -244,9 +245,6 @@ export function resolvePromptSubmissionSkipReason(params: {
   imageCount: number;
   runtimeOnly?: boolean;
 }): PromptSubmissionSkipReason | null {
-  if (params.runtimeOnly) {
-    return null;
-  }
   if (params.prompt.trim().length > 0 || params.imageCount > 0) {
     return null;
   }
@@ -515,6 +513,8 @@ export function buildAfterTurnRuntimeContext(params: {
   >;
   workspaceDir: string;
   agentDir: string;
+  activeAgentId?: string;
+  contextEnginePluginId?: string;
   tokenBudget?: number;
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
@@ -542,6 +542,13 @@ export function buildAfterTurnRuntimeContext(params: {
       bashElevated: params.attempt.bashElevated,
       extraSystemPrompt: params.attempt.extraSystemPrompt,
       ownerNumbers: params.attempt.ownerNumbers,
+    }),
+    ...resolveContextEngineCapabilities({
+      config: params.attempt.config,
+      sessionKey: params.attempt.sessionKey,
+      agentId: params.activeAgentId,
+      contextEnginePluginId: params.contextEnginePluginId,
+      purpose: "context-engine.after-turn",
     }),
     ...(typeof params.tokenBudget === "number" &&
     Number.isFinite(params.tokenBudget) &&

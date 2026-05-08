@@ -65,12 +65,14 @@ describe("config view", () => {
     clearButton?: HTMLButtonElement;
     saveButton?: HTMLButtonElement;
     applyButton?: HTMLButtonElement;
+    updateButton?: HTMLButtonElement;
   } {
     const buttons = Array.from(container.querySelectorAll("button"));
     return {
       clearButton: buttons.find((btn) => btn.textContent?.trim() === "Clear"),
       saveButton: buttons.find((btn) => btn.textContent?.trim() === "Save"),
       applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
+      updateButton: buttons.find((btn) => btn.textContent?.trim() === "Update"),
     };
   }
 
@@ -97,6 +99,34 @@ describe("config view", () => {
 
   function normalizedText(container: HTMLElement): string {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
+  }
+
+  function findButtonByText(container: HTMLElement, text: string): HTMLButtonElement {
+    const button = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === text,
+    );
+    if (!button) {
+      throw new Error(`Expected button with text "${text}"`);
+    }
+    return button;
+  }
+
+  function findButtonContainingText(container: HTMLElement, text: string): HTMLButtonElement {
+    const button = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes(text),
+    );
+    if (!button) {
+      throw new Error(`Expected button containing text "${text}"`);
+    }
+    return button;
+  }
+
+  function queryRequired(container: HTMLElement, selector: string): Element {
+    const element = container.querySelector(selector);
+    if (!element) {
+      throw new Error(`Expected element matching "${selector}"`);
+    }
+    return element;
   }
 
   beforeEach(() => {
@@ -171,6 +201,49 @@ describe("config view", () => {
     expect(onReset).toHaveBeenCalledTimes(1);
   });
 
+  it("renders inline progress inside busy action buttons without locking adjacent controls", () => {
+    const container = document.createElement("div");
+    const renderCase = (overrides: Partial<ConfigProps>) =>
+      render(
+        renderConfig({
+          ...baseProps(),
+          schema: {
+            type: "object",
+            properties: {
+              gateway: { type: "object", properties: { mode: { type: "string" } } },
+            },
+          },
+          formValue: { gateway: { mode: "remote" } },
+          originalValue: { gateway: { mode: "local" } },
+          ...overrides,
+        }),
+        container,
+      );
+
+    renderCase({ saving: true });
+    let busyButton = findButtonContainingText(container, "Saving…");
+    let { clearButton, applyButton } = findActionButtons(container);
+    expect(busyButton.disabled).toBe(true);
+    expect(busyButton.getAttribute("aria-busy")).toBe("true");
+    expect(busyButton.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(clearButton?.disabled).toBe(false);
+    expect(applyButton?.disabled).toBe(false);
+
+    renderCase({ applying: true });
+    busyButton = findButtonContainingText(container, "Applying…");
+    ({ clearButton } = findActionButtons(container));
+    expect(busyButton.disabled).toBe(true);
+    expect(busyButton.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(clearButton?.disabled).toBe(false);
+
+    renderCase({ updating: true });
+    busyButton = findButtonContainingText(container, "Updating…");
+    ({ clearButton } = findActionButtons(container));
+    expect(busyButton.disabled).toBe(true);
+    expect(busyButton.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(clearButton?.disabled).toBe(false);
+  });
+
   it("switches mode via the sidebar toggle", () => {
     const container = document.createElement("div");
     const onFormModeChange = vi.fn();
@@ -182,11 +255,8 @@ describe("config view", () => {
       container,
     );
 
-    const btn = Array.from(container.querySelectorAll("button")).find(
-      (b) => b.textContent?.trim() === "Raw",
-    );
-    expect(btn).toBeTruthy();
-    btn?.click();
+    const btn = findButtonByText(container, "Raw");
+    btn.click();
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
   });
 
@@ -259,11 +329,8 @@ describe("config view", () => {
     expect(tabs).toContain("Agents");
     expect(tabs).toContain("Gateway");
 
-    const btn = Array.from(container.querySelectorAll("button")).find(
-      (b) => b.textContent?.trim() === "Gateway",
-    );
-    expect(btn).toBeTruthy();
-    btn?.click();
+    const btn = findButtonByText(container, "Gateway");
+    btn.click();
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
   });
 
@@ -299,11 +366,7 @@ describe("config view", () => {
       },
     });
 
-    const content = container.querySelector<HTMLElement>(".config-content");
-    expect(content).toBeTruthy();
-    if (!content) {
-      return;
-    }
+    const content = queryRequired(container, ".config-content") as HTMLElement;
     content.scrollTop = 280;
     content.scrollLeft = 24;
     content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
@@ -311,12 +374,9 @@ describe("config view", () => {
       content.scrollLeft = left ?? content.scrollLeft;
     }) as typeof content.scrollTo;
 
-    const messagesButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Messages",
-    );
-    expect(messagesButton).toBeTruthy();
+    const messagesButton = findButtonByText(container, "Messages");
 
-    messagesButton?.click();
+    messagesButton.click();
     await Promise.resolve();
 
     expect(content.scrollTo).toHaveBeenCalledOnce();
@@ -424,8 +484,10 @@ describe("config view", () => {
       container,
     );
     const clearButton = container.querySelector<HTMLButtonElement>(".config-search__clear");
-    expect(clearButton).toBeTruthy();
-    clearButton?.click();
+    if (!clearButton) {
+      throw new Error("Expected config search clear button");
+    }
+    clearButton.click();
     expect(onSearchChange).toHaveBeenCalledWith("");
   });
 
@@ -450,8 +512,10 @@ describe("config view", () => {
     expect(container.querySelector("textarea")).toBeNull();
 
     const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
-    expect(revealButton).toBeTruthy();
-    revealButton?.click();
+    if (!revealButton) {
+      throw new Error("Expected raw config reveal button");
+    }
+    revealButton.click();
 
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     expect(textarea).not.toBeNull();
@@ -901,6 +965,9 @@ describe("config view", () => {
 
     expect(importButton?.disabled).toBe(true);
     expect(container.querySelector(".settings-theme-import__input")).not.toBeNull();
+    expect(
+      container.querySelector<HTMLAnchorElement>(".settings-theme-import__external")?.href,
+    ).toBe("https://tweakcn.com/editor/theme");
     expect(normalizedText(container)).toContain("Share links, editor URLs, registry URLs");
   });
 

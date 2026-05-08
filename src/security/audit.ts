@@ -4,8 +4,8 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
 import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
-import { isInterpreterLikeAllowlistPattern } from "../infra/exec-inline-eval.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
@@ -30,6 +30,7 @@ import type {
   SecurityAuditSummary,
 } from "./audit.types.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
+import { collectExecFilesystemPolicyDriftHits } from "./exec-filesystem-policy.js";
 import type { ExecFn } from "./windows-acl.js";
 
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
@@ -581,6 +582,20 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
     });
   }
 
+  const execFilesystemPolicyHits = collectExecFilesystemPolicyDriftHits(cfg);
+  if (execFilesystemPolicyHits.length > 0) {
+    findings.push({
+      checkId: "tools.exec.fs_tools_disabled_but_exec_enabled",
+      severity: "warn",
+      title: "Filesystem tool policy does not make exec read-only",
+      detail:
+        `Found scopes where write/edit/apply_patch are unavailable but exec remains available:\n${execFilesystemPolicyHits.map((hit) => `- ${hit.scopeLabel}: runtime=[${hit.runtimeTools.join(", ")}], disabledFs=[${hit.disabledFilesystemTools.join(", ")}], exec.host=${hit.execHost}, sandbox=${hit.sandboxMode}, workspaceAccess=${hit.sandboxWorkspaceAccess}`).join("\n")}\n` +
+        "The exec tool is a shell and can still write files wherever the selected host or sandbox filesystem permits it.",
+      remediation:
+        'For read-only agents, deny exec and process too. If shell access is intentional, constrain the filesystem boundary with sandbox mode "all" and workspaceAccess "ro" or "none".',
+    });
+  }
+
   const autoAllowSkillsHits = collectAutoAllowSkillsHits(approvals);
   if (autoAllowSkillsHits.length > 0) {
     findings.push({
@@ -946,7 +961,7 @@ async function createAuditExecutionContext(
     execDockerRawFn: opts.execDockerRawFn,
     probeGatewayFn: opts.probeGatewayFn,
     plugins: opts.plugins,
-    loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors !== false,
+    loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors ?? deep,
     workspaceDir,
     configSnapshot,
     codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),
@@ -1059,7 +1074,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         env,
         stateDir,
         includePersistedAuthState: true,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       });
     const { collectChannelSecurityFindings } = await loadAuditChannelModule();
     findings.push(

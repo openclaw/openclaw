@@ -20,7 +20,7 @@ export type ChatAbortControllerEntry = {
   kind?: "chat-send" | "agent";
 };
 
-export type RegisteredChatAbortController = {
+type RegisteredChatAbortController = {
   controller: AbortController;
   registered: boolean;
   entry?: ChatAbortControllerEntry;
@@ -31,7 +31,7 @@ export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
 }
 
-export function resolveChatRunExpiresAtMs(params: {
+function resolveChatRunExpiresAtMs(params: {
   now: number;
   timeoutMs: number;
   graceMs?: number;
@@ -196,25 +196,4 @@ export function abortChatRunById(
     ops.agentRunSeq.delete(removed.clientRunId);
   }
   return { aborted: true };
-}
-
-export function abortChatRunsForSessionKey(
-  ops: ChatAbortOps,
-  params: {
-    sessionKey: string;
-    stopReason?: string;
-  },
-): { aborted: boolean; runIds: string[] } {
-  const { sessionKey, stopReason } = params;
-  const runIds: string[] = [];
-  for (const [runId, active] of ops.chatAbortControllers) {
-    if (active.sessionKey !== sessionKey) {
-      continue;
-    }
-    const res = abortChatRunById(ops, { runId, sessionKey, stopReason });
-    if (res.aborted) {
-      runIds.push(runId);
-    }
-  }
-  return { aborted: runIds.length > 0, runIds };
 }

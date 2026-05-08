@@ -4,7 +4,6 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { resolveModelAuthMode } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
-  isCliProvider,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
@@ -33,7 +32,7 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readLatestSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
+import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -47,7 +46,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
@@ -56,6 +54,7 @@ import {
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
+import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { formatFastModeLabel } from "./status-labels.js";
 
@@ -97,6 +96,7 @@ export type StatusArgs = {
   activeModelAuth?: string;
   usageLine?: string;
   timeLine?: string;
+  uptimeLine?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
@@ -198,51 +198,6 @@ function resolveExecutionLabel(
   return `${runtime}/${sandboxMode}`;
 }
 
-const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  pi: "OpenClaw Pi Default",
-  codex: "OpenAI Codex",
-  "codex-cli": "OpenAI Codex",
-  "claude-cli": "Claude CLI",
-  "google-gemini-cli": "Gemini CLI",
-};
-
-function resolveAgentRuntimeLabel(
-  args: Pick<StatusArgs, "config" | "sessionEntry" | "resolvedHarness"> & {
-    fallbackProvider?: string;
-  },
-): string {
-  const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
-  const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
-  if (acpAgent) {
-    const backendRaw = normalizeOptionalString(args.sessionEntry?.acp?.backend);
-    const backend = backendRaw ? sanitizeTerminalText(backendRaw) : undefined;
-    return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
-  }
-
-  const runtimeRaw =
-    normalizeOptionalString(args.resolvedHarness) ??
-    normalizeOptionalString(args.sessionEntry?.agentRuntimeOverride) ??
-    normalizeOptionalString(args.sessionEntry?.agentHarnessId);
-  const runtime = normalizeOptionalLowercaseString(runtimeRaw);
-  if (runtime && runtime !== "auto" && runtime !== "default") {
-    return AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
-  }
-
-  const providerRaw =
-    normalizeOptionalString(args.sessionEntry?.modelProvider) ??
-    normalizeOptionalString(args.sessionEntry?.providerOverride) ??
-    normalizeOptionalString(args.fallbackProvider);
-  const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
-  if (provider && isCliProvider(provider, args.config)) {
-    return (
-      AGENT_RUNTIME_LABELS[normalizeOptionalLowercaseString(providerRaw) ?? ""] ??
-      `${provider} (cli)`
-    );
-  }
-
-  return AGENT_RUNTIME_LABELS.pi;
-}
-
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
   const ctx = contextTokens ?? null;
   if (total == null) {
@@ -325,11 +280,12 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    const snapshot = readLatestSessionUsageFromTranscript(
+    const snapshot = readRecentSessionUsageFromTranscript(
       sessionId,
       storePath,
       sessionEntry?.sessionFile,
       agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+      256 * 1024,
     );
     if (!snapshot) {
       return undefined;
@@ -695,12 +651,17 @@ export function buildStatusMessage(args: StatusArgs): string {
     model: selectedModel,
     allowAsyncLoad: false,
   });
-  const activeContextTokens = resolveContextTokensForModel({
-    cfg: contextConfig,
-    ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
-    model: contextLookupModel,
-    allowAsyncLoad: false,
-  });
+  const explicitRuntimeContextTokens =
+    typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
+      ? args.runtimeContextTokens
+      : undefined;
+  const activeContextTokens =
+    resolveContextTokensForModel({
+      cfg: contextConfig,
+      ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+      model: contextLookupModel,
+      allowAsyncLoad: false,
+    }) ?? explicitRuntimeContextTokens;
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
     entry,
@@ -716,10 +677,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
       ? args.agent.contextTokens
       : undefined;
-  const explicitRuntimeContextTokens =
-    typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
-      ? args.runtimeContextTokens
-      : undefined;
   const explicitConfiguredContextTokens =
     typeof args.explicitConfiguredContextTokens === "number" &&
     args.explicitConfiguredContextTokens > 0
@@ -731,14 +688,18 @@ export function buildStatusMessage(args: StatusArgs): string {
         ? Math.min(explicitConfiguredContextTokens, activeContextTokens)
         : explicitConfiguredContextTokens
       : undefined;
+  const cappedAgentContextTokens =
+    typeof agentContextTokens === "number"
+      ? typeof activeContextTokens === "number"
+        ? Math.min(agentContextTokens, activeContextTokens)
+        : agentContextTokens
+      : undefined;
   const channelOverrideContextTokens = channelModelNote
     ? (explicitRuntimeContextTokens ??
       cappedConfiguredContextTokens ??
       (typeof activeContextTokens === "number"
-        ? typeof agentContextTokens === "number"
-          ? Math.min(agentContextTokens, activeContextTokens)
-          : activeContextTokens
-        : agentContextTokens))
+        ? (cappedAgentContextTokens ?? activeContextTokens)
+        : cappedAgentContextTokens))
     : undefined;
   // When a fallback model is active, the selected-model context limit that
   // callers keep on the agent config is often stale. Prefer an explicit runtime
@@ -787,7 +748,11 @@ export function buildStatusMessage(args: StatusArgs): string {
         ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
         model: contextLookupModel,
         contextTokensOverride:
-          channelOverrideContextTokens ?? persistedContextTokens ?? agentContextTokens,
+          channelOverrideContextTokens ??
+          persistedContextTokens ??
+          cappedConfiguredContextTokens ??
+          cappedAgentContextTokens ??
+          explicitRuntimeContextTokens,
         fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
         allowAsyncLoad: false,
       }) ?? DEFAULT_CONTEXT_TOKENS);
@@ -904,15 +869,16 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? activeAuthMode
     : (selectedAuthMode ?? activeAuthMode);
   const showCost = effectiveCostAuthMode === "api-key" || effectiveCostAuthMode === "mixed";
-  const costConfig = showCost
-    ? resolveModelCostConfig({
-        provider: activeProvider,
-        model: activeModel,
-        config: args.config,
-        allowPluginNormalization: false,
-      })
-    : undefined;
   const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
+  const costConfig =
+    showCost && hasUsage
+      ? resolveModelCostConfig({
+          provider: activeProvider,
+          model: activeModel,
+          config: args.config,
+          allowPluginNormalization: false,
+        })
+      : undefined;
   const cost =
     showCost && hasUsage
       ? estimateUsageCost({
@@ -960,6 +926,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   return [
     versionLine,
     args.timeLine,
+    args.uptimeLine,
     modelLine,
     configuredFallbacksLine,
     fallbackLine,

@@ -87,6 +87,19 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
   });
 
+  it("can opt into reusing the stored workspace scope for unscoped control-plane readers", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/a" });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        config,
+        allowWorkspaceScopedSnapshot: true,
+      }),
+    ).toBe(snapshot);
+  });
+
   it("rejects a current snapshot when plugin load paths change", () => {
     const config = { plugins: { load: { paths: ["/plugins/one"] } } };
     const snapshot = createSnapshot({ config });
@@ -100,6 +113,66 @@ describe("current plugin metadata snapshot", () => {
     ).toBeUndefined();
   });
 
+  it("rejects configless default-discovery reuse for snapshots created with load paths", () => {
+    const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("accepts configless default-discovery reuse for snapshots created without load paths", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      }),
+    ).toBe(snapshot);
+  });
+
+  it("rejects a current snapshot when env-resolved plugin load paths change", () => {
+    const config = { plugins: { load: { paths: ["~/plugins"] } } };
+    const snapshot = createSnapshot({ config });
+    const snapshotEnv = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const requestedEnv = {
+      HOME: "/home/requested",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env: snapshotEnv });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env: snapshotEnv })).toBe(snapshot);
+    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBeUndefined();
+  });
+
+  it("rejects a current snapshot when env-resolved plugin roots change", () => {
+    const config = {};
+    const snapshot = createSnapshot({ config });
+    const snapshotEnv = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    const requestedEnv = {
+      HOME: "/home/requested",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env: snapshotEnv });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env: snapshotEnv })).toBe(snapshot);
+    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBeUndefined();
+  });
+
   it("keeps source-policy compatibility when storing an auto-enabled runtime config", () => {
     const sourceConfig = { channels: { telegram: { botToken: "token" } } };
     const autoEnabledConfig = {
@@ -111,6 +184,27 @@ describe("current plugin metadata snapshot", () => {
 
     expect(getCurrentPluginMetadataSnapshot({ config: sourceConfig })).toBe(snapshot);
     expect(getCurrentPluginMetadataSnapshot({ config: autoEnabledConfig })).toBeUndefined();
+  });
+
+  it("accepts explicit compatible configs for gateway runtime reuse", () => {
+    const sourceConfig = { channels: { telegram: { botToken: "token" } } };
+    const runtimeConfig = {
+      ...sourceConfig,
+      plugins: { allow: ["telegram"] },
+    };
+    const snapshot = createSnapshot({ config: sourceConfig, workspaceDir: "/workspace" });
+    setCurrentPluginMetadataSnapshot(snapshot, {
+      config: sourceConfig,
+      compatibleConfigs: [runtimeConfig],
+      workspaceDir: "/workspace",
+    });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({ config: sourceConfig, workspaceDir: "/workspace" }),
+    ).toBe(snapshot);
+    expect(
+      getCurrentPluginMetadataSnapshot({ config: runtimeConfig, workspaceDir: "/workspace" }),
+    ).toBe(snapshot);
   });
 
   it("clears the current snapshot", () => {

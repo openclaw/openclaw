@@ -1,7 +1,7 @@
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
-  resolveSessionAgentId,
+  resolveSessionAgentIds,
   type MemoryCorpusSearchResult,
   type AnyAgentTool,
   type OpenClawConfig,
@@ -16,6 +16,7 @@ type MemorySearchManagerResult = Awaited<
 type MemoryToolOptions = {
   config?: OpenClawConfig;
   getConfig?: () => OpenClawConfig | undefined;
+  agentId?: string;
   agentSessionKey?: string;
 };
 
@@ -49,14 +50,15 @@ export const MemoryGetSchema = Type.Object({
   ),
 });
 
-export function resolveMemoryToolContext(options: MemoryToolOptions) {
+function resolveMemoryToolContext(options: MemoryToolOptions) {
   const cfg = options.getConfig?.() ?? options.config;
   if (!cfg) {
     return null;
   }
-  const agentId = resolveSessionAgentId({
+  const { sessionAgentId: agentId } = resolveSessionAgentIds({
     sessionKey: options.agentSessionKey,
     config: cfg,
+    agentId: options.agentId,
   });
   if (!resolveMemorySearchConfig(cfg, agentId)) {
     return null;

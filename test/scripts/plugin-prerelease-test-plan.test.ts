@@ -22,6 +22,14 @@ function readPluginPrereleaseWorkflow() {
   return parse(readFileSync(".github/workflows/plugin-prerelease.yml", "utf8"));
 }
 
+function getDockerLane(name: string) {
+  const lane = findLaneByName(name);
+  if (!lane) {
+    throw new Error(`Missing Docker E2E lane ${name}`);
+  }
+  return lane;
+}
+
 describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   it("covers every pre-release plugin skill surface in the plugin prerelease plan", () => {
     const plan = assertPluginPrereleaseTestPlanComplete();
@@ -36,9 +44,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
     expect(plan.dockerLanes).toEqual([
       "npm-onboard-channel-agent",
+      "npm-onboard-discord-channel-agent",
+      "npm-onboard-slack-channel-agent",
       "doctor-switch",
       "update-channel-switch",
-      "bundled-channel-deps-compat",
       "plugins-offline",
       "plugins",
       "kitchen-sink-plugin",
@@ -54,7 +63,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ]);
 
     for (const lane of plan.dockerLanes) {
-      expect(findLaneByName(lane), lane).toBeTruthy();
+      expect(getDockerLane(lane).name).toBe(lane);
     }
   });
 
@@ -62,7 +71,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const plan = createPluginPrereleaseTestPlan();
 
     expect(plan.dockerLanes).not.toContain("openai-web-search-minimal");
-    expect(plan.dockerLanes.some((lane) => lane.startsWith("live-"))).toBe(false);
+    expect(plan.dockerLanes.filter((lane) => lane.startsWith("live-"))).toEqual([]);
     expect(plan.staticChecks).toContainEqual({
       check: "live-ish-availability",
       checkName: "checks-plugin-prerelease-live-ish-availability",
@@ -82,7 +91,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   });
 
   it("uses kitchen-sink npm and ClawHub scenarios as the registry install canary", () => {
-    const lane = findLaneByName("kitchen-sink-plugin");
+    const lane = getDockerLane("kitchen-sink-plugin");
     const script = readFileSync("scripts/e2e/kitchen-sink-plugin-docker.sh", "utf8");
     const sweepScript = readFileSync("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh", "utf8");
     const assertionsScript = readFileSync(
@@ -103,43 +112,56 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(script).toContain("npm-latest-conformance");
     expect(script).toContain("npm-latest-adversarial");
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
-    expect(script).toContain("clawhub:openclaw-kitchen-sink@latest");
-    expect(script).toContain("clawhub:openclaw-kitchen-sink@beta");
+    expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
+    expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
+    expect(script).toContain(
+      "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||${KITCHEN_SINK_NPM_SPEC}",
+    );
     expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
     expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_PREINSTALL_SPEC"');
+    expect(sweepScript).toContain("assert-cutover-preinstalled");
+    expect(sweepScript).toContain('install_args+=("--force")');
     expect(sweepScript).toContain("KITCHEN_SINK_PERSONALITY");
+    expect(sweepScript).toContain("OPENCLAW_KITCHEN_SINK_PERSONALITY");
     expect(sweepScript).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
     const successScenario = sweepScript.slice(
       sweepScript.indexOf("run_success_scenario()"),
       sweepScript.indexOf("run_failure_scenario()"),
     );
-    expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
-      successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"'),
+    expect(successScenario.indexOf('plugins install "${install_args[@]}"')).toBeLessThan(
+      successScenario.indexOf("configure_kitchen_sink_runtime"),
     );
-    expect(successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"')).toBeLessThan(
+    expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
       successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
     );
+    expect(successScenario).toContain('plugins inspect "$KITCHEN_SINK_ID" --runtime --json');
+    expect(successScenario).toContain("plugins inspect --all --runtime --json");
     expect(sweepScript).toContain("run_failure_scenario");
+    expect(assertionsScript).toContain("assertCutoverPreinstalled");
     expect(assertionsScript).toContain("record.source !== source");
     expect(assertionsScript).toContain("record.clawhubPackage !== packageName");
+    expect(assertionsScript).toContain("record.clawpackSha256");
+    expect(assertionsScript).toContain("record.artifactKind");
+    expect(assertionsScript).toContain("record.npmIntegrity");
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain("expectedErrorMessages");
     expect(assertionsScript).toContain(
-      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "adversarial"]);',
+      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "adversarial"]);',
     );
     expect(assertionsScript).toContain("!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)");
-    expect(assertionsScript).not.toContain(
-      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance"',
-    );
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
       'from "openclaw/plugin-sdk/plugin-entry"',
+    );
+    expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
+      "X-ClawHub-Artifact-Sha256",
     );
     expect(script).toContain("docker stats --no-stream");
     expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
   });
 
   it("keeps the generic plugin Docker lane as an external install contract canary", () => {
-    const lane = findLaneByName("plugins");
+    const lane = getDockerLane("plugins");
     const sweepScript = readFileSync("scripts/e2e/lib/plugins/sweep.sh", "utf8");
     const clawhubScript = readFileSync("scripts/e2e/lib/plugins/clawhub.sh", "utf8");
     const assertionsScript = readFileSync("scripts/e2e/lib/plugins/assertions.mjs", "utf8");
@@ -159,9 +181,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(clawhubScript).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain('node_modules", "openclaw');
-    expect(assertionsScript).toContain('node_modules", "is-number');
     expect(fixtureServer).toContain('"is-number": "7.0.0"');
     expect(fixtureServer).toContain('openclaw: ">=2026.4.11"');
+    expect(fixtureServer).toContain("/versions/${fixture.version}/artifact");
   });
 
   it("wires the full plugin prerelease plan into its release workflow", () => {
@@ -295,6 +317,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         include_repo_e2e: false,
         live_models_only: false,
         ref: "${{ needs.preflight.outputs.checkout_revision }}",
+        targeted_docker_lane_group_size: 4,
       },
     });
     expect(dockerSuite.secrets).toBeUndefined();
@@ -320,7 +343,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     });
     expect(fullReleaseWorkflow.concurrency).toEqual({
       group: "full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}",
-      "cancel-in-progress": false,
+      "cancel-in-progress": "${{ inputs.ref == 'main' && inputs.rerun_group == 'all' }}",
     });
     expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
     expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
@@ -330,6 +353,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "normal_ci",
       "plugin_prerelease",
       "release_checks",
+      "prepare_release_package",
       "npm_telegram",
       "summary",
     ]) {

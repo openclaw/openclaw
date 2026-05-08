@@ -42,15 +42,11 @@ describe("acquireFileLock", () => {
       JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
       "utf8",
     );
-    setTimeout(() => {
-      void fs.rm(lockPath, { force: true });
-    }, 50);
 
     await expect(acquireFileLock(filePath, options)).rejects.toSatisfy((error) => {
       expect(error).toMatchObject({
         code: FILE_LOCK_TIMEOUT_ERROR_CODE,
       });
-      expect((error as { lockPath?: string }).lockPath).toBeTruthy();
       expect((error as { lockPath?: string }).lockPath).toMatch(/oauth-refresh\.lock$/);
       return true;
     });

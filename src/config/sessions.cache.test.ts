@@ -108,6 +108,30 @@ describe("Session Store Cache", () => {
     expect(loaded2["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe("alpha");
   });
 
+  it("honors explicit clone:false on cache hits", async () => {
+    const testStore = createSingleSessionStore(
+      createSessionEntry({
+        origin: { provider: "openai" },
+      }),
+    );
+
+    await saveSessionStore(storePath, testStore);
+
+    const parseSpy = vi.spyOn(JSON, "parse");
+
+    const loaded1 = loadSessionStore(storePath, { clone: false });
+    expect(parseSpy).not.toHaveBeenCalled();
+
+    loaded1["session:1"].origin = { provider: "mutated" };
+
+    const loaded2 = loadSessionStore(storePath, { clone: false });
+    expect(loaded2).toBe(loaded1);
+    expect(loaded2["session:1"].origin?.provider).toBe("mutated");
+    expect(parseSpy).not.toHaveBeenCalled();
+
+    parseSpy.mockRestore();
+  });
+
   it("does not cache pre-migration or pre-normalization disk JSON", () => {
     fs.writeFileSync(
       storePath,
@@ -302,7 +326,7 @@ describe("Session Store Cache", () => {
     expect(loaded).toEqual({});
   });
 
-  it("should handle invalid JSON gracefully", async () => {
+  it("should handle invalid JSON gracefully", () => {
     // Write invalid JSON
     fs.writeFileSync(storePath, "not valid json {");
 
@@ -341,7 +365,8 @@ describe("Session Store Cache", () => {
 
     // The cache should detect the size change and reload from disk
     const loaded2 = loadSessionStore(storePath);
-    expect(loaded2["session:2"]).toBeDefined();
-    expect(loaded2["session:2"].displayName).toBe("Added");
+    expect(loaded2).toMatchObject({
+      "session:2": { displayName: "Added" },
+    });
   });
 });
