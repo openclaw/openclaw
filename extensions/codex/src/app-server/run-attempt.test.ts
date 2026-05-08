@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { abortAgentHarnessRun } from "openclaw/plugin-sdk/agent-harness";
-import { SessionManager } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   embeddedAgentLog,
   nativeHookRelayTesting,
@@ -190,12 +189,24 @@ function userMessage(text: string, timestamp: number) {
   };
 }
 
-function mockCall(mock: unknown, label: string, index = 0): unknown[] {
-  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.at(index);
-  if (!call) {
-    throw new Error(`Expected ${label} call ${index + 1}`);
-  }
-  return call;
+function seedSessionHistory(
+  sessionFile: string,
+  messages: Array<ReturnType<typeof assistantMessage> | ReturnType<typeof userMessage>>,
+) {
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "session-1",
+    transcriptPath: sessionFile,
+    events: [
+      { type: "session", version: 1, id: "session-1" },
+      ...messages.map((message, index) => ({
+        type: "message",
+        id: `history-${index + 1}`,
+        parentId: index === 0 ? null : `history-${index}`,
+        message,
+      })),
+    ],
+  });
 }
 
 function createAppServerHarness(
@@ -2187,8 +2198,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const sessionManager = SessionManager.open(sessionFile);
-    sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
+    seedSessionHistory(sessionFile, [assistantMessage("previous turn", Date.now())]);
     const harness = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -2221,9 +2231,10 @@ describe("runCodexAppServerAttempt", () => {
   it("projects mirrored history when starting Codex without a native thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const sessionManager = SessionManager.open(sessionFile);
-    sessionManager.appendMessage(userMessage("we are fixing the Opik default project", Date.now()));
-    sessionManager.appendMessage(assistantMessage("Opik default project context", Date.now() + 1));
+    seedSessionHistory(sessionFile, [
+      userMessage("we are fixing the Opik default project", Date.now()),
+      assistantMessage("Opik default project context", Date.now() + 1),
+    ]);
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "make the default webpage openclaw";
@@ -2291,8 +2302,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const sessionManager = SessionManager.open(sessionFile);
-    sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
+    seedSessionHistory(sessionFile, [assistantMessage("existing context", Date.now())]);
     const harness = createStartedThreadHarness();
 
     const params = createParams(sessionFile, workspaceDir);
@@ -3033,9 +3043,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
-      assistantMessage("existing context", Date.now()),
-    );
+    seedSessionHistory(sessionFile, [assistantMessage("existing context", Date.now())]);
     createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
         throw new Error("turn start exploded");
