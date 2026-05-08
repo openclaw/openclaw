@@ -1241,7 +1241,7 @@ describe("statusCommand", () => {
 
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
-    expect(payload.gateway.error ?? payload.gateway.authWarning ?? null).not.toBeNull();
+    expect(payload.gateway.error ?? payload.gateway.authWarning).toEqual(expect.any(String));
     if (Array.isArray(payload.secretDiagnostics) && payload.secretDiagnostics.length > 0) {
       expect(
         payload.secretDiagnostics.some((entry: string) => entry.includes("gateway.auth.token")),
