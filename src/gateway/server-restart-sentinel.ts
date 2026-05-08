@@ -41,6 +41,7 @@ import {
   deliveryContextFromSession,
   mergeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./server-methods/agent-timestamp.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
@@ -287,10 +288,16 @@ async function deliverQueuedSessionDelivery(params: {
       AccountId: route.accountId,
       MessageSid: messageId,
       Timestamp: Date.now(),
-      Provider: route.channel,
-      Surface: route.channel,
+      InputProvenance: {
+        kind: "internal_system",
+        sourceChannel: route.channel,
+        sourceTool: "restart-sentinel",
+      },
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
       ChatType: route.chatType,
-      CommandAuthorized: false,
+      CommandAuthorized: true,
+      GatewayClientScopes: ["operator.admin"],
       ReplyToId: route.replyToId,
       OriginatingChannel: route.channel,
       OriginatingTo: route.to,

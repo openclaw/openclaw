@@ -543,10 +543,16 @@ describe("scheduleRestartSentinelWake", () => {
           BodyForAgent: "stamped:Reply with exactly: Yay! I did it!",
           BodyForCommands: "",
           CommandBody: "",
-          CommandAuthorized: false,
+          CommandAuthorized: true,
+          GatewayClientScopes: ["operator.admin"],
+          InputProvenance: {
+            kind: "internal_system",
+            sourceChannel: "whatsapp",
+            sourceTool: "restart-sentinel",
+          },
           SessionKey: "agent:main:main",
-          Provider: "whatsapp",
-          Surface: "whatsapp",
+          Provider: "webchat",
+          Surface: "webchat",
           OriginatingChannel: "whatsapp",
           OriginatingTo: "+15550002",
           MessageThreadId: "thread-42",
@@ -595,6 +601,72 @@ describe("scheduleRestartSentinelWake", () => {
           ChatType: "group",
           OriginatingChannel: "telegram",
           OriginatingTo: "telegram:-1001",
+        }),
+      }),
+    );
+  });
+
+  it("authorizes routed agentTurn continuations while preserving Telegram topic routing", async () => {
+    mocks.readRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:telegram:group:-1003826723328:topic:13757",
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue in topic",
+        },
+      },
+    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mocks.parseSessionThreadInfo.mockReturnValue({
+      baseSessionKey: "agent:main:telegram:group:-1003826723328",
+      threadId: "13757",
+    });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:telegram:group:-1003826723328:topic:13757",
+        updatedAt: 0,
+        origin: { provider: "telegram", chatType: "group" },
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:telegram:group:-1003826723328:topic:13757",
+      legacyKey: undefined,
+    });
+    mocks.deliveryContextFromSession.mockReturnValue({
+      channel: "telegram",
+      to: "telegram:-1003826723328:topic:13757",
+      accountId: "default",
+      threadId: 13757,
+    });
+    mocks.resolveOutboundTarget.mockReturnValue({
+      ok: true as const,
+      to: "telegram:-1003826723328:topic:13757",
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "default",
+        routeSessionKey: "agent:main:telegram:group:-1003826723328:topic:13757",
+        ctxPayload: expect.objectContaining({
+          Body: "continue in topic",
+          CommandAuthorized: true,
+          GatewayClientScopes: ["operator.admin"],
+          InputProvenance: {
+            kind: "internal_system",
+            sourceChannel: "telegram",
+            sourceTool: "restart-sentinel",
+          },
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "group",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:-1003826723328:topic:13757",
+          ExplicitDeliverRoute: true,
+          MessageThreadId: "13757",
         }),
       }),
     );
