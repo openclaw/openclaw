@@ -456,6 +456,13 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     When a cached gateway probe result is available (gateway was healthy at the time of the check), doctor cross-references its result with the CLI-visible config and notes any discrepancy. Doctor does not start a fresh embedding ping on the default path; use the deep memory status command when you want a live provider check.
 
+    `doctor.memory.status` returns two distinct health surfaces:
+
+    - `runtime.ok`: whether the gateway could resolve and start the memory runtime for the default agent.
+    - `embedding.ok`: whether the configured embedding provider is ready, cached, skipped, or failed independently of runtime startup.
+
+    This split lets clients distinguish "memory runtime is active but embeddings were not probed" from "memory runtime itself is unavailable."
+
     Use `openclaw memory status --deep` to verify embedding readiness at runtime.
 
   </Accordion>
