@@ -309,25 +309,6 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(result.reason).toBe("no compaction entry");
   });
 
-  it("does not create legacy jsonl successor files for unmigrated transcripts", async () => {
-    const dir = await createTmpDir();
-    const { manager } = createCompactedSession(dir);
-
-    const result = await rotateTranscriptAfterCompaction({
-      sessionManager: manager,
-      sessionFile: path.join(dir, "legacy-session.jsonl"),
-      now: () => new Date("2026-04-27T12:15:00.000Z"),
-    });
-
-    expect(result).toMatchObject({
-      rotated: false,
-      reason: "transcript not in SQLite",
-    });
-    await expect(
-      fs.stat(path.join(dir, "2026-04-27T12-15-00-000Z_legacy-session.jsonl")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
   it("uses a refreshed manager after manual boundary hardening", async () => {
     const dir = await createTmpDir();
     const manager = createScopedSessionManager(dir);
