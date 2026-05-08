@@ -119,7 +119,9 @@ function expectRegistryDiagnosticContains(
   registry: ReturnType<typeof loadPluginManifestRegistry>,
   fragment: string,
 ) {
-  expect(registry.diagnostics.some((diag) => diag.message.includes(fragment))).toBe(true);
+  expect(registry.diagnostics.map((diag) => diag.message)).toEqual(
+    expect.arrayContaining([expect.stringContaining(fragment)]),
+  );
 }
 
 function prepareLinkedManifestFixture(params: { id: string; mode: "symlink" | "hardlink" }): {
@@ -1948,8 +1950,8 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     expect(registry.plugins.some((plugin) => plugin.id === "codex")).toBe(true);
-    expect(registry.diagnostics.some((diag) => diag.message.includes("requires OpenClaw"))).toBe(
-      false,
+    expect(registry.diagnostics.map((diag) => diag.message)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("requires OpenClaw")]),
     );
   });
 
