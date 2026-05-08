@@ -38,7 +38,6 @@ import {
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
-import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
@@ -1658,9 +1657,11 @@ function parseExplicitLiveModelRef(
   const slash = trimmed.indexOf("/");
   if (slash !== -1) {
     const provider = normalizeProviderId(trimmed.slice(0, slash));
-    const modelId = provider
-      ? normalizeStaticProviderModelId(provider, trimmed.slice(slash + 1)).trim()
-      : "";
+    const rawModelId = trimmed.slice(slash + 1).trim();
+    const modelId =
+      provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
+        ? normalizeGoogleModelId(rawModelId)
+        : rawModelId;
     return provider && modelId ? { provider, modelId } : null;
   }
   if (!providerFilter || providerFilter.size !== 1) {
