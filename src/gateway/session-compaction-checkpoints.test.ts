@@ -196,7 +196,8 @@ describe("session-compaction-checkpoints", () => {
       expect(forkSpy).not.toHaveBeenCalled();
       expect(forked).not.toBeNull();
       expect(forked?.sessionFile).not.toBe(sessionFile);
-      expect(forked?.sessionId).toEqual(expect.any(String));
+      expect(forked?.sessionId).toBeTypeOf("string");
+      expect(forked?.sessionId).not.toBe("");
     } finally {
       openSpy.mockRestore();
       forkSpy.mockRestore();
@@ -289,13 +290,15 @@ describe("session-compaction-checkpoints", () => {
       parentId: null,
       message: expect.objectContaining({ content: "legacy first" }),
     });
-    expect(forkedEntries[1]?.id).toEqual(expect.any(String));
+    expect(forkedEntries[1]?.id).toBeTypeOf("string");
+    expect(forkedEntries[1]?.id).not.toBe("");
     expect(forkedEntries[2]).toMatchObject({
       type: "message",
       parentId: forkedEntries[1]?.id,
       message: expect.objectContaining({ content: "legacy second" }),
     });
-    expect(forkedEntries[2]?.id).toEqual(expect.any(String));
+    expect(forkedEntries[2]?.id).toBeTypeOf("string");
+    expect(forkedEntries[2]?.id).not.toBe("");
 
     const messages = SessionManager.open(forked!.sessionFile, dir).buildSessionContext().messages;
     expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
