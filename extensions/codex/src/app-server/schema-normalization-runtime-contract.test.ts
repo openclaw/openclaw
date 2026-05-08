@@ -7,12 +7,17 @@ import {
   createPermissiveTool,
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { createSqliteSessionTranscriptLocator } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexThreadStartParams } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread } from "./thread-lifecycle.js";
 
 let tempDir: string;
+
+function testSessionFile(suffix = "session-1"): string {
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: suffix });
+}
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
   return {
@@ -96,7 +101,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
   });
 
   it("passes prepared executable dynamic tool schemas through thread start unchanged", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionFile = testSessionFile();
     const workspaceDir = path.join(tempDir, "workspace");
     const parameterFreeTool = createParameterFreeTool("message");
     const dynamicTool = {
@@ -161,7 +166,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
   });
 
   it("treats dynamic tool schema changes as thread-fingerprint changes", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionFile = testSessionFile("session-dynamic-tool-change");
     const workspaceDir = path.join(tempDir, "workspace");
     const appServer = createAppServerOptions();
     let nextThreadId = 1;
