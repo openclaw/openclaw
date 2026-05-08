@@ -50,14 +50,6 @@ describe("gateway restart intent", () => {
     expect(fs.existsSync(intentPath(env))).toBe(false);
   });
 
-  it("rejects oversized intent files before parsing", () => {
-    const env = createIntentEnv();
-    fs.writeFileSync(intentPath(env), "x".repeat(2048), { encoding: "utf8", mode: 0o600 });
-
-    expect(consumeGatewayRestartIntentSync(env)).toBe(false);
-    expect(fs.existsSync(intentPath(env))).toBe(true);
-  });
-
   it("stores intents in SQLite instead of a legacy JSON file", () => {
     const env = createIntentEnv();
 
@@ -83,22 +75,5 @@ describe("gateway restart intent", () => {
       waitMs: 12_345,
     });
     expect(fs.existsSync(intentPath(env))).toBe(false);
-  });
-
-  it("does not touch an existing legacy intent-path symlink when writing", () => {
-    const env = createIntentEnv();
-    const targetPath = path.join(env.OPENCLAW_STATE_DIR ?? "", "attacker-target.txt");
-    fs.writeFileSync(targetPath, "keep", "utf8");
-    try {
-      fs.symlinkSync(targetPath, intentPath(env));
-    } catch {
-      return;
-    }
-
-    expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(true);
-
-    expect(fs.readFileSync(targetPath, "utf8")).toBe("keep");
-    expect(fs.lstatSync(intentPath(env)).isSymbolicLink()).toBe(true);
-    expect(consumeGatewayRestartIntentSync(env)).toBe(true);
   });
 });

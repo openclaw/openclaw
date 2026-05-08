@@ -380,8 +380,8 @@ The remaining cleanup is mostly consolidation and deletion:
 - Gateway singleton locks now use shared SQLite KV instead of temp-dir lock
   files. Done.
 - Gateway restart sentinel state now uses shared SQLite KV instead of
-  `restart-sentinel.json`; the old path resolver remains only for legacy
-  cleanup/status compatibility.
+  `restart-sentinel.json`; runtime code clears the SQLite row directly and no
+  longer carries file cleanup plumbing.
 - Gateway restart intent and supervisor handoff state now use shared SQLite KV
   instead of `gateway-restart-intent.json` and
   `gateway-supervisor-restart-handoff.json` sidecars.
