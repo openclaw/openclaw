@@ -25,6 +25,19 @@ describe("pi bundle MCP names", () => {
     expect(safeToolName).toBe(`memory${TOOL_NAME_SEPARATOR}status-2`);
   });
 
+  it("prepends s prefix when server name starts with a digit", () => {
+    const usedNames = new Set<string>();
+    const name = sanitizeServerName("12306", usedNames);
+    expect(name).toMatch(/^[A-Za-z]/);
+    expect(name).toBe("s12306");
+  });
+
+  it("prepends s prefix when server name starts with a dash after sanitization", () => {
+    const usedNames = new Set<string>();
+    const name = sanitizeServerName("---server", usedNames);
+    expect(name).toMatch(/^[A-Za-z]/);
+  });
+
   it("truncates overlong tool names while keeping the server prefix", () => {
     const safeToolName = buildSafeToolName({
       serverName: "memory",
