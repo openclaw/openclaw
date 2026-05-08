@@ -497,7 +497,7 @@ describe("dreaming view", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("dreams");
     const emptyContainer = renderInto(buildProps({ dreamDiaryContent: null }));
-    expect(emptyContainer.querySelector(".dreams-diary__empty")).not.toBeNull();
+    expect(emptyContainer.querySelectorAll(".dreams-diary__empty")).toHaveLength(1);
     expect(emptyContainer.querySelector(".dreams-diary__empty-text")?.textContent).toContain(
       "No dreams yet",
     );
