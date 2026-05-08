@@ -5,8 +5,10 @@ import { upsertPluginStateMigrationEntry } from "../plugin-sdk/migration-runtime
 import {
   createDreamingWorkspaceMapStorageEntry,
   createDreamingWorkspaceValueStorageEntry,
+  createDreamingSessionCorpusLineStorageEntry,
   MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
   MEMORY_CORE_PLUGIN_ID,
+  MEMORY_CORE_SESSION_CORPUS_LINES_NAMESPACE,
   MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE,
   MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
@@ -22,6 +24,7 @@ const DREAMING_STATE_RELATIVE_PATHS = {
   shortTermRecall: path.join("memory", ".dreams", "short-term-recall.json"),
   phaseSignals: path.join("memory", ".dreams", "phase-signals.json"),
   events: path.join("memory", ".dreams", "events.jsonl"),
+  sessionCorpusDir: path.join("memory", ".dreams", "session-corpus"),
   shortTermLock: path.join("memory", ".dreams", "short-term-promotion.lock"),
 } as const;
 
@@ -43,6 +46,15 @@ async function fileExists(filePath: string): Promise<boolean> {
   try {
     const stat = await fs.stat(filePath);
     return stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function dirExists(dirPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(dirPath);
+    return stat.isDirectory();
   } catch {
     return false;
   }
@@ -99,6 +111,30 @@ function upsertValueRow(params: {
   upsertPluginStateMigrationEntry({
     pluginId: MEMORY_CORE_PLUGIN_ID,
     namespace: MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
+    key: row.key,
+    value: row.value,
+    createdAt: params.createdAt,
+    env: params.env,
+  });
+}
+
+function upsertSessionCorpusLine(params: {
+  workspaceDir: string;
+  relativePath: string;
+  lineNumber: number;
+  text: string;
+  createdAt: number;
+  env: NodeJS.ProcessEnv;
+}): void {
+  const row = createDreamingSessionCorpusLineStorageEntry({
+    workspaceDir: params.workspaceDir,
+    relativePath: params.relativePath,
+    lineNumber: params.lineNumber,
+    text: params.text,
+  });
+  upsertPluginStateMigrationEntry({
+    pluginId: MEMORY_CORE_PLUGIN_ID,
+    namespace: MEMORY_CORE_SESSION_CORPUS_LINES_NAMESPACE,
     key: row.key,
     value: row.value,
     createdAt: params.createdAt,
@@ -262,6 +298,40 @@ export async function importLegacyMemoryCoreDreamingStateFilesToSqlite(params: {
         result.files += 1;
       }
       touchedWorkspace = true;
+    }
+
+    const sessionCorpusDir = path.join(
+      workspaceDir,
+      DREAMING_STATE_RELATIVE_PATHS.sessionCorpusDir,
+    );
+    if (await dirExists(sessionCorpusDir)) {
+      const entries = await fs.readdir(sessionCorpusDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || (!entry.name.endsWith(".txt") && !entry.name.endsWith(".md"))) {
+          continue;
+        }
+        const sourcePath = path.join(sessionCorpusDir, entry.name);
+        const relativePath = path.posix.join("memory", ".dreams", "session-corpus", entry.name);
+        const raw = await fs.readFile(sourcePath, "utf8");
+        const lines =
+          raw.length === 0 ? [] : raw.replace(/\r\n/g, "\n").replace(/\n$/u, "").split("\n");
+        const createdAt = Date.now();
+        for (const [index, line] of lines.entries()) {
+          upsertSessionCorpusLine({
+            workspaceDir,
+            relativePath,
+            lineNumber: index + 1,
+            text: line,
+            createdAt,
+            env: params.env,
+          });
+          result.rows += 1;
+        }
+        await fs.rm(sourcePath, { force: true });
+        result.files += 1;
+        touchedWorkspace = true;
+      }
+      await fs.rmdir(sessionCorpusDir).catch(() => {});
     }
 
     const lockPath = path.join(workspaceDir, DREAMING_STATE_RELATIVE_PATHS.shortTermLock);

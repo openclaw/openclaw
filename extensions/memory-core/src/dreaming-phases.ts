@@ -14,6 +14,7 @@ import {
   MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
   MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE,
   MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE,
+  appendDreamingSessionCorpusLines,
   readDreamingWorkspaceMap,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
@@ -21,7 +22,6 @@ import {
   writeDreamingWorkspaceMap,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -82,7 +82,6 @@ const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
 const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
-const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
 const SESSION_INGESTION_SCORE = 0.58;
 const SESSION_INGESTION_MAX_SNIPPET_CHARS = 280;
 const SESSION_INGESTION_MIN_SNIPPET_CHARS = 12;
@@ -686,35 +685,13 @@ async function appendSessionCorpusLines(params: {
     return [];
   }
   const relativePath = path.posix.join("memory", ".dreams", "session-corpus", `${params.day}.txt`);
-  const absolutePath = path.join(
-    params.workspaceDir,
-    SESSION_CORPUS_RELATIVE_DIR,
-    `${params.day}.txt`,
-  );
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  let existing = "";
-  try {
-    existing = await fs.readFile(absolutePath, "utf-8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      throw err;
-    }
-  }
-  const normalizedExisting = existing.replace(/\r\n/g, "\n");
-  const existingLineCount =
-    normalizedExisting.length === 0
-      ? 0
-      : normalizedExisting.endsWith("\n")
-        ? normalizedExisting.slice(0, -1).split("\n").length
-        : normalizedExisting.split("\n").length;
-  const payload = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
-  await appendRegularFile({
-    filePath: absolutePath,
-    content: payload,
-    rejectSymlinkParents: true,
+  const firstLine = await appendDreamingSessionCorpusLines({
+    workspaceDir: params.workspaceDir,
+    relativePath,
+    lines: params.lines.map((entry) => entry.rendered),
   });
   return params.lines.map((entry, index) => {
-    const lineNumber = existingLineCount + index + 1;
+    const lineNumber = firstLine + index;
     return {
       path: relativePath,
       startLine: lineNumber,
