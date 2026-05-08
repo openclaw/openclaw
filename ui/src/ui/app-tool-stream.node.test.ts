@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAgentEvent, type FallbackStatus, type ToolStreamEntry } from "./app-tool-stream.ts";
 
 type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
@@ -65,6 +65,10 @@ function expectCompactionCompleteAndAutoClears(host: MutableHost) {
   expect(host.compactionClearTimer).toBeNull();
 }
 
+function useToolStreamFakeTimers(): void {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+}
+
 describe("app-tool-stream fallback lifecycle handling", () => {
   beforeAll(() => {
     const globalWithWindow = globalThis as typeof globalThis & {
@@ -75,8 +79,16 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     }
   });
 
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("accepts session-scoped fallback lifecycle events when no run is active", () => {
-    vi.useFakeTimers();
+    useToolStreamFakeTimers();
     const host = createHost();
 
     handleAgentEvent(host, {
@@ -104,7 +116,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   });
 
   it("rejects idle fallback lifecycle events for other sessions", () => {
-    vi.useFakeTimers();
+    useToolStreamFakeTimers();
     const host = createHost();
 
     handleAgentEvent(host, {
@@ -127,7 +139,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   });
 
   it("auto-clears fallback status after toast duration", () => {
-    vi.useFakeTimers();
+    useToolStreamFakeTimers();
     const host = createHost();
 
     handleAgentEvent(host, {
@@ -162,7 +174,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   });
 
   it("builds previous fallback label from provider + model on fallback_cleared", () => {
-    vi.useFakeTimers();
+    useToolStreamFakeTimers();
     const host = createHost();
 
     handleAgentEvent(host, {
@@ -188,7 +200,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   });
 
   it("keeps compaction in retry-pending state until the matching lifecycle end", () => {
-    vi.useFakeTimers();
+    useToolStreamFakeTimers();
     const host = createHost();
 
     handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
@@ -234,7 +246,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   });
 
   it("treats lifecycle error as terminal for retry-pending compaction", () => {
-    vi.useFakeTimers();
+    useToolStreamFakeTimers();
     const host = createHost();
 
     handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
@@ -263,7 +275,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   });
 
   it("does not surface retrying or complete when retry compaction failed", () => {
-    vi.useFakeTimers();
+    useToolStreamFakeTimers();
     const host = createHost();
 
     handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));

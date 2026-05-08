@@ -137,7 +137,11 @@ describe("pw-tools-core", () => {
     const savedPath = params.saveAs.mock.calls[0]?.[0];
     expect(typeof savedPath).toBe("string");
     expect(savedPath).not.toBe(params.targetPath);
-    expect(path.basename(path.dirname(String(savedPath)))).toContain("fs-safe-output");
+    const savedParentName = path.basename(path.dirname(String(savedPath)));
+    expect(
+      savedParentName.includes("fs-safe-output") ||
+        savedParentName === path.basename(path.dirname(params.targetPath)),
+    ).toBe(true);
     expect(path.basename(String(savedPath))).toContain(path.basename(params.targetPath));
     expect(path.basename(String(savedPath))).toMatch(/\.part$/);
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);

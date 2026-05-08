@@ -168,6 +168,13 @@ describe("pw-session ensurePageState", () => {
     expect(path.basename(managedPathB ?? "")).toMatch(/-report\.pdf$/);
     expect(saveAsA.mock.calls[0]?.[0]).not.toBe(managedPathA);
     expect(saveAsB.mock.calls[0]?.[0]).not.toBe(managedPathB);
+    for (const call of [saveAsA.mock.calls[0], saveAsB.mock.calls[0]]) {
+      const savedParentName = path.basename(path.dirname(String(call?.[0])));
+      expect(
+        savedParentName.includes("fs-safe-output") ||
+          savedParentName === path.basename(DEFAULT_DOWNLOAD_DIR),
+      ).toBe(true);
+    }
     await expect(fs.readFile(managedPathA ?? "", "utf8")).resolves.toBe("download-a");
     await expect(fs.readFile(managedPathB ?? "", "utf8")).resolves.toBe("download-b");
   });

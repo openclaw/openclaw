@@ -90,7 +90,7 @@ describe("buildCliSpeechProvider", () => {
           ? ".pcm"
           : forcedFormat
             ? `.${forcedFormat}`
-            : path.extname(outputPath);
+            : path.extname(outputPath.replace(/\.part$/, ""));
       writeFileSync(outputPath, Buffer.from(`converted:${extension}`));
     });
   });
