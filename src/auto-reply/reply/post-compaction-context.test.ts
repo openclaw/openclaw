@@ -262,9 +262,8 @@ Never modify memory/YYYY-MM-DD.md destructively.
     expect(result).not.toBeNull();
     expect(result).toContain("memory/2026-03-03.md");
     expect(result).not.toContain("memory/YYYY-MM-DD.md");
-    expect(result).toContain(
-      "Current time: Tuesday, March 3rd, 2026 - 9:00 AM (America/New_York) / 2026-03-03 14:00 UTC",
-    );
+    expect(result).toContain("Current time: Tuesday, March 3rd, 2026 - 9:00 AM (America/New_York)");
+    expect(result).toContain("Reference UTC: 2026-03-03 14:00 UTC");
   });
 
   it("appends current time line even when no YYYY-MM-DD placeholder is present", async () => {
