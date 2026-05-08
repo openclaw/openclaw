@@ -225,7 +225,7 @@ describe("config view", () => {
     let { clearButton, applyButton } = findActionButtons(container);
     expect(busyButton.disabled).toBe(true);
     expect(busyButton.getAttribute("aria-busy")).toBe("true");
-    expect(busyButton.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
     expect(clearButton?.disabled).toBe(false);
     expect(applyButton?.disabled).toBe(false);
 
@@ -233,14 +233,14 @@ describe("config view", () => {
     busyButton = findButtonContainingText(container, "Applying…");
     ({ clearButton } = findActionButtons(container));
     expect(busyButton.disabled).toBe(true);
-    expect(busyButton.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
     expect(clearButton?.disabled).toBe(false);
 
     renderCase({ updating: true });
     busyButton = findButtonContainingText(container, "Updating…");
     ({ clearButton } = findActionButtons(container));
     expect(busyButton.disabled).toBe(true);
-    expect(busyButton.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
     expect(clearButton?.disabled).toBe(false);
   });
 
@@ -402,12 +402,10 @@ describe("config view", () => {
     expect(icon?.closest(".config-search__input-row")).not.toBeNull();
 
     const input = container.querySelector(".config-search__input");
-    expect(input).not.toBeNull();
-    if (!input) {
-      return;
-    }
-    (input as HTMLInputElement).value = "gateway";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    const searchInput = input as HTMLInputElement;
+    searchInput.value = "gateway";
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });
 
