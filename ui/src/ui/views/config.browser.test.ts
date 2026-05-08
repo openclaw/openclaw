@@ -529,14 +529,11 @@ describe("config view", () => {
     revealButton.click();
 
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).not.toBeNull();
+    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
     expect(textarea?.value).toContain("supersecret");
-    if (!textarea) {
-      return;
-    }
-    textarea.value = textarea.value.replace("supersecret", "updatedsecret");
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onRawChange).toHaveBeenCalledWith(textarea.value);
+    textarea!.value = textarea!.value.replace("supersecret", "updatedsecret");
+    textarea!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onRawChange).toHaveBeenCalledWith(textarea!.value);
   });
 
   it("opens raw pending changes without sending a fake raw edit", () => {
@@ -860,7 +857,7 @@ describe("config view", () => {
     });
 
     const input = container.querySelector<HTMLInputElement>(".cfg-input");
-    expect(input).not.toBeNull();
+    expect(input).toBeInstanceOf(HTMLInputElement);
     expect(input?.readOnly).toBe(true);
     expect(input?.value).toBe("");
     expect(input?.placeholder).toContain("Structured value (SecretRef)");
@@ -926,7 +923,7 @@ describe("config view", () => {
     });
 
     const input = container.querySelector<HTMLInputElement>(".cfg-input");
-    expect(input).not.toBeNull();
+    expect(input).toBeInstanceOf(HTMLInputElement);
     expect(input?.readOnly).toBe(false);
     expect(input?.value).toContain("malformed");
     expect(input?.value).not.toBe("[object Object]");
