@@ -6,6 +6,9 @@ export * from "./sessions/main-session.js";
 export * from "./sessions/main-session.runtime.js";
 export * from "./sessions/lifecycle.js";
 export {
+  createSqliteSessionTranscriptLocator,
+  isSqliteSessionTranscriptLocator,
+  parseSqliteSessionTranscriptLocator,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,

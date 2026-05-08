@@ -22,6 +22,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { parseSqliteSessionTranscriptLocator } from "./paths.js";
 
 export type SqliteSessionTranscriptEvent = {
   seq: number;
@@ -263,6 +264,9 @@ function rememberTranscriptFile(params: {
   if (!transcriptPath) {
     return;
   }
+  if (parseSqliteSessionTranscriptLocator(transcriptPath)) {
+    return;
+  }
   const resolvedTranscriptPath = path.resolve(transcriptPath);
   runOpenClawStateWriteTransaction((database) => {
     executeSqliteQuerySync(
@@ -291,6 +295,10 @@ function rememberTranscriptFile(params: {
 export function resolveSqliteSessionTranscriptScopeForPath(
   options: OpenClawStateDatabaseOptions & { transcriptPath: string },
 ): SqliteSessionTranscriptScope | undefined {
+  const parsedLocator = parseSqliteSessionTranscriptLocator(options.transcriptPath);
+  if (parsedLocator) {
+    return parsedLocator;
+  }
   const transcriptPath = path.resolve(options.transcriptPath);
   const database = openOpenClawStateDatabase(options);
   const row = executeSqliteQueryTakeFirstSync<{ agent_id?: unknown; session_id?: unknown }>(

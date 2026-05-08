@@ -66,7 +66,7 @@ import {
   resolveHookExternalContentSource,
   isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
-  resolveSessionTranscriptPath,
+  createSqliteSessionTranscriptLocator,
   resolveThinkingDefault,
   setSessionRuntimeModel,
 } from "./run.runtime.js";
@@ -538,7 +538,10 @@ async function prepareCronRunContext(params: {
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   if (!cronSession.sessionEntry.sessionFile?.trim()) {
-    cronSession.sessionEntry.sessionFile = resolveSessionTranscriptPath(runSessionId, agentId);
+    cronSession.sessionEntry.sessionFile = createSqliteSessionTranscriptLocator({
+      sessionId: runSessionId,
+      agentId,
+    });
   }
   const runSessionKey = baseSessionKey.startsWith("cron:")
     ? `${agentSessionKey}:run:${runSessionId}`

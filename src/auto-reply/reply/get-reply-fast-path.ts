@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { listSessionEntries } from "../../config/sessions/store.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
@@ -239,7 +239,7 @@ export function initFastReplySessionState(params: {
   const sessionFile =
     !resetTriggered && existingEntry?.sessionFile
       ? existingEntry.sessionFile
-      : resolveSessionTranscriptPath(sessionId, agentId);
+      : createSqliteSessionTranscriptLocator({ sessionId, agentId });
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,

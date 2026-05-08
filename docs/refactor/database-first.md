@@ -191,6 +191,11 @@ The remaining cleanup is mostly consolidation and deletion:
 - Bootstrap header seeding and manual compaction boundary hardening now mutate
   SQLite transcript rows directly. They may retain a `.jsonl`-shaped
   transcript path as metadata, but they do not create or rewrite the file.
+- Fresh runtime session rows now use virtual
+  `sqlite-transcript://<agent>/<session>.jsonl` locators instead of fake
+  `agents/<agentId>/sessions/*.jsonl` paths. The old path builders remain for
+  doctor imports, explicit debug/export artifacts, and path-compatibility
+  tests.
 - Parent transcript fork decisions and fork creation no longer accept
   `storePath` or `sessionsDir`; they use `{agentId, sessionId}` SQLite
   transcript scope and derive any retained path metadata from the parent
