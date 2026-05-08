@@ -127,6 +127,33 @@ describe("TranscriptSessionManager", () => {
     ]);
   });
 
+  it("uses the virtual sqlite transcript locator session id when no explicit id is supplied", async () => {
+    await makeTempSessionFile();
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "locator-session",
+    });
+
+    const sessionManager = openTranscriptSessionManager({
+      sessionFile,
+      cwd: "/tmp/workspace",
+    });
+    sessionManager.appendMessage({ role: "user", content: "seed", timestamp: 1 });
+
+    expect(sessionManager.getSessionId()).toBe("locator-session");
+    expect(readSessionEntries(sessionFile)).toMatchObject([
+      {
+        type: "session",
+        id: "locator-session",
+        cwd: "/tmp/workspace",
+      },
+      {
+        type: "message",
+        message: { role: "user", content: "seed" },
+      },
+    ]);
+  });
+
   it("creates, branches, lists, and forks default sessions with virtual sqlite locators", async () => {
     await makeTempSessionFile();
     const sessionManager = SessionManager.create("/tmp/sqlite-workspace");
