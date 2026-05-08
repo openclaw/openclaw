@@ -128,6 +128,58 @@ function buildEditSuccessResult(pathParam: string, editCount: number): AgentTool
   } as AgentToolResult<unknown>;
 }
 
+// Detects the "concurrent identical edits, follower request" case: the file is
+// unchanged compared to before the call AND already in the target state for
+// every edit (newText present, oldText absent). The leader request mutated the
+// file before this follower's `base.execute(...)` ran, so the underlying tool
+// sees `oldText` missing and throws an exact-text mismatch — but the file IS
+// at the desired final state. We only consult this classifier on the
+// EDIT_MISMATCH_MESSAGE error class, so unrelated thrown errors (aborts,
+// access failures, bridge errors) keep rethrowing. See [GitHub #60816].
+function isFileAlreadyInTargetState(params: {
+  originalContent?: string;
+  currentContent: string;
+  edits: EditReplacement[];
+}): boolean {
+  if (params.edits.length === 0) {
+    return false;
+  }
+  if (typeof params.originalContent !== "string") {
+    // Without a snapshot we cannot distinguish "this request did the work"
+    // from "another writer landed it". Defer to the existing mismatch path.
+    return false;
+  }
+  const normalizedOriginal = normalizeToLF(params.originalContent);
+  const normalizedCurrent = normalizeToLF(params.currentContent);
+  if (normalizedOriginal !== normalizedCurrent) {
+    return false;
+  }
+  for (const edit of params.edits) {
+    const normalizedNew = normalizeToLF(edit.newText);
+    const normalizedOld = normalizeToLF(edit.oldText);
+    if (normalizedNew.length > 0 && !normalizedCurrent.includes(normalizedNew)) {
+      return false;
+    }
+    if (normalizedOld.length > 0 && normalizedCurrent.includes(normalizedOld)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildEditNoopResult(pathParam: string): AgentToolResult<unknown> {
+  return {
+    isError: false,
+    content: [
+      {
+        type: "text",
+        text: `Edit noop: content already up to date in ${pathParam}.`,
+      },
+    ],
+    details: { diff: "", firstChangedLine: undefined },
+  } as AgentToolResult<unknown>;
+}
+
 function shouldAddMismatchHint(error: unknown) {
   return error instanceof Error && error.message.includes(EDIT_MISMATCH_MESSAGE);
 }
@@ -143,9 +195,16 @@ function appendMismatchHint(error: Error, currentContent: string): Error {
 }
 
 /**
- * Recover from two edit-tool failure classes without changing edit semantics:
- * - exact-match mismatch errors become actionable by including current file contents
+ * Recover from three edit-tool result classes without changing edit semantics:
  * - post-write throws are converted back to success only if the file actually changed
+ * - exact-match mismatch errors where the requested final state is already
+ *   satisfied (concurrent identical edits, follower request) are reported as a
+ *   noop, distinct from both success and error
+ * - any remaining exact-match mismatch errors become actionable by including
+ *   current file contents
+ *
+ * Errors outside the exact-match mismatch class (aborts, access failures,
+ * bridge errors, etc.) always rethrow unchanged.
  */
 export function wrapEditToolWithRecovery(
   base: AnyAgentTool,
@@ -203,6 +262,19 @@ export function wrapEditToolWithRecovery(
           err instanceof Error &&
           shouldAddMismatchHint(err)
         ) {
+          // Gate the noop classification on the exact-text mismatch error
+          // class so unrelated thrown errors (aborts, access failures, bridge
+          // errors) keep rethrowing untouched. See [GitHub #60816].
+          if (
+            edits.length > 0 &&
+            isFileAlreadyInTargetState({
+              originalContent,
+              currentContent,
+              edits,
+            })
+          ) {
+            return buildEditNoopResult(pathParam ?? absolutePath);
+          }
           throw appendMismatchHint(err, currentContent);
         }
 
