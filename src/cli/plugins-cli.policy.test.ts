@@ -50,6 +50,16 @@ describe("plugins cli policy mutations", () => {
     return config;
   }
 
+  function requirePluginEntries(
+    config: OpenClawConfig,
+  ): NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]> {
+    expect(config.plugins?.entries).toBeDefined();
+    if (!config.plugins?.entries) {
+      throw new Error("expected plugin entries in config");
+    }
+    return config.plugins.entries;
+  }
+
   it("refreshes the persisted plugin registry after enabling a plugin", async () => {
     const sourceConfig = {} as OpenClawConfig;
     const enabledConfig = {
@@ -113,7 +123,8 @@ describe("plugins cli policy mutations", () => {
     await runPluginsCommand(["plugins", "disable", "alpha"]);
 
     const nextConfig = requireFirstWrittenConfig();
-    expect(nextConfig.plugins?.entries?.alpha?.enabled).toBe(false);
+    const entries = requirePluginEntries(nextConfig);
+    expect(entries.alpha).toMatchObject({ enabled: false });
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: nextConfig,
       installRecords: {},
@@ -164,8 +175,9 @@ describe("plugins cli policy mutations", () => {
       await runPluginsCommand(["plugins", "disable", alias]);
 
       const nextConfig = requireFirstWrittenConfig();
-      expect(nextConfig.plugins?.entries?.[pluginId]?.enabled).toBe(false);
-      expect(nextConfig.plugins?.entries?.[alias]).toBeUndefined();
+      const entries = requirePluginEntries(nextConfig);
+      expect(entries[pluginId]).toMatchObject({ enabled: false });
+      expect(entries[alias]).toBeUndefined();
     },
   );
 
@@ -194,7 +206,8 @@ describe("plugins cli policy mutations", () => {
     await runPluginsCommand(["plugins", "disable", "twitch"]);
 
     const nextConfig = requireFirstWrittenConfig();
-    expect(nextConfig.plugins?.entries?.twitch?.enabled).toBe(false);
+    const entries = requirePluginEntries(nextConfig);
+    expect(entries.twitch).toMatchObject({ enabled: false });
     expect(nextConfig.channels?.twitch).toBeUndefined();
   });
 });
