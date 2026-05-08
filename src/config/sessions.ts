@@ -9,14 +9,8 @@ export {
   createSqliteSessionTranscriptLocator,
   isSqliteSessionTranscriptLocator,
   parseSqliteSessionTranscriptLocator,
-  resolveSessionFilePath,
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptPathInDir,
-  resolveSessionTranscriptsDir,
-  resolveSessionTranscriptsDirForAgent,
   SAFE_SESSION_ID_RE,
   validateSessionId,
-  type SessionFilePathOptions,
 } from "./sessions/paths.js";
 export * from "./sessions/reset.js";
 export * from "./sessions/session-key.js";
