@@ -270,6 +270,28 @@ describe("before_tool_call loop detection behavior", () => {
     expectToolLoopBlockedResult(result, "global circuit breaker");
   });
 
+  it("blocks a different tool after the global breaker threshold is reached", async () => {
+    const { tool: readTool, params: readParams } = createGenericReadRepeatFixture();
+    const searchExecute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "search output" }],
+      details: { ok: true },
+    });
+    const searchTool = createWrappedTool("memory_search", searchExecute);
+
+    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+      await expectUnblockedToolExecution(readTool, `read-${i}`, readParams);
+    }
+
+    const result = await searchTool.execute(
+      "search-after-global-breaker",
+      { query: "still looping" },
+      undefined,
+      undefined,
+    );
+    expectToolLoopBlockedResult(result, "global circuit breaker");
+    expect(searchExecute).not.toHaveBeenCalled();
+  });
+
   it("does not carry loop history across run ids", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],

@@ -531,6 +531,99 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("blocks a different tool after the session-global no-progress threshold", () => {
+      const state = createState();
+      const fixture = createReadNoProgressFixture();
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: fixture.toolName,
+        toolParams: fixture.params,
+        result: fixture.result,
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "exec",
+        { command: "pwd" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+        expect(loopResult.count).toBe(GLOBAL_CIRCUIT_BREAKER_THRESHOLD);
+        expect(loopResult.message).toContain("global circuit breaker");
+      }
+    });
+
+    it("counts stable no-progress repeats across multiple tool patterns", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 4,
+        globalCircuitBreakerThreshold: 5,
+      };
+
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "read",
+        toolParams: { path: "/tmp/a.txt" },
+        result: { content: [{ type: "text", text: "same read" }], details: { ok: true } },
+        count: 3,
+      });
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "exec",
+        toolParams: { command: "pwd" },
+        result: {
+          content: [{ type: "text", text: "/workspace" }],
+          details: { status: "completed", exitCode: 0, aggregated: "/workspace" },
+        },
+        count: 2,
+        startIndex: 3,
+      });
+
+      const loopResult = detectToolCallLoop(state, "memory_search", { query: "next" }, config);
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+        expect(loopResult.count).toBe(5);
+      }
+    });
+
+    it("does not count unrelated one-off tools as global no-progress", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 4,
+        globalCircuitBreakerThreshold: 5,
+      };
+
+      for (const [index, toolName] of [
+        "read",
+        "list",
+        "exec",
+        "memory_search",
+        "fetch",
+      ].entries()) {
+        recordSuccessfulCall(
+          state,
+          toolName,
+          { id: index },
+          { content: [{ type: "text", text: "same output" }], details: { ok: true } },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "write", { path: "/tmp/out" }, config);
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("blocks repeated completed exec calls despite volatile runtime details", () => {
       const state = createState();
       const params = { command: "grafana-api.sh datasources" };
