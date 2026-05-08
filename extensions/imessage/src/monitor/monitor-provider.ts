@@ -54,6 +54,10 @@ import { combineIMessagePayloads } from "./coalesce.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
+  warnGroupAllowlistDropPerChatOnce,
+  warnGroupAllowlistMisconfigOnce,
+} from "./group-allowlist-warnings.js";
+import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
@@ -192,6 +196,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "imessage",
+    accountId: accountInfo.accountId,
+    log: (message) => runtime.log?.(warn(message)),
+  });
+  warnGroupAllowlistMisconfigOnce({
+    groupPolicy,
+    groups: imessageCfg.groups,
     accountId: accountInfo.accountId,
     log: (message) => runtime.log?.(warn(message)),
   });
@@ -398,6 +408,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         decision.reason === "from me";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
+      }
+      // Surface the silent-allowlist drop once per chat. Without this, operators
+      // who migrate from BlueBubbles and copy groupPolicy="allowlist" without
+      // populating channels.imessage.groups see every group message vanish at
+      // default log level. See issue #78749.
+      if (decision.reason === "group id not in allowlist") {
+        warnGroupAllowlistDropPerChatOnce({
+          accountId: accountInfo.accountId,
+          chatId: message.chat_id ?? undefined,
+          log: (msg) => runtime.log?.(warn(msg)),
+        });
       }
       return;
     }

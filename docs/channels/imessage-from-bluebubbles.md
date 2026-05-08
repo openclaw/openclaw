@@ -85,7 +85,12 @@ The bundled iMessage plugin runs **two** separate group allowlist gates back-to-
    - a `groups: { "*": { ... } }` wildcard entry (sets `allowAll = true`), or
    - an explicit per-`chat_id` entry under `groups`.
 
-If gate 1 passes but gate 2 fails, the message is dropped and the rejection logs **only at `verbose`/`debug` level** (`inbound-processing.ts:337`). At the default `info` log level every group message vanishes silently — DMs continue to work because they take a different code path.
+If gate 1 passes but gate 2 fails, the message is dropped. The plugin emits two `warn`-level signals so this is no longer silent at default log level:
+
+- A one-time startup `warn` per account when `groupPolicy: "allowlist"` is set but `channels.imessage.groups` is empty (no `"*"` wildcard, no per-`chat_id` entries) — fired before any messages land.
+- A one-time per-`chat_id` `warn` the first time a specific group is dropped at runtime, naming the chat_id and the exact key to add to `groups` to allow it.
+
+DMs continue to work because they take a different code path.
 
 This is the most common BlueBubbles → bundled-iMessage migration failure mode: operators copy `groupAllowFrom` and `groupPolicy` but skip the `groups` block, because BlueBubbles' `groups: { "*": { "requireMention": true } }` looks like an unrelated mention setting. It's actually load-bearing for the registry gate.
 
@@ -107,15 +112,7 @@ The minimum config to keep group messages flowing after `groupPolicy: "allowlist
 
 `requireMention: true` under `*` is harmless when no mention patterns are configured: the runtime sets `canDetectMention = false` and short-circuits the mention drop at `inbound-processing.ts:512`. With mention patterns configured (`agents.list[].groupChat.mentionPatterns`), it works as expected.
 
-To debug a suspected silent drop, raise log level temporarily:
-
-```bash
-OPENCLAW_LOG_LEVEL=debug openclaw gateway
-```
-
-Then look for `imessage: skipping group message (<chat_id>) not in allowlist`. If you see that line, gate 2 is dropping — add the `groups` block.
-
-Tracker for raising the drop's log severity so this is no longer silent at `info`: [openclaw#78749](https://github.com/openclaw/openclaw/issues/78749).
+If the gateway logs `imessage: dropping group message from chat_id=<id>` or the startup line `imessage: groupPolicy="allowlist" but channels.imessage.groups is empty`, gate 2 is dropping — add the `groups` block.
 
 ## Step-by-step
 
@@ -174,7 +171,7 @@ Tracker for raising the drop's log severity so this is no longer silent at `info
 
 4. **Verify DMs.** Send the agent a direct message; confirm the reply lands.
 
-5. **Verify groups separately.** DMs and groups take different code paths — DM success does not prove groups are routing. Send the agent a message in a paired group chat and confirm the reply lands. If the group goes silent (no agent reply, no error), restart the gateway with `OPENCLAW_LOG_LEVEL=debug openclaw gateway` and look for `imessage: skipping group message (...) not in allowlist`. If that line appears, your `groups` block is missing or empty — see "Group registry footgun" above.
+5. **Verify groups separately.** DMs and groups take different code paths — DM success does not prove groups are routing. Send the agent a message in a paired group chat and confirm the reply lands. If the group goes silent (no agent reply, no error), check the gateway log for `imessage: dropping group message from chat_id=<id>` or the startup `imessage: groupPolicy="allowlist" but channels.imessage.groups is empty` line — both fire at the default log level. If either appears, your `groups` block is missing or empty — see "Group registry footgun" above.
 
 6. **Verify the action surface** — from a paired DM, ask the agent to react, edit, unsend, reply, send a photo, and (in a group) rename the group / add or remove a participant. Each action should land natively in Messages.app. If any throws "iMessage `<action>` requires the imsg private API bridge", run `imsg launch` again and refresh `channels status --probe`.
 

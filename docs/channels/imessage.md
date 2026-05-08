@@ -239,7 +239,12 @@ If SIP-disabled isn't acceptable for your threat model:
     1. **Sender / chat-target allowlist** (`channels.imessage.groupAllowFrom`) — handle, `chat_guid`, `chat_identifier`, or `chat_id`.
     2. **Group registry** (`channels.imessage.groups`) — with `groupPolicy: "allowlist"`, this gate requires either a `groups: { "*": { ... } }` wildcard entry (sets `allowAll = true`), or an explicit per-`chat_id` entry under `groups`.
 
-    If gate 2 has nothing in it, every group message is dropped — and the rejection logs only at `verbose`/`debug` level, so the drops are silent at the default `info` log level. DMs continue to work because they take a different code path.
+    If gate 2 has nothing in it, every group message is dropped. The plugin emits two `warn`-level signals at the default log level:
+
+    - one-time per account at startup: `imessage: groupPolicy="allowlist" but channels.imessage.groups is empty for account "<id>"`
+    - one-time per `chat_id` at runtime: `imessage: dropping group message from chat_id=<id> ...`
+
+    DMs continue to work because they take a different code path.
 
     Minimum config to keep groups flowing under `groupPolicy: "allowlist"`:
 
@@ -255,7 +260,7 @@ If SIP-disabled isn't acceptable for your threat model:
     }
     ```
 
-    To debug a suspected silent drop, run `OPENCLAW_LOG_LEVEL=debug openclaw gateway` and look for `imessage: skipping group message (<chat_id>) not in allowlist`. If that line appears, gate 2 is dropping — add the `groups` block.
+    If those `warn` lines appear in the gateway log, gate 2 is dropping — add the `groups` block.
     </Warning>
 
     Mention gating for groups:
