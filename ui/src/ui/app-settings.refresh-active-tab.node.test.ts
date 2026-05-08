@@ -3,6 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
+function createDeferred<T = void>() {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
+  return { promise, resolve };
+}
+
 const mocks = vi.hoisted(() => ({
   refreshChatMock: vi.fn(async () => {}),
   scheduleChatScrollMock: vi.fn(),
@@ -196,12 +207,8 @@ describe("refreshActiveTab", () => {
   it("records tab visible timing without waiting for the tab refresh RPC", async () => {
     const host = createHost();
     host.tab = "chat";
-    let resolveSessions!: () => void;
-    mocks.loadSessionsMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveSessions = resolve;
-      }),
-    );
+    const sessions = createDeferred();
+    mocks.loadSessionsMock.mockReturnValueOnce(sessions.promise);
 
     setTab(host as never, "sessions");
 
@@ -221,7 +228,7 @@ describe("refreshActiveTab", () => {
       );
     });
 
-    resolveSessions();
+    sessions.resolve();
   });
 
   it("does not wait for secondary overview refreshes before resolving", async () => {
@@ -244,12 +251,8 @@ describe("refreshActiveTab", () => {
   it("does not wait for config schema before resolving config tab refresh", async () => {
     const host = createHost();
     host.tab = "config";
-    let resolveSchema!: () => void;
-    mocks.loadConfigSchemaMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveSchema = resolve;
-      }),
-    );
+    const schema = createDeferred();
+    mocks.loadConfigSchemaMock.mockReturnValueOnce(schema.promise);
 
     const refresh = refreshActiveTab(host as never);
     const outcome = await Promise.race([
@@ -262,7 +265,7 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
     expect(host.requestUpdate).not.toHaveBeenCalled();
 
-    resolveSchema();
+    schema.resolve();
 
     await vi.waitFor(() => {
       expect(host.requestUpdate).toHaveBeenCalledOnce();
@@ -272,18 +275,12 @@ describe("refreshActiveTab", () => {
   it("renders channels from the cheap snapshot before starting slow probes", async () => {
     const host = createHost();
     host.tab = "channels";
-    let resolveSchema!: () => void;
-    let resolveProbe!: () => void;
-    mocks.loadConfigSchemaMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveSchema = resolve;
-      }),
-    );
+    const schema = createDeferred();
+    const channelProbe = createDeferred();
+    mocks.loadConfigSchemaMock.mockReturnValueOnce(schema.promise);
     mocks.loadChannelsMock.mockImplementation(async (_host, probe) => {
       if (probe) {
-        await new Promise<void>((resolve) => {
-          resolveProbe = resolve;
-        });
+        await channelProbe.promise;
       }
     });
 
@@ -298,8 +295,8 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
     expect(host.requestUpdate).not.toHaveBeenCalled();
 
-    resolveSchema();
-    resolveProbe();
+    schema.resolve();
+    channelProbe.resolve();
 
     await vi.waitFor(() => {
       expect(host.requestUpdate).toHaveBeenCalledTimes(2);
@@ -309,16 +306,12 @@ describe("refreshActiveTab", () => {
   it("records overview secondary refresh duration and aggregate status", async () => {
     const host = createHost();
     host.tab = "overview";
-    let resolveUsage!: () => void;
-    mocks.loadUsageMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveUsage = resolve;
-      }),
-    );
+    const usage = createDeferred();
+    mocks.loadUsageMock.mockReturnValueOnce(usage.promise);
     mocks.loadSkillsMock.mockRejectedValueOnce(new Error("skills failed"));
 
     await refreshActiveTab(host as never);
-    resolveUsage();
+    usage.resolve();
 
     await vi.waitFor(() => {
       expect(host.eventLogBuffer).toEqual(
@@ -401,16 +394,12 @@ describe("refreshActiveTab", () => {
   it("does not record stale cron run timing after leaving the cron tab", async () => {
     const host = createHost();
     host.tab = "cron";
-    let resolveRuns!: () => void;
-    mocks.loadCronRunsMock.mockReturnValueOnce(
-      new Promise<"ok">((resolve) => {
-        resolveRuns = () => resolve("ok");
-      }),
-    );
+    const runs = createDeferred<"ok">();
+    mocks.loadCronRunsMock.mockReturnValueOnce(runs.promise);
 
     await refreshActiveTab(host as never);
     host.tab = "chat";
-    resolveRuns();
+    runs.resolve("ok");
     await Promise.resolve();
 
     expect(host.eventLogBuffer).not.toEqual(
