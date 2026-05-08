@@ -7,7 +7,6 @@ import {
   replaceSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
 } from "../../config/sessions/transcript-store.sqlite.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import type {
   FileEntry,
   SessionContext,
@@ -49,11 +48,6 @@ function generateEntryId(byId: { has(id: string): boolean }): string {
   return randomUUID();
 }
 
-function resolveAgentIdFromTranscriptPath(sessionFile: string): string {
-  void sessionFile;
-  return DEFAULT_AGENT_ID;
-}
-
 function transcriptStateFromEntries(fileEntries: FileEntry[]): TranscriptState {
   const headerBeforeMigration =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
@@ -88,12 +82,20 @@ function resolveTranscriptWriteScope(
     : path.resolve(sessionFile);
   const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
   const existing = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
+  if (!isSqliteSessionTranscriptLocator(transcriptPath) && !existing) {
+    throw new Error(
+      `Legacy transcript has not been imported into SQLite: ${transcriptPath}. Run "openclaw doctor --fix" to build the session database.`,
+    );
+  }
+  if (!existing) {
+    return undefined;
+  }
   const sessionId = header?.id ?? existing?.sessionId;
   if (!sessionId) {
     return undefined;
   }
   return {
-    agentId: existing?.agentId ?? resolveAgentIdFromTranscriptPath(sessionFile),
+    agentId: existing.agentId,
     sessionId,
     transcriptPath,
   };

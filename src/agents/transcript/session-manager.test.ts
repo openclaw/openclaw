@@ -11,6 +11,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { openTranscriptSessionManager } from "./session-manager.js";
 import { SessionManager } from "./session-transcript-contract.js";
+import { replaceTranscriptStateEventsSync } from "./transcript-state.js";
 
 async function makeTempSessionFile(name = "session.jsonl"): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-session-"));
@@ -78,6 +79,22 @@ describe("TranscriptSessionManager", () => {
         sessionId: "session-1",
         cwd: "/tmp/workspace",
       }),
+    ).toThrow(/Legacy transcript has not been imported into SQLite/);
+  });
+
+  it("rejects runtime writes to unmigrated legacy session files", async () => {
+    const sessionFile = await makeTempSessionFile();
+
+    expect(() =>
+      replaceTranscriptStateEventsSync(sessionFile, [
+        {
+          type: "session",
+          version: 3,
+          id: "session-legacy-write",
+          timestamp: new Date(0).toISOString(),
+          cwd: "/tmp/workspace",
+        },
+      ]),
     ).toThrow(/Legacy transcript has not been imported into SQLite/);
   });
 
