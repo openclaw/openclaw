@@ -198,6 +198,10 @@ The remaining cleanup is mostly consolidation and deletion:
 - Memory-host no longer exports no-op session-directory transcript
   classification helpers; transcript filtering now derives from SQLite row
   metadata during entry construction.
+- Memory-host and QMD session-export tests default to virtual
+  `sqlite-transcript://<agent>/<session>.jsonl` locators. Old
+  `agents/<agentId>/sessions/*.jsonl` paths stay covered only where a test is
+  intentionally proving legacy path compatibility.
 - QA-lab raw session inspection now uses `sessions.list` through the gateway
   instead of reading `agents/qa/sessions/sessions.json`; MSteams feedback
   appends directly to SQLite transcripts without fabricating a JSONL path.
