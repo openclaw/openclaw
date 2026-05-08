@@ -112,6 +112,8 @@ export function createDiscordMessageHandler(
     runtime: params.runtime,
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
+    maxPendingPerSession: params.discordConfig?.inboundWorker?.maxPendingPerSession,
+    maxQueuedAgeMs: params.discordConfig?.inboundWorker?.maxQueuedAgeMs,
     replayGuard,
     __testing: params.__testing,
   });

@@ -113,6 +113,14 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Parent Inheritance",
     help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
   },
+  "inboundWorker.maxPendingPerSession": {
+    label: "Discord Session Queue Max Pending",
+    help: "Optional max pending inbound agent runs per Discord session before new jobs are dropped. Leave unset to preserve the existing unbounded queue.",
+  },
+  "inboundWorker.maxQueuedAgeMs": {
+    label: "Discord Session Queue Max Age (ms)",
+    help: "Optional max time a Discord inbound agent run may wait in a per-session queue before being skipped as stale. Leave unset to preserve existing behavior.",
+  },
   "eventQueue.listenerTimeout": {
     label: "Discord EventQueue Listener Timeout (ms)",
     help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",

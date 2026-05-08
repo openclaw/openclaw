@@ -711,6 +711,8 @@ export const DiscordAccountSchema = z
     inboundWorker: z
       .object({
         runTimeoutMs: z.number().int().nonnegative().optional(),
+        maxPendingPerSession: z.number().int().positive().optional(),
+        maxQueuedAgeMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

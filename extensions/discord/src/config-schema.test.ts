@@ -76,6 +76,18 @@ describe("discord config schema", () => {
     expect(cfg.historyLimit).toBe(3);
   });
 
+  it("accepts Discord inbound worker queue caps", () => {
+    const cfg = expectValidDiscordConfig({
+      inboundWorker: {
+        maxPendingPerSession: 2,
+        maxQueuedAgeMs: 30_000,
+      },
+    });
+
+    expect(cfg.inboundWorker?.maxPendingPerSession).toBe(2);
+    expect(cfg.inboundWorker?.maxQueuedAgeMs).toBe(30_000);
+  });
+
   it("accepts Discord application IDs at top-level and account scope", () => {
     const cfg = expectValidDiscordConfig({
       applicationId: "123456789012345678",
