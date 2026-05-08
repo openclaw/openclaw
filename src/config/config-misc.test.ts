@@ -39,6 +39,14 @@ const nonBooleanConfigCases = [
   },
 ];
 
+function issuePaths(issues: Array<{ path: string }>): string[] {
+  return issues.map((issue) => issue.path);
+}
+
+function issueMessages(issues: Array<{ message: string }>): string[] {
+  return issues.map((issue) => issue.message);
+}
+
 describe("boolean config validation", () => {
   it.each(nonBooleanConfigCases)("rejects non-boolean values for $name", ({ config }) => {
     const result = OpenClawSchema.safeParse(config);
@@ -986,8 +994,10 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
-      expect(snap.issues.some((issue) => issue.message.includes('"memorySearch"'))).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
+      expect(issueMessages(snap.issues)).toEqual(
+        expect.arrayContaining([expect.stringContaining('"memorySearch"')]),
+      );
+      expect(issuePaths(snap.legacyIssues)).toContain("memorySearch");
       expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toMatchObject({
         provider: "local",
         fallback: "none",
@@ -1009,8 +1019,10 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
-      expect(snap.issues.some((issue) => issue.message.includes('"heartbeat"'))).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
+      expect(issueMessages(snap.issues)).toEqual(
+        expect.arrayContaining([expect.stringContaining('"heartbeat"')]),
+      );
+      expect(issuePaths(snap.legacyIssues)).toContain("heartbeat");
       expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
         every: "30m",
         model: "anthropic/claude-3-5-haiku-20241022",
@@ -1032,8 +1044,10 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
-      expect(snap.issues.some((issue) => issue.message.includes('"heartbeat"'))).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
+      expect(issueMessages(snap.issues)).toEqual(
+        expect.arrayContaining([expect.stringContaining('"heartbeat"')]),
+      );
+      expect(issuePaths(snap.legacyIssues)).toContain("heartbeat");
       expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
         showOk: true,
         showAlerts: false,
@@ -1057,7 +1071,7 @@ describe("config strict validation", () => {
     };
     const issues = findLegacyConfigIssues(raw);
 
-    expect(issues.some((issue) => issue.path === "messages.tts")).toBe(true);
+    expect(issuePaths(issues)).toContain("messages.tts");
     expect(raw.messages.tts.elevenlabs).toEqual({
       apiKey: "test-key",
       voiceId: "voice-1",
@@ -1088,12 +1102,12 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
-      expect(snap.issues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(true);
-      expect(snap.issues.some((issue) => issue.path === "agents.list.0.sandbox")).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(
-        true,
+      expect(issuePaths(snap.issues)).toEqual(
+        expect.arrayContaining(["agents.defaults.sandbox", "agents.list.0.sandbox"]),
       );
-      expect(snap.legacyIssues.some((issue) => issue.path === "agents.list")).toBe(true);
+      expect(issuePaths(snap.legacyIssues)).toEqual(
+        expect.arrayContaining(["agents.defaults.sandbox", "agents.list"]),
+      );
       expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
       expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
     });
@@ -1111,7 +1125,7 @@ describe("config strict validation", () => {
         const snap = await readConfigFileSnapshot();
         expect(snap.valid).toBe(false);
         expect(snap.legacyIssues).toHaveLength(0);
-        expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+        expect(issuePaths(snap.issues)).toContain("gateway.bind");
       } finally {
         if (prev === undefined) {
           delete process.env.OPENCLAW_BIND;
@@ -1130,8 +1144,8 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
       expect(snap.valid).toBe(false);
-      expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+      expect(issuePaths(snap.issues)).toContain("gateway.bind");
+      expect(issuePaths(snap.legacyIssues)).toContain("gateway.bind");
     });
   });
 });
