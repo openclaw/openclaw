@@ -1335,6 +1335,7 @@
                 "group": "Using ClawHub",
                 "pages": [
                   "clawhub/cli",
+                  "clawhub/publishing",
                   "clawhub/skill-format",
                   "clawhub/soul-format",
                   "clawhub/auth",
