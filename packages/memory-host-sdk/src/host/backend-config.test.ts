@@ -48,7 +48,6 @@ const collectionNames = (resolved: ResolvedMemoryBackendConfig): Set<string> =>
 function requireQmdConfig(
   resolved: ResolvedMemoryBackendConfig,
 ): NonNullable<ResolvedMemoryBackendConfig["qmd"]> {
-  expect(resolved.qmd).toBeDefined();
   if (!resolved.qmd) {
     throw new Error("expected qmd memory backend config");
   }
@@ -62,7 +61,6 @@ function requireQmdCollection(
   const collection = requireQmdConfig(resolved).collections.find(
     (candidate) => candidate.name === name,
   );
-  expect(collection).toBeDefined();
   if (!collection) {
     throw new Error(`expected qmd collection ${name}`);
   }
@@ -189,7 +187,9 @@ describe("resolveMemoryBackendConfig", () => {
     const custom = requireQmdConfig(resolved).collections.find((c) =>
       c.name.startsWith("custom-notes"),
     );
-    expect(custom).toBeDefined();
+    if (!custom) {
+      throw new Error("expected custom-notes qmd collection");
+    }
     expect(custom).toMatchObject({ path: path.resolve("/workspace/root", "notes") });
   });
 

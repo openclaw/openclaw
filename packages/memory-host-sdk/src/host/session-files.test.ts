@@ -38,7 +38,6 @@ afterEach(() => {
 });
 
 function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
-  expect(entry).toBeTruthy();
   if (!entry) {
     throw new Error("expected session entry");
   }
@@ -201,11 +200,11 @@ describe("buildSessionEntry", () => {
     ];
     fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
 
-    const entry = await buildSessionEntry(archivePath);
+    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
-    expect(entry?.content).toBe("");
-    expect(entry?.lineMap).toEqual([]);
-    expect(entry?.generatedByCronRun).toBe(true);
+    expect(entry.content).toBe("");
+    expect(entry.lineMap).toEqual([]);
+    expect(entry.generatedByCronRun).toBe(true);
   });
 
   it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
@@ -222,11 +221,11 @@ describe("buildSessionEntry", () => {
     ];
     fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
 
-    const entry = await buildSessionEntry(archivePath);
+    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
-    expect(entry?.content).toBe("");
-    expect(entry?.lineMap).toEqual([]);
-    expect(entry?.generatedByCronRun).toBe(true);
+    expect(entry.content).toBe("");
+    expect(entry.lineMap).toEqual([]);
+    expect(entry.generatedByCronRun).toBe(true);
   });
 
   it("skips blank lines and invalid JSON without breaking lineMap", async () => {
@@ -240,8 +239,8 @@ describe("buildSessionEntry", () => {
     const filePath = path.join(tmpDir, "gaps.jsonl");
     fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
-    const entry = await buildSessionEntry(filePath);
-    expect(entry?.lineMap).toEqual([3, 5]);
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.lineMap).toEqual([3, 5]);
   });
 
   it("strips inbound metadata when a user envelope is split across text blocks", async () => {
@@ -269,8 +268,8 @@ describe("buildSessionEntry", () => {
     const filePath = path.join(tmpDir, "enveloped-session-array.jsonl");
     fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
-    const entry = await buildSessionEntry(filePath);
-    expect(entry?.content).toBe("User: Actual user text");
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe("User: Actual user text");
   });
 
   it("skips inter-session user messages", async () => {
@@ -295,8 +294,8 @@ describe("buildSessionEntry", () => {
     const filePath = path.join(tmpDir, "inter-session-session.jsonl");
     fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
-    const entry = await buildSessionEntry(filePath);
-    expect(entry?.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
-    expect(entry?.lineMap).toEqual([2, 3]);
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
+    expect(entry.lineMap).toEqual([2, 3]);
   });
 });

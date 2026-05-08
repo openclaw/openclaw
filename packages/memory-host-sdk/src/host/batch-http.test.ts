@@ -13,7 +13,6 @@ type RetryOptions = {
 
 function requireRetryOptions(call: unknown[] | undefined): RetryOptions {
   const options = call?.[1] as RetryOptions | undefined;
-  expect(options).toBeDefined();
   if (!options) {
     throw new Error("expected retry options");
   }

@@ -44,7 +44,6 @@ function setupTempDirLifecycle(prefix: string): () => string {
 }
 
 function expectFileEntry(entry: Awaited<ReturnType<typeof buildFileEntry>>): FileEntry {
-  expect(entry).toBeTruthy();
   if (!entry) {
     throw new Error("Expected file entry to be built");
   }
@@ -54,11 +53,19 @@ function expectFileEntry(entry: Awaited<ReturnType<typeof buildFileEntry>>): Fil
 function expectMultimodalIndexingChunk(
   built: Awaited<ReturnType<typeof buildMultimodalChunkForIndexing>>,
 ): MultimodalIndexingChunk {
-  expect(built).toBeTruthy();
   if (!built) {
     throw new Error("Expected multimodal indexing chunk to be built");
   }
   return built;
+}
+
+function expectEmbeddingInput(
+  chunk: MultimodalIndexingChunk["chunk"],
+): NonNullable<MultimodalIndexingChunk["chunk"]["embeddingInput"]> {
+  if (!chunk.embeddingInput) {
+    throw new Error("Expected multimodal chunk embedding input");
+  }
+  return chunk.embeddingInput;
 }
 
 const multimodal: MemoryMultimodalSettings = {
@@ -133,11 +140,7 @@ describe("memory host SDK package internals", () => {
 
     const entry = expectFileEntry(await buildFileEntry(imagePath, tmpDir, multimodal));
     const built = expectMultimodalIndexingChunk(await buildMultimodalChunkForIndexing(entry));
-    expect(built.chunk.embeddingInput).toBeDefined();
-    if (!built.chunk.embeddingInput) {
-      throw new Error("Expected multimodal chunk embedding input");
-    }
-    expect(built.chunk.embeddingInput.parts).toEqual([
+    expect(expectEmbeddingInput(built.chunk).parts).toEqual([
       { type: "text", text: "Image file: diagram.png" },
       expect.objectContaining({ type: "inline-data", mimeType: "image/png" }),
     ]);
