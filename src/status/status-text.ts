@@ -274,8 +274,13 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     selectedModelAuth = activeModelAuth;
   }
   const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
-  const currentUsageProvider =
-    resolveUsageProviderId(activeStatusProvider) ?? resolveUsageProviderId(activeProvider);
+  const currentUsageProvider = (() => {
+    try {
+      return resolveUsageProviderId(activeStatusProvider) ?? resolveUsageProviderId(activeProvider);
+    } catch {
+      return undefined;
+    }
+  })();
   let usageLine: string | null = null;
   if (
     currentUsageProvider &&

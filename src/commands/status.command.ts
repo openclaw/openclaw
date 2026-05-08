@@ -184,7 +184,16 @@ export async function statusCommand(
           indeterminate: true,
           enabled: opts.json !== true,
         },
-        async () => await resolveStatusUsageSummary(input),
+        async () =>
+          await resolveStatusUsageSummary(
+            typeof input === "number"
+              ? { timeoutMs: input, config: scan.cfg }
+              : {
+                  timeoutMs: input?.timeoutMs ?? opts.timeoutMs,
+                  config: input?.config ?? scan.cfg,
+                  agentDir: input?.agentDir,
+                },
+          ),
       ),
     resolveHealth: async (input) =>
       await withProgress(

@@ -973,6 +973,30 @@ describe("statusCommand", () => {
     (runtime.error as Mock<(...args: unknown[]) => void>).mockClear();
   });
 
+  it("scopes usage resolution to the scanned config", async () => {
+    const snapshotMock = resolveStatusRuntimeSnapshot as Mock;
+    const usageMock = resolveStatusUsageSummary as Mock;
+    snapshotMock.mockClear();
+    usageMock.mockClear();
+
+    await statusCommand({ usage: true, timeoutMs: 1234 }, runtime as never);
+
+    const params = snapshotMock.mock.calls.at(-1)?.[0] as
+      | {
+          config: unknown;
+          timeoutMs?: number;
+          usage?: boolean;
+          resolveUsage?: (timeoutMs?: number) => Promise<unknown>;
+        }
+      | undefined;
+    expect(params).toMatchObject({ usage: true, timeoutMs: 1234 });
+    await params?.resolveUsage?.(1234);
+    expect(usageMock).toHaveBeenCalledWith({
+      timeoutMs: 1234,
+      config: params?.config,
+    });
+  });
+
   it("prints JSON and includes security audit only when all is requested", async () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
     mocks.buildPluginCompatibilityNotices.mockReturnValue([

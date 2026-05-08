@@ -47,17 +47,19 @@ export async function resolveStatusSecurityAudit(params: {
 }
 
 type StatusUsageSummaryOptions = {
-  config: OpenClawConfig;
   timeoutMs?: number;
+  config?: OpenClawConfig;
   agentDir?: string;
 };
 
-export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
+export async function resolveStatusUsageSummary(input?: number | StatusUsageSummaryOptions) {
   const { loadProviderUsageSummary } = await loadProviderUsage();
+  const opts = typeof input === "number" ? { timeoutMs: input } : (input ?? {});
+  const agentDir = opts.agentDir ?? (opts.config ? resolveDefaultAgentDir(opts.config) : undefined);
   return await loadProviderUsageSummary({
-    timeoutMs: params.timeoutMs,
-    config: params.config,
-    agentDir: params.agentDir ?? resolveDefaultAgentDir(params.config),
+    timeoutMs: opts.timeoutMs,
+    ...(opts.config ? { config: opts.config } : {}),
+    ...(agentDir ? { agentDir } : {}),
   });
 }
 
@@ -137,13 +139,22 @@ export async function resolveStatusRuntimeDetails(params: {
   deep?: boolean;
   gatewayReachable: boolean;
   suppressHealthErrors?: boolean;
-  resolveUsage?: (input: StatusUsageSummaryOptions) => Promise<StatusUsageSummary>;
+  resolveUsage?: (input?: number | StatusUsageSummaryOptions) => Promise<StatusUsageSummary>;
   resolveHealth?: (input: {
     config: OpenClawConfig;
     timeoutMs?: number;
   }) => Promise<StatusGatewayHealth>;
 }) {
-  const resolveUsageSummary = params.resolveUsage ?? resolveStatusUsageSummary;
+  const resolveUsageSummary =
+    params.resolveUsage ??
+    (async (input?: number | StatusUsageSummaryOptions) => {
+      const opts = typeof input === "number" ? { timeoutMs: input } : (input ?? {});
+      return await resolveStatusUsageSummary({
+        timeoutMs: opts.timeoutMs ?? params.timeoutMs,
+        config: opts.config ?? params.config,
+        agentDir: opts.agentDir,
+      });
+    });
   const resolveGatewayHealthSummary = params.resolveHealth ?? resolveStatusGatewayHealth;
   const usage = params.usage
     ? await resolveUsageSummary({
@@ -199,7 +210,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
     config: OpenClawConfig;
     sourceConfig: OpenClawConfig;
   }) => Promise<StatusSecurityAudit>;
-  resolveUsage?: (input: StatusUsageSummaryOptions) => Promise<StatusUsageSummary>;
+  resolveUsage?: (input?: number | StatusUsageSummaryOptions) => Promise<StatusUsageSummary>;
   resolveHealth?: (input: {
     config: OpenClawConfig;
     timeoutMs?: number;

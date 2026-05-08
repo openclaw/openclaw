@@ -11,6 +11,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type { ProviderUsageSnapshot } from "../../infra/provider-usage.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -26,24 +27,6 @@ import {
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
 
-type LoadProviderUsageSummary =
-  typeof import("../../infra/provider-usage.js").loadProviderUsageSummary;
-
-const providerUsageMock = vi.hoisted(() => ({
-  loadProviderUsageSummary: vi.fn<LoadProviderUsageSummary>(async () => ({
-    updatedAt: Date.now(),
-    providers: [],
-  })),
-}));
-
-vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/provider-usage.js")>();
-  return {
-    ...actual,
-    loadProviderUsageSummary: providerUsageMock.loadProviderUsageSummary,
-  };
-});
-
 vi.mock("../../agents/harness/builtin-pi.js", () => ({
   createPiAgentHarness: () => ({
     id: "pi",
@@ -53,6 +36,32 @@ vi.mock("../../agents/harness/builtin-pi.js", () => ({
       throw new Error("not used in status tests");
     },
   }),
+}));
+
+const usageMocks = vi.hoisted(() => ({
+  formatUsageWindowSummary: vi.fn(() => undefined as string | undefined),
+  loadProviderUsageSummary: vi.fn(async () => ({
+    updatedAt: 0,
+    providers: [] as ProviderUsageSnapshot[],
+  })),
+  resolveUsageProviderId: vi.fn((provider?: string | null) => {
+    const normalized = provider?.trim().toLowerCase();
+    if (
+      normalized === "anthropic" ||
+      normalized === "github-copilot" ||
+      normalized === "google-gemini-cli" ||
+      normalized === "openai-codex"
+    ) {
+      return normalized;
+    }
+    return undefined;
+  }),
+}));
+
+vi.mock("../../infra/provider-usage.js", () => ({
+  formatUsageWindowSummary: usageMocks.formatUsageWindowSummary,
+  loadProviderUsageSummary: usageMocks.loadProviderUsageSummary,
+  resolveUsageProviderId: usageMocks.resolveUsageProviderId,
 }));
 
 const baseCfg = baseCommandTestConfig;
@@ -107,13 +116,16 @@ function registerStatusCodexHarness(): void {
   registerAgentHarness(harness, { ownerPluginId: "codex" });
 }
 
+beforeEach(() => {
+  usageMocks.formatUsageWindowSummary.mockReset();
+  usageMocks.formatUsageWindowSummary.mockReturnValue(undefined);
+  usageMocks.loadProviderUsageSummary.mockReset();
+  usageMocks.loadProviderUsageSummary.mockResolvedValue({ updatedAt: 0, providers: [] });
+  usageMocks.resolveUsageProviderId.mockClear();
+});
+
 afterEach(() => {
   clearAgentHarnesses();
-  providerUsageMock.loadProviderUsageSummary.mockReset();
-  providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
-    updatedAt: Date.now(),
-    providers: [],
-  });
 });
 
 function writeTranscriptUsageLog(params: {
@@ -629,28 +641,18 @@ describe("buildStatusReply subagent summary", () => {
           }),
           "utf8",
         );
-        const usageResetBase = Math.floor(Date.now() / 1000);
-        providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
-          updatedAt: Date.now(),
+        const expectedAgentDir = path.dirname(authPath);
+        usageMocks.loadProviderUsageSummary.mockResolvedValue({
+          updatedAt: 0,
           providers: [
             {
               provider: "openai-codex",
               displayName: "Codex",
-              windows: [
-                {
-                  label: "5h",
-                  usedPercent: 9,
-                  resetAt: (usageResetBase + 60 * 60) * 1000,
-                },
-                {
-                  label: "Week",
-                  usedPercent: 30,
-                  resetAt: (usageResetBase + 3 * 24 * 60 * 60) * 1000,
-                },
-              ],
+              windows: [{ label: "weekly", usedPercent: 23 }],
             },
           ],
         });
+        usageMocks.formatUsageWindowSummary.mockReturnValue("Week 77% left");
 
         const commonParams = {
           sessionEntry: {
@@ -693,19 +695,18 @@ describe("buildStatusReply subagent summary", () => {
         expect(normalizedCodex).toContain("Model: openai/gpt-5.5");
         expect(normalizedCodex).toContain("oauth (openai-codex:status)");
         expect(normalizedCodex).toContain("openai-codex:status");
-        expect(normalizedCodex).toContain("Usage: 5h 91% left");
-        expect(normalizedCodex).toContain("Week 70% left");
+        expect(normalizedCodex).toContain("Usage: Week 77% left");
         expect(normalizedImplicitCodex).toContain("Model: openai/gpt-5.5");
         expect(normalizedImplicitCodex).toContain("oauth (openai-codex:status)");
         expect(normalizedImplicitCodex).toContain("Runtime: OpenAI Codex");
-        expect(normalizedImplicitCodex).toContain("Usage: 5h 91% left");
-        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
-          ([params]) => params?.providers?.includes("openai-codex"),
+        expect(normalizedImplicitCodex).toContain("Usage: Week 77% left");
+        expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+        expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+          expect.objectContaining({
+            providers: ["openai-codex"],
+            agentDir: expectedAgentDir,
+          }),
         );
-        if (!providerUsageCall) {
-          throw new Error("expected provider usage summary call for openai-codex");
-        }
-        expect(providerUsageCall[0]?.providers).toEqual(["openai-codex"]);
       },
       {
         env: {
@@ -732,6 +733,17 @@ describe("buildStatusReply subagent summary", () => {
           }),
           "utf8",
         );
+        usageMocks.loadProviderUsageSummary.mockResolvedValue({
+          updatedAt: 0,
+          providers: [
+            {
+              provider: "anthropic",
+              displayName: "Claude",
+              windows: [{ label: "weekly", usedPercent: 34 }],
+            },
+          ],
+        });
+        usageMocks.formatUsageWindowSummary.mockReturnValue("Week 66% left");
 
         const text = await buildStatusText({
           cfg: {
@@ -765,6 +777,12 @@ describe("buildStatusReply subagent summary", () => {
         const normalized = normalizeTestText(text);
         expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
         expect(normalized).toContain("oauth (claude-cli)");
+        expect(normalized).toContain("Usage: Week 66% left");
+        expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+          expect.objectContaining({
+            providers: ["anthropic"],
+          }),
+        );
       },
       {
         env: {

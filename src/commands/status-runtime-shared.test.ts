@@ -133,6 +133,22 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("resolves usage summaries with status config and agent scope", async () => {
+    const config = { gateway: {} };
+
+    await resolveStatusUsageSummary({
+      timeoutMs: 2345,
+      config,
+      agentDir: "/tmp/status-agent",
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      timeoutMs: 2345,
+      config,
+      agentDir: "/tmp/status-agent",
+    });
+  });
+
   it("resolves gateway health with the shared probe call shape", async () => {
     await resolveStatusGatewayHealth({
       config: { gateway: {} },
