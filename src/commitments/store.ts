@@ -223,9 +223,12 @@ function loadCommitmentStoreInternal(): LoadedCommitmentStore {
   return loadCommitmentStoreFromSqlite();
 }
 
-export async function loadCommitmentStore(storePath?: string): Promise<CommitmentStoreFile> {
+export async function loadCommitmentStore(
+  storePath?: string,
+  options: { env?: NodeJS.ProcessEnv } = {},
+): Promise<CommitmentStoreFile> {
   void storePath;
-  return loadCommitmentStoreInternal().store;
+  return loadCommitmentStoreFromSqlite(options.env ?? process.env).store;
 }
 
 function replaceCommitmentRows(
@@ -257,9 +260,10 @@ function replaceCommitmentRows(
 export async function saveCommitmentStore(
   storePath: string | undefined,
   store: CommitmentStoreFile,
+  options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<void> {
   void storePath;
-  replaceCommitmentRows(store);
+  replaceCommitmentRows(store, options.env ?? process.env);
 }
 
 export async function legacyCommitmentStoreFileExists(

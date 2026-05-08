@@ -58,10 +58,12 @@ export type QaScenarioRuntimeDeps = {
   readConfigSnapshot: QaScenarioRuntimeFunction;
   createSession: QaScenarioRuntimeFunction;
   readEffectiveTools: QaScenarioRuntimeFunction;
+  readQaCommitmentStore: QaScenarioRuntimeFunction;
   readQaCrestodianAuditEntries: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
   readRawQaSessionEntries: QaScenarioRuntimeFunction;
   setQaActiveMemorySessionDisabled: QaScenarioRuntimeFunction;
+  seedQaCommitmentStore: QaScenarioRuntimeFunction;
   seedQaSessionTranscript: QaScenarioRuntimeFunction;
   runQaCli: QaScenarioRuntimeFunction;
   extractMediaPathFromText: QaScenarioRuntimeFunction;
@@ -145,10 +147,12 @@ type QaScenarioRuntimeApi<
   readConfigSnapshot: TDeps["readConfigSnapshot"];
   createSession: TDeps["createSession"];
   readEffectiveTools: TDeps["readEffectiveTools"];
+  readQaCommitmentStore: TDeps["readQaCommitmentStore"];
   readQaCrestodianAuditEntries: TDeps["readQaCrestodianAuditEntries"];
   readSkillStatus: TDeps["readSkillStatus"];
   readRawQaSessionEntries: TDeps["readRawQaSessionEntries"];
   setQaActiveMemorySessionDisabled: TDeps["setQaActiveMemorySessionDisabled"];
+  seedQaCommitmentStore: TDeps["seedQaCommitmentStore"];
   seedQaSessionTranscript: TDeps["seedQaSessionTranscript"];
   runQaCli: TDeps["runQaCli"];
   extractMediaPathFromText: TDeps["extractMediaPathFromText"];
@@ -247,10 +251,12 @@ export function createQaScenarioRuntimeApi<
     readConfigSnapshot: params.deps.readConfigSnapshot,
     createSession: params.deps.createSession,
     readEffectiveTools: params.deps.readEffectiveTools,
+    readQaCommitmentStore: params.deps.readQaCommitmentStore,
     readQaCrestodianAuditEntries: params.deps.readQaCrestodianAuditEntries,
     readSkillStatus: params.deps.readSkillStatus,
     readRawQaSessionEntries: params.deps.readRawQaSessionEntries,
     setQaActiveMemorySessionDisabled: params.deps.setQaActiveMemorySessionDisabled,
+    seedQaCommitmentStore: params.deps.seedQaCommitmentStore,
     seedQaSessionTranscript: params.deps.seedQaSessionTranscript,
     runQaCli: params.deps.runQaCli,
     extractMediaPathFromText: params.deps.extractMediaPathFromText,

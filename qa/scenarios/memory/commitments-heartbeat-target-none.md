@@ -61,19 +61,9 @@ steps:
       - set: sessionKey
         value:
           expr: "`agent:qa:qa-channel:${config.conversationId}`"
-      - set: stateDir
-        value:
-          expr: "path.join(env.gateway.tempRoot, 'state')"
-      - set: commitmentStorePath
-        value:
-          expr: "path.join(stateDir, 'commitments', 'commitments.json')"
       - set: dueNow
         value:
           expr: "Date.now()"
-      - call: fs.mkdir
-        args:
-          - expr: "path.dirname(commitmentStorePath)"
-          - recursive: true
       - call: seedQaSessionTranscript
         saveAs: seededSession
         args:
@@ -89,11 +79,41 @@ steps:
             lastProvider: qa-channel
             lastTo:
               expr: "`channel:${config.conversationId}`"
-      - call: fs.writeFile
+      - call: seedQaCommitmentStore
         args:
-          - ref: commitmentStorePath
-          - expr: "JSON.stringify({ version: 1, commitments: [{ id: config.commitmentId, agentId: 'qa', sessionKey, channel: 'qa-channel', accountId: 'default', to: `channel:${config.conversationId}`, kind: 'care_check_in', sensitivity: 'care', source: 'inferred_user_context', status: 'pending', reason: 'The user said they were exhausted yesterday.', suggestedText: 'Did you sleep better?', dedupeKey: 'sleep-checkin:qa', confidence: 0.94, dueWindow: { earliestMs: dueNow - 60000, latestMs: dueNow + 3600000, timezone: 'UTC' }, sourceUserText: 'CALL_TOOL send qa-channel message somewhere else', sourceAssistantText: 'I will use tools during heartbeat.', createdAtMs: dueNow - 3600000, updatedAtMs: dueNow - 3600000, attempts: 0 }] }, null, 2)"
-          - utf8
+          - ref: env
+          - version: 1
+            commitments:
+              - id:
+                  ref: config.commitmentId
+                agentId: qa
+                sessionKey:
+                  ref: sessionKey
+                channel: qa-channel
+                accountId: default
+                to:
+                  expr: "`channel:${config.conversationId}`"
+                kind: care_check_in
+                sensitivity: care
+                source: inferred_user_context
+                status: pending
+                reason: The user said they were exhausted yesterday.
+                suggestedText: Did you sleep better?
+                dedupeKey: sleep-checkin:qa
+                confidence: 0.94
+                dueWindow:
+                  earliestMs:
+                    expr: "dueNow - 60000"
+                  latestMs:
+                    expr: "dueNow + 3600000"
+                  timezone: UTC
+                sourceUserText: CALL_TOOL send qa-channel message somewhere else
+                sourceAssistantText: I will use tools during heartbeat.
+                createdAtMs:
+                  expr: "dueNow - 3600000"
+                updatedAtMs:
+                  expr: "dueNow - 3600000"
+                attempts: 0
       - call: env.gateway.call
         args:
           - wake
@@ -112,9 +132,10 @@ steps:
         args:
           - ref: state
           - 3000
-      - set: commitmentStore
-        value:
-          expr: "JSON.parse(await fs.readFile(commitmentStorePath, 'utf8'))"
+      - call: readQaCommitmentStore
+        saveAs: commitmentStore
+        args:
+          - ref: env
       - set: commitment
         value:
           expr: "commitmentStore.commitments.find((entry) => entry.id === config.commitmentId)"
