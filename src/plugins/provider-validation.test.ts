@@ -219,6 +219,9 @@ describe("normalizeRegisteredProvider", () => {
         'provider "demo" registered both catalog and discovery; using catalog',
       ],
       assert: (provider: ReturnType<typeof normalizeRegisteredProvider>) => {
+        if (provider === null) {
+          throw new Error("expected normalized provider");
+        }
         expect(provider).toMatchObject({ catalog: { run: expect.any(Function) } });
         expect(provider.discovery).toBeUndefined();
       },

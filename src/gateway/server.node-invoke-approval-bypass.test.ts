@@ -193,9 +193,12 @@ describe("node.invoke approval bypass", () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
     const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
     const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
-    const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
+    const publicKeyRaw = requireNonEmptyString(
+      publicKeyRawBase64UrlFromPem(publicKeyPem),
+      "operator public key",
+    );
     const deviceId = requireNonEmptyString(
-      deriveDeviceIdFromPublicKey(publicKeyRaw),
+      deriveDeviceIdFromPublicKey(publicKeyRaw) ?? undefined,
       "operator device id",
     );
     return await connectOperatorWithRetry(scopes, (nonce) => {

@@ -4,6 +4,17 @@ import {
   resolveWhatsAppGroupSystemPrompt,
 } from "./system-prompt.js";
 
+type PromptAccountConfig = {
+  direct?: Record<string, { systemPrompt?: string | null }>;
+  groups?: Record<string, { systemPrompt?: string | null }>;
+};
+
+type PromptParams = {
+  accountConfig?: PromptAccountConfig | null;
+  groupId?: string | null;
+  peerId?: string | null;
+};
+
 const promptSurfaceCases = [
   {
     name: "group",
@@ -11,7 +22,7 @@ const promptSurfaceCases = [
     targetId: "g1",
     collectionKey: "groups",
     specificPrompt: "group prompt",
-    resolve: resolveWhatsAppGroupSystemPrompt,
+    resolve: (params: PromptParams) => resolveWhatsAppGroupSystemPrompt(params),
   },
   {
     name: "direct",
@@ -19,15 +30,15 @@ const promptSurfaceCases = [
     targetId: "p1",
     collectionKey: "direct",
     specificPrompt: "direct prompt",
-    resolve: resolveWhatsAppDirectSystemPrompt,
+    resolve: (params: PromptParams) => resolveWhatsAppDirectSystemPrompt(params),
   },
-];
+] as const;
 
 function createParams(
   surface: (typeof promptSurfaceCases)[number],
-  accountConfig?: unknown,
+  accountConfig?: PromptAccountConfig | null,
   targetId: string | null | undefined = surface.targetId,
-) {
+): PromptParams {
   return {
     [surface.targetKey]: targetId,
     accountConfig,
@@ -36,7 +47,7 @@ function createParams(
 
 function createAccountConfig(
   surface: (typeof promptSurfaceCases)[number],
-  entries: Record<string, unknown>,
+  entries: Record<string, { systemPrompt?: string | null }>,
 ) {
   return { [surface.collectionKey]: entries };
 }

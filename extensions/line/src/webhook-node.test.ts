@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
@@ -81,7 +82,7 @@ async function invokeWebhook(params: {
   const middleware = createLineWebhookMiddleware({
     channelSecret: SECRET,
     onEvents: onEventsMock as never,
-    runtime: params.runtime,
+    runtime: params.runtime as RuntimeEnv | undefined,
   });
 
   const headers = { ...params.headers };
@@ -166,7 +167,7 @@ async function invokeMiddlewarePostContract(params: {
   failWith?: Error;
   rawBody: string;
   signed: boolean;
-}) {
+}): Promise<WebhookPostResult> {
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const onEvents = vi.fn(async () => {
     if (params.failWith) {
@@ -182,6 +183,7 @@ async function invokeMiddlewarePostContract(params: {
   });
   return {
     body: res.json.mock.calls.at(-1)?.[0],
+    contentType: undefined,
     dispatched,
     runtimeError: runtime.error,
     status: res.status.mock.calls.at(-1)?.[0],

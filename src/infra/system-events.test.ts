@@ -257,6 +257,9 @@ describe("system events (session routing)", () => {
     enqueueSystemEvent("Post-compaction context:\nline one\nline two", { sessionKey: key });
 
     const result = await drainFormattedEvents(key);
+    if (result === undefined) {
+      throw new Error("expected formatted system event text");
+    }
     expect(result).toContain("Post-compaction context:");
     const lines = result.split("\n");
     expect(lines.length).toBeGreaterThan(0);

@@ -205,7 +205,7 @@ describe("commands.list handler", () => {
 
   it("maps native commands with category, scope, and args", () => {
     const { payload } = callHandler();
-    const { commands } = payload as { commands: Array<Record<string, unknown>> };
+    const { commands } = payload as { commands: Array<{ name: string } & Record<string, unknown>> };
     const model = requireCommand(commands, "model");
     expect(model).toMatchObject({
       name: "model",

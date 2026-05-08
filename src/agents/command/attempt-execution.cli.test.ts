@@ -539,7 +539,7 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    const messages = await readSessionMessages(sessionFile!);
+    const messages = await readSessionMessages(sessionFile);
     expect(messages).toHaveLength(3);
     expect(messages.map((message) => message.role)).toEqual(["assistant", "user", "assistant"]);
     expect(messages[2]).toMatchObject({

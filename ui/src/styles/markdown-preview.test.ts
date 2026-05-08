@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readStyleSheetAsync } from "../../../test/helpers/ui-style-fixtures";
+import { readStyleSheetAsync } from "../../../test/helpers/ui-style-fixtures.js";
 
 describe("markdown preview styles", () => {
   it("keeps the preview dialog canvas unified", async () => {

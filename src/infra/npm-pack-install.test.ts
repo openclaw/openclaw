@@ -123,6 +123,9 @@ describe("installFromNpmSpecArchive", () => {
     const okResult = expectWrappedOkResult(result, { ok: true, target: "done" });
     expect(okResult.integrityDrift).toBeUndefined();
     expect(okResult.npmResolution.resolvedSpec).toBe("@openclaw/test@1.0.0");
+    if (okResult.npmResolution.resolvedAt === undefined) {
+      throw new Error("expected npm resolution timestamp");
+    }
     expect(Date.parse(okResult.npmResolution.resolvedAt)).not.toBeNaN();
     expect(installFromArchive).toHaveBeenCalledWith({ archivePath: "/tmp/openclaw-test.tgz" });
   });

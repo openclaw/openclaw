@@ -79,6 +79,9 @@ describe("formatPluginSourceForTable", () => {
       OPENCLAW_STATE_DIR: "~/state",
     } as NodeJS.ProcessEnv;
     const stock = withPathResolutionEnv(homeDir, rawEnv, (env) => resolveBundledPluginsDir(env));
+    if (stock === undefined) {
+      throw new Error("expected bundled plugins dir");
+    }
     expectResolvedSourceRoots({
       homeDir,
       env: rawEnv,

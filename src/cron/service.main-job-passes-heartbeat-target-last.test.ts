@@ -53,7 +53,7 @@ describe("cron main job passes heartbeat target=last", () => {
     if (!callArgs?.heartbeat) {
       throw new Error("expected runHeartbeatOnce call with heartbeat config");
     }
-    return callArgs;
+    return callArgs.heartbeat;
   }
 
   async function runSingleTick(cron: CronService) {
@@ -93,8 +93,8 @@ describe("cron main job passes heartbeat target=last", () => {
 
     // The heartbeat config passed should include target: "last" so the
     // heartbeat runner delivers the response to the last active channel.
-    const callArgs = requireRunHeartbeatOnceCall(runHeartbeatOnce);
-    expect(callArgs.heartbeat.target).toBe("last");
+    const heartbeat = requireRunHeartbeatOnceCall(runHeartbeatOnce);
+    expect(heartbeat.target).toBe("last");
   });
 
   it("should preserve heartbeat.target=last when wakeMode=now falls back to requestHeartbeat", async () => {

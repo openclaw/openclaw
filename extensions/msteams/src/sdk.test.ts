@@ -431,6 +431,13 @@ function makeFakeSdk() {
   return { sdk: { App: FakeApp as any, Client: FakeClient as any }, appInstances, FakeApp };
 }
 
+function requireTokenProvider(value: unknown): (scope: string) => Promise<string> {
+  if (typeof value !== "function") {
+    throw new Error("expected app token provider");
+  }
+  return value as (scope: string) => Promise<string>;
+}
+
 describe("createMSTeamsApp – secret credentials", () => {
   it("passes clientId, clientSecret, tenantId to sdk.App", async () => {
     const { sdk, appInstances, FakeApp } = makeFakeSdk();
@@ -472,10 +479,7 @@ describe("createMSTeamsApp – federated certificate credentials", () => {
       clientId: "fed-app-id",
       tenantId: "fed-tenant",
     });
-    const tokenProvider = appInstances[0].token;
-    if (!tokenProvider) {
-      throw new Error("expected federated app to expose token provider");
-    }
+    const tokenProvider = requireTokenProvider(appInstances[0].token);
     const token = await tokenProvider("https://api.botframework.com/.default");
     expect(token).toBe("mock-managed-token");
   });
@@ -521,10 +525,7 @@ describe("createMSTeamsApp – federated managed identity", () => {
     };
     await createMSTeamsApp(creds, sdk);
     expect(appInstances[0]).toMatchObject({ clientId: "mi-app-id", tenantId: "mi-tenant" });
-    const tokenProvider = appInstances[0].token;
-    if (!tokenProvider) {
-      throw new Error("expected managed-identity app to expose token provider");
-    }
+    const tokenProvider = requireTokenProvider(appInstances[0].token);
     const token = await tokenProvider("https://api.botframework.com/.default");
     expect(token).toBe("mock-managed-token");
   });
@@ -538,10 +539,7 @@ describe("createMSTeamsApp – federated managed identity", () => {
       useManagedIdentity: true,
     };
     await createMSTeamsApp(creds, sdk);
-    const tokenProvider = appInstances[0].token;
-    if (!tokenProvider) {
-      throw new Error("expected managed-identity app to expose token provider");
-    }
+    const tokenProvider = requireTokenProvider(appInstances[0].token);
     const token = await tokenProvider("https://api.botframework.com/.default");
     expect(token).toBe("mock-managed-token");
   });
@@ -556,7 +554,7 @@ describe("createMSTeamsApp – federated managed identity", () => {
       useManagedIdentity: true,
     };
     await createMSTeamsApp(creds, sdk);
-    const tokenFn = appInstances[0].token as (scope: string) => Promise<string>;
+    const tokenFn = requireTokenProvider(appInstances[0].token);
     await expect(tokenFn("https://api.botframework.com/.default")).rejects.toThrow(
       /failed to acquire token/i,
     );

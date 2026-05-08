@@ -121,9 +121,9 @@ describe("config view", () => {
     return button;
   }
 
-  function queryRequired<T extends Element>(container: HTMLElement, selector: string): T {
-    const element = container.querySelector<T>(selector);
-    if (!element) {
+  function queryRequired(container: HTMLElement, selector: string): HTMLElement {
+    const element = container.querySelector(selector);
+    if (!(element instanceof HTMLElement)) {
       throw new Error(`Expected element matching "${selector}"`);
     }
     return element;
@@ -366,7 +366,7 @@ describe("config view", () => {
       },
     });
 
-    const content = queryRequired<HTMLElement>(container, ".config-content");
+    const content = queryRequired(container, ".config-content");
     content.scrollTop = 280;
     content.scrollLeft = 24;
     content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {

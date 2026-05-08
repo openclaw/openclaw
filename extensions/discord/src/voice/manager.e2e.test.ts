@@ -469,6 +469,9 @@ describe("DiscordVoiceManager", () => {
 
     const player = getLastAudioPlayer();
     const entry = getSessionEntry(manager);
+    if (!("stop" in player) || typeof player.stop !== "function") {
+      throw new Error("expected audio player stop mock");
+    }
     player.state.status = "playing";
 
     await (

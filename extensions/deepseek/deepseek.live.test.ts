@@ -142,6 +142,9 @@ describeLive("deepseek plugin live", () => {
     };
     let capturedPayload: Record<string, unknown> | undefined;
     const streamFn = createDeepSeekV4ThinkingWrapper(streamSimple, "high");
+    if (streamFn === undefined) {
+      throw new Error("expected DeepSeek V4 thinking wrapper");
+    }
 
     const stream = streamFn(resolveDeepSeekV4LiveModel(), context, {
       apiKey: DEEPSEEK_KEY,
@@ -202,6 +205,9 @@ describeLive("deepseek plugin live", () => {
     };
     let capturedPayload: Record<string, unknown> | undefined;
     const streamFn = createDeepSeekV4ThinkingWrapper(streamSimple, "high");
+    if (streamFn === undefined) {
+      throw new Error("expected DeepSeek V4 thinking wrapper");
+    }
 
     const stream = streamFn(resolveDeepSeekV4LiveModel(), context, {
       apiKey: DEEPSEEK_KEY,

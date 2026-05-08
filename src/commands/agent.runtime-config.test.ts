@@ -208,6 +208,9 @@ describe("agentCommand runtime config", () => {
 
       expect(resolved.storePath).toBe(store);
       expect(resolved.sessionKey).toEqual(expect.any(String));
+      if (resolved.sessionKey === undefined) {
+        throw new Error("expected resolved session key");
+      }
       expect(resolved.sessionKey.length).toBeGreaterThan(0);
       expect(resolved.sessionId).toEqual(expect.any(String));
       expect(resolved.sessionId.length).toBeGreaterThan(0);

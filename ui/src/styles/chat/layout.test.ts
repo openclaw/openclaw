@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures";
+import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 
 function readLayoutCss(): string {
   return readStyleSheet("ui/src/styles/chat/layout.css");

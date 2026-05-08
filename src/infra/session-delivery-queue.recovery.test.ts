@@ -139,6 +139,9 @@ describe("session-delivery queue recovery", () => {
       }
       expect(failedEntry.retryCount).toBe(1);
       expect(typeof failedEntry.lastAttemptAt).toBe("number");
+      if (typeof failedEntry.lastAttemptAt !== "number") {
+        throw new Error("expected last attempt timestamp");
+      }
 
       const lastAttemptAt = failedEntry.lastAttemptAt;
       const notReady = isSessionDeliveryEligibleForRetry(failedEntry, lastAttemptAt + 4_999);
