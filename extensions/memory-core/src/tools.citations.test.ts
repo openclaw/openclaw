@@ -27,6 +27,16 @@ import {
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 
+function collectWikiResultPaths(results: readonly { corpus: string; path: string }[]): string[] {
+  const paths: string[] = [];
+  for (const result of results) {
+    if (result.corpus === "wiki") {
+      paths.push(result.path);
+    }
+  }
+  return paths;
+}
+
 async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
   const startedAt = Date.now();
   let lastError: unknown;
@@ -369,9 +379,7 @@ describe("memory tools", () => {
     expect(corpora).toContain("memory");
     expect(corpora).toContain("wiki");
     expect(details.results).toHaveLength(5);
-    expect(
-      details.results.filter((entry) => entry.corpus === "wiki").map((entry) => entry.path),
-    ).toEqual(["w1.md", "w2.md", "w3.md", "w4.md"]);
+    expect(collectWikiResultPaths(details.results)).toEqual(["w1.md", "w2.md", "w3.md", "w4.md"]);
   });
 
   it("merges memory and wiki corpus search results for corpus=all", async () => {
