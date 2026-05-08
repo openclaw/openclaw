@@ -148,8 +148,9 @@ runtime-backed legacy provider prefixes are not shown as normal model/provider
 choices.
 
 If any configured model route is still `openai-codex/*`, `openclaw doctor --fix`
-rewrites it to `openai/*`. For matching agent routes, it sets the agent runtime
-to `codex` and preserves existing `openai-codex` auth profile overrides.
+rewrites it to `openai/*` and preserves existing `openai-codex` auth profile
+overrides. It does not pin the whole agent to `agentRuntime.id: "codex"` because
+canonical OpenAI refs already select the Codex harness automatically.
 
 ## Route map
 
@@ -159,7 +160,7 @@ Use this table before changing config:
 | ---------------------------------------------------- | -------------------------- | -------------------------------------- | ------------------------------ | ---------------------------- |
 | ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-*`             | omitted or `agentRuntime.id: "codex"`  | Codex OAuth or Codex account   | `Runtime: OpenAI Codex`      |
 | OpenAI API-key auth for agent models                 | `openai/gpt-*`             | omitted or `agentRuntime.id: "codex"`  | `openai-codex` API-key profile | `Runtime: OpenAI Codex`      |
-| Legacy config that needs doctor repair               | `openai-codex/gpt-*`       | repaired to `codex`                    | Existing configured auth       | Recheck after `doctor --fix` |
+| Legacy config that needs doctor repair               | `openai-codex/gpt-*`       | preserved or automatic                 | Existing configured auth       | Recheck after `doctor --fix` |
 | Mixed providers with conservative auto mode          | provider-specific refs     | `agentRuntime.id: "auto"`              | Per selected provider          | Depends on selected runtime  |
 | Explicit Codex ACP adapter session                   | ACP prompt/model dependent | `sessions_spawn` with `runtime: "acp"` | ACP backend auth               | ACP task/session status      |
 
@@ -286,7 +287,7 @@ Use one of these shapes instead:
 - Keep the default agent on `agentRuntime.id: "auto"` and PI fallback for normal mixed
   provider usage.
 - Use legacy `codex/*` refs only for compatibility. New configs should prefer
-  `openai/*` plus an explicit Codex runtime policy.
+  `openai/*`; add an explicit Codex runtime policy only for dedicated Codex-only agents.
 
 For example, this keeps the default agent on normal automatic selection and
 adds a separate Codex agent:

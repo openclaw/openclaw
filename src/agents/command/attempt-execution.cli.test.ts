@@ -934,6 +934,57 @@ describe("embedded attempt harness pinning", () => {
     );
   });
 
+  it("does not carry an automatic Codex harness pin into non-OpenAI model switches", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "mixed-provider-session",
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+    };
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "minimax",
+      originalProvider: "minimax",
+      modelOverride: "minimax-m2.7",
+      cfg: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "auto" },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "switch to minimax",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-mixed-provider-auto-runtime",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "minimax",
+      sessionHasHistory: true,
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "pi",
+      }),
+    );
+  });
+
   it("pins sessions with history to the configured Codex harness instead of PI", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "codex-history-session",

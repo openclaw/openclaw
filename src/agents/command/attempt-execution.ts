@@ -23,7 +23,11 @@ import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliRuntimeAlias, resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
-import { isOpenAIProvider, resolveOpenAIRuntimeProviderForPi } from "../openai-codex-routing.js";
+import {
+  isOpenAICodexProvider,
+  isOpenAIProvider,
+  resolveOpenAIRuntimeProviderForPi,
+} from "../openai-codex-routing.js";
 import { normalizeEmbeddedAgentRuntime } from "../pi-embedded-runner/runtime.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -669,6 +673,13 @@ function resolveSessionPinnedAgentHarnessId(params: {
   if (params.sessionEntry?.sessionId !== params.sessionId) {
     return resolveConfiguredAgentHarnessId(params);
   }
+  const explicitRuntimeOverride = params.sessionEntry.agentRuntimeOverride?.trim();
+  if (explicitRuntimeOverride) {
+    const runtime = normalizeEmbeddedAgentRuntime(explicitRuntimeOverride);
+    if (runtime !== "auto" && runtime !== "default") {
+      return runtime;
+    }
+  }
   if (params.sessionEntry.agentHarnessId) {
     if (isOpenAIProvider(params.provider)) {
       const configuredPolicy = resolveAgentHarnessPolicy({
@@ -689,6 +700,23 @@ function resolveSessionPinnedAgentHarnessId(params: {
       if (storedRuntime === "pi" && configuredAgentHarnessId) {
         return configuredAgentHarnessId;
       }
+    }
+    const currentProvider = params.provider.trim().toLowerCase();
+    const storedHarness = normalizeEmbeddedAgentRuntime(params.sessionEntry.agentHarnessId);
+    if (
+      storedHarness === "codex" &&
+      !isOpenAIProvider(params.provider) &&
+      !isOpenAICodexProvider(params.provider) &&
+      currentProvider !== "codex"
+    ) {
+      const configuredAgentHarnessId = resolveConfiguredAgentHarnessId(params);
+      if (configuredAgentHarnessId) {
+        return configuredAgentHarnessId;
+      }
+      if (!params.sessionHasHistory) {
+        return undefined;
+      }
+      return "pi";
     }
     return params.sessionEntry.agentHarnessId;
   }
