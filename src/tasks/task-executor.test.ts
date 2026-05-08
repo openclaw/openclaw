@@ -111,6 +111,15 @@ function expectParentFlowId(task: { parentFlowId?: string }): string {
   return task.parentFlowId;
 }
 
+function requireCreatedFlowTask(
+  result: ReturnType<typeof runTaskInFlow>,
+): NonNullable<ReturnType<typeof runTaskInFlow>["task"]> {
+  if (!result.task) {
+    throw new Error("Expected TaskFlow child task to be created");
+  }
+  return result.task;
+}
+
 function createRunningAcpChildTaskRun(
   overrides: Partial<Parameters<typeof createRunningTaskRun>[0]> = {},
 ) {
@@ -497,7 +506,8 @@ describe("task-executor", () => {
           runId: "run-flow-child",
         }),
       });
-      expect(getTaskById(created.task!.taskId)).toMatchObject({
+      const createdTask = requireCreatedFlowTask(created);
+      expect(getTaskById(createdTask.taskId)).toMatchObject({
         parentFlowId: flow.flowId,
         ownerKey: "agent:main:main",
         childSessionKey: "agent:codex:acp:child",
@@ -548,7 +558,7 @@ describe("task-executor", () => {
         controllerId: "tests/managed-flow",
         goal: "Long running batch",
       });
-      const child = runTaskInFlow({
+      const created = runTaskInFlow({
         flowId: flow.flowId,
         runtime: "acp",
         childSessionKey: "agent:codex:acp:child",
@@ -557,7 +567,8 @@ describe("task-executor", () => {
         status: "running",
         startedAt: 10,
         lastEventAt: 10,
-      }).task!;
+      });
+      const child = requireCreatedFlowTask(created);
 
       const cancelled = await cancelFlowById({
         cfg: {} as never,
