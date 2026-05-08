@@ -84,11 +84,33 @@ type LedgerOptions = {
   now?: () => number;
 };
 
-type AcpEventLedgerKvDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
+type AcpEventLedgerDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "acp_replay_events" | "acp_replay_sessions" | "kv"
+>;
 
 type LedgerKvRow = {
   key: string;
   value_json: string;
+};
+
+type LedgerSessionRow = {
+  complete: number;
+  created_at: number;
+  cwd: string;
+  next_seq: number;
+  session_id: string;
+  session_key: string;
+  updated_at: number;
+};
+
+type LedgerEventRow = {
+  at: number;
+  run_id: string | null;
+  seq: number;
+  session_id: string;
+  session_key: string;
+  update_json: string;
 };
 
 type MutableLedgerState = {
@@ -447,8 +469,8 @@ function dbOptionsFromParams(
   };
 }
 
-function loadStoreFromSqliteDb(database: DatabaseSync): LedgerStore {
-  const db = getNodeSqliteKysely<AcpEventLedgerKvDatabase>(database);
+function loadStoreFromLegacyKvRows(database: DatabaseSync): LedgerStore {
+  const db = getNodeSqliteKysely<AcpEventLedgerDatabase>(database);
   const rows = executeSqliteQuerySync<LedgerKvRow>(
     database,
     db
@@ -473,30 +495,90 @@ function loadStoreFromSqliteDb(database: DatabaseSync): LedgerStore {
   return { version: LEDGER_VERSION, sessions };
 }
 
+function loadStoreFromSqliteDb(database: DatabaseSync): LedgerStore {
+  const db = getNodeSqliteKysely<AcpEventLedgerDatabase>(database);
+  const sessionRows = executeSqliteQuerySync<LedgerSessionRow>(
+    database,
+    db
+      .selectFrom("acp_replay_sessions")
+      .select([
+        "session_id",
+        "session_key",
+        "cwd",
+        "complete",
+        "created_at",
+        "updated_at",
+        "next_seq",
+      ])
+      .orderBy("updated_at", "desc")
+      .orderBy("session_id", "asc"),
+  ).rows;
+  if (sessionRows.length === 0) {
+    return loadStoreFromLegacyKvRows(database);
+  }
+
+  const sessions: Record<string, LedgerSession> = {};
+  for (const row of sessionRows) {
+    sessions[row.session_id] = {
+      sessionId: row.session_id,
+      sessionKey: row.session_key,
+      cwd: row.cwd,
+      complete: row.complete === 1,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      nextSeq: row.next_seq,
+      events: [],
+    };
+  }
+
+  const eventRows = executeSqliteQuerySync<LedgerEventRow>(
+    database,
+    db
+      .selectFrom("acp_replay_events")
+      .select(["session_id", "seq", "at", "session_key", "run_id", "update_json"])
+      .orderBy("session_id", "asc")
+      .orderBy("seq", "asc"),
+  ).rows;
+  for (const row of eventRows) {
+    const session = sessions[row.session_id];
+    if (!session) {
+      continue;
+    }
+    try {
+      session.events.push({
+        seq: row.seq,
+        at: row.at,
+        sessionId: row.session_id,
+        sessionKey: row.session_key,
+        ...(row.run_id ? { runId: row.run_id } : {}),
+        update: JSON.parse(row.update_json) as SessionUpdate,
+      });
+    } catch {
+      session.complete = false;
+    }
+  }
+
+  return { version: LEDGER_VERSION, sessions };
+}
+
 function writeStoreToSqliteDb(
   database: DatabaseSync,
   store: LedgerStore,
   updatedAt: number,
   options: { pruneMissing?: boolean } = {},
 ): void {
-  const db = getNodeSqliteKysely<AcpEventLedgerKvDatabase>(database);
+  const db = getNodeSqliteKysely<AcpEventLedgerDatabase>(database);
   if (options.pruneMissing !== false) {
-    const existing = executeSqliteQuerySync<LedgerKvRow>(
+    const existing = executeSqliteQuerySync<{ session_id: string }>(
       database,
-      db
-        .selectFrom("kv")
-        .select(["key", "value_json"])
-        .where("scope", "=", ACP_EVENT_LEDGER_KV_SCOPE),
+      db.selectFrom("acp_replay_sessions").select("session_id"),
     ).rows;
     const retained = new Set(Object.keys(store.sessions));
     for (const row of existing) {
-      if (!retained.has(row.key)) {
+      if (!retained.has(row.session_id)) {
         executeSqliteQuerySync(
           database,
-          db
-            .deleteFrom("kv")
-            .where("scope", "=", ACP_EVENT_LEDGER_KV_SCOPE)
-            .where("key", "=", row.key),
+          db.deleteFrom("acp_replay_sessions").where("session_id", "=", row.session_id),
         );
       }
     }
@@ -505,21 +587,65 @@ function writeStoreToSqliteDb(
     executeSqliteQuerySync(
       database,
       db
-        .insertInto("kv")
+        .insertInto("acp_replay_sessions")
         .values({
-          scope: ACP_EVENT_LEDGER_KV_SCOPE,
-          key: session.sessionId,
-          value_json: JSON.stringify(session),
-          updated_at: updatedAt,
+          session_id: session.sessionId,
+          session_key: session.sessionKey,
+          cwd: session.cwd,
+          complete: session.complete ? 1 : 0,
+          created_at: session.createdAt,
+          updated_at: session.updatedAt || updatedAt,
+          next_seq: session.nextSeq,
         })
         .onConflict((conflict) =>
-          conflict.columns(["scope", "key"]).doUpdateSet({
-            value_json: JSON.stringify(session),
-            updated_at: updatedAt,
+          conflict.column("session_id").doUpdateSet({
+            session_key: session.sessionKey,
+            cwd: session.cwd,
+            complete: session.complete ? 1 : 0,
+            created_at: session.createdAt,
+            updated_at: session.updatedAt || updatedAt,
+            next_seq: session.nextSeq,
           }),
         ),
     );
+    executeSqliteQuerySync(
+      database,
+      db.deleteFrom("acp_replay_events").where("session_id", "=", session.sessionId),
+    );
+    if (session.events.length > 0) {
+      executeSqliteQuerySync(
+        database,
+        db.insertInto("acp_replay_events").values(
+          session.events.map((event) => ({
+            session_id: event.sessionId,
+            seq: event.seq,
+            at: event.at,
+            session_key: event.sessionKey,
+            run_id: event.runId ?? null,
+            update_json: JSON.stringify(event.update),
+          })),
+        ),
+      );
+    }
   }
+  executeSqliteQuerySync(
+    database,
+    db.deleteFrom("kv").where("scope", "=", ACP_EVENT_LEDGER_KV_SCOPE),
+  );
+  executeSqliteQuerySync(
+    database,
+    db
+      .deleteFrom("acp_replay_events")
+      .where(({ not, exists, selectFrom, ref }) =>
+        not(
+          exists(
+            selectFrom("acp_replay_sessions")
+              .select("session_id")
+              .whereRef("acp_replay_sessions.session_id", "=", ref("acp_replay_events.session_id")),
+          ),
+        ),
+      ),
+  );
 }
 
 function writeStoreToSqlite(

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -115,6 +116,45 @@ describe("ACP event ledger", () => {
         sessionUpdate: "agent_thought_chunk",
         content: { type: "text", text: "Thinking" },
       });
+    });
+  });
+
+  it("stores SQLite replay state in relational tables instead of legacy kv blobs", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const dbPath = path.join(dir, "openclaw-state.sqlite");
+      const ledger = createSqliteAcpEventLedger({ path: dbPath, now: () => 1000 });
+      await ledger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: true,
+      });
+      await ledger.recordUpdate({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        runId: "run-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Answer" },
+        },
+      });
+      closeOpenClawStateDatabaseForTest();
+
+      const sqlite = requireNodeSqlite();
+      const db = new sqlite.DatabaseSync(dbPath);
+      try {
+        expect(db.prepare("SELECT COUNT(*) AS count FROM acp_replay_sessions").get()).toEqual({
+          count: 1,
+        });
+        expect(db.prepare("SELECT COUNT(*) AS count FROM acp_replay_events").get()).toEqual({
+          count: 1,
+        });
+        expect(
+          db.prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = 'acp_event_ledger'").get(),
+        ).toEqual({ count: 0 });
+      } finally {
+        db.close();
+      }
     });
   });
 

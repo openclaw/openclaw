@@ -17,7 +17,7 @@ import {
 } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
-const OPENCLAW_STATE_SCHEMA_VERSION = 17;
+const OPENCLAW_STATE_SCHEMA_VERSION = 18;
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
