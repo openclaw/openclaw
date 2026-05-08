@@ -381,8 +381,9 @@ describe("capability cli", () => {
     });
 
     const payload = mocks.runtime.writeJson.mock.calls[0]?.[0] as Array<{ id: string }>;
-    expect(payload.some((entry) => entry.id === "model.run")).toBe(true);
-    expect(payload.some((entry) => entry.id === "image.describe")).toBe(true);
+    expect(payload.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["model.run", "image.describe"]),
+    );
   });
 
   it("defaults model run to local transport", async () => {
