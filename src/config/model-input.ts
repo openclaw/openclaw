@@ -1,6 +1,10 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
-import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "../shared/string-coerce.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
@@ -20,7 +24,9 @@ function modelKeyForConfig(provider: string, model: string): string {
   if (!modelId) {
     return providerId;
   }
-  return modelId.toLowerCase().startsWith(`${providerId.toLowerCase()}/`)
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
+    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
+  )
     ? modelId
     : `${providerId}/${modelId}`;
 }

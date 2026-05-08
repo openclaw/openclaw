@@ -39,12 +39,8 @@ function resolveStatusHarnessRuntime(params: {
   sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
   defaultRuntime: string;
 }): string {
-  const sessionRuntime = normalizeOptionalString(
-    params.sessionEntry?.agentRuntimeOverride ?? params.sessionEntry?.agentHarnessId,
-  );
-  return sessionRuntime && sessionRuntime !== "auto" && sessionRuntime !== "default"
-    ? sessionRuntime
-    : params.defaultRuntime;
+  void params.sessionEntry;
+  return params.defaultRuntime;
 }
 
 async function resolveStatusAuthLabel(params: {

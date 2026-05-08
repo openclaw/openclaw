@@ -45,14 +45,22 @@ describe("doctor session state provider routes", () => {
     ).toBe(true);
   });
 
-  it("preserves raw configured CLI runtimes before harness policy normalization", () => {
+  it("preserves configured provider CLI runtimes before harness policy normalization", () => {
     expect(
       resolveConfiguredDoctorSessionStateRoute({
         cfg: {
           agents: {
             defaults: {
               model: { primary: "openai/gpt-5.5" },
-              agentRuntime: { id: "codex-cli" },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                agentRuntime: { id: "codex-cli" },
+                models: [],
+              },
             },
           },
         },
@@ -66,7 +74,7 @@ describe("doctor session state provider routes", () => {
     });
   });
 
-  it("lets environment CLI runtime overrides reach plugin-owned scanners", () => {
+  it("ignores legacy environment runtime overrides before plugin-owned scans", () => {
     expect(
       resolveConfiguredDoctorSessionStateRoute({
         cfg: {
@@ -81,7 +89,7 @@ describe("doctor session state provider routes", () => {
         env: { OPENCLAW_AGENT_RUNTIME: "codex-cli" },
       }),
     ).toMatchObject({
-      runtime: "codex-cli",
+      runtime: "codex",
     });
   });
 

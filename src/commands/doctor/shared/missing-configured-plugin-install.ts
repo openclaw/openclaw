@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
@@ -108,13 +109,8 @@ function addConfiguredAgentRuntimePluginIds(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): void {
-  addConfiguredPluginId(ids, env?.OPENCLAW_AGENT_RUNTIME);
-  const agents = asObjectRecord(cfg.agents);
-  const defaults = asObjectRecord(agents?.defaults);
-  addConfiguredPluginId(ids, asObjectRecord(defaults?.agentRuntime)?.id);
-  const list = Array.isArray(agents?.list) ? agents.list : [];
-  for (const entry of list) {
-    addConfiguredPluginId(ids, asObjectRecord(asObjectRecord(entry)?.agentRuntime)?.id);
+  for (const runtime of collectConfiguredAgentHarnessRuntimes(cfg, env ?? process.env)) {
+    addConfiguredPluginId(ids, runtime);
   }
 }
 

@@ -51,13 +51,12 @@ describe("OpenAI Codex routing policy", () => {
     ).toBe("openai-codex");
   });
 
-  it("honors explicit session PI pins when validating OpenAI auth profiles", () => {
+  it("ignores session PI pins when validating OpenAI auth profiles", () => {
     expect(
       listOpenAIAuthProfileProvidersForAgentRuntime({
         provider: "openai",
         harnessRuntime: "codex",
-        sessionAgentRuntimeOverride: "pi",
       }),
-    ).toEqual(["openai", "openai-codex"]);
+    ).toEqual(["openai-codex"]);
   });
 });

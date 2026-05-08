@@ -362,13 +362,19 @@ describe("agentCommand", () => {
     });
   });
 
-  it("does not enable Codex for one-shot OpenAI overrides when the agent forces PI", async () => {
+  it("does not enable Codex for one-shot OpenAI overrides when the provider forces PI", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
-      mockConfig(home, storePath, {
-        agentRuntime: { id: "pi" },
-        models: undefined,
-      });
+      const cfg = mockConfig(home, storePath, { models: undefined });
+      cfg.models = {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "pi" },
+            models: [],
+          },
+        },
+      };
 
       await agentCommand(
         {

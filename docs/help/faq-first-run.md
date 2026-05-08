@@ -594,12 +594,11 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   <Accordion title="How does Codex auth work?">
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Use
-    `openai/gpt-5.5` with `agentRuntime.id: "codex"` for the common setup:
-    ChatGPT/Codex subscription auth plus native Codex app-server execution. Use
-    `openai-codex/gpt-5.5` only when you want Codex OAuth through the default
-    Codex runtime. Direct OpenAI API-key access remains available for non-agent
-    OpenAI API surfaces and for agent models through an ordered
-    `openai-codex` API-key profile.
+    `openai/gpt-5.5` for the common setup: ChatGPT/Codex subscription auth plus
+    native Codex app-server execution. `openai-codex/gpt-*` model refs are
+    legacy config repaired by `openclaw doctor --fix`. Direct OpenAI API-key
+    access remains available for non-agent OpenAI API surfaces and for agent
+    models through an ordered `openai-codex` API-key profile.
     See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 

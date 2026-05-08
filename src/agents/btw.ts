@@ -256,8 +256,6 @@ async function resolveRuntimeModel(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       }).runtime,
-      sessionAgentHarnessId: params.sessionEntry?.agentHarnessId,
-      sessionAgentRuntimeOverride: params.sessionEntry?.agentRuntimeOverride,
     }),
     agentDir: params.agentDir,
     sessionEntry: params.sessionEntry,

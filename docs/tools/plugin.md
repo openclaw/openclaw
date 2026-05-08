@@ -391,8 +391,8 @@ even when source overlay mounts are present.
   re-enable plugins before running doctor cleanup if you want stale ids removed
 - OpenAI-family Codex routes keep separate plugin boundaries:
   `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
-  app-server plugin is selected by `agentRuntime.id: "codex"` or legacy
-  `codex/*` model refs
+  app-server plugin is selected by canonical `openai/*` agent refs, explicit
+  provider/model `agentRuntime.id: "codex"`, or legacy `codex/*` model refs
 
 ## Troubleshooting runtime hooks
 
