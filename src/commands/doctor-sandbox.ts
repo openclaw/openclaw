@@ -7,12 +7,6 @@ import {
   isDockerDaemonUnavailable,
   resolveSandboxScope,
 } from "../agents/sandbox.js";
-import {
-  inspectLegacySandboxRegistryFiles,
-  migrateLegacySandboxRegistryFiles,
-  type LegacySandboxRegistryInspection,
-  type LegacySandboxRegistryMigrationResult,
-} from "../agents/sandbox/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
@@ -20,6 +14,12 @@ import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  inspectLegacySandboxRegistryFiles,
+  migrateLegacySandboxRegistryFiles,
+  type LegacySandboxRegistryInspection,
+  type LegacySandboxRegistryMigrationResult,
+} from "./doctor-sandbox-registry-migration.js";
 
 type SandboxScriptInfo = {
   scriptPath: string;

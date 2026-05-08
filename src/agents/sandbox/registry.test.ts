@@ -35,8 +35,8 @@ vi.mock("./constants.js", () => ({
   SANDBOX_BROWSERS_DIR,
 }));
 
+import { migrateLegacySandboxRegistryFiles } from "../../commands/doctor-sandbox-registry-migration.js";
 import {
-  migrateLegacySandboxRegistryFiles,
   readBrowserRegistry,
   readRegistry,
   readRegistryEntry,
