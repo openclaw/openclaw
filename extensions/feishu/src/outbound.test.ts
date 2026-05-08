@@ -978,6 +978,44 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     expect(sendMediaFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_reply_target",
+        replyInThread: false,
+      }),
+    );
+  });
+
+  it("forwards threadId as replyInThread=true to sendMediaFeishu", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "https://example.com/image.png",
+      threadId: "om_topic_root",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_topic_root",
+        replyInThread: true,
+      }),
+    );
+  });
+
+  it("prefers replyToId over threadId (inline reply) when both are set", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "om_inline",
+      threadId: "om_topic_root",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_inline",
+        replyInThread: false,
       }),
     );
   });

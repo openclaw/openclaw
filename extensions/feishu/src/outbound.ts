@@ -408,6 +408,20 @@ function resolveReplyToMessageId(params: {
   return trimmed || undefined;
 }
 
+type FeishuMediaReplyMode = {
+  replyToMessageId: string | undefined;
+  replyInThread: boolean;
+};
+
+function resolveFeishuMediaReplyMode(params: {
+  replyToId?: string | null;
+  threadId?: string | number | null;
+}): FeishuMediaReplyMode {
+  const replyToMessageId = resolveReplyToMessageId(params);
+  const replyInThread = params.threadId != null && !params.replyToId;
+  return { replyToMessageId, replyInThread };
+}
+
 async function sendCommentThreadReply(params: {
   cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
   to: string;
@@ -456,9 +470,10 @@ async function sendOutboundText(params: {
   to: string;
   text: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
 }) {
-  const { cfg, to, text, accountId, replyToMessageId } = params;
+  const { cfg, to, text, accountId, replyToMessageId, replyInThread } = params;
   const commentResult = await sendCommentThreadReply({
     cfg,
     to,
@@ -474,10 +489,17 @@ async function sendOutboundText(params: {
   const renderMode = account.config?.renderMode ?? "auto";
 
   if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
-    return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId });
+    return sendMarkdownCardFeishu({
+      cfg,
+      to,
+      text,
+      accountId,
+      replyToMessageId,
+      replyInThread,
+    });
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
+  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
 }
 
 export const feishuOutbound: ChannelOutboundAdapter = {
@@ -653,7 +675,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
     }) => {
-      const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+      const { replyToMessageId, replyInThread } = resolveFeishuMediaReplyMode({
+        replyToId,
+        threadId,
+      });
       const commentTarget = parseFeishuCommentTarget(to);
       if (commentTarget) {
         const commentText = [text?.trim(), mediaUrl?.trim()].filter(Boolean).join("\n\n");
@@ -663,6 +688,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           text: commentText || mediaUrl || text || "",
           accountId: accountId ?? undefined,
           replyToMessageId,
+          replyInThread,
         });
       }
 
@@ -681,6 +707,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           text,
           accountId: accountId ?? undefined,
           replyToMessageId,
+          replyInThread,
         });
       }
 
@@ -694,6 +721,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             accountId: accountId ?? undefined,
             mediaLocalRoots,
             replyToMessageId,
+            replyInThread,
             ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
           if (result.voiceIntentDegradedToFile && text?.trim()) {
@@ -703,6 +731,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
               text,
               accountId: accountId ?? undefined,
               replyToMessageId,
+              replyInThread,
             });
           }
           return result;
@@ -717,6 +746,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             text: fallbackText,
             accountId: accountId ?? undefined,
             replyToMessageId,
+            replyInThread,
           });
         }
       }
@@ -728,6 +758,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text: text ?? "",
         accountId: accountId ?? undefined,
         replyToMessageId,
+        replyInThread,
       });
     },
   }),
