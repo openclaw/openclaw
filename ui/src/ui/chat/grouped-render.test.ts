@@ -563,7 +563,6 @@ describe("grouped chat rendering", () => {
       1_000_000,
     );
     const meta = cached.querySelector<HTMLDetailsElement>("details.msg-meta");
-    expect(meta).not.toBeNull();
     expect(meta?.open).toBe(false);
     expect(meta?.querySelector("summary")?.textContent).toContain("Context");
     expect(cached.querySelector(".msg-meta__ctx")?.textContent).toBe("44% ctx");
@@ -620,7 +619,6 @@ describe("grouped chat rendering", () => {
 
     const time = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
     const display = formatChatTimestampForDisplay(timestamp);
-    expect(time).not.toBeNull();
     expect(time?.dateTime).toBe(display.dateTime);
     expect(time?.textContent?.trim()).toBe(display.label);
     expect(time?.getAttribute("title")).toBe(display.title);
