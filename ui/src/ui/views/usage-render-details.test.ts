@@ -72,7 +72,11 @@ describe("computeFilteredUsage", () => {
     expect(result).toMatchObject({
       totalTokens: 300, // 100 + 200
     });
-    expect(result?.totalCost).toBeCloseTo(0.3); // 0.1 + 0.2
+    expect(result).toBeDefined();
+    if (!result) {
+      throw new Error("expected filtered usage aggregate");
+    }
+    expect(result.totalCost).toBeCloseTo(0.3); // 0.1 + 0.2
   });
 
   it("handles reversed range (end < start)", () => {
