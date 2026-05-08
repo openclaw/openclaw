@@ -31,4 +31,11 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
 COPY . .
 COPY --chmod=755 scripts/docker/cleanup-smoke/run.sh /usr/local/bin/openclaw-cleanup-smoke
 
+RUN chown -R node:node /repo
+
+USER node
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node --version >/dev/null || exit 1
+
 ENTRYPOINT ["/usr/local/bin/openclaw-cleanup-smoke"]

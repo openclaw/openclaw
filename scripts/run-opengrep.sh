@@ -113,8 +113,8 @@ fi
 if (( PATHS_PASSED == 0 )); then
   if (( CHANGED_ONLY )); then
     SCAN_PATHS=()
-    while IFS= read -r path; do
-      SCAN_PATHS+=( "$path" )
+    while IFS= read -r changed_path; do
+      [[ -n "$changed_path" ]] && SCAN_PATHS+=( "$changed_path" )
     done < <(
       {
         git diff --name-only --diff-filter=ACMRTUXB "${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}" 2>/dev/null || true
@@ -123,8 +123,8 @@ if (( PATHS_PASSED == 0 )); then
       } | awk '/^(src|extensions|apps|packages|scripts)\// { print }' | sort -u
     )
     RULEPACK_CHANGED_PATHS=()
-    while IFS= read -r path; do
-      RULEPACK_CHANGED_PATHS+=( "$path" )
+    while IFS= read -r changed_path; do
+      [[ -n "$changed_path" ]] && RULEPACK_CHANGED_PATHS+=( "$changed_path" )
     done < <(
       {
         git diff --name-only --diff-filter=ACMRTUXB "${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}" 2>/dev/null || true
@@ -154,7 +154,7 @@ fi
 
 echo "→ Running opengrep ($BUCKET) against $(IFS=' '; echo "${SCAN_PATHS[*]:-overridden}")" >&2
 echo "  Using exclusions from .semgrepignore" >&2
-OPENGREP_ARGS=( scan --no-strict --config "$CONFIG" --no-git-ignore )
+OPENGREP_ARGS=( "scan" "--no-strict" "--config" "$CONFIG" "--no-git-ignore" )
 if (( ${#EXTRA_ARGS[@]} > 0 )); then
   OPENGREP_ARGS+=( "${EXTRA_ARGS[@]}" )
 fi

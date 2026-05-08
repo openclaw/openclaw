@@ -45,4 +45,7 @@ COPY install-sh-common/cli-verify.sh /usr/local/install-sh-common/cli-verify.sh
 COPY install-sh-common/version-parse.sh /usr/local/install-sh-common/version-parse.sh
 COPY --chmod=755 install-sh-nonroot/run.sh /usr/local/bin/openclaw-install-nonroot
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node --version >/dev/null || exit 1
+
 ENTRYPOINT ["/usr/local/bin/openclaw-install-nonroot"]

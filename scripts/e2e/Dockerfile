@@ -30,6 +30,9 @@ ENV OPENCLAW_DISABLE_BONJOUR="1"
 USER appuser
 WORKDIR /app
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node --version >/dev/null || exit 1
+
 FROM e2e-runner AS bare
 
 CMD ["bash"]
