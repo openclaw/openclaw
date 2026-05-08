@@ -183,7 +183,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "10.33.0"
+  PNPM_VERSION: "11.0.8"
   OPENCLAW_REPOSITORY: openclaw/openclaw
   TSX_VERSION: "4.21.0"
   OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.4' }}

@@ -288,7 +288,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "10.33.0"
+  PNPM_VERSION: "11.0.8"
 
 jobs:
   validate_selected_ref:
