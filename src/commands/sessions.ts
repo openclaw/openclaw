@@ -16,7 +16,6 @@ import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,
   resolveSessionDisplayDefaults,
-  resolveSessionDisplayModel,
 } from "./sessions-display-model.js";
 import {
   formatSessionAgeCell,
