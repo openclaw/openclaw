@@ -256,7 +256,8 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent");
+      expect(fallbackOpts).toMatchObject({
         resultMetaOverrides: {
           transport: "embedded",
           fallbackFrom: "gateway",
@@ -304,12 +305,12 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = agentCommand.mock.calls[0]?.[0] as {
+      const fallbackOpts = requireFirstCallArg<{
         sessionId?: string;
         sessionKey?: string;
         runId?: string;
         resultMetaOverrides?: unknown;
-      };
+      }>(agentCommand, "embedded agent");
       expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
       expect(fallbackOpts.sessionId).not.toBe("locked-session");
       expect(fallbackOpts.sessionKey).toBe(`agent:main:explicit:${fallbackOpts.sessionId}`);
@@ -389,7 +390,8 @@ describe("agentCliCommand", () => {
       const result = await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(agentCommand.mock.calls[0]?.[0]).toMatchObject({
+      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent");
+      expect(fallbackOpts).toMatchObject({
         resultMetaOverrides: {
           transport: "embedded",
           fallbackFrom: "gateway",
