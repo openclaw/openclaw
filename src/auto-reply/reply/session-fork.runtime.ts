@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import {
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
@@ -9,8 +8,8 @@ import {
 } from "../../agents/transcript/session-transcript-contract.js";
 import { derivePromptTokens } from "../../agents/usage.js";
 import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
+  createSqliteSessionTranscriptLocator,
+  isSqliteSessionTranscriptLocator,
 } from "../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
@@ -76,14 +75,10 @@ async function estimateParentTranscriptTokensFromSqlite(params: {
 
 function resolveForkParentSessionFile(parentEntry: StoreSessionEntry, agentId: string): string {
   const sessionFile = parentEntry.sessionFile?.trim();
-  if (sessionFile && path.isAbsolute(sessionFile)) {
-    return path.resolve(sessionFile);
+  if (sessionFile && isSqliteSessionTranscriptLocator(sessionFile)) {
+    return sessionFile;
   }
-  return resolveSessionFilePath(
-    parentEntry.sessionId,
-    parentEntry,
-    resolveSessionFilePathOptions({ agentId }),
-  );
+  return createSqliteSessionTranscriptLocator({ agentId, sessionId: parentEntry.sessionId });
 }
 
 export async function resolveParentForkTokenCountRuntime(params: {
@@ -248,7 +243,10 @@ async function writeForkHeaderOnly(params: {
 }): Promise<{ sessionId: string; sessionFile: string }> {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
-  const sessionFile = sessionId;
+  const sessionFile = createSqliteSessionTranscriptLocator({
+    agentId: params.agentId,
+    sessionId,
+  });
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
@@ -272,7 +270,10 @@ async function writeBranchedSession(params: {
 }): Promise<{ sessionId: string; sessionFile: string }> {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
-  const sessionFile = sessionId;
+  const sessionFile = createSqliteSessionTranscriptLocator({
+    agentId: params.source.agentId,
+    sessionId,
+  });
   const pathWithoutLabels = params.source.branchEntries.filter((entry) => entry.type !== "label");
   const pathEntryIds = new Set(pathWithoutLabels.map((entry) => entry.id));
   const labelEntries = buildBranchLabelEntries({
