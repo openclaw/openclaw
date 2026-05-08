@@ -32,7 +32,7 @@ describe("resolveSessionTranscriptCandidates", () => {
 });
 
 describe("resolveStableSessionEndTranscript", () => {
-  it("uses a generated sqlite locator instead of a legacy sessionFile path", () => {
+  it("uses a generated sqlite locator instead of a legacy sessionFile value", () => {
     expect(
       resolveStableSessionEndTranscript({
         sessionId: "s1",

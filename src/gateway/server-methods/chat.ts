@@ -1313,7 +1313,7 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
   return { messages: [], placeholderCount: 0 };
 }
 
-function resolveTranscriptPath(params: {
+function resolveTranscriptLocator(params: {
   sessionId: string;
   sessionFile?: string;
   agentId?: string;
@@ -1345,17 +1345,17 @@ async function appendAssistantTranscriptMessage(params: {
   };
   cfg?: OpenClawConfig;
 }): Promise<TranscriptAppendResult> {
-  const transcriptPath = resolveTranscriptPath({
+  const transcriptLocator = resolveTranscriptLocator({
     sessionId: params.sessionId,
     sessionFile: params.sessionFile,
     agentId: params.agentId,
   });
-  if (!transcriptPath) {
-    return { ok: false, error: "transcript path not resolved" };
+  if (!transcriptLocator) {
+    return { ok: false, error: "transcript locator not resolved" };
   }
 
   return await appendInjectedAssistantMessageToTranscript({
-    transcriptPath,
+    transcriptPath: transcriptLocator,
     message: params.message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
@@ -2259,19 +2259,19 @@ export const chatHandlers: GatewayRequestHandlers = {
               if (!resolvedSessionId) {
                 return;
               }
-              const transcriptPath = resolveTranscriptPath({
+              const transcriptLocator = resolveTranscriptLocator({
                 sessionId: resolvedSessionId,
                 sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
                 agentId,
               });
-              if (!transcriptPath) {
+              if (!transcriptLocator) {
                 return;
               }
               const persistedImages = await persistedImagesPromise;
               emitSessionTranscriptUpdate({
                 agentId,
                 sessionId: resolvedSessionId,
-                sessionFile: transcriptPath,
+                sessionFile: transcriptLocator,
                 sessionKey,
                 message: buildChatSendTranscriptMessage({
                   message: parsedMessage,
@@ -2299,17 +2299,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!resolvedSessionId) {
           return;
         }
-        const transcriptPath = resolveTranscriptPath({
+        const transcriptLocator = resolveTranscriptLocator({
           sessionId: resolvedSessionId,
           sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
           agentId,
         });
-        if (!transcriptPath) {
+        if (!transcriptLocator) {
           return;
         }
         transcriptMediaRewriteDone = true;
         await rewriteChatSendUserTurnMediaPaths({
-          transcriptPath,
+          transcriptPath: transcriptLocator,
           agentId,
           sessionId: resolvedSessionId,
           sessionKey,
@@ -2334,14 +2334,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         const { entry: latestEntry } = loadSessionEntry(sessionKey);
         const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-        const resolvedTranscriptPath = resolveTranscriptPath({
+        const resolvedTranscriptLocator = resolveTranscriptLocator({
           sessionId,
           sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
           agentId,
         });
         const mediaLocalRoots = appendLocalMediaParentRoots(
           getAgentScopedMediaLocalRoots(cfg, agentId),
-          resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
+          resolvedTranscriptLocator ? [resolvedTranscriptLocator] : undefined,
         );
         const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
           sessionKey,
@@ -2528,14 +2528,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                   });
                   const { entry: latestEntry } = loadSessionEntry(sessionKey);
                   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-                  const resolvedTranscriptPath = resolveTranscriptPath({
+                  const resolvedTranscriptLocator = resolveTranscriptLocator({
                     sessionId,
                     sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
                     agentId,
                   });
                   const mediaLocalRoots = appendLocalMediaParentRoots(
                     getAgentScopedMediaLocalRoots(cfg, agentId),
-                    resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
+                    resolvedTranscriptLocator ? [resolvedTranscriptLocator] : undefined,
                   );
                   const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
                     sessionKey,
