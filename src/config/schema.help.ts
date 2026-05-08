@@ -1209,9 +1209,9 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.sessions.enabled":
     "Indexes session transcripts into QMD so recall can include prior conversation content (experimental, default: false). Enable only when transcript memory is required and you accept larger index churn.",
   "memory.qmd.sessions.exportDir":
-    "Overrides where sanitized session exports are written before QMD indexing. Use this when default state storage is constrained or when exports must land on a managed volume.",
+    "Overrides where the optional QMD markdown export cache is written before QMD indexing. Use this only for QMD adapter storage; it is not the canonical session store and sessions remain SQLite-backed.",
   "memory.qmd.sessions.retentionDays":
-    "Defines how long exported session files are kept before automatic pruning, in days (default: unlimited). Set a finite value for storage hygiene or compliance retention policies.",
+    "Defines how long optional QMD markdown export-cache files are kept, in days (default: unlimited). Session retention itself is SQLite-backed and not controlled by this setting.",
   "memory.qmd.update.interval":
     "Sets how often QMD refreshes indexes from source content (duration string, default: 5m). Shorter intervals improve freshness but increase background CPU and I/O.",
   "memory.qmd.update.debounceMs":
@@ -1417,9 +1417,9 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.model":
     "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
   "agents.defaults.compaction.truncateAfterCompaction":
-    "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
+    "When enabled, rotates the active SQLite transcript after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains available as a checkpoint snapshot. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
-    'Triggers normal local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Requires truncateAfterCompaction so successful compaction can rotate to a smaller successor transcript; set to 0 or leave unset to disable. This never splits raw transcript bytes.',
+    'Triggers normal local compaction when the active SQLite transcript reaches this size (bytes or strings like "20mb"). Requires truncateAfterCompaction so successful compaction can rotate to a smaller successor transcript; set to 0 or leave unset to disable. This never splits raw transcript bytes or events.',
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends brief compaction notices to the user when compaction starts and when it completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'). Disabled by default to keep compaction silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
@@ -1531,8 +1531,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Defines reset policy for thread-scoped sessions, including focused channel thread workflows. Use this when thread sessions should expire faster or slower than other chat types.",
   "session.resetByChannel":
     "Provides channel-specific reset overrides keyed by provider/channel id for fine-grained behavior control. Use this only when one channel needs exceptional reset behavior beyond type-level policies.",
-  "session.store":
-    "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
   "session.typingIntervalSeconds":
     "Controls interval for repeated typing indicators while replies are being prepared in typing-capable channels. Increase to reduce chatty updates or decrease for more active typing feedback.",
   "session.typingMode":
@@ -1557,10 +1555,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Matches a normalized session-key prefix after internal key normalization steps in policy consumers. Use this for general prefix controls, and prefer rawKeyPrefix when exact full-key matching is required.",
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
-  "session.writeLock":
-    "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
-  "session.writeLock.acquireTimeoutMs":
-    "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
   "session.agentToAgent":
     "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
   "session.agentToAgent.maxPingPongTurns":
@@ -1577,27 +1571,11 @@ export const FIELD_HELP: Record<string, string> = {
     "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
   "session.threadBindings.defaultSpawnContext":
     'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
-  "session.maintenance":
-    "Explicit SQLite session-row maintenance controls for age and entry-count retention. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
-  "session.maintenance.mode":
-    'Determines whether maintenance policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds.',
-  "session.maintenance.pruneAfter":
-    "Removes entries older than this duration (for example `30d` or `12h`) during maintenance passes. Use this as the primary age-retention control and align it with data retention policy.",
-  "session.maintenance.pruneDays":
-    "Deprecated age-retention field kept for compatibility with legacy configs using day counts. Use session.maintenance.pruneAfter instead so duration syntax and behavior are consistent.",
-  "session.maintenance.maxEntries":
-    "Caps total session entry count retained in the store to prevent unbounded growth over time. Use lower limits for constrained environments, or higher limits when longer history is required.",
-  "session.maintenance.rotateBytes":
-    'Deprecated and ignored. Do not use for `sessions.json` growth control; OpenClaw no longer creates automatic rotation backups, and "openclaw doctor --fix" removes this key.',
-  "session.maintenance.maxDiskBytes":
-    "Deprecated and ignored. Session transcripts now live in SQLite; use openclaw doctor --fix to remove legacy disk-budget settings.",
-  "session.maintenance.highWaterBytes":
-    "Deprecated and ignored with session.maintenance.maxDiskBytes. Use openclaw doctor --fix to remove it from legacy configs.",
   cron: "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
   "cron.store":
-    "Path to the cron job store file used to persist scheduled jobs across restarts. Set an explicit path only when you need custom storage layout, backups, or mounted volumes.",
+    "Legacy cron store path used as the import namespace for old jobs.json files. Scheduled jobs now persist in the shared SQLite state database; set this only when importing or identifying a custom legacy store.",
   "cron.maxConcurrentRuns":
     "Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
   "cron.retry":

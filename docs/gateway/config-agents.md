@@ -586,7 +586,7 @@ Periodic heartbeat runs.
         midTurnPrecheck: { enabled: false }, // optional Pi tool-loop pressure check
         postCompactionSections: ["Session Startup", "Red Lines"], // [] disables reinjection
         model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
-        truncateAfterCompaction: true, // rotate to a smaller successor JSONL after compaction
+        truncateAfterCompaction: true, // rotate to a smaller successor SQLite transcript after compaction
         maxActiveTranscriptBytes: "20mb", // optional preflight local compaction trigger
         notifyUser: true, // send brief notices when compaction starts and completes (default: false)
         memoryFlush: {
@@ -612,7 +612,7 @@ Periodic heartbeat runs.
 - `midTurnPrecheck`: optional Pi tool-loop pressure check. When `enabled: true`, OpenClaw checks context pressure after tool results are appended and before the next model call. If the context no longer fits, it aborts the current attempt before submitting the prompt and reuses the existing precheck recovery path to truncate tool results or compact and retry. Works with both `default` and `safeguard` compaction modes. Default: disabled.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Defaults to `["Session Startup", "Red Lines"]`; set `[]` to disable reinjection. When unset or explicitly set to that default pair, older `Every Session`/`Safety` headings are also accepted as a legacy fallback.
 - `model`: optional `provider/model-id` override for compaction summarization only. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
-- `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when the active JSONL grows past the threshold. Requires `truncateAfterCompaction` so successful compaction can rotate to a smaller successor transcript. Disabled when unset or `0`.
+- `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when the active SQLite transcript grows past the threshold. Requires `truncateAfterCompaction` so successful compaction can rotate to a smaller successor transcript. Disabled when unset or `0`.
 - `notifyUser`: when `true`, sends brief notices to the user when compaction starts and when it completes (for example, "Compacting context..." and "Compaction complete"). Disabled by default to keep compaction silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. Skipped when workspace is read-only.
 
@@ -1211,12 +1211,6 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       group: { mode: "idle", idleMinutes: 120 },
     },
     resetTriggers: ["/new", "/reset"],
-    store: "~/.openclaw/agents/{agentId}/sessions/sessions.json", // optional legacy/custom JSON store override
-    maintenance: {
-      mode: "warn", // warn | enforce
-      pruneAfter: "30d",
-      maxEntries: 500,
-    },
     threadBindings: {
       enabled: true,
       idleHours: 24, // default inactivity auto-unfocus in hours (`0` disables)
@@ -1248,14 +1242,6 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`mainKey`**: legacy field. Runtime always uses `"main"` for the main direct-chat bucket.
 - **`agentToAgent.maxPingPongTurns`**: maximum reply-back turns between agents during agent-to-agent exchanges (integer, range: `0`-`20`, default: `5`). `0` disables ping-pong chaining.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
-- **`store`**: optional legacy/custom JSON store path. When omitted, the canonical per-agent session store uses `~/.openclaw/state/openclaw.sqlite`.
-- **`maintenance`**: explicit SQLite session-row cleanup + retention controls.
-  - `mode`: `warn` emits warnings only; `enforce` applies cleanup.
-  - `pruneAfter`: age cutoff for stale entries (default `30d`).
-  - `maxEntries`: maximum number of entries in the session store (default `500`). Runtime writes do not prune or cap entries; `openclaw sessions cleanup --enforce` applies the cap immediately.
-  - `rotateBytes`: deprecated and ignored; `openclaw doctor --fix` removes it from older configs.
-  - `maxDiskBytes`: deprecated and ignored; session transcripts are stored in SQLite.
-  - `highWaterBytes`: deprecated and ignored with `maxDiskBytes`.
 - **`threadBindings`**: global defaults for thread-bound session features.
   - `enabled`: master default switch (providers can override; Discord uses `channels.discord.threadBindings.enabled`)
   - `idleHours`: default inactivity auto-unfocus in hours (`0` disables; providers can override)
