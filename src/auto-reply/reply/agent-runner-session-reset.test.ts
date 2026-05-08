@@ -49,11 +49,11 @@ describe("resetReplyRunSession", () => {
   });
 
   it("rotates the session and clears stale runtime and fallback fields", async () => {
-    const sessionsDir = path.join(rootDir, "agents", "main", "sessions");
+    const transcriptDir = path.join(rootDir, "transcript-fixtures", "main");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
-      sessionFile: path.join(sessionsDir, "session.jsonl"),
+      sessionFile: path.join(transcriptDir, "session.jsonl"),
       modelProvider: "qwencode",
       model: "qwen",
       contextTokens: 123,
@@ -118,11 +118,11 @@ describe("resetReplyRunSession", () => {
   });
 
   it("rotates from the SQLite row when no in-memory store is available", async () => {
-    const sessionsDir = path.join(rootDir, "agents", "main", "sessions");
+    const transcriptDir = path.join(rootDir, "transcript-fixtures", "main");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
-      sessionFile: path.join(sessionsDir, "session.jsonl"),
+      sessionFile: path.join(transcriptDir, "session.jsonl"),
       totalTokens: 42,
       compactionCount: 1,
     };
