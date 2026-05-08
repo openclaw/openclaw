@@ -628,16 +628,20 @@ export async function approveDevicePairing(
       });
       nextTokenScopesByRole.set(roleForToken, nextScopes);
       if (roleForToken === OPERATOR_ROLE && nextScopes.length > 0) {
+        const callerRequiredScopes = mergeScopes(
+          resolveRoleScopedDeviceTokenScopes(roleForToken, pending.scopes),
+          nextScopes,
+        );
         if (!options?.callerScopes) {
           return {
             status: "forbidden",
             reason: "caller-scopes-required",
-            scope: nextScopes[0],
+            scope: callerRequiredScopes[0],
           };
         }
         const missingScope = resolveMissingRequestedScope({
           role: OPERATOR_ROLE,
-          requestedScopes: nextScopes,
+          requestedScopes: callerRequiredScopes,
           allowedScopes: options.callerScopes,
         });
         if (missingScope) {
