@@ -52,11 +52,6 @@ export type BuildSessionTranscriptEntryOptions = {
   generatedByCronRun?: boolean;
 };
 
-export type SessionTranscriptClassification = {
-  dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
-  cronRunTranscriptPaths: ReadonlySet<string>;
-};
-
 export type SessionTranscriptDeltaStats = {
   size: number;
   messageCount: number;
@@ -158,39 +153,6 @@ function normalizeComparablePath(pathname: string): string {
 
 export function normalizeSessionTranscriptPathForComparison(pathname: string): string {
   return normalizeComparablePath(pathname);
-}
-
-export function loadDreamingNarrativeTranscriptPathSetForSessionsDir(
-  sessionsDir: string,
-): ReadonlySet<string> {
-  void sessionsDir;
-  return new Set<string>();
-}
-
-export function loadSessionTranscriptClassificationForSessionsDir(
-  sessionsDir: string,
-): SessionTranscriptClassification {
-  void sessionsDir;
-  return {
-    dreamingNarrativeTranscriptPaths: new Set<string>(),
-    cronRunTranscriptPaths: new Set<string>(),
-  };
-}
-
-export function loadDreamingNarrativeTranscriptPathSetForAgent(
-  agentId: string,
-): ReadonlySet<string> {
-  return loadSessionTranscriptClassificationForAgent(agentId).dreamingNarrativeTranscriptPaths;
-}
-
-export function loadSessionTranscriptClassificationForAgent(
-  agentId: string,
-): SessionTranscriptClassification {
-  void agentId;
-  return {
-    dreamingNarrativeTranscriptPaths: new Set<string>(),
-    cronRunTranscriptPaths: new Set<string>(),
-  };
 }
 
 function createSqliteSessionTranscriptRef(params: { agentId: string; sessionId: string }): string {

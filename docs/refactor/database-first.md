@@ -195,6 +195,9 @@ The remaining cleanup is mostly consolidation and deletion:
   `storePath` or `sessionsDir`; they use `{agentId, sessionId}` SQLite
   transcript scope and derive any retained path metadata from the parent
   session entry.
+- Memory-host no longer exports no-op session-directory transcript
+  classification helpers; transcript filtering now derives from SQLite row
+  metadata during entry construction.
 - QA-lab raw session inspection now uses `sessions.list` through the gateway
   instead of reading `agents/qa/sessions/sessions.json`; MSteams feedback
   appends directly to SQLite transcripts without fabricating a JSONL path.

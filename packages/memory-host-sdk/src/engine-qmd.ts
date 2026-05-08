@@ -4,8 +4,6 @@ export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js
 export {
   buildSessionTranscriptEntry,
   listSessionTranscriptsForAgent,
-  loadDreamingNarrativeTranscriptPathSetForAgent,
-  loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
   readSessionTranscriptDeltaStats,
   resolveSessionTranscriptScope,
@@ -13,7 +11,6 @@ export {
   type BuildSessionTranscriptEntryOptions,
   type SessionTranscriptEntry,
   type SessionTranscriptDeltaStats,
-  type SessionTranscriptClassification,
 } from "./host/session-transcripts.js";
 export {
   isUsageCountedSessionTranscriptFileName,
