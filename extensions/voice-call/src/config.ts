@@ -280,6 +280,10 @@ const VoiceCallRealtimeConfigSchema = z
     fastContext: VoiceCallRealtimeFastContextConfigSchema,
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallRealtimeProvidersConfigSchema,
+    /** When set, if the consult agent takes longer than this (ms), return an ack and continue in background with email delivery. */
+    backgroundConsultTimeoutMs: z.number().int().positive().optional(),
+    /** Extra system prompt for the background email delivery agent. */
+    backgroundEmailPrompt: z.string().optional(),
   })
   .strict()
   .default({

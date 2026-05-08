@@ -24,6 +24,7 @@ export {
 } from "../realtime-voice/provider-types.js";
 export {
   buildRealtimeVoiceAgentConsultChatMessage,
+  buildRealtimeVoiceAgentConsultEmailAckResponse,
   buildRealtimeVoiceAgentConsultPrompt,
   buildRealtimeVoiceAgentConsultWorkingResponse,
   collectRealtimeVoiceAgentConsultVisibleText,
@@ -36,6 +37,7 @@ export {
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceAgentConsultArgs,
+  type RealtimeVoiceAgentConsultDeliveryPreference,
   type RealtimeVoiceAgentConsultToolPolicy,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "../realtime-voice/agent-consult-tool.js";

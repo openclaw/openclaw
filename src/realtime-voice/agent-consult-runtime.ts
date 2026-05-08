@@ -144,6 +144,7 @@ export async function consultRealtimeVoiceAgent(params: {
   toolsAllow?: string[];
   extraSystemPrompt?: string;
   fallbackText?: string;
+  abortSignal?: AbortSignal;
 }): Promise<RealtimeVoiceAgentConsultResult> {
   const agentId = params.agentId ?? "main";
   const agentDir = params.agentRuntime.resolveAgentDir(params.cfg, agentId);
@@ -199,6 +200,7 @@ export async function consultRealtimeVoiceAgent(params: {
       params.extraSystemPrompt ??
       "You are a behind-the-scenes consultant for a live voice agent. Be accurate, brief, and speakable.",
     agentDir,
+    abortSignal: params.abortSignal,
   });
 
   const text = collectRealtimeVoiceAgentConsultVisibleText(result.payloads ?? []);
