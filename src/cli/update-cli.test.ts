@@ -646,9 +646,11 @@ describe("update-cli", () => {
     await updateCliShared.tryWriteCompletionCache(root, false);
 
     const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => String(call[0]));
-    expect(logs.some((line) => line.includes("timed out after 30s"))).toBe(true);
-    expect(logs.some((line) => line.includes("openclaw completion --write-state"))).toBe(true);
-    expect(logs.some((line) => line.includes("Error: spawnSync"))).toBe(false);
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("timed out after 30s")]));
+    expect(logs).toEqual(
+      expect.arrayContaining([expect.stringContaining("openclaw completion --write-state")]),
+    );
+    expect(logs).not.toEqual(expect.arrayContaining([expect.stringContaining("Error: spawnSync")]));
   });
 
   it("respawns into the updated package root before running post-update tasks", async () => {
