@@ -64,6 +64,10 @@ const resolveAndPersistSessionFile = vi.hoisted(() =>
     sessionEntry: { sessionId: "s1", sessionFile: "/tmp/session.jsonl" },
   })),
 );
+const sessionRows = vi.hoisted(() => ({ value: {} as Record<string, Record<string, unknown>> }));
+const getSessionEntry = vi.hoisted(() =>
+  vi.fn(({ sessionKey }: { sessionKey: string }) => sessionRows.value[sessionKey]),
+);
 const generateTopicLabel = vi.hoisted(() => vi.fn());
 const describeStickerImage = vi.hoisted(() => vi.fn(async () => null));
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => ({})));
@@ -78,11 +82,6 @@ const getAgentScopedMediaLocalRoots = vi.hoisted(() =>
 );
 const resolveChunkMode = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMarkdownTableMode = vi.hoisted(() => vi.fn(() => "preserve"));
-const resolveSessionStoreEntry = vi.hoisted(() =>
-  vi.fn(({ store, sessionKey }: { store: Record<string, unknown>; sessionKey: string }) => ({
-    existing: store[sessionKey],
-  })),
-);
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -131,11 +130,10 @@ vi.mock("./bot-message-dispatch.runtime.js", () => ({
   getAgentScopedMediaLocalRoots,
   loadSessionStore,
   resolveAndPersistSessionFile,
+  getSessionEntry,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode,
   resolveMarkdownTableMode,
-  resolveSessionStoreEntry,
-  resolveStorePath,
 }));
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
@@ -160,8 +158,9 @@ let resetTelegramReplyFenceForTests: typeof import("./bot-message-dispatch.js").
 
 const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
-  resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
-  loadSessionStore: loadSessionStore as TelegramBotDeps["loadSessionStore"],
+  getSessionEntry: getSessionEntry as unknown as TelegramBotDeps["getSessionEntry"],
+  listSessionEntries: vi.fn(() => []) as TelegramBotDeps["listSessionEntries"],
+  patchSessionEntry: vi.fn(async () => null) as TelegramBotDeps["patchSessionEntry"],
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
@@ -221,11 +220,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
     resolveAndPersistSessionFile.mockReset();
+    sessionRows.value = {};
+    getSessionEntry.mockReset();
+    getSessionEntry.mockImplementation(
+      ({ sessionKey }: { sessionKey: string }) => sessionRows.value[sessionKey],
+    );
     generateTopicLabel.mockReset();
     getAgentScopedMediaLocalRoots.mockClear();
     resolveChunkMode.mockClear();
     resolveMarkdownTableMode.mockClear();
-    resolveSessionStoreEntry.mockClear();
     describeStickerImage.mockReset();
     loadModelCatalog.mockReset();
     findModelInCatalog.mockReset();
@@ -276,6 +279,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       sessionEntry: { sessionId: "s1", sessionFile: "/tmp/session.jsonl" },
     });
     loadSessionStore.mockReturnValue({});
+    sessionRows.value = {};
     generateTopicLabel.mockResolvedValue("Topic label");
     describeStickerImage.mockResolvedValue(null);
     loadModelCatalog.mockResolvedValue({});
@@ -368,7 +372,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       removeAckAfterReply: false,
     } as unknown as TelegramMessageContext;
     base.turn = {
-      storePath: "/tmp/openclaw/telegram-sessions.json",
+      storePath: "/tmp/openclaw/telegram-agent.sqlite",
       recordInboundSession: vi.fn(async () => undefined),
       record: {
         onRecordError: vi.fn(),
@@ -475,9 +479,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
   }
 
   function createReasoningStreamContext(): TelegramMessageContext {
-    loadSessionStore.mockReturnValue({
+    sessionRows.value = {
       s1: { reasoningLevel: "stream" },
-    });
+    };
     return createContext({
       ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
     });
@@ -1788,7 +1792,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("uses resolved DM config for auto-topic-label overrides", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
-    loadSessionStore.mockReturnValue({ s1: {} });
+    sessionRows.value = { s1: {} };
     const bot = createBot();
 
     await dispatchWithContext({
