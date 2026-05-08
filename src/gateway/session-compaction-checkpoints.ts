@@ -14,6 +14,10 @@ import type {
   SessionEntry,
 } from "../config/sessions.js";
 import {
+  createSqliteSessionTranscriptLocator,
+  isSqliteSessionTranscriptLocator,
+} from "../config/sessions/paths.js";
+import {
   deleteSqliteSessionTranscript,
   deleteSqliteSessionTranscriptSnapshot,
   loadSqliteSessionTranscriptEvents,
@@ -142,6 +146,13 @@ function createCheckpointVirtualTranscriptPath(params: {
   if (!sourceFile) {
     return undefined;
   }
+  if (isSqliteSessionTranscriptLocator(sourceFile)) {
+    const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sourceFile });
+    return createSqliteSessionTranscriptLocator({
+      agentId: scope?.agentId ?? DEFAULT_AGENT_ID,
+      sessionId: params.checkpointId,
+    });
+  }
   const parsed = path.parse(sourceFile);
   return path.join(
     parsed.dir,
@@ -183,11 +194,21 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
   migrateSessionEntries(entries);
 
   const targetCwd = params.targetCwd ?? sourceHeader.cwd ?? process.cwd();
-  const sessionDir = params.sessionDir ?? (sourceFile ? path.dirname(sourceFile) : process.cwd());
   const sessionId = randomUUID();
   const timestamp = new Date().toISOString();
-  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-  const sessionFile = path.join(sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
+  const sourceScope = sourceFile
+    ? resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sourceFile })
+    : undefined;
+  const agentId = params.agentId?.trim() || sourceScope?.agentId || DEFAULT_AGENT_ID;
+  const sessionFile =
+    sourceFile && isSqliteSessionTranscriptLocator(sourceFile)
+      ? createSqliteSessionTranscriptLocator({ agentId, sessionId })
+      : (() => {
+          const sessionDir =
+            params.sessionDir ?? (sourceFile ? path.dirname(sourceFile) : process.cwd());
+          const fileTimestamp = timestamp.replace(/[:.]/g, "-");
+          return path.join(sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
+        })();
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
@@ -199,7 +220,7 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
 
   try {
     replaceSqliteSessionTranscriptEvents({
-      agentId: params.agentId?.trim() || DEFAULT_AGENT_ID,
+      agentId,
       sessionId,
       transcriptPath: sessionFile,
       events: [
