@@ -578,6 +578,9 @@ public struct SendParams: Codable, Sendable {
     public let agentid: String?
     public let replytoid: String?
     public let threadid: String?
+    public let forcedocument: Bool?
+    public let silent: Bool?
+    public let parsemode: String?
     public let sessionkey: String?
     public let idempotencykey: String
 
@@ -593,6 +596,9 @@ public struct SendParams: Codable, Sendable {
         agentid: String?,
         replytoid: String?,
         threadid: String?,
+        forcedocument: Bool?,
+        silent: Bool?,
+        parsemode: String?,
         sessionkey: String?,
         idempotencykey: String)
     {
@@ -607,6 +613,9 @@ public struct SendParams: Codable, Sendable {
         self.agentid = agentid
         self.replytoid = replytoid
         self.threadid = threadid
+        self.forcedocument = forcedocument
+        self.silent = silent
+        self.parsemode = parsemode
         self.sessionkey = sessionkey
         self.idempotencykey = idempotencykey
     }
@@ -623,6 +632,9 @@ public struct SendParams: Codable, Sendable {
         case agentid = "agentId"
         case replytoid = "replyToId"
         case threadid = "threadId"
+        case forcedocument = "forceDocument"
+        case silent
+        case parsemode = "parseMode"
         case sessionkey = "sessionKey"
         case idempotencykey = "idempotencyKey"
     }

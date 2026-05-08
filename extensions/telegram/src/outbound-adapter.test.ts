@@ -68,6 +68,7 @@ describe("telegramOutbound", () => {
       },
       mediaLocalRoots: ["/tmp/media"],
       accountId: "ops",
+      formatting: { parseMode: "HTML" },
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
@@ -79,6 +80,7 @@ describe("telegramOutbound", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/1.jpg",
         mediaLocalRoots: ["/tmp/media"],
+        textMode: "html",
         quoteText: "quoted",
         buttons: [[{ text: "Allow Once", callback_data: "/approve abc allow-once" }]],
       }),
@@ -90,6 +92,7 @@ describe("telegramOutbound", () => {
       expect.objectContaining({
         mediaUrl: "https://example.com/2.jpg",
         mediaLocalRoots: ["/tmp/media"],
+        textMode: "html",
         quoteText: "quoted",
       }),
     );
