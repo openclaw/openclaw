@@ -132,7 +132,7 @@ describe("mattermost channel message adapter", () => {
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "mattermostMessageAdapter",
-      adapter: adapter,
+      adapter,
       proofs: {
         text: proveText,
         media: proveMedia,

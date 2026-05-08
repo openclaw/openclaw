@@ -141,7 +141,7 @@ function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
 }
 
 function parseSseData(event: SseEvent): unknown {
-  return JSON.parse(event.data);
+  return JSON.parse(event.data) as unknown;
 }
 
 function requireSessionKey(value: string | undefined, label: string): string {
