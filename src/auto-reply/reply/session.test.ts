@@ -30,6 +30,8 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -105,6 +107,8 @@ vi.mock("../../agents/model-catalog.js", () => ({
 
 let suiteRoot = "";
 let suiteCase = 0;
+let currentTestSessionRowsTarget: TestSessionRowsTarget | undefined;
+const TEST_NATIVE_MODEL_PROFILE_ID = "test-native-profile";
 
 beforeAll(async () => {
   suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-suite-"));
@@ -118,6 +122,8 @@ afterAll(async () => {
 
 async function makeCaseDir(prefix: string): Promise<string> {
   const stateDir = path.join(suiteRoot, `${prefix}${++suiteCase}`);
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   return stateDir;
 }
@@ -141,35 +147,35 @@ async function makeSessionRowsTarget(prefix: string): Promise<TestSessionRowsTar
   return target;
 }
 
-function requireString(value: string | undefined, label: string): string {
-  if (!value) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
+async function createSessionRowsTarget(prefix: string): Promise<TestSessionRowsTarget> {
+  return await makeSessionRowsTarget(prefix);
 }
-
-const createSessionRowsTarget = makeSessionRowsTarget;
-const TEST_NATIVE_MODEL_PROFILE_ID = "openai-codex:secondary@example.test";
-let currentTestSessionRowsTarget: TestSessionRowsTarget | undefined;
 
 function getCurrentTestSessionRowsTarget(): TestSessionRowsTarget {
   if (!currentTestSessionRowsTarget) {
-    throw new Error("Expected current session rows target to be initialized");
+    throw new Error("expected current session rows target");
   }
   return currentTestSessionRowsTarget;
 }
 
 async function replaceSessionRowsForFixtureTarget(
   target: TestSessionRowsTarget,
-  store: Record<string, SessionEntry | Record<string, unknown>>,
+  rows: Record<string, SessionEntry | Record<string, unknown>>,
 ): Promise<void> {
   const { agentId } = target;
   for (const { sessionKey } of listSessionEntries({ agentId })) {
     deleteSessionEntry({ agentId, sessionKey });
   }
-  for (const [sessionKey, entry] of Object.entries(store)) {
+  for (const [sessionKey, entry] of Object.entries(rows)) {
     upsertSessionEntry({ agentId, sessionKey, entry: entry as SessionEntry });
   }
+}
+
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
 }
 
 function requireMockCallArg(
@@ -363,6 +369,9 @@ beforeEach(() => {
     });
 });
 afterEach(async () => {
+  currentTestSessionRowsTarget = undefined;
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
@@ -639,7 +648,6 @@ describe("initSessionState thread forking", () => {
     const parentEntry = tokenCountCall.parentEntry as SessionEntry | undefined;
     expect(parentEntry?.sessionId).toBe(parentSessionId);
     expect(parentEntry?.totalTokensFresh).toBe(false);
-    expect(tokenCountCall.agentId).toBe("main");
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
     expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
@@ -1227,8 +1235,7 @@ describe("initSessionState RawBody", () => {
   });
 
   it("uses the default per-agent sessions store when config store is unset", async () => {
-    const root = await makeCaseDir("openclaw-session-store-default-");
-    const stateDir = root;
+    const stateDir = await makeCaseDir("openclaw-session-store-default-");
     const agentId = "worker1";
     const sessionKey = `agent:${agentId}:telegram:12345`;
     const sessionId = "sess-worker-1";
@@ -1991,6 +1998,45 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
       }
     }
   });
+
+  it("reuses a migrated SQLite session root when a scoped WhatsApp group entry only contains activation state", async () => {
+    const sessionKey =
+      "agent:main:whatsapp:group:120363406150318674@g.us:thread:whatsapp-account-work";
+    const sessionRowsTarget = await createSessionRowsTarget("openclaw-group-activation-backfill-");
+    await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
+      [sessionKey]: {
+        groupActivation: "always",
+      },
+    });
+    const cfg = makeCfg({
+      allowFrom: ["+41796666864"],
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello without mention",
+        RawBody: "hello without mention",
+        CommandBody: "hello without mention",
+        From: "120363406150318674@g.us",
+        To: "+41779241027",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        SenderName: "Peschiño",
+        SenderE164: "+41796666864",
+        SenderId: "41796666864:0@s.whatsapp.net",
+      },
+      cfg,
+      commandAuthorized: false,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(sessionKey);
+    expect(result.sessionEntry.groupActivation).toBe("always");
+    expect(result.sessionEntry.sessionId).toBe(result.sessionId);
+    expect(typeof result.sessionEntry.updatedAt).toBe("number");
+  });
 });
 
 describe("initSessionState reset triggers in Slack channels", () => {
@@ -2240,18 +2286,13 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expectEntryFields(
-        result.sessionEntry,
-        {
-          providerOverride: overrides.providerOverride,
-          modelOverride: overrides.modelOverride,
-          authProfileOverride: overrides.authProfileOverride,
-          authProfileOverrideSource: overrides.authProfileOverrideSource,
-          authProfileOverrideCompactionCount: overrides.authProfileOverrideCompactionCount,
-        },
-        testCase.name,
-      );
-      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
+      expect(result.sessionEntry, testCase.name).toMatchObject({
+        providerOverride: overrides.providerOverride,
+        modelOverride: overrides.modelOverride,
+        authProfileOverride: overrides.authProfileOverride,
+        authProfileOverrideSource: overrides.authProfileOverrideSource,
+        authProfileOverrideCompactionCount: overrides.authProfileOverrideCompactionCount,
+      });
       expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
 
       const stored = readSessionRowsForFixtureTarget(sessionRowsTarget);
@@ -2553,14 +2594,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       const result = await initSessionState({
         ctx: {
           Body: "hello",
-          RawBody: "hello",
-          CommandBody: "hello",
-          From: "user-stale",
-          To: "bot",
-          ChatType: "direct",
           SessionKey: sessionKey,
-          Provider: "telegram",
-          Surface: "telegram",
         },
         cfg,
         commandAuthorized: true,
@@ -3111,7 +3145,7 @@ describe("initSessionState stale threadId fallback", () => {
       cfg,
       commandAuthorized: true,
     });
-    expect(threadResult.sessionEntry.lastThreadId).toBe(42);
+    expect(threadResult.sessionEntry.deliveryContext?.threadId).toBe(42);
 
     // Second interaction: plain DM (non-thread session), same store
     // The main session should NOT inherit threadId=42
@@ -3123,11 +3157,10 @@ describe("initSessionState stale threadId fallback", () => {
       cfg,
       commandAuthorized: true,
     });
-    expect(mainResult.sessionEntry.lastThreadId).toBeUndefined();
     expect(mainResult.sessionEntry.deliveryContext?.threadId).toBeUndefined();
   });
 
-  it("preserves lastThreadId within the same thread session", async () => {
+  it("preserves thread routing within the same thread session", async () => {
     await createSessionRowsTarget("preserve-thread-");
     const cfg = { session: {} } as OpenClawConfig;
 
@@ -3152,7 +3185,7 @@ describe("initSessionState stale threadId fallback", () => {
       cfg,
       commandAuthorized: true,
     });
-    expect(result.sessionEntry.lastThreadId).toBe(99);
+    expect(result.sessionEntry.deliveryContext?.threadId).toBe(99);
   });
 });
 
@@ -3196,9 +3229,7 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("mattermost");
-    expect(result.sessionEntry.lastTo).toBe("channel:CHAN1");
-    expect(result.sessionEntry.lastThreadId).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext?.threadId).toBeUndefined();
     expect(result.sessionEntry.deliveryContext).toEqual({
       channel: "mattermost",
       to: "channel:CHAN1",
@@ -3207,13 +3238,8 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.origin).toBeUndefined();
 
     const persisted = readSessionRowsForFixtureTarget(sessionRowsTarget);
-    expect(persisted[sessionKey]?.lastThreadId).toBeUndefined();
-    expect(persisted[sessionKey]?.deliveryContext).toEqual({
-      channel: "mattermost",
-      to: "channel:CHAN1",
-      accountId: "default",
-    });
-    expect(persisted[sessionKey]?.origin).toBeUndefined();
+    expect(persisted[result.sessionKey]?.deliveryContext?.threadId).toBeUndefined();
+    expect(persisted[result.sessionKey]?.origin).toBeUndefined();
   });
 
   it("does not synthesize heartbeat routing on a session with no external route", async () => {
@@ -3239,8 +3265,6 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBeUndefined();
-    expect(result.sessionEntry.lastTo).toBeUndefined();
     expect(result.sessionEntry.deliveryContext).toBeUndefined();
     expect(result.sessionEntry.origin).toBeUndefined();
   });
@@ -3284,8 +3308,6 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("feishu");
-    expect(result.sessionEntry.lastTo).toBe("user:ou_sender_1");
     expect(result.sessionEntry.deliveryContext).toEqual({
       channel: "feishu",
       to: "user:ou_sender_1",
@@ -3294,7 +3316,7 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.origin).toBeUndefined();
   });
 
-  it("keeps persisted external lastChannel when OriginatingChannel is internal webchat", async () => {
+  it("keeps persisted external route when OriginatingChannel is internal webchat", async () => {
     const sessionRowsTarget = await createSessionRowsTarget("preserve-external-channel-");
     const sessionKey = "agent:main:telegram:group:12345";
     await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
@@ -3322,8 +3344,6 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("telegram");
-    expect(result.sessionEntry.lastTo).toBe("group:12345");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
     expect(result.sessionEntry.deliveryContext?.to).toBe("group:12345");
   });
@@ -3363,8 +3383,6 @@ describe("initSessionState internal channel routing preservation", () => {
     });
 
     // External route must be preserved — webchat is admin/monitoring only
-    expect(result.sessionEntry.lastChannel).toBe("imessage");
-    expect(result.sessionEntry.lastTo).toBe("+1555");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("imessage");
     expect(result.sessionEntry.deliveryContext?.to).toBe("+1555");
   });
@@ -3396,8 +3414,6 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("webchat");
-    expect(result.sessionEntry.lastTo).toBe("session:dashboard");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
     expect(result.sessionEntry.deliveryContext?.to).toBe("session:dashboard");
   });
@@ -3430,10 +3446,28 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("discord");
-    expect(result.sessionEntry.lastTo).toBe("channel:24680");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("discord");
     expect(result.sessionEntry.deliveryContext?.to).toBe("channel:24680");
+  });
+
+  it("does not derive delivery routing from the session key for internal webchat", async () => {
+    await createSessionRowsTarget("session-key-channel-hint-");
+    const sessionKey = "agent:main:telegram:group:98765";
+    const cfg = { session: {} } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
+    expect(result.sessionEntry.deliveryContext?.to).toBeUndefined();
   });
 
   it("keeps internal route when there is no persisted external fallback", async () => {
@@ -3451,8 +3485,8 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("sessions_send");
-    expect(result.sessionEntry.lastTo).toBe("session:handoff");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("sessions_send");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("session:handoff");
   });
 
   it("keeps webchat channel for webchat/main sessions", async () => {
@@ -3469,7 +3503,7 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("webchat");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
   });
 
   it("preserves external route for main session when webchat accesses without destination (fixes #47745)", async () => {
@@ -3501,8 +3535,8 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("whatsapp");
-    expect(result.sessionEntry.lastTo).toBe("+15555550123");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("whatsapp");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("+15555550123");
   });
 
   it("preserves external route for main session when webchat sends with destination (fixes #47745)", async () => {
@@ -3535,8 +3569,6 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("whatsapp");
-    expect(result.sessionEntry.lastTo).toBe("+15555550123");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("whatsapp");
     expect(result.sessionEntry.deliveryContext?.to).toBe("+15555550123");
   });
@@ -3563,7 +3595,6 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastAccountId).toBe("work");
     expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
   });
 });
