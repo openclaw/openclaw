@@ -876,7 +876,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `channel already registered: ${id} (${existingRuntime.pluginId})`,
+        message: `channel already registered: ${id} (registered by ${existingRuntime.pluginId}${record.id !== existingRuntime.pluginId ? `; re-registration attempted by ${record.id}` : "; duplicate registration"})`,
       });
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
@@ -895,7 +895,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `channel setup already registered: ${id} (${existingSetup.pluginId})`,
+        message: `channel setup already registered: ${id} (registered by ${existingSetup.pluginId}${record.id !== existingSetup.pluginId ? `; re-registration attempted by ${record.id}` : "; duplicate registration"})`,
       });
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
