@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { resolveStateDir } from "./paths.js";
 
 const CONFIG_AUDIT_ARGV_CAP = 8;
@@ -132,6 +134,10 @@ export function snapshotConfigAuditProcessInfo(): ConfigAuditProcessInfo {
 }
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
+export const CONFIG_AUDIT_OWNER_ID = "core:config";
+export const CONFIG_AUDIT_NAMESPACE = "audit";
+export const CONFIG_AUDIT_MAX_ENTRIES = 50_000;
+export const CONFIG_AUDIT_STORE_LABEL = "SQLite core:config/audit state";
 
 export type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed" | "rejected";
 
@@ -264,23 +270,6 @@ type ConfigWriteAuditRecordBase = Omit<
 > & {
   nextHash: string;
   nextBytes: number;
-};
-
-type ConfigAuditFs = {
-  promises: {
-    mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>;
-    appendFile(
-      path: string,
-      data: string,
-      options?: { encoding?: BufferEncoding; mode?: number },
-    ): Promise<unknown>;
-  };
-  mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): unknown;
-  appendFileSync(
-    path: string,
-    data: string,
-    options?: { encoding?: BufferEncoding; mode?: number },
-  ): unknown;
 };
 
 function normalizeAuditLabel(value: string | undefined): string | null {
@@ -417,7 +406,7 @@ export function finalizeConfigWriteAuditRecord(params: {
 }
 
 type ConfigAuditAppendContext = {
-  fs: ConfigAuditFs;
+  fs: unknown;
   env: NodeJS.ProcessEnv;
   homedir: () => string;
 };
@@ -438,184 +427,38 @@ function resolveConfigAuditAppendRecord(params: ConfigAuditAppendParams): Config
   return redactSecrets(record as ConfigAuditRecord);
 }
 
-export type ConfigAuditScrubResult = {
-  scanned: number;
-  rewritten: number;
-  skipped: number;
-  // True when the scrub detected concurrent appends mid-rewrite and refused
-  // to swap the file. Caller should re-run `openclaw doctor --fix` once the
-  // gateway is idle. No on-disk content was modified on abort.
-  aborted: boolean;
-};
-
-type ConfigAuditScrubFs = {
-  promises: {
-    readFile(path: string, encoding: "utf-8"): Promise<string>;
-    stat(path: string): Promise<{ size: number }>;
-    writeFile(
-      path: string,
-      data: string,
-      options?: { encoding?: BufferEncoding; mode?: number },
-    ): Promise<unknown>;
-    rename(oldPath: string, newPath: string): Promise<unknown>;
-    unlink(path: string): Promise<unknown>;
-  };
-};
-
-// Rewrites every record in `config-audit.jsonl` through `redactConfigAuditArgv`
-// so that historical argv/execArgv values written before the forward redactor
-// shipped are masked the same way new entries are. Idempotent — re-applying the
-// redactor to already-masked entries is a no-op because the redactor passes
-// `***` and `--flag=***` through unchanged, so subsequent doctor passes do not
-// rewrite the file unless a genuinely unredacted entry is still present.
-// Malformed lines (parse failures, non-object payloads) are preserved verbatim
-// and counted as `skipped` so the function never destroys forensic content it
-// cannot understand.
-// Atomic write: produces a sibling `*.scrub.tmp` file at mode `0o600`, then
-// renames it over the audit log. The temp file is unlinked on any error path
-// so a partial scrub never leaves plaintext at rest.
-export async function scrubConfigAuditLog(params: {
-  fs: ConfigAuditScrubFs;
+function resolveConfigAuditStoreEnv(params: {
   env: NodeJS.ProcessEnv;
   homedir: () => string;
-  dryRun?: boolean;
-}): Promise<ConfigAuditScrubResult> {
-  const auditPath = resolveConfigAuditLogPath(params.env, params.homedir);
-  let raw: string;
-  try {
-    raw = await params.fs.promises.readFile(auditPath, "utf-8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return { scanned: 0, rewritten: 0, skipped: 0, aborted: false };
-    }
-    throw err;
-  }
-  const originalByteLength = Buffer.byteLength(raw, "utf-8");
+}): NodeJS.ProcessEnv {
+  return {
+    ...params.env,
+    OPENCLAW_STATE_DIR: resolveStateDir(params.env, params.homedir),
+  };
+}
 
-  let scanned = 0;
-  let rewritten = 0;
-  let skipped = 0;
-  let changed = false;
-  const outLines: string[] = [];
-  const lines = raw.split("\n");
+function openConfigAuditStore(env: NodeJS.ProcessEnv) {
+  return createCorePluginStateSyncKeyedStore<ConfigAuditRecord>({
+    ownerId: CONFIG_AUDIT_OWNER_ID,
+    namespace: CONFIG_AUDIT_NAMESPACE,
+    maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+    env,
+  });
+}
 
-  for (const line of lines) {
-    if (line.length === 0) {
-      outLines.push(line);
-      continue;
-    }
-    scanned += 1;
-    let record: unknown;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      outLines.push(line);
-      skipped += 1;
-      continue;
-    }
-    if (!record || typeof record !== "object" || Array.isArray(record)) {
-      outLines.push(line);
-      skipped += 1;
-      continue;
-    }
-    const obj = record as Record<string, unknown>;
-    let mutated = false;
-    for (const key of ["argv", "execArgv"] as const) {
-      const value = obj[key];
-      if (!Array.isArray(value)) {
-        continue;
-      }
-      if (!value.every((entry): entry is string => typeof entry === "string")) {
-        continue;
-      }
-      const redacted = redactConfigAuditArgv(value);
-      let differs = false;
-      for (let i = 0; i < redacted.length; i++) {
-        if (redacted[i] !== value[i]) {
-          differs = true;
-          break;
-        }
-      }
-      if (differs) {
-        obj[key] = redacted;
-        mutated = true;
-      }
-    }
-    if (mutated) {
-      rewritten += 1;
-      changed = true;
-      outLines.push(JSON.stringify(obj));
-    } else {
-      outLines.push(line);
-    }
-  }
+function configAuditEntryKey(record: ConfigAuditRecord): string {
+  return `${record.ts}:${record.event}:${randomUUID()}`;
+}
 
-  if (!changed || params.dryRun) {
-    return { scanned, rewritten, skipped, aborted: false };
-  }
-
-  // Concurrent-append guard: re-stat just before the rename. If the file
-  // grew while the scrub was transforming records in memory, an
-  // appendConfigAuditRecord caller wrote a new entry that the rename would
-  // overwrite. Abort instead of silently dropping the new record. The
-  // caller (doctor --fix) surfaces a retry hint to the operator.
-  let preRenameSize: number;
-  try {
-    preRenameSize = (await params.fs.promises.stat(auditPath)).size;
-  } catch {
-    return { scanned, rewritten, skipped, aborted: true };
-  }
-  if (preRenameSize !== originalByteLength) {
-    return { scanned, rewritten, skipped, aborted: true };
-  }
-
-  const tmpPath = `${auditPath}.scrub.tmp`;
-  try {
-    await params.fs.promises.writeFile(tmpPath, outLines.join("\n"), {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-    let finalPreRenameSize: number;
-    try {
-      finalPreRenameSize = (await params.fs.promises.stat(auditPath)).size;
-    } catch {
-      try {
-        await params.fs.promises.unlink(tmpPath);
-      } catch {
-        // best-effort cleanup; the stat failure is handled as a safe abort
-      }
-      return { scanned, rewritten, skipped, aborted: true };
-    }
-    if (finalPreRenameSize !== originalByteLength) {
-      try {
-        await params.fs.promises.unlink(tmpPath);
-      } catch {
-        // best-effort cleanup; the append detection is the actionable state
-      }
-      return { scanned, rewritten, skipped, aborted: true };
-    }
-    await params.fs.promises.rename(tmpPath, auditPath);
-  } catch (err) {
-    try {
-      await params.fs.promises.unlink(tmpPath);
-    } catch {
-      // best-effort cleanup; the rename failure is the actionable error
-    }
-    throw err;
-  }
-
-  return { scanned, rewritten, skipped, aborted: false };
+function toStoredConfigAuditRecord(record: ConfigAuditRecord): ConfigAuditRecord {
+  return JSON.parse(JSON.stringify(record)) as ConfigAuditRecord;
 }
 
 export async function appendConfigAuditRecord(params: ConfigAuditAppendParams): Promise<void> {
   try {
-    const auditPath = resolveConfigAuditLogPath(params.env, params.homedir);
-    const record = resolveConfigAuditAppendRecord(params);
-    await params.fs.promises.mkdir(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    await params.fs.promises.appendFile(auditPath, `${JSON.stringify(record)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
+    const record = toStoredConfigAuditRecord(resolveConfigAuditAppendRecord(params));
+    const env = resolveConfigAuditStoreEnv(params);
+    openConfigAuditStore(env).register(configAuditEntryKey(record), record);
   } catch {
     // best-effort
   }
@@ -623,14 +466,20 @@ export async function appendConfigAuditRecord(params: ConfigAuditAppendParams): 
 
 export function appendConfigAuditRecordSync(params: ConfigAuditAppendParams): void {
   try {
-    const auditPath = resolveConfigAuditLogPath(params.env, params.homedir);
-    const record = resolveConfigAuditAppendRecord(params);
-    params.fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    params.fs.appendFileSync(auditPath, `${JSON.stringify(record)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
+    const record = toStoredConfigAuditRecord(resolveConfigAuditAppendRecord(params));
+    const env = resolveConfigAuditStoreEnv(params);
+    openConfigAuditStore(env).register(configAuditEntryKey(record), record);
   } catch {
     // best-effort
   }
+}
+
+export function listConfigAuditRecordsForTests(params: {
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+}): ConfigAuditRecord[] {
+  const env = resolveConfigAuditStoreEnv(params);
+  return openConfigAuditStore(env)
+    .entries()
+    .map((entry) => entry.value);
 }

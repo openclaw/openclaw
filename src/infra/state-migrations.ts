@@ -13,6 +13,7 @@ import {
   listBundledChannelLegacyStateMigrationDetectors,
 } from "../channels/plugins/bundled.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
+import { CONFIG_AUDIT_NAMESPACE, CONFIG_AUDIT_OWNER_ID } from "../config/io.audit.js";
 import {
   normalizeEnvPathOverride,
   resolveLegacyStateDirs,
@@ -626,6 +627,87 @@ function legacyCrestodianAuditKey(lineNumber: number, rawLine: string): string {
   return `legacy:${lineNumber}:${digest}`;
 }
 
+function legacyConfigAuditKey(lineNumber: number, rawLine: string): string {
+  const digest = crypto.createHash("sha256").update(rawLine, "utf8").digest("hex").slice(0, 16);
+  return `legacy:${lineNumber}:${digest}`;
+}
+
+function importLegacyConfigAuditToSqlite(
+  filePath: string,
+  env: NodeJS.ProcessEnv,
+): { imported: number; warnings: string[] } {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const records: Array<{
+    key: string;
+    valueJson: string;
+    createdAt: number;
+  }> = [];
+  const warnings: string[] = [];
+  for (const [index, line] of raw.split(/\r?\n/u).entries()) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        warnings.push(`Skipped non-object config audit record at ${filePath}:${index + 1}`);
+        continue;
+      }
+      const timestamp =
+        typeof (parsed as { ts?: unknown }).ts === "string"
+          ? Date.parse((parsed as { ts: string }).ts)
+          : Number.NaN;
+      records.push({
+        key: legacyConfigAuditKey(index + 1, trimmed),
+        valueJson: JSON.stringify(parsed),
+        createdAt: Number.isFinite(timestamp) ? timestamp : Date.now(),
+      });
+    } catch (err) {
+      warnings.push(
+        `Failed reading config audit record at ${filePath}:${index + 1}: ${String(err)}`,
+      );
+    }
+  }
+
+  if (records.length > 0) {
+    runOpenClawStateWriteTransaction(
+      (stateDatabase) => {
+        const db = getNodeSqliteKysely<PluginStateMigrationDatabase>(stateDatabase.db);
+        for (const record of records) {
+          executeSqliteQuerySync(
+            stateDatabase.db,
+            db
+              .insertInto("plugin_state_entries")
+              .values({
+                plugin_id: CONFIG_AUDIT_OWNER_ID,
+                namespace: CONFIG_AUDIT_NAMESPACE,
+                entry_key: record.key,
+                value_json: record.valueJson,
+                created_at: record.createdAt,
+                expires_at: null,
+              })
+              .onConflict((conflict) =>
+                conflict.columns(["plugin_id", "namespace", "entry_key"]).doUpdateSet({
+                  value_json: (eb) => eb.ref("excluded.value_json"),
+                  created_at: (eb) => eb.ref("excluded.created_at"),
+                  expires_at: (eb) => eb.ref("excluded.expires_at"),
+                }),
+              ),
+          );
+        }
+      },
+      { env },
+    );
+  }
+
+  if (warnings.length === 0) {
+    fs.rmSync(filePath, { force: true });
+    removeDirIfEmpty(path.dirname(filePath));
+  }
+  return { imported: records.length, warnings };
+}
+
 function importLegacyCrestodianAuditToSqlite(
   filePath: string,
   env: NodeJS.ProcessEnv,
@@ -1230,6 +1312,26 @@ function collectCoreLegacyStateMigrationPlans(params: {
           changes:
             result.imported > 0
               ? ["Imported ACPX gateway instance id into SQLite plugin state"]
+              : [],
+          warnings: result.warnings,
+        };
+      },
+    });
+  }
+  const configAuditPath = path.join(params.stateDir, "logs", "config-audit.jsonl");
+  if (fileExists(configAuditPath)) {
+    plans.push({
+      kind: "custom",
+      label: "Config audit log",
+      sourcePath: configAuditPath,
+      targetTable: "plugin_state_entries",
+      recordCount: countJsonlRecords(configAuditPath),
+      apply: () => {
+        const result = importLegacyConfigAuditToSqlite(configAuditPath, params.env);
+        return {
+          changes:
+            result.imported > 0
+              ? [`Imported ${result.imported} config audit record(s) into SQLite plugin state`]
               : [],
           warnings: result.warnings,
         };

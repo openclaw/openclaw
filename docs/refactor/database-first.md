@@ -292,6 +292,9 @@ The remaining cleanup is mostly consolidation and deletion:
 - Crestodian audit entries now use core SQLite plugin state instead of
   `audit/crestodian.jsonl`. Doctor imports the legacy JSONL audit log and
   removes it after successful import.
+- Config write/observe audit entries now use core SQLite plugin state instead
+  of `logs/config-audit.jsonl`. Doctor imports the legacy JSONL audit log and
+  removes it after successful import.
 - Crestodian rescue pending approvals now use core SQLite plugin state instead
   of `crestodian/rescue-pending/*.json`. Doctor imports legacy pending approval
   files and removes them after successful import.
