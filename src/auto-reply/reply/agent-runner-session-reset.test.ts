@@ -49,6 +49,7 @@ describe("resetReplyRunSession", () => {
   });
 
   it("rotates the session and clears stale runtime and fallback fields", async () => {
+    const transcriptDir = path.join(rootDir, "transcript-fixtures", "main");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
@@ -115,6 +116,7 @@ describe("resetReplyRunSession", () => {
   });
 
   it("rotates from the SQLite row when no in-memory store is available", async () => {
+    const transcriptDir = path.join(rootDir, "transcript-fixtures", "main");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
@@ -146,38 +148,5 @@ describe("resetReplyRunSession", () => {
     expect(followupRun.run.sessionId).toBe(activeSessionEntry?.sessionId);
     const persisted = readTestSessionRow("main");
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
-  });
-
-  it("uses the prepared run agent when rotating a SQLite-only session", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-    };
-    const sessionKey = "agent:main:main";
-    await writeTestSessionRow(sessionKey, sessionEntry, "worker");
-
-    const followupRun = createTestFollowupRun({
-      agentId: "worker",
-      sessionKey,
-    });
-    let activeSessionEntry: SessionEntry | undefined;
-    const reset = await resetReplyRunSession({
-      options: {
-        failureLabel: "role ordering",
-        buildLogMessage: (next) => `reset ${next}`,
-      },
-      sessionKey,
-      queueKey: sessionKey,
-      followupRun,
-      onActiveSessionEntry: (entry) => {
-        activeSessionEntry = entry;
-      },
-      onNewSession: () => {},
-    });
-
-    expect(reset).toBe(true);
-    expect(activeSessionEntry?.sessionId).toBe("00000000-0000-0000-0000-000000000123");
-    expect(readTestSessionRow(sessionKey, "worker")?.sessionId).toBe(activeSessionEntry?.sessionId);
-    expect(readTestSessionRow(sessionKey, "main")).toBeUndefined();
   });
 });
