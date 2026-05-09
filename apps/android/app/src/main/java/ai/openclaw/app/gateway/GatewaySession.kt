@@ -77,6 +77,12 @@ private data class SelectedConnectAuth(
   val attemptedDeviceTokenRetry: Boolean,
 )
 
+private data class GatewayConnectionReadyInfo(
+  val serverName: String?,
+  val remoteAddress: String?,
+  val mainSessionKey: String?,
+)
+
 private class GatewayConnectFailure(
   val gatewayError: GatewaySession.ErrorShape,
 ) : IllegalStateException(gatewayError.message)
@@ -336,11 +342,12 @@ class GatewaySession(
     private val connectNonceDeferred = CompletableDeferred<String>()
     private val client: OkHttpClient = buildClient()
     private var socket: WebSocket? = null
+    private var readyInfo: GatewayConnectionReadyInfo? = null
     private val loggerTag = "OpenClawGateway"
 
     val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
-    suspend fun connect() {
+    suspend fun connect(): GatewayConnectionReadyInfo {
       val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
       val request = Request.Builder().url(url).build()
       socket = client.newWebSocket(request, Listener())
@@ -349,6 +356,7 @@ class GatewaySession(
       } catch (err: Throwable) {
         throw err
       }
+      return readyInfo ?: throw IllegalStateException("connect failed: missing ready info")
     }
 
     suspend fun request(
@@ -509,7 +517,7 @@ class GatewaySession(
         }
         throw GatewayConnectFailure(error)
       }
-      handleConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
+      readyInfo = handleConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
       connectDeferred.complete(Unit)
     }
 
@@ -567,7 +575,7 @@ class GatewaySession(
       res: RpcResponse,
       deviceId: String,
       authSource: GatewayConnectAuthSource,
-    ) {
+    ): GatewayConnectionReadyInfo {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
       pendingDeviceTokenRetry = false
@@ -617,7 +625,7 @@ class GatewaySession(
           ?.get("sessionDefaults")
           .asObjectOrNull()
       mainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
-      onConnected(serverName, remoteAddress, mainSessionKey)
+      return GatewayConnectionReadyInfo(serverName, remoteAddress, mainSessionKey)
     }
 
     private fun buildConnectParams(
@@ -897,10 +905,11 @@ class GatewaySession(
           target.password,
           target.options,
           target.tls,
-        )
+      )
       try {
-        conn.connect()
+        val readyInfo = conn.connect()
         currentConnection = conn
+        onConnected(readyInfo.serverName, readyInfo.remoteAddress, readyInfo.mainSessionKey)
         conn.awaitClose()
       } finally {
         if (currentConnection === conn) {
