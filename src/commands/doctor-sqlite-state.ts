@@ -91,14 +91,6 @@ import {
   legacyTuiLastSessionFileExists,
 } from "../tui/tui-last-session.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import {
-  importLegacyPluginStateSidecarToSqlite,
-  importLegacyTaskFlowRegistrySidecarToSqlite,
-  importLegacyTaskRegistrySidecarToSqlite,
-  legacyPluginStateSidecarExists,
-  legacyTaskFlowRegistrySidecarExists,
-  legacyTaskRegistrySidecarExists,
-} from "./doctor-sqlite-sidecars.js";
 
 type LegacyStateProbe = {
   deviceIdentity: boolean;
@@ -116,12 +108,9 @@ type LegacyStateProbe = {
   configHealth: boolean;
   managedImages: boolean;
   mediaFiles: boolean;
-  pluginState: boolean;
   pluginBindingApprovals: boolean;
   installedPluginIndex: boolean;
   subagents: boolean;
-  taskRegistry: boolean;
-  taskFlowRegistry: boolean;
   tuiLastSession: boolean;
   acpEventLedger: boolean;
   voiceWake: boolean;
@@ -197,12 +186,9 @@ async function probeLegacyRuntimeStateFiles(params: {
     configHealth: await legacyConfigHealthFileExists(baseDir),
     managedImages: await legacyManagedOutgoingImageRecordFilesExist(baseDir),
     mediaFiles: await legacyMediaFilesExist(env),
-    pluginState: legacyPluginStateSidecarExists(env),
     pluginBindingApprovals: legacyPluginBindingApprovalFileExists(),
     installedPluginIndex: legacyInstalledPluginIndexFileExists({ env, stateDir: baseDir }),
     subagents: legacySubagentRegistryFileExists(env),
-    taskRegistry: legacyTaskRegistrySidecarExists(env),
-    taskFlowRegistry: legacyTaskFlowRegistrySidecarExists(env),
     tuiLastSession: await legacyTuiLastSessionFileExists({ stateDir: baseDir }),
     acpEventLedger: legacyAcpEventLedgerFileExists(env),
     voiceWake: await legacyVoiceWakeConfigFileExists(baseDir),
@@ -232,7 +218,7 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
   }
   if (!params.prompter.shouldRepair) {
     note(
-      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, exec approvals, channel pairing, node pairing, node host config, push, media, plugin, plugin binding approvals, installed plugin index, subagent, task, Task Flow, TUI, ACP event ledger, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
+      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, exec approvals, channel pairing, node pairing, node host config, push, media, plugin binding approvals, installed plugin index, subagent, TUI, ACP event ledger, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
       "SQLite state",
     );
     return;
@@ -380,16 +366,6 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
       }
     });
   }
-  if (probe.pluginState) {
-    await runImport("Plugin state", () => {
-      const result = importLegacyPluginStateSidecarToSqlite(env);
-      if (result.importedEntries > 0 || result.removedSource) {
-        changes.push(
-          `- Imported ${result.importedEntries} plugin state entr${result.importedEntries === 1 ? "y" : "ies"} into SQLite.`,
-        );
-      }
-    });
-  }
   if (probe.pluginBindingApprovals) {
     await runImport("Plugin binding approvals", () => {
       const result = importLegacyPluginBindingApprovalFileToSqlite();
@@ -413,24 +389,6 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
       const result = importLegacySubagentRegistryFileToSqlite(env);
       if (result.imported) {
         changes.push(`- Imported ${result.runs} subagent run record(s) into SQLite.`);
-      }
-    });
-  }
-  if (probe.taskRegistry) {
-    await runImport("Task registry", () => {
-      const result = importLegacyTaskRegistrySidecarToSqlite(env);
-      if (result.importedTasks > 0 || result.importedDeliveryStates > 0) {
-        changes.push(
-          `- Imported ${result.importedTasks} task record(s) and ${result.importedDeliveryStates} task delivery state row(s) into SQLite.`,
-        );
-      }
-    });
-  }
-  if (probe.taskFlowRegistry) {
-    await runImport("Task Flow registry", () => {
-      const result = importLegacyTaskFlowRegistrySidecarToSqlite(env);
-      if (result.importedFlows > 0) {
-        changes.push(`- Imported ${result.importedFlows} Task Flow record(s) into SQLite.`);
       }
     });
   }

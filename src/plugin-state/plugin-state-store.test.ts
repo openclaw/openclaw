@@ -1,14 +1,6 @@
-import { mkdirSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  importLegacyPluginStateSidecarToSqlite,
-  legacyPluginStateSidecarExists,
-} from "../commands/doctor-sqlite-sidecars.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closePluginStateSqliteStore,
@@ -19,12 +11,7 @@ import {
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
-import {
-  resolveLegacyPluginStateDir,
-  resolveLegacyPluginStateSqlitePath,
-  resolvePluginStateDir,
-  resolvePluginStateSqlitePath,
-} from "./plugin-state-store.paths.js";
+import { resolvePluginStateDir, resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
 afterEach(() => {
@@ -514,70 +501,6 @@ describe("plugin state keyed store", () => {
       expect(failedSteps).toEqual([]);
       expect(result.dbPath).toContain("openclaw.sqlite");
       expect(JSON.stringify(result)).not.toContain("probe-value");
-    });
-  });
-
-  it("throws on unsupported future schema versions", async () => {
-    await withOpenClawTestState({ label: "plugin-state-schema" }, async () => {
-      mkdirSync(resolvePluginStateDir(), { recursive: true });
-      const { DatabaseSync } = requireNodeSqlite();
-      const db = new DatabaseSync(resolvePluginStateSqlitePath());
-      db.exec("PRAGMA user_version = 99;");
-      db.close();
-      closeOpenClawStateDatabaseForTest();
-
-      const store = createPluginStateKeyedStore("discord", { namespace: "schema", maxEntries: 10 });
-      await expect(store.register("k", { ok: true })).rejects.toMatchObject({
-        code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED",
-      });
-    });
-  });
-
-  it("imports legacy plugin-state sidecar into the shared database", async () => {
-    await withOpenClawTestState({ label: "plugin-state-legacy-import" }, async () => {
-      mkdirSync(resolveLegacyPluginStateDir(), { recursive: true });
-      const { DatabaseSync } = requireNodeSqlite();
-      const legacyPath = resolveLegacyPluginStateSqlitePath();
-      const db = new DatabaseSync(legacyPath);
-      db.exec(`
-        CREATE TABLE plugin_state_entries (
-          plugin_id  TEXT    NOT NULL,
-          namespace  TEXT    NOT NULL,
-          entry_key  TEXT    NOT NULL,
-          value_json TEXT    NOT NULL,
-          created_at INTEGER NOT NULL,
-          expires_at INTEGER,
-          PRIMARY KEY (plugin_id, namespace, entry_key)
-        );
-      `);
-      db.prepare(
-        `
-          INSERT INTO plugin_state_entries (
-            plugin_id,
-            namespace,
-            entry_key,
-            value_json,
-            created_at,
-            expires_at
-          ) VALUES (?, ?, ?, ?, ?, ?)
-        `,
-      ).run("legacy-plugin", "claims", "claim-1", JSON.stringify({ ok: true }), 123, null);
-      db.close();
-
-      expect(legacyPluginStateSidecarExists()).toBe(true);
-      const result = importLegacyPluginStateSidecarToSqlite();
-
-      expect(result).toMatchObject({
-        sourcePath: legacyPath,
-        importedEntries: 1,
-        removedSource: true,
-      });
-      expect(legacyPluginStateSidecarExists()).toBe(false);
-      const store = createPluginStateKeyedStore<{ ok: boolean }>("legacy-plugin", {
-        namespace: "claims",
-        maxEntries: 10,
-      });
-      await expect(store.lookup("claim-1")).resolves.toEqual({ ok: true });
     });
   });
 });

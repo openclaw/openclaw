@@ -32,7 +32,3 @@ export function resolveTaskRegistryDir(env: NodeJS.ProcessEnv = process.env): st
 export function resolveTaskRegistrySqlitePath(env: NodeJS.ProcessEnv = process.env): string {
   return resolveOpenClawStateSqlitePath(env);
 }
-
-export function resolveLegacyTaskRegistrySqlitePath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveTaskStateDir(env), "tasks", "runs.sqlite");
-}

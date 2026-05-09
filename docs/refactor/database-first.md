@@ -3,7 +3,7 @@ summary: "Migration plan for making SQLite the primary durable state and cache l
 title: "Database-first state refactor"
 read_when:
   - Moving OpenClaw runtime data, cache, transcripts, task state, or scratch files into SQLite
-  - Designing doctor migrations from legacy JSON, JSONL, or sidecar SQLite files
+  - Designing doctor migrations from legacy JSON or JSONL files
   - Changing backup, restore, VFS, or worker storage behavior
   - Removing session file locks, pruning, truncation, or JSON compatibility paths
 ---
@@ -42,8 +42,9 @@ proceed with these assumptions:
 - Keep exactly one normal configuration file. Do not move config, credentials,
   provider auth profiles, plugin manifests, or Git workspaces into SQLite in
   this refactor.
-- Runtime compatibility files are not required. Legacy JSON, JSONL, and sidecar
-  SQLite files are migration inputs only.
+- Runtime compatibility files are not required. Legacy JSON and JSONL files are
+  migration inputs only. The branch-local SQLite sidecars never shipped and are
+  deleted instead of imported.
 - `openclaw doctor --fix` should call the migration implementation, but the
   migration should also be independently runnable through `openclaw migrate`.
 - Backup output should remain one archive file. Database contents should enter
@@ -57,7 +58,7 @@ proceed with these assumptions:
 
 The current branch is already past the proof-of-concept stage. The shared
 database exists, Node `node:sqlite` is wired through a small runtime helper, and
-former sidecars now write to `state/openclaw.sqlite` or the owning
+former stores now write to `state/openclaw.sqlite` or the owning
 `openclaw-agent.sqlite` database.
 
 The remaining work is not choosing SQLite; it is deleting compatibility-shaped
@@ -70,8 +71,8 @@ interfaces that still look like the old file world:
 - Session writes no longer pass through the old in-process `store-writer.ts`
   queue. SQLite patch writes use conflict detection and bounded retry instead.
 - Legacy path discovery still has valid migration uses, but runtime code should
-  stop treating `sessions.json`, transcript JSONL files, sandbox registry JSON,
-  and sidecar SQLite files as possible write targets.
+  stop treating `sessions.json`, transcript JSONL files, and sandbox registry
+  JSON as possible write targets.
 - Agent-owned tables live in per-agent SQLite databases. The global DB keeps
   registry/control-plane rows plus lightweight locators such as transcript file
   mappings.
@@ -144,12 +145,13 @@ The branch already has a real shared SQLite base:
 
 The remaining cleanup is mostly consolidation and deletion:
 
-- Plugin state now uses the shared `state/openclaw.sqlite` database. Doctor
-  imports the legacy `plugin-state/state.sqlite` sidecar and removes it after a
-  successful import.
+- Plugin state now uses the shared `state/openclaw.sqlite` database. The old
+  branch-local `plugin-state/state.sqlite` sidecar importer is removed because
+  that SQLite layout never shipped.
 - Task and Task Flow runtime tables now live in the shared
   `state/openclaw.sqlite` database instead of `tasks/runs.sqlite` and
-  `tasks/flows/registry.sqlite`.
+  `tasks/flows/registry.sqlite`; the old sidecar importers are removed for the
+  same unshipped-layout reason.
 - `src/config/sessions/store.ts` no longer needs `storePath` for inbound
   metadata, route updates, or updated-at reads. Command persistence, CLI
   session cleanup, subagent depth, auth overrides, and transcript session
@@ -597,8 +599,8 @@ startup must not import legacy files.
 
 Migration properties:
 
-- One migration pass discovers all legacy file and sidecar database sources and
-  produces a plan before mutating anything.
+- One migration pass discovers all legacy file sources and produces a plan
+  before mutating anything.
 - A pre-migration backup archive is created. The standalone migrate command can
   skip it only with an explicit dangerous force flag.
 - Imports are idempotent and keyed by source path, mtime, size, hash, and target
@@ -614,12 +616,12 @@ Migration properties:
 
 Move these into the global database:
 
-- Task registry from `tasks/runs.sqlite`. Runtime writes now use the shared
-  database; legacy sidecar import remains.
-- Task Flow registry from `tasks/flows/registry.sqlite`. Runtime writes now use
-  the shared database; legacy sidecar import remains.
-- Plugin state from `plugin-state/state.sqlite`. Runtime writes now use the
-  shared database; legacy sidecar import remains.
+- Task registry runtime writes now use the shared database; the unshipped
+  `tasks/runs.sqlite` sidecar importer is deleted.
+- Task Flow runtime writes now use the shared database; the unshipped
+  `tasks/flows/registry.sqlite` sidecar importer is deleted.
+- Plugin state runtime writes now use the shared database; the unshipped
+  `plugin-state/state.sqlite` sidecar importer is deleted.
 - Builtin memory search no longer defaults to `memory/<agentId>.sqlite`; its
   index tables live in the owning agent database unless `memorySearch.store.path`
   explicitly asks for a sidecar.
@@ -908,12 +910,12 @@ is newer than the backup.
    - Add close/checkpoint/integrity helpers used by tests, backup, and doctor.
 
 2. Collapse sidecar SQLite stores.
-   - Move plugin state tables into the global database. Done for runtime writes;
-     doctor imports the legacy sidecar.
+   - Move plugin state tables into the global database. Done for runtime
+     writes; the unshipped legacy sidecar importer is deleted.
    - Move task registry tables into the global database. Done for runtime
-     writes; doctor imports the legacy sidecar.
+     writes; the unshipped legacy sidecar importer is deleted.
    - Move Task Flow tables into the global database. Done for runtime writes;
-     doctor imports the legacy sidecar.
+     the unshipped legacy sidecar importer is deleted.
    - Move builtin memory-search tables into each agent database by default.
      Done for the default path; explicit custom `memorySearch.store.path`
      remains a sidecar opt-in.
@@ -1150,13 +1152,15 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - ClawHub `.clawhub/origin.json`
 
 The ban should allow tests to create legacy fixtures and allow migration code to
-read/import/remove legacy sources.
+read/import/remove legacy file sources. Unshipped SQLite sidecars stay banned
+and do not get doctor import allowances.
 
 ## Done Criteria
 
 - Runtime data and cache writes go to the global or agent SQLite database.
 - Runtime no longer writes session indexes, transcript JSONL, sandbox registry
-  JSON, task sidecar SQLite, or plugin-state sidecar SQLite.
+  JSON, task sidecar SQLite, or plugin-state sidecar SQLite. The unshipped task
+  and plugin-state sidecar SQLite importers are deleted.
 - Legacy file import is doctor/migrate-only.
 - Backup produces one archive with compact SQLite snapshots and integrity proof.
 - Agent workers can run with disk, VFS scratch, or experimental VFS-only
