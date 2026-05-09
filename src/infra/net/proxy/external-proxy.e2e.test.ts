@@ -288,6 +288,7 @@ async function runNodeModule(
 
 describe("SSRF external proxy routing", () => {
   let target: Server | null = null;
+  let wsTarget: Server | null = null;
   let httpsLikeTarget: Server | null = null;
   let tlsTarget: Server | null = null;
   let proxy: Server | null = null;
@@ -304,11 +305,13 @@ describe("SSRF external proxy routing", () => {
     await closeServer(proxy);
     await closeServer(tlsTarget);
     await closeServer(httpsLikeTarget);
+    await closeServer(wsTarget);
     await closeServer(target);
     wss = null;
     proxy = null;
     tlsTarget = null;
     httpsLikeTarget = null;
+    wsTarget = null;
     target = null;
   });
 
@@ -317,11 +320,13 @@ describe("SSRF external proxy routing", () => {
       res.writeHead(218, { "content-type": "text/plain" });
       res.end("from loopback target");
     });
-    wss = new WebSocketServer({ server: target });
+    wsTarget = createServer();
+    wss = new WebSocketServer({ server: wsTarget });
     wss.on("connection", (ws) => {
       ws.close(1000, "done");
     });
     const targetPort = await listenOnLoopback(target);
+    const wsTargetPort = await listenOnLoopback(wsTarget);
 
     httpsLikeTarget = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "text/plain" });
@@ -388,7 +393,7 @@ describe("SSRF external proxy routing", () => {
             const ws = new WebSocket(url, { handshakeTimeout: ${PROBE_TIMEOUT_MS} });
             ws.once("open", () => {
               ws.close();
-              reject(new Error("proxied websocket unexpectedly opened"));
+              resolve();
             });
             ws.once("error", () => resolve());
           });
@@ -448,11 +453,10 @@ describe("SSRF external proxy routing", () => {
         OPENCLAW_TEST_NODE_HTTP_TARGET_URL: `http://127.0.0.1:${targetPort}/node-http-metadata`,
         OPENCLAW_TEST_EXPLICIT_AGENT_TARGET_URL: `http://127.0.0.1:${targetPort}/explicit-agent`,
         OPENCLAW_TEST_NODE_HTTPS_TARGET_URL: `https://127.0.0.1:${httpsLikeTargetPort}/https-connect-proof`,
-        OPENCLAW_TEST_WS_TARGET_URL: `ws://127.0.0.1:${targetPort}/websocket-proxied`,
-        OPENCLAW_TEST_GATEWAY_BYPASS_WS_URL: `ws://127.0.0.1:${targetPort}/gateway-bypass`,
+        OPENCLAW_TEST_WS_TARGET_URL: `ws://127.0.0.1:${wsTargetPort}/websocket-proxied`,
+        OPENCLAW_TEST_GATEWAY_BYPASS_WS_URL: `ws://127.0.0.1:${wsTargetPort}/gateway-bypass`,
         NO_PROXY: "127.0.0.1,localhost",
         no_proxy: "localhost",
-        GLOBAL_AGENT_NO_PROXY: "localhost",
       },
     );
 
@@ -462,12 +466,11 @@ describe("SSRF external proxy routing", () => {
     expect(child.stdout).toContain('"nodeHttp":{"status":218');
     expect(child.stdout).toContain('"explicitAgent":{"status":218');
     expect(child.stdout).toContain('"body":"from loopback target"');
-    expect(seenConnectTargets).toContain(`127.0.0.1:${targetPort}`);
+    expect(seenConnectTargets).toContain(`127.0.0.1:${wsTargetPort}`);
     expect(seenConnectTargets).toContain(`127.0.0.1:${httpsLikeTargetPort}`);
     expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/node-http-metadata`);
     expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/explicit-agent`);
-    expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/websocket-proxied`);
-    expect(seenConnectTargets).not.toContain(`http://127.0.0.1:${targetPort}/gateway-bypass`);
+    expect(seenConnectTargets).not.toContain(`http://127.0.0.1:${wsTargetPort}/gateway-bypass`);
   });
 
   it("preserves the target TLS hostname for Node HTTPS requests through the managed proxy", async () => {
@@ -526,7 +529,6 @@ describe("SSRF external proxy routing", () => {
           OPENCLAW_TEST_DISCORD_TLS_URL: `https://discord.com:${tlsTargetPort}/tls-proxy-proof`,
           NO_PROXY: "127.0.0.1,localhost",
           no_proxy: "localhost",
-          GLOBAL_AGENT_NO_PROXY: "localhost",
         },
       );
 

@@ -70,6 +70,7 @@ overrides:
 
 allowBuilds:
   "@openclaw/fs-safe": true
+  "@openclaw/proxyline": true
   "@google/genai": true
   "@lydell/node-pty": true
   "@matrix-org/matrix-sdk-crypto-nodejs": true
