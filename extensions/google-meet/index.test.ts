@@ -3897,16 +3897,19 @@ describe("google-meet plugin", () => {
       expect(runCommandWithTimeout).toHaveBeenNthCalledWith(3, ["bridge", "start"], {
         timeoutMs: 30000,
       });
-      expect(callGatewayFromCli).toHaveBeenCalledWith(
-        "browser.request",
-        expect.any(Object),
-        expect.objectContaining({
-          method: "POST",
-          path: "/tabs/open",
-          body: { url: "https://meet.google.com/abc-defg-hij" },
-        }),
-        { progress: false },
-      );
+      const openRequests = callGatewayFromCli.mock.calls.filter((call) => {
+        const params = call[2];
+        return call[0] === "browser.request" && isRecord(params) && params.path === "/tabs/open";
+      });
+      expect(openRequests).toHaveLength(1);
+      const [method, opts, params, extra] = openRequests[0] ?? [];
+      expect(method).toBe("browser.request");
+      expect(isRecord(opts)).toBe(true);
+      const request = requireRecord(params, "local browser open request");
+      expect(request.method).toBe("POST");
+      expect(request.path).toBe("/tabs/open");
+      expect(request.body).toStrictEqual({ url: "https://meet.google.com/abc-defg-hij" });
+      expect(extra).toStrictEqual({ progress: false });
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
@@ -4013,7 +4016,10 @@ describe("google-meet plugin", () => {
     callbacks?.onTranscript?.("Please summarize the launch.");
     await vi.advanceTimersByTimeAsync(GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS);
 
-    expect(sendAudio).toHaveBeenCalledWith(expect.any(Buffer));
+    expect(sendAudio).toHaveBeenCalledTimes(1);
+    const audioChunk = sendAudio.mock.calls[0]?.[0];
+    expect(Buffer.isBuffer(audioChunk)).toBe(true);
+    expect(audioChunk.byteLength).toBeGreaterThan(0);
     expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalled();
     expect(runtime.tts.textToSpeechTelephony).toHaveBeenCalledWith({
       text: "Use the Portugal launch data.",
@@ -4023,14 +4029,13 @@ describe("google-meet plugin", () => {
       "[google-meet] agent TTS: provider=elevenlabs model=eleven_multilingual_v2 voice=pMsXgVXv3BLzUgSXRplE outputFormat=pcm16 sampleRate=24000",
     );
     expect(Buffer.concat(outputStdinWrites)).toEqual(Buffer.from([1, 0, 2, 0]));
-    expect(handle.getHealth()).toMatchObject({
-      providerConnected: true,
-      audioInputActive: true,
-      audioOutputActive: true,
-      realtimeTranscriptLines: 2,
-      lastRealtimeTranscriptRole: "assistant",
-    });
-    const talkEventTypes = handle.getHealth().recentTalkEvents?.map((event) => event.type) ?? [];
+    const health = handle.getHealth();
+    expect(health.providerConnected).toBe(true);
+    expect(health.audioInputActive).toBe(true);
+    expect(health.audioOutputActive).toBe(true);
+    expect(health.realtimeTranscriptLines).toBe(2);
+    expect(health.lastRealtimeTranscriptRole).toBe("assistant");
+    const talkEventTypes = health.recentTalkEvents?.map((event) => event.type) ?? [];
     expect(talkEventTypes).toEqual([
       "session.started",
       "session.ready",
