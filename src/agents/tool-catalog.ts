@@ -1,3 +1,4 @@
+import { listCoreToolFactoryNames } from "./core-tool-factory-descriptors.js";
 /**
  * Core tool catalog and profile defaults.
  * Drives built-in profile allowlists, group expansion, and UI section metadata
@@ -43,6 +44,7 @@ type CoreToolDefinition = {
   description: string;
   sectionId: string;
   profiles: ToolProfileId[];
+  includeInSectionGroup?: boolean;
   includeInOpenClawGroup?: boolean;
 };
 
@@ -216,6 +218,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "transcripts",
+    label: "transcripts",
+    description: "Manage meeting transcripts",
+    sectionId: "sessions",
+    profiles: [],
+    includeInSectionGroup: false,
+  },
+  {
     id: "session_status",
     label: "session_status",
     description: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
@@ -327,6 +337,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "openclaw",
+    label: "openclaw",
+    description: "Open OpenClaw system setup and maintenance",
+    sectionId: "agents",
+    profiles: [],
+    includeInSectionGroup: false,
+  },
+  {
     id: "get_goal",
     label: "get_goal",
     description: "Get current thread goal",
@@ -400,6 +418,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "pdf",
+    label: "pdf",
+    description: "PDF analysis",
+    sectionId: "media",
+    profiles: [],
+    includeInSectionGroup: false,
+  },
+  {
     id: "tts",
     label: "tts",
     description: "Text-to-speech conversion",
@@ -437,6 +463,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
 function buildCoreToolGroupMap() {
   const sectionToolMap = new Map<string, string[]>();
   for (const tool of CORE_TOOL_DEFINITIONS) {
+    if (tool.includeInSectionGroup === false) {
+      continue;
+    }
     const groupId = `group:${tool.sectionId}`;
     const list = sectionToolMap.get(groupId) ?? [];
     list.push(tool.id);
@@ -445,7 +474,12 @@ function buildCoreToolGroupMap() {
   const openclawTools = CORE_TOOL_DEFINITIONS.filter((tool) => tool.includeInOpenClawGroup).map(
     (tool) => tool.id,
   );
+  const coreFactoryNames = new Set(listCoreToolFactoryNames());
+  const coreTools = CORE_TOOL_DEFINITIONS.filter((tool) => coreFactoryNames.has(tool.id)).map(
+    (tool) => tool.id,
+  );
   return {
+    "group:core": coreTools,
     "group:openclaw": openclawTools,
     ...Object.fromEntries(sectionToolMap.entries()),
   };

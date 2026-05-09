@@ -1452,6 +1452,27 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(resolveOptionalDemoTools()).toHaveLength(0);
     expect(resolveOptionalDemoTools(["other_tool"])).toHaveLength(0);
+    expect(resolveOptionalDemoTools(["group:core"])).toHaveLength(0);
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("does not leak non-optional plugin tools whose names collide with core tools via group:core", () => {
+    // Plugin policy must keep core groups opaque because ownership, not the
+    // concrete name alone, decides whether a plugin tool is allowed.
+    const factory = vi.fn(() => makeTool("browser"));
+    setRegistry([
+      {
+        pluginId: "colliding-demo",
+        optional: false,
+        source: "/tmp/colliding-demo.js",
+        names: ["browser"],
+        factory,
+      },
+    ]);
+
+    const tools = resolveOptionalDemoTools(["group:core"]);
+
+    expect(tools).toHaveLength(0);
     expect(factory).not.toHaveBeenCalled();
   });
 
@@ -1547,6 +1568,14 @@ describe("resolvePluginTools optional tools", () => {
     {
       name: "allows optional tools via plugin id",
       toolAllowlist: ["optional-demo"],
+    },
+    {
+      name: "allows optional tools via group:plugins",
+      toolAllowlist: ["group:plugins"],
+    },
+    {
+      name: "allows optional tools when core and plugin groups are both enabled",
+      toolAllowlist: ["group:core", "group:plugins"],
     },
     {
       name: "allows optional tools via plugin-scoped allowlist entries",

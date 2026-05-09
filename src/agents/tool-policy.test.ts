@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { listCoreToolFactoryNames } from "./core-tool-factory-descriptors.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
@@ -38,13 +39,38 @@ describe("tool-policy", () => {
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
-  it("includes core tool groups in group:openclaw", () => {
+  it("includes all core tools in group:core", () => {
+    const group = TOOL_GROUPS["group:core"];
+    expect(group.toSorted()).toEqual(listCoreToolFactoryNames().toSorted());
+    expect(group).toContain("pdf");
+    expect(group).toContain("spawn_task");
+    expect(group).toContain("dismiss_task");
+    expect(group).toContain("get_goal");
+    expect(group).toContain("create_goal");
+    expect(group).toContain("update_goal");
+    expect(group).toContain("transcripts");
+    expect(group).not.toContain("browser");
+    expect(group).not.toContain("canvas");
+    expect(group).not.toContain("memory_get");
+  });
+
+  it("keeps group:openclaw as the curated OpenClaw integration group", () => {
     const group = TOOL_GROUPS["group:openclaw"];
     expect(group).toContain("browser");
     expect(group).toContain("message");
     expect(group).toContain("subagents");
     expect(group).toContain("session_status");
     expect(group).toContain("tts");
+    expect(group).not.toContain("read");
+    expect(group).not.toContain("exec");
+    expect(group).not.toContain("pdf");
+    expect(group).not.toContain("transcripts");
+  });
+
+  it("does not widen existing section groups with group:core-only tools", () => {
+    expect(TOOL_GROUPS["group:sessions"]).not.toContain("transcripts");
+    expect(TOOL_GROUPS["group:agents"]).not.toContain("openclaw");
+    expect(TOOL_GROUPS["group:media"]).not.toContain("pdf");
   });
 
   it("normalizes tool names and aliases", () => {

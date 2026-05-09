@@ -33,6 +33,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 
 | Group              | Tools                                                                                                                                                 |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group:core`       | All shipped core tools (excludes plugin-owned tools)                                                                                                  |
 | `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                                                       |
 | `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                                                |
 | `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `spawn_task`, `dismiss_task` |
