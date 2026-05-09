@@ -145,6 +145,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Docs/Subagents: correct the listed sub-agent bootstrap context files to include `SOUL.md`, `IDENTITY.md`, and `USER.md`. (#79470) Thanks @lastguru-net.
 - OpenAI/Codex: install the Codex runtime plugin from npm during OpenAI onboarding and load it automatically for implicit OpenAI model routes, while preserving manual PI runtime overrides. Fixes #79358.
 - OpenAI/realtime voice: defer `response.create` while a realtime response is still active, retry after `response.done`/`response.cancelled`, and align GA input transcription/noise-reduction defaults with the Codex realtime reference so Discord/Voice Call consult results can resume speaking instead of tripping the active-response race.
 - OpenAI/realtime voice: avoid duplicate barge-in cancellation requests, log realtime model interruption/cutoff events in Discord voice logs, and treat OpenAI's no-active-response cancellation reply as a completed cancel so Discord voice sessions do not wedge pending speech after fast interruptions.
