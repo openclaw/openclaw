@@ -165,7 +165,6 @@ export function resolveWebFetchDefinition(
       ? resolvePluginWebFetchProviders({
           config: options?.config,
           bundledAllowlistCompat: true,
-          origin: "bundled",
         })
       : options?.preferRuntimeProviders
         ? resolveRuntimeWebFetchProviders({

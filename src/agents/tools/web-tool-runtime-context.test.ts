@@ -114,6 +114,20 @@ describe("web tool runtime context", () => {
     );
   });
 
+  it("treats resolved global provider owners as explicit selections", async () => {
+    mocks.resolveManifestContractOwnerPluginId.mockReturnValue("brave");
+    const { resolveWebSearchToolRuntimeContext } = await import("./web-tool-runtime-context.js");
+
+    const resolved = resolveWebSearchToolRuntimeContext({
+      config: { tools: { web: { search: { provider: "brave" } } } },
+    });
+
+    expect(resolved.preferRuntimeProviders).toBe(false);
+    expect(mocks.resolveManifestContractOwnerPluginId.mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "origin",
+    );
+  });
+
   it("keeps runtime providers disabled for bundled fetch owners", async () => {
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue("firecrawl");
     const { resolveWebFetchToolRuntimeContext } = await import("./web-tool-runtime-context.js");
