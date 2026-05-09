@@ -448,6 +448,7 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   close: () => void;
 } {
   let closed = false;
+  const lateCallableMethods = new Set<keyof OpenClawPluginApi>(["sendSessionAttachment"]);
   return {
     api: new Proxy(api, {
       get(target, prop, receiver) {
@@ -456,7 +457,7 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
           return value;
         }
         return (...args: unknown[]) => {
-          if (closed) {
+          if (closed && !(typeof prop === "string" && lateCallableMethods.has(prop))) {
             return undefined;
           }
           return Reflect.apply(value, target, args);
@@ -576,6 +577,8 @@ export const __testing = {
   shouldLoadChannelPluginInSetupRuntime,
   shouldPreferNativeModuleLoad,
   toSafeImportPath,
+  createGuardedPluginRegistrationApi,
+  runPluginRegisterSync,
   getCompatibleActivePluginRegistry,
   resolvePluginLoadCacheContext,
   get maxPluginRegistryCacheEntries() {

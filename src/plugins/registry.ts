@@ -19,6 +19,7 @@ import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
@@ -2680,27 +2681,34 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 });
               },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
-              sendSessionAttachment: (attachment) => {
+              sendSessionAttachment: async (attachment) => {
                 if (registryParams.activateGlobalSideEffects === false) {
-                  return Promise.resolve({ ok: false, error: "global side effects disabled" });
+                  return { ok: false, error: "global side effects disabled" };
                 }
-                const activeRegistry = getActivePluginRegistry();
-                const pluginLoaded =
-                  activeRegistry === registry &&
-                  registry.plugins.some(
-                    (plugin) => plugin.id === record.id && plugin.status === "loaded",
-                  );
-                if (!pluginLoaded) {
-                  return Promise.resolve({ ok: false, error: "plugin is not loaded" });
+                try {
+                  const activeRegistry = getActivePluginRegistry();
+                  const pluginLoaded =
+                    activeRegistry === registry &&
+                    registry.plugins.some(
+                      (plugin) => plugin.id === record.id && plugin.status === "loaded",
+                    );
+                  if (!pluginLoaded) {
+                    return { ok: false, error: "plugin is not loaded" };
+                  }
+                  const runtimeConfig =
+                    (registryParams.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+                    params.config;
+                  return await sendPluginSessionAttachment({
+                    ...attachment,
+                    config: runtimeConfig,
+                    origin: record.origin,
+                  });
+                } catch (error) {
+                  return {
+                    ok: false,
+                    error: `attachment delivery setup failed: ${formatErrorMessage(error)}`,
+                  };
                 }
-                const runtimeConfig =
-                  (registryParams.runtime.config?.current?.() as OpenClawConfig | undefined) ??
-                  params.config;
-                return sendPluginSessionAttachment({
-                  ...attachment,
-                  config: runtimeConfig,
-                  origin: record.origin,
-                });
               },
               registerSessionAction: (action) => registerSessionAction(record, action),
               sendSessionAttachment: (attachment) => {

@@ -53,6 +53,9 @@ async function resolveTelegramSendContext(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean;
+  formatting?: {
+    parseMode?: "HTML";
+  };
   gatewayClientScopes?: readonly string[];
   resolveSend: ResolveTelegramSendFn;
 }): Promise<{
@@ -60,7 +63,7 @@ async function resolveTelegramSendContext(params: {
   baseOpts: {
     cfg: NonNullable<TelegramSendOpts>["cfg"];
     verbose: false;
-    textMode: "html";
+    textMode?: "html";
     messageThreadId?: number;
     replyToMessageId?: number;
     accountId?: string;
@@ -69,12 +72,13 @@ async function resolveTelegramSendContext(params: {
   };
 }> {
   const send = await params.resolveSend(params.deps);
+  const textMode = params.formatting?.parseMode === "HTML" ? "html" : undefined;
   return {
     send,
     baseOpts: {
       verbose: false,
-      textMode: "html",
       cfg: params.cfg,
+      ...(textMode ? { textMode } : {}),
       messageThreadId: parseTelegramThreadId(params.threadId),
       replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
       accountId: params.accountId ?? undefined,
@@ -209,6 +213,7 @@ export function createTelegramOutboundAdapter(
         deps,
         replyToId,
         threadId,
+        formatting,
         silent,
         gatewayClientScopes,
       }) => {
@@ -219,6 +224,7 @@ export function createTelegramOutboundAdapter(
           replyToId,
           threadId,
           silent,
+          formatting,
           gatewayClientScopes,
           resolveSend,
         });
@@ -237,6 +243,7 @@ export function createTelegramOutboundAdapter(
         deps,
         replyToId,
         threadId,
+        formatting,
         forceDocument,
         silent,
         gatewayClientScopes,
@@ -248,6 +255,7 @@ export function createTelegramOutboundAdapter(
           replyToId,
           threadId,
           silent,
+          formatting,
           gatewayClientScopes,
           resolveSend,
         });
@@ -270,6 +278,7 @@ export function createTelegramOutboundAdapter(
       deps,
       replyToId,
       threadId,
+      formatting,
       forceDocument,
       silent,
       gatewayClientScopes,
@@ -281,6 +290,7 @@ export function createTelegramOutboundAdapter(
         replyToId,
         threadId,
         silent,
+        formatting,
         gatewayClientScopes,
         resolveSend,
       });

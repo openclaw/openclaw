@@ -2627,7 +2627,7 @@ export type OpenClawPluginApi = {
   /** Register a typed session action that clients can dispatch through the Gateway. */
   registerSessionAction: (action: PluginSessionActionRegistration) => void;
   /**
-   * Send one or more host-validated files to the active channel for a session.
+   * Send one or more host-validated files to the active direct-outbound channel for a session.
    *
    * This API is intended for bundled plugins running with the host channel/session
    * integration available. Calls may resolve to `{ ok: false }` instead of attaching

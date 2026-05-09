@@ -371,6 +371,41 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("prefers the freshest routable alias even when the normalized key is already routable", () => {
+    const queriedKey = "agent:main:matrix:channel:!MiXeDCase:Example.Org";
+    const canonicalKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    const fresherAlias = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    storeState.store[canonicalKey] = {
+      sessionId: "older-canonical-session",
+      updatedAt: Date.now() - 1_000,
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!mixedcase:example.org",
+        accountId: "matrix-account",
+      },
+    };
+    storeState.store[fresherAlias] = {
+      sessionId: "fresh-alias-session",
+      updatedAt: Date.now(),
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+    };
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+      threadId: undefined,
+    });
+  });
+
   it("falls back to the base session when a thread entry only has partial route metadata", () => {
     const baseKey = "agent:main:matrix:channel:!MixedCase:example.org";
     const threadKey = `${baseKey}:thread:$thread-event`;

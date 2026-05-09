@@ -11,6 +11,7 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "../../media/mime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveAttachmentDelivery, sendPluginSessionAttachment } from "../host-hook-workflow.js";
+import { clearPluginLoaderCache } from "../loader.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
 import { setActivePluginRegistry } from "../runtime.js";
@@ -71,6 +72,9 @@ describe("plugin session attachments", () => {
     workflowMocks.getChannelPlugin.mockReset();
     workflowMocks.sendMessage.mockReset();
     setActivePluginRegistry(createEmptyPluginRegistry());
+    clearPluginLoaderCache();
+    delete (globalThis as { __proofAttachmentApi?: OpenClawPluginApi }).__proofAttachmentApi;
+    delete (globalThis as { __proofAttachmentLog?: unknown[] }).__proofAttachmentLog;
   });
 
   it("resolves channel hint precedence for attachment delivery", () => {
@@ -266,6 +270,51 @@ describe("plugin session attachments", () => {
       expect(workflowMocks.sendMessage.mock.calls[0]?.[0]).toMatchObject({
         content: "1 &lt; 2 &amp; 3 &gt; 2",
         parseMode: "HTML",
+      });
+    });
+  });
+
+  it("resolves relative attachment paths against the session agent workspace", async () => {
+    await withSessionStore(async ({ storePath, stateDir }) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const relativeFilePath = "./report.txt";
+      const absoluteFilePath = path.join(workspaceDir, "report.txt");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(absoluteFilePath, "workspace report", "utf8");
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "12345",
+          },
+        } as unknown as SessionEntry;
+        return undefined;
+      });
+      workflowMocks.sendMessage.mockImplementation(async (params: Record<string, unknown>) => ({
+        channel: params.channel,
+        to: params.to,
+        via: "direct" as const,
+        mediaUrl: null,
+        result: { channel: params.channel, messageId: "attachment-1" },
+      }));
+
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: relativeFilePath }],
+          config: {
+            session: { store: storePath },
+            agents: {
+              list: [{ id: "main", workspace: workspaceDir }],
+            },
+          },
+        }),
+      ).resolves.toMatchObject({ ok: true, channel: "telegram", count: 1 });
+      expect(workflowMocks.sendMessage.mock.calls[0]?.[0]).toMatchObject({
+        mediaUrls: [absoluteFilePath],
       });
     });
   });
@@ -770,6 +819,59 @@ describe("plugin session attachments", () => {
         }),
       ).resolves.toMatchObject({ ok: true, channel: "telegram", count: 1 });
       expect(workflowMocks.sendMessage).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("returns structured errors when the captured API cannot read the live runtime config", async () => {
+    await withSessionStore(async ({ stateDir, storePath, filePath }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "12345",
+          },
+        } as unknown as SessionEntry;
+        return undefined;
+      });
+
+      const registrationConfig = { session: { store: path.join(stateDir, "stale-sessions.json") } };
+      const registry = createPluginRegistry({
+        logger: createSilentPluginLogger(),
+        runtime: {
+          config: {
+            current: () => {
+              throw new Error("config runtime unavailable");
+            },
+          },
+        } as unknown as PluginRuntime,
+      });
+      let capturedApi: OpenClawPluginApi | undefined;
+      registerTestPlugin({
+        registry,
+        config: registrationConfig,
+        record: createPluginRecord({
+          id: "attachment-runtime-error-plugin",
+          name: "Attachment Runtime Error Plugin",
+          origin: "bundled",
+        }),
+        register(api) {
+          capturedApi = api;
+        },
+      });
+      setActivePluginRegistry(registry.registry);
+
+      await expect(
+        capturedApi?.sendSessionAttachment({
+          sessionKey: "agent:main:main",
+          files: [{ path: filePath }],
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: "attachment delivery setup failed: config runtime unavailable",
+      });
+      expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
     });
   });
 });
