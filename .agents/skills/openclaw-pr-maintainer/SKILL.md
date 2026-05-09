@@ -132,6 +132,10 @@ Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch,
 ## Enforce the bug-fix evidence bar
 
 - Never merge a bug-fix PR based only on issue text, PR text, or AI rationale.
+- Whenever feasible, use Crabbox (`$crabbox`) for end-to-end verification before
+  commenting that a bug is unreproducible, closing an issue, or opening/landing
+  a fix PR. Prefer a real packaged/Docker/live lane that exercises the reported
+  user flow over unit-only proof.
 - Before landing, require:
   1. symptom evidence such as a repro, logs, or a failing test
   2. a verified root cause in code with file/line
@@ -139,6 +143,9 @@ Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch,
   4. a regression test when feasible, or explicit manual verification plus a reason no test was added
 - If the claim is unsubstantiated or likely wrong, request evidence or changes instead of merging.
 - If the linked issue appears outdated or incorrect, correct triage first. Do not merge a speculative fix.
+- If Crabbox/E2E proof is blocked, say exactly why and use the closest available
+  local, Docker, mocked, or targeted proof. Do not present unit tests as real
+  behavior proof.
 
 ## Close low-signal manual PRs carefully
 
