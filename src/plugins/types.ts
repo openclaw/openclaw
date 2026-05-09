@@ -2603,10 +2603,7 @@ export type OpenClawPluginApi = {
   /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
   setRunContext: (patch: PluginRunContextPatch) => boolean;
   /** Read namespaced plugin data for a run. */
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
-  getRunContext: <T extends PluginJsonValue = PluginJsonValue>(
-    params: PluginRunContextGetParams,
-  ) => T | undefined;
+  getRunContext: (params: PluginRunContextGetParams) => PluginJsonValue | undefined;
   /** Clear one namespace or all namespaces this plugin owns for a run. */
   clearRunContext: (params: { runId: string; namespace?: string }) => void;
   /** Register a plugin-owned session job so reset/delete/disable can clean it deterministically. */
