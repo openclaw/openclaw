@@ -186,8 +186,12 @@ describe("doctor session transcript repair", () => {
   it("imports legacy Codex app-server binding sidecars during repair mode", async () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "session.jsonl");
-    const sidecarPath = `${sessionFile}.codex-app-server.json`;
+    const legacyTranscriptPath = path.join(sessionsDir, "session.jsonl");
+    await fs.writeFile(
+      legacyTranscriptPath,
+      `${JSON.stringify({ type: "session", version: 3, id: "session-1", cwd: root })}\n`,
+    );
+    const sidecarPath = `${legacyTranscriptPath}.codex-app-server.json`;
     await fs.writeFile(
       sidecarPath,
       JSON.stringify({
@@ -201,10 +205,10 @@ describe("doctor session transcript repair", () => {
     await noteSessionTranscriptHealth({ shouldRepair: true, sessionDirs: [sessionsDir] });
 
     await expect(fs.access(sidecarPath)).rejects.toThrow();
-    expect(readOpenClawStateKvJson("codex_app_server_thread_bindings", sessionFile)).toMatchObject({
+    expect(readOpenClawStateKvJson("codex_app_server_thread_bindings", "session-1")).toMatchObject({
       schemaVersion: 1,
       threadId: "thread-123",
-      sessionFile,
+      sessionId: "session-1",
       cwd: root,
       model: "gpt-5.5",
     });

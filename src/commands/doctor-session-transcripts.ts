@@ -43,7 +43,8 @@ type TranscriptMigrationResult = TranscriptRepairResult & {
 
 type CodexAppServerBindingMigrationResult = {
   filePath: string;
-  sessionFile: string;
+  legacyTranscriptPath: string;
+  sessionId: string;
   imported: boolean;
   removedSource: boolean;
   reason?: string;
@@ -296,12 +297,28 @@ async function listCodexAppServerBindingSidecars(sessionDirs: string[]): Promise
   return files.toSorted((a, b) => a.localeCompare(b));
 }
 
-function resolveCodexAppServerBindingSessionFile(sidecarPath: string): string {
+function resolveCodexAppServerBindingTranscriptPath(sidecarPath: string): string {
   return sidecarPath.slice(0, -CODEX_APP_SERVER_BINDING_SIDECAR_SUFFIX.length);
 }
 
+async function resolveCodexAppServerBindingSessionId(
+  legacyTranscriptPath: string,
+): Promise<string> {
+  try {
+    const raw = await fs.readFile(legacyTranscriptPath, "utf-8");
+    const sessionId = getSessionId(parseTranscriptEntries(raw));
+    if (sessionId) {
+      return sessionId;
+    }
+  } catch {
+    // Fall back to the legacy filename when only the sidecar survived.
+  }
+  const basename = path.basename(legacyTranscriptPath);
+  return basename.endsWith(".jsonl") ? basename.slice(0, -".jsonl".length) : basename;
+}
+
 function normalizeCodexAppServerBindingPayload(
-  sessionFile: string,
+  sessionId: string,
   value: unknown,
 ): OpenClawStateJsonValue | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -317,7 +334,7 @@ function normalizeCodexAppServerBindingPayload(
   }
   return {
     schemaVersion: 1,
-    sessionFile,
+    sessionId,
     threadId: parsed.threadId,
     cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
     authProfileId: typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined,
@@ -339,14 +356,16 @@ async function migrateCodexAppServerBindingSidecar(params: {
   filePath: string;
   shouldRepair: boolean;
 }): Promise<CodexAppServerBindingMigrationResult> {
-  const sessionFile = resolveCodexAppServerBindingSessionFile(params.filePath);
+  const legacyTranscriptPath = resolveCodexAppServerBindingTranscriptPath(params.filePath);
+  const sessionId = await resolveCodexAppServerBindingSessionId(legacyTranscriptPath);
   try {
     const raw = await fs.readFile(params.filePath, "utf-8");
-    const payload = normalizeCodexAppServerBindingPayload(sessionFile, JSON.parse(raw));
+    const payload = normalizeCodexAppServerBindingPayload(sessionId, JSON.parse(raw));
     if (!payload) {
       return {
         filePath: params.filePath,
-        sessionFile,
+        legacyTranscriptPath,
+        sessionId,
         imported: false,
         removedSource: false,
         reason: "invalid binding payload",
@@ -355,23 +374,26 @@ async function migrateCodexAppServerBindingSidecar(params: {
     if (!params.shouldRepair) {
       return {
         filePath: params.filePath,
-        sessionFile,
+        legacyTranscriptPath,
+        sessionId,
         imported: false,
         removedSource: false,
       };
     }
-    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionFile, payload);
+    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionId, payload);
     await fs.rm(params.filePath, { force: true });
     return {
       filePath: params.filePath,
-      sessionFile,
+      legacyTranscriptPath,
+      sessionId,
       imported: true,
       removedSource: true,
     };
   } catch (error) {
     return {
       filePath: params.filePath,
-      sessionFile,
+      legacyTranscriptPath,
+      sessionId,
       imported: false,
       removedSource: false,
       reason: String(error),
@@ -398,13 +420,13 @@ export async function noteSessionTranscriptHealth(params?: {
     return;
   }
 
-  const results: TranscriptMigrationResult[] = [];
-  for (const filePath of files) {
-    results.push(await migrateSessionTranscriptFileToSqlite({ filePath, shouldRepair }));
-  }
   const codexBindingResults: CodexAppServerBindingMigrationResult[] = [];
   for (const filePath of codexBindingSidecars) {
     codexBindingResults.push(await migrateCodexAppServerBindingSidecar({ filePath, shouldRepair }));
+  }
+  const results: TranscriptMigrationResult[] = [];
+  for (const filePath of files) {
+    results.push(await migrateSessionTranscriptFileToSqlite({ filePath, shouldRepair }));
   }
   const broken = results.filter((result) => result.broken);
   const imported = results.filter((result) => result.imported);

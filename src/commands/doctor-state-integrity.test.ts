@@ -580,12 +580,6 @@ describe("doctor state integrity oauth dir checks", () => {
   it("moves a heartbeat-poisoned main session and clears stale TUI restore pointers", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(process.env, tempHome);
-    const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
-      "main",
-      process.env,
-      () => tempHome,
-    );
-    const heartbeatTranscriptPath = path.join(sessionsDir, "heartbeat-session.jsonl");
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "heartbeat-session",
@@ -597,7 +591,6 @@ describe("doctor state integrity oauth dir checks", () => {
     await writeSessionStore(cfg, {
       "agent:main:main": {
         sessionId: "heartbeat-session",
-        sessionFile: heartbeatTranscriptPath,
         updatedAt: Date.now(),
       },
     });
