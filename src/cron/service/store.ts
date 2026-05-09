@@ -1,7 +1,4 @@
-import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
-import { normalizeCronJobInput } from "../normalize.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
@@ -37,77 +34,10 @@ export async function ensureLoaded(
   for (const job of state.store?.jobs ?? []) {
     previousJobsById.set(job.id, job);
   }
-  const loaded = await loadCronStore(state.deps.storePath);
-  const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
-  for (const [index, job] of jobs.entries()) {
-    const raw = job as unknown as Record<string, unknown>;
-    const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
-    let normalized: Record<string, unknown> | null;
-    try {
-      normalized = normalizeCronJobInput(raw);
-    } catch (error) {
-      if (!isInvalidCronSessionTargetIdError(error)) {
-        throw error;
-      }
-      normalized = null;
-      state.deps.log.warn(
-        { storePath: state.deps.storePath, jobId: typeof raw.id === "string" ? raw.id : undefined },
-        "cron: job has invalid persisted sessionTarget; run openclaw doctor --fix to repair",
-      );
-    }
-    const hydrated =
-      normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
-    jobs[index] = hydrated;
-    if (legacyJobIdIssue) {
-      const resolvedId = typeof hydrated.id === "string" ? hydrated.id : undefined;
-      state.deps.log.warn(
-        { storePath: state.deps.storePath, jobId: resolvedId },
-        "cron: job used legacy jobId field; normalized id in memory (run openclaw doctor --fix to persist canonical shape)",
-      );
-    }
-    // Persisted legacy jobs may predate the required `enabled` field.
-    // Keep runtime behavior backward-compatible without rewriting the store.
-    if (typeof hydrated.enabled !== "boolean") {
-      hydrated.enabled = true;
-    }
+  const loaded = await loadCronStore(state.deps.storeKey);
+  const jobs = loaded.jobs ?? [];
+  for (const hydrated of jobs) {
     invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
-    // Same shape: persisted jobs missing `sessionTarget` crash downstream
-    // on any code path that dereferences `.startsWith` (e.g.
-    // `runIsolatedAgentJob` in `src/gateway/server-cron.ts`). Mirror the
-    // defaulter applied at create time: systemEvent payloads -> "main",
-    // agentTurn -> "isolated". Use `Object.hasOwn` rather than `in` so a
-    // poisoned prototype cannot feed a crafted `kind` into the defaulter.
-    if (typeof hydrated.sessionTarget !== "string") {
-      const payload = hydrated.payload as unknown;
-      const payloadKind =
-        payload &&
-        typeof payload === "object" &&
-        !Array.isArray(payload) &&
-        Object.hasOwn(payload, "kind")
-          ? (payload as { kind?: unknown }).kind
-          : undefined;
-      let defaulted: "main" | "isolated" | undefined;
-      if (payloadKind === "systemEvent") {
-        defaulted = "main";
-      } else if (payloadKind === "agentTurn") {
-        defaulted = "isolated";
-      }
-      if (defaulted) {
-        hydrated.sessionTarget = defaulted;
-        // `ensureLoaded` is called with `forceReload: true` on every tick;
-        // warn once per jobId per process to avoid log spam on repeated
-        // loads of the same still-broken legacy row.
-        const jobId = typeof hydrated.id === "string" ? hydrated.id : undefined;
-        const dedupeKey = jobId ?? "<unknown>";
-        if (!state.warnedMissingSessionTargetJobIds.has(dedupeKey)) {
-          state.warnedMissingSessionTargetJobIds.add(dedupeKey);
-          state.deps.log.warn(
-            { storePath: state.deps.storePath, jobId, defaulted },
-            "cron: job missing sessionTarget; defaulted in memory (run openclaw doctor --fix to persist canonical shape)",
-          );
-        }
-      }
-    }
   }
   state.store = {
     version: 1,
@@ -129,7 +59,7 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   }
   state.warnedDisabled = true;
   state.deps.log.warn(
-    { enabled: false, action, storePath: state.deps.storePath },
+    { enabled: false, action, storeKey: state.deps.storeKey },
     "cron: scheduler disabled; jobs will not run automatically",
   );
 }
@@ -141,5 +71,5 @@ export async function persist(
   if (!state.store) {
     return;
   }
-  await saveCronStore(state.deps.storePath, state.store, opts);
+  await saveCronStore(state.deps.storeKey, state.store, opts);
 }
