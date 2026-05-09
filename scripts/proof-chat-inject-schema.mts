@@ -1,10 +1,8 @@
 #!/usr/bin/env tsx
 /**
- * Schema-half proof: ChatInjectParamsSchema accepts originAgent.
- *
- * Before patch: validateChatInjectParams({ ..., originAgent }) returns false
- *               with `additionalProperties` error from AJV.
- * After patch:  returns true.
+ * Schema-half proof: ChatInjectParamsSchema accepts non-empty originAgent,
+ * rejects empty/whitespace-only originAgent, and still rejects unknown
+ * extra fields (additionalProperties:false invariant preserved).
  */
 
 import { validateChatInjectParams } from "../src/gateway/protocol/index.js";
@@ -29,11 +27,17 @@ show("legacy params (sessionKey + message + label)", {
   label: "proof",
 });
 
-show("patched params (with originAgent)", {
+show("patched params (with non-empty originAgent)", {
   sessionKey: "synthetic:fixture",
   message: "hello",
   label: "proof",
   originAgent: "hermes",
+});
+
+show("rejects empty-string originAgent (minLength:1)", {
+  sessionKey: "synthetic:fixture",
+  message: "hello",
+  originAgent: "",
 });
 
 show("rejects unknown extra fields (additionalProperties:false preserved)", {

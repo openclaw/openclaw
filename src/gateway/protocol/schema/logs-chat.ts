@@ -66,7 +66,7 @@ export const ChatInjectParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     message: NonEmptyString,
     label: Type.Optional(Type.String({ maxLength: 100 })),
-    originAgent: Type.Optional(Type.String({ maxLength: 100 })),
+    originAgent: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
   },
   { additionalProperties: false },
 );

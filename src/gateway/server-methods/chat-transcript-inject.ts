@@ -80,6 +80,12 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     label: params.label,
     content: params.content,
   });
+  // Normalize: trim whitespace, treat empty as unset. Keeps malformed attribution
+  // values out of the persisted transcript even if the schema is permissive.
+  const normalizedOriginAgent =
+    typeof params.originAgent === "string" && params.originAgent.trim().length > 0
+      ? params.originAgent.trim()
+      : undefined;
   const messageBody: AppendMessageArg & Record<string, unknown> = {
     role: "assistant",
     // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
@@ -93,9 +99,17 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     stopReason: "stop",
     usage,
     // Make these explicit so downstream tooling never treats this as model output.
+    // `provider: "openclaw"` + `model: "gateway-injected"` is the sentinel pair the
+    // replay-history filter (replay-history.ts) keys off to drop transcript-only
+    // injected rows from being replayed back to the next model. Do not change these.
     api: "openai-responses",
-    provider: params.originAgent ?? "openclaw",
+    provider: "openclaw",
     model: "gateway-injected",
+    // Display-only attribution. UI avatar/handle resolvers may key off this to render
+    // the true source of a cross-agent inject (e.g. "hermes", "codex"). It does NOT
+    // participate in replay filtering; the sentinel provider/model pair above continues
+    // to mark this as transcript-only output regardless of originAgent.
+    ...(normalizedOriginAgent ? { originAgent: normalizedOriginAgent } : {}),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.abortMeta
       ? {

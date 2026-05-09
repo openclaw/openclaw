@@ -5910,21 +5910,25 @@ public struct ChatInjectParams: Codable, Sendable {
     public let sessionkey: String
     public let message: String
     public let label: String?
+    public let originagent: String?
 
     public init(
         sessionkey: String,
         message: String,
-        label: String?)
+        label: String?,
+        originagent: String?)
     {
         self.sessionkey = sessionkey
         self.message = message
         self.label = label
+        self.originagent = originagent
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case message
         case label
+        case originagent = "originAgent"
     }
 }
 
