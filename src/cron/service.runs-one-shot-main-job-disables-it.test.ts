@@ -67,7 +67,7 @@ async function createCronHarness(options: CronHarnessOptions = {}) {
   const events = options.withEvents === false ? undefined : createCronEventHarness();
 
   const cron = new CronService({
-    storePath: store.storePath,
+    storeKey: store.storePath,
     cronEnabled: true,
     log: noopLogger,
     ...(options.nowMs ? { nowMs: options.nowMs } : {}),
@@ -232,11 +232,11 @@ async function stopCronAndCleanup(cron: CronService, store: { cleanup: () => Pro
 }
 
 function createStartedCronService(
-  storePath: string,
+  storeKey: string,
   runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"],
 ) {
   return new CronService({
-    storePath,
+    storeKey,
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),

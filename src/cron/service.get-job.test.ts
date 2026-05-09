@@ -12,8 +12,8 @@ installCronTestHooks({ logger });
 
 function createCronService(storePath: string, cronEnabled = true) {
   return new CronService({
-    storePath,
-    cronEnabled,
+    storeKey: storePath,
+    cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),

@@ -382,7 +382,6 @@ describe("diagnostics command", () => {
       buildDiagnosticsParams("/diagnostics flaky tool call", {
         sessionEntry: {
           sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
           updatedAt: 1,
           agentHarnessId: "codex",
         },
@@ -396,15 +395,20 @@ describe("diagnostics command", () => {
     expect(calls[0]?.args).toBe("diagnostics flaky tool call");
     expect(calls[0]?.diagnosticsPreviewOnly).toBe(true);
     expect(calls[0]?.senderIsOwner).toBe(true);
-    expect(calls[0]?.sessionFile).toBe("/tmp/session.jsonl");
-    const diagnosticsSessions = requireDiagnosticsSessions(calls[0]);
-    expect(diagnosticsSessions).toHaveLength(1);
-    expect(diagnosticsSessions[0]?.agentHarnessId).toBe("codex");
-    expect(diagnosticsSessions[0]?.sessionId).toBe("session-1");
-    expect(diagnosticsSessions[0]?.sessionFile).toBe("/tmp/session.jsonl");
-    expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
-    expect(diagnosticsSessions[0]?.accountId).toBe("account-1");
-    const { defaults } = requireExecCall(execCalls);
+    expect(calls[0]?.transcriptLocator).toBe("sqlite-transcript://main/session-1");
+    expect(calls[0]?.diagnosticsSessions).toEqual([
+      expect.objectContaining({
+        agentHarnessId: "codex",
+        sessionId: "session-1",
+        channel: "whatsapp",
+        accountId: "account-1",
+      }),
+    ]);
+    const defaults = execCalls[0]?.defaults as {
+      approvalWarningText?: string;
+      approvalFollowupText?: string;
+      approvalFollowup?: () => Promise<string | undefined>;
+    };
     expect(defaults.approvalWarningText).toContain("OpenAI Codex harness:");
     expect(defaults.approvalWarningText).toContain(
       "Approving diagnostics will also send this thread's feedback bundle to OpenAI servers.",
@@ -420,7 +424,7 @@ describe("diagnostics command", () => {
     expect(calls[1]?.diagnosticsUploadApproved).toBe(true);
   });
 
-  it("passes sidecar-bound session files to Codex diagnostics even when harness metadata is stale", async () => {
+  it("passes sidecar-bound transcript locators to Codex diagnostics even when harness metadata is stale", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
@@ -428,18 +432,15 @@ describe("diagnostics command", () => {
         sessionKey: "agent:main:telegram:direct:user-1",
         sessionEntry: {
           sessionId: "telegram-session",
-          sessionFile: "/tmp/telegram.jsonl",
           updatedAt: 1,
         },
         sessionStore: {
           "agent:main:telegram:direct:user-1": {
             sessionId: "telegram-session",
-            sessionFile: "/tmp/telegram.jsonl",
             updatedAt: 1,
           },
           "agent:main:discord:channel:123": {
             sessionId: "discord-session",
-            sessionFile: "/tmp/discord.jsonl",
             updatedAt: 2,
             channel: "discord",
           },
@@ -451,19 +452,21 @@ describe("diagnostics command", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
     expect(calls).toHaveLength(1);
-    const diagnosticsSessions = requireDiagnosticsSessions(calls[0]);
-    expect(diagnosticsSessions).toHaveLength(2);
-    expect(diagnosticsSessions[0]?.sessionKey).toBe("agent:main:telegram:direct:user-1");
-    expect(diagnosticsSessions[0]?.sessionId).toBe("telegram-session");
-    expect(diagnosticsSessions[0]?.sessionFile).toBe("/tmp/telegram.jsonl");
-    expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
-    expect(diagnosticsSessions[1]?.sessionKey).toBe("agent:main:discord:channel:123");
-    expect(diagnosticsSessions[1]?.sessionId).toBe("discord-session");
-    expect(diagnosticsSessions[1]?.sessionFile).toBe("/tmp/discord.jsonl");
-    expect(diagnosticsSessions[1]?.channel).toBe("discord");
-    expect(requireExecCall(execCalls).defaults.approvalWarningText).toContain(
-      "OpenAI Codex harness:",
-    );
+    expect(calls[0]?.diagnosticsSessions).toEqual([
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:user-1",
+        sessionId: "telegram-session",
+        channel: "whatsapp",
+      }),
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:123",
+        sessionId: "discord-session",
+        channel: "discord",
+      }),
+    ]);
+    expect(
+      (execCalls[0]?.defaults as { approvalWarningText?: string }).approvalWarningText,
+    ).toContain("OpenAI Codex harness:");
   });
 
   it("omits the Codex section for ordinary sessions without Codex targets", async () => {
@@ -485,7 +488,6 @@ describe("diagnostics command", () => {
       buildDiagnosticsParams("/diagnostics", {
         sessionEntry: {
           sessionId: "ordinary-session",
-          sessionFile: "/tmp/ordinary.jsonl",
           updatedAt: 1,
         },
       }),
@@ -513,7 +515,6 @@ describe("diagnostics command", () => {
         isGroup: true,
         sessionEntry: {
           sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
           updatedAt: 1,
           agentHarnessId: "codex",
         },
@@ -549,7 +550,6 @@ describe("diagnostics command", () => {
         isGroup: true,
         sessionEntry: {
           sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
           updatedAt: 1,
           agentHarnessId: "codex",
         },

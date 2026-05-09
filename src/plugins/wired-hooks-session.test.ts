@@ -45,7 +45,6 @@ describe("session hook runner methods", () => {
         sessionKey: "agent:main:abc",
         messageCount: 42,
         reason: "daily" as const,
-        sessionFile: "/tmp/abc-123.jsonl",
         nextSessionId: "def-456",
       },
     },

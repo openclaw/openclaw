@@ -45,19 +45,17 @@ function buildContextEngine(params: {
   };
 }
 
-async function writeTranscriptLocator(params: { transcriptLocator: string; sessionId: string }) {
-  await fs.mkdir(path.dirname(params.transcriptLocator), { recursive: true });
+function seedSqliteTranscript(params: { sessionId: string; cwd: string }) {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: params.sessionId,
-    transcriptPath: params.transcriptLocator,
     events: [
       {
         type: "session",
         version: CURRENT_SESSION_VERSION,
         id: params.sessionId,
         timestamp: new Date(0).toISOString(),
-        cwd: path.dirname(params.transcriptLocator),
+        cwd: params.cwd,
       },
       {
         type: "message",
@@ -99,12 +97,11 @@ describe("runCliTurnCompactionLifecycle", () => {
   it("compacts over-budget CLI transcripts and clears external CLI resume state", async () => {
     const sessionKey = "agent:main:cli";
     const sessionId = "session-cli";
-    const transcriptLocator = path.join(tmpDir, "session.jsonl");
     const sqliteTranscriptLocator = createSqliteSessionTranscriptLocator({
       agentId: "main",
       sessionId,
     });
-    await writeTranscriptLocator({ transcriptLocator, sessionId });
+    seedSqliteTranscript({ sessionId, cwd: tmpDir });
 
     const sessionEntry: SessionEntry = {
       sessionId,

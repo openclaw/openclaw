@@ -18,7 +18,7 @@ import {
 } from "../pi-settings.js";
 import type { SkillSnapshot } from "../skills.js";
 import {
-  readTranscriptState as readTranscriptStateImpl,
+  readTranscriptStateForSession as readTranscriptStateForSessionImpl,
   type TranscriptState,
 } from "../transcript/transcript-state.js";
 import { recordCliCompactionInSessionEntry as recordCliCompactionInSessionEntryImpl } from "./session-entry-updates.js";
@@ -35,7 +35,10 @@ type SettingsManagerLike = {
   setCompactionEnabled?: (enabled: boolean) => void;
 };
 type CliCompactionDeps = {
-  readTranscriptState: (transcriptLocator: string) => Promise<TranscriptState>;
+  readTranscriptStateForSession: (scope: {
+    agentId: string;
+    sessionId: string;
+  }) => Promise<TranscriptState>;
   ensureContextEnginesInitialized: () => void;
   resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
   createPreparedEmbeddedPiSettingsManager: (params: {
@@ -58,7 +61,7 @@ type CliCompactionDeps = {
 const log = createSubsystemLogger("agents/cli-compaction");
 
 const cliCompactionDeps: CliCompactionDeps = {
-  readTranscriptState: readTranscriptStateImpl,
+  readTranscriptStateForSession: readTranscriptStateForSessionImpl,
   ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
   resolveContextEngine: resolveContextEngineImpl,
   createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerImpl,
@@ -75,7 +78,7 @@ export function setCliCompactionTestDeps(overrides: Partial<typeof cliCompaction
 
 export function resetCliCompactionTestDeps(): void {
   Object.assign(cliCompactionDeps, {
-    readTranscriptState: readTranscriptStateImpl,
+    readTranscriptStateForSession: readTranscriptStateForSessionImpl,
     ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
     resolveContextEngine: resolveContextEngineImpl,
     createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerImpl,
@@ -210,7 +213,10 @@ export async function runCliTurnCompactionLifecycle(params: {
 
   cliCompactionDeps.ensureContextEnginesInitialized();
   const contextEngine = await cliCompactionDeps.resolveContextEngine(params.cfg);
-  const transcriptState = await cliCompactionDeps.readTranscriptState(transcriptLocator);
+  const transcriptState = await cliCompactionDeps.readTranscriptStateForSession({
+    agentId: params.sessionAgentId,
+    sessionId: params.sessionEntry.sessionId,
+  });
   const settingsManager = await cliCompactionDeps.createPreparedEmbeddedPiSettingsManager({
     cwd: params.workspaceDir,
     agentDir: params.agentDir,

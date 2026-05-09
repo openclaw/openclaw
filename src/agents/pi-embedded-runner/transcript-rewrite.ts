@@ -1,3 +1,4 @@
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteRequest,
@@ -9,8 +10,8 @@ import type { AgentMessage } from "../agent-core-contract.js";
 import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
 import type { SessionManager } from "../transcript/session-manager-contract.js";
 import {
-  persistTranscriptStateMutation,
-  readTranscriptState,
+  persistTranscriptStateMutationForSession,
+  readTranscriptStateForSession,
   type TranscriptState,
 } from "../transcript/transcript-state.js";
 import { log } from "./logger.js";
@@ -350,29 +351,35 @@ export function rewriteTranscriptEntriesInState(params: {
  * transcript update when the active branch changed.
  */
 export async function rewriteTranscriptEntriesInSqliteTranscript(params: {
-  transcriptLocator: string;
-  agentId?: string;
-  sessionId?: string;
+  agentId: string;
+  sessionId: string;
   sessionKey?: string;
   request: TranscriptRewriteRequest;
   config?: unknown;
 }): Promise<TranscriptRewriteResult> {
   try {
-    const state = await readTranscriptState(params.transcriptLocator);
+    const state = await readTranscriptStateForSession({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    });
     const result = rewriteTranscriptEntriesInState({
       state,
       replacements: params.request.replacements,
     });
     if (result.changed) {
-      await persistTranscriptStateMutation({
-        transcriptLocator: params.transcriptLocator,
+      await persistTranscriptStateMutationForSession({
+        agentId: params.agentId,
+        sessionId: params.sessionId,
         state,
         appendedEntries: result.appendedEntries,
       });
       emitSessionTranscriptUpdate({
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        transcriptLocator: params.transcriptLocator,
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        transcriptLocator: createSqliteSessionTranscriptLocator({
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+        }),
         sessionKey: params.sessionKey,
       });
       log.info(

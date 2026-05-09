@@ -4,6 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
@@ -94,7 +95,6 @@ import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import type { AgentWorkerPermissionMode } from "../runtime-worker-permissions.js";
 import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { openTranscriptSessionManagerForSession } from "../transcript/session-manager.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -479,17 +479,8 @@ export async function runEmbeddedPiAgent(
     config: params.config,
     agentId: params.agentId,
   });
-  const initialSessionManager = openTranscriptSessionManagerForSession({
-    agentId: sessionAgentId,
-    sessionId: params.sessionId,
-    cwd: params.workspaceDir,
-  });
-  const initialTranscriptLocator = initialSessionManager.getTranscriptLocator();
-  if (!initialTranscriptLocator) {
-    throw new Error(
-      `SQLite transcript scope did not produce a runtime transcript handle: agentId=${sessionAgentId} sessionId=${params.sessionId}`,
-    );
-  }
+  const resolveTranscriptBoundaryHandle = (sessionId: string) =>
+    createSqliteSessionTranscriptLocator({ agentId: sessionAgentId, sessionId });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
@@ -1106,7 +1097,7 @@ export async function runEmbeddedPiAgent(
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       let activeSessionId = params.sessionId;
-      let activeTranscriptLocator = initialTranscriptLocator;
+      let activeTranscriptLocator = resolveTranscriptBoundaryHandle(activeSessionId);
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
       // OpenClaw owns transcript persistence; this marker only lets the outer retry avoid
       // replaying the same inbound channel message after overflow compaction.
@@ -1213,12 +1204,9 @@ export async function runEmbeddedPiAgent(
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
         ) => {
           const nextSessionId = compactResult.result?.sessionId;
-          const nextTranscriptLocator = compactResult.result?.transcriptLocator;
           if (nextSessionId && nextSessionId !== activeSessionId) {
             activeSessionId = nextSessionId;
-          }
-          if (nextTranscriptLocator && nextTranscriptLocator !== activeTranscriptLocator) {
-            activeTranscriptLocator = nextTranscriptLocator;
+            activeTranscriptLocator = resolveTranscriptBoundaryHandle(activeSessionId);
           }
         };
         const onCompactionHookMessages = async (payload: {
@@ -1250,10 +1238,7 @@ export async function runEmbeddedPiAgent(
             return;
           }
           try {
-            await hookRunner.runBeforeCompaction(
-              { messageCount: -1, transcriptLocator: activeTranscriptLocator },
-              resolveActiveHookContext(),
-            );
+            await hookRunner.runBeforeCompaction({ messageCount: -1 }, resolveActiveHookContext());
           } catch (hookErr) {
             log.warn(`before_compaction hook failed during ${reason}: ${String(hookErr)}`);
           }
@@ -1276,8 +1261,6 @@ export async function runEmbeddedPiAgent(
                 messageCount: -1,
                 compactedCount: -1,
                 tokenCount: compactResult.result?.tokensAfter,
-                transcriptLocator:
-                  compactResult.result?.transcriptLocator ?? activeTranscriptLocator,
               },
               resolveActiveHookContext(),
             );
@@ -1541,16 +1524,13 @@ export async function runEmbeddedPiAgent(
             idleTimedOut,
             timedOutDuringCompaction,
             sessionIdUsed,
-            transcriptLocatorUsed,
             lastAssistant: sessionLastAssistant,
             currentAttemptAssistant,
           } = attempt;
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
-          }
-          if (transcriptLocatorUsed && transcriptLocatorUsed !== activeTranscriptLocator) {
-            activeTranscriptLocator = transcriptLocatorUsed;
+            activeTranscriptLocator = resolveTranscriptBoundaryHandle(activeSessionId);
           }
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
@@ -1996,7 +1976,6 @@ export async function runEmbeddedPiAgent(
                 }
                 if (preflightRecovery?.route === "compact_then_truncate") {
                   const truncResult = await truncateOversizedToolResultsInSession({
-                    transcriptLocator: activeTranscriptLocator,
                     contextWindowTokens: ctxInfo.tokens,
                     maxCharsOverride: resolveLiveToolResultMaxChars({
                       contextWindowTokens: ctxInfo.tokens,
@@ -2063,7 +2042,6 @@ export async function runEmbeddedPiAgent(
                     `(contextWindow=${contextWindowTokens} tokens)`,
                 );
                 const truncResult = await truncateOversizedToolResultsInSession({
-                  transcriptLocator: activeTranscriptLocator,
                   contextWindowTokens,
                   maxCharsOverride: toolResultMaxChars,
                   agentId: sessionAgentId,
@@ -2605,7 +2583,6 @@ export async function runEmbeddedPiAgent(
           });
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
-            transcriptLocator: transcriptLocatorUsed,
             provider: reportedModelRef.provider,
             model: reportedModelRef.model,
             contextTokens: ctxInfo.tokens,

@@ -62,7 +62,6 @@ export function buildEmbeddedRunBaseParams(params: {
     modelOverrideSource: params.run.modelOverrideSource,
   });
   return {
-    sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
     agentDir: params.run.agentDir,
     config,

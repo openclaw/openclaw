@@ -144,7 +144,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       rewrittenEntries: 2,
     });
     expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
-      transcriptPath: sqliteTranscript("session-1"),
+      agentId: "main",
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       config: undefined,
@@ -404,7 +404,7 @@ describe("runContextEngineMaintenance", () => {
 
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
     expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
-      transcriptPath: sqliteTranscript("session-background-file-rewrite"),
+      agentId: "main",
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
       config: undefined,
@@ -527,7 +527,7 @@ describe("runContextEngineMaintenance", () => {
           currentTokenCount: 1536,
         });
         expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
-          transcriptPath: sqliteTranscript("session-1"),
+          agentId: "main",
           sessionId: "session-1",
           sessionKey,
           config: undefined,

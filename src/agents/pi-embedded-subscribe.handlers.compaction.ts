@@ -65,7 +65,6 @@ export function handleCompactionStart(ctx: EmbeddedPiSubscribeContext, evt: Comp
         {
           messageCount: ctx.params.session.messages?.length ?? 0,
           messages: ctx.params.session.messages,
-          sessionFile: ctx.params.session.sessionFile,
         },
         {
           sessionKey: ctx.params.sessionKey,
@@ -154,7 +153,6 @@ export function handleCompactionEnd(ctx: EmbeddedPiSubscribeContext, evt: Compac
           {
             messageCount: ctx.params.session.messages?.length ?? 0,
             compactedCount: ctx.getCompactionCount(),
-            sessionFile: ctx.params.session.sessionFile,
           },
           { sessionKey: ctx.params.sessionKey },
         )

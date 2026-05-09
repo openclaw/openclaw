@@ -13,12 +13,10 @@ import {
 } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
-  createSqliteSessionTranscriptLocator,
   resolveFreshSessionTotalTokens,
   type SessionEntry,
 } from "../../config/sessions.js";
 import {
-  listSqliteSessionTranscriptLocators,
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
 } from "../../config/sessions/transcript-store.sqlite.js";
@@ -230,41 +228,6 @@ function isTranscriptPressureEvent(event: unknown): boolean {
   return Boolean(message && typeof message === "object" && !Array.isArray(message));
 }
 
-function resolveSessionLogPath(
-  sessionId?: string,
-  _sessionEntry?: SessionEntry,
-  sessionKey?: string,
-): string | undefined {
-  if (!sessionId) {
-    return undefined;
-  }
-
-  try {
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    return createSqliteSessionTranscriptLocator({ agentId, sessionId });
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveSqliteSessionTranscriptPath(params: {
-  sessionId?: string;
-  sessionKey?: string;
-}): string | undefined {
-  const sessionId = normalizeOptionalString(params.sessionId);
-  if (!sessionId) {
-    return undefined;
-  }
-  const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
-  const candidates = listSqliteSessionTranscriptLocators().filter(
-    (entry) => (!agentId || entry.agentId === agentId) && entry.sessionId === sessionId,
-  );
-  if (candidates.length === 0) {
-    return undefined;
-  }
-  return candidates[0]?.locator;
-}
-
 function deriveTranscriptUsageSnapshot(
   usage: ReturnType<typeof normalizeUsage> | undefined,
 ): SessionTranscriptUsageSnapshot | undefined {
@@ -378,13 +341,11 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
-  transcriptLocator?: string;
 }): Promise<TranscriptTokenEstimate | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
   }
-  const fallbackTranscriptLocator = normalizeOptionalString(params.transcriptLocator);
   try {
     const snapshot = await readSessionLogSnapshot({
       sessionId,
@@ -411,12 +372,17 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         transcriptBytesTokens,
       };
     }
-    const messages = (await readSessionMessagesAsync(sessionId, fallbackTranscriptLocator, {
-      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
-      mode: "recent",
-      maxMessages: 200,
-      maxBytes: 1024 * 1024,
-    })) as AgentMessage[];
+    const messages = (await readSessionMessagesAsync(
+      {
+        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        sessionId,
+      },
+      {
+        mode: "recent",
+        maxMessages: 200,
+        maxBytes: 1024 * 1024,
+      },
+    )) as AgentMessage[];
     if (messages.length === 0) {
       return undefined;
     }
@@ -510,7 +476,6 @@ export async function runPreflightCompactionIfNeeded(params: {
           sessionId: entry.sessionId,
           sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-          transcriptLocator: params.followupRun.run.transcriptLocator,
         });
   const stalePersistedPromptTokens = hasPersistedTotalTokens
     ? Math.floor(persistedTotalTokens)
@@ -576,18 +541,12 @@ export async function runPreflightCompactionIfNeeded(params: {
   );
 
   params.replyOperation.setPhase("preflight_compacting");
-  const transcriptLocator =
-    resolveSqliteSessionTranscriptPath({
-      sessionId: entry.sessionId,
-      sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-    }) ??
-    resolveSessionLogPath(
-      entry.sessionId,
-      entry,
-      params.sessionKey ?? params.followupRun.run.sessionKey,
-    );
+  const sessionAgentId =
+    params.followupRun.run.agentId ??
+    resolveAgentIdFromSessionKey(params.sessionKey ?? params.followupRun.run.sessionKey);
   const result = await memoryDeps.compactEmbeddedPiSession({
     sessionId: entry.sessionId,
+    agentId: sessionAgentId,
     sessionKey: params.sessionKey,
     sandboxSessionKey: params.runtimePolicySessionKey,
     allowGatewaySubagentBinding: true,
@@ -599,7 +558,6 @@ export async function runPreflightCompactionIfNeeded(params: {
     senderName: params.followupRun.run.senderName,
     senderUsername: params.followupRun.run.senderUsername,
     senderE164: params.followupRun.run.senderE164,
-    transcriptLocator: transcriptLocator ?? params.followupRun.run.transcriptLocator,
     workspaceDir: params.followupRun.run.workspaceDir,
     agentDir: params.followupRun.run.agentDir,
     config: params.cfg,
@@ -631,7 +589,6 @@ export async function runPreflightCompactionIfNeeded(params: {
     sessionKey: params.sessionKey,
     tokensAfter: result.result?.tokensAfter,
     newSessionId: result.result?.sessionId,
-    newTranscriptLocator: result.result?.transcriptLocator,
   });
   await appendPostCompactionRefreshPrompt({
     cfg: params.cfg,
@@ -642,16 +599,12 @@ export async function runPreflightCompactionIfNeeded(params: {
     const previousSessionId = params.followupRun.run.sessionId;
     params.followupRun.run.sessionId = entry.sessionId;
     params.replyOperation.updateSessionId(entry.sessionId);
-    if (result.result?.transcriptLocator) {
-      params.followupRun.run.transcriptLocator = result.result.transcriptLocator;
-    }
     const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
     if (queueKey) {
       memoryDeps.refreshQueuedFollowupSession({
         key: queueKey,
         previousSessionId,
         nextSessionId: entry.sessionId,
-        nextTranscriptLocator: result.result?.transcriptLocator,
       });
     }
   }
@@ -892,7 +845,6 @@ export async function runMemoryFlushIfNeeded(params: {
     .filter(Boolean)
     .join("\n\n");
   let postCompactionSessionId: string | undefined;
-  let postCompactionTranscriptLocator: string | undefined;
   try {
     await memoryDeps.runWithModelFallback({
       ...resolveMemoryFlushModelFallbackOptions(
@@ -945,15 +897,6 @@ export async function runMemoryFlushIfNeeded(params: {
         }
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;
-          postCompactionTranscriptLocator =
-            result.meta.agentMeta.transcriptLocator ??
-            createSqliteSessionTranscriptLocator({
-              agentId: params.followupRun.run.agentId,
-              sessionId: result.meta.agentMeta.sessionId,
-            });
-        }
-        if (result.meta?.agentMeta?.transcriptLocator) {
-          postCompactionTranscriptLocator = result.meta.agentMeta.transcriptLocator;
         }
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
@@ -973,23 +916,18 @@ export async function runMemoryFlushIfNeeded(params: {
         sessionStore: activeSessionStore,
         sessionKey: params.sessionKey,
         newSessionId: postCompactionSessionId,
-        newTranscriptLocator: postCompactionTranscriptLocator,
       });
       const updatedEntry = params.sessionKey ? activeSessionStore?.[params.sessionKey] : undefined;
       if (updatedEntry) {
         activeSessionEntry = updatedEntry;
         params.followupRun.run.sessionId = updatedEntry.sessionId;
         params.replyOperation.updateSessionId(updatedEntry.sessionId);
-        if (postCompactionTranscriptLocator) {
-          params.followupRun.run.transcriptLocator = postCompactionTranscriptLocator;
-        }
         const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
         if (queueKey) {
           memoryDeps.refreshQueuedFollowupSession({
             key: queueKey,
             previousSessionId,
             nextSessionId: updatedEntry.sessionId,
-            nextTranscriptLocator: postCompactionTranscriptLocator,
           });
         }
       }
@@ -1009,9 +947,6 @@ export async function runMemoryFlushIfNeeded(params: {
           activeSessionEntry = updatedEntry;
           params.followupRun.run.sessionId = updatedEntry.sessionId;
           params.replyOperation.updateSessionId(updatedEntry.sessionId);
-          if (postCompactionTranscriptLocator) {
-            params.followupRun.run.transcriptLocator = postCompactionTranscriptLocator;
-          }
         }
       } catch (err) {
         logVerbose(`failed to persist memory flush metadata: ${String(err)}`);

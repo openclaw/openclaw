@@ -1,9 +1,7 @@
 import crypto from "node:crypto";
-import {
-  createSqliteSessionTranscriptLocator,
-  readLatestAssistantTextFromSessionTranscript,
-} from "../../config/sessions.js";
+import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -256,16 +254,10 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
         reply: { text: "🎤 No active chat session is available for `/tts latest`." },
       };
     }
-    const latest = await readLatestAssistantTextFromSessionTranscript(
-      createSqliteSessionTranscriptLocator({
-        agentId: params.agentId,
-        sessionId: params.sessionEntry.sessionId,
-      }),
-      {
-        agentId: params.agentId,
-        sessionId: params.sessionEntry.sessionId,
-      },
-    );
+    const latest = await readLatestAssistantTextFromSessionTranscript({
+      agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+      sessionId: params.sessionEntry.sessionId,
+    });
     const latestText = latest?.text.trim();
     if (!latestText || isSilentReplyPayloadText(latestText)) {
       return {

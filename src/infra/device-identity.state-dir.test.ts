@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { importLegacyDeviceIdentityFileToSqlite } from "../commands/doctor/legacy/device-identity.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
+  DeviceIdentityMigrationRequiredError,
   loadDeviceIdentityIfPresent,
   loadDeviceIdentityIfPresentForEnv,
   loadOrCreateDeviceIdentity,
@@ -57,16 +58,40 @@ describe("device identity state dir defaults", () => {
     });
   });
 
-  it("regenerates the identity when the stored file is invalid", async () => {
+  it("fails closed when a legacy identity file exists before doctor import", async () => {
+    await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
+      const original = loadOrCreateDeviceIdentity(path.join(stateDir, "seed-device.json"));
+      const identityPath = path.join(stateDir, "identity", "device.json");
+      const legacy = {
+        version: 1,
+        deviceId: original.deviceId,
+        publicKeyPem: original.publicKeyPem,
+        privateKeyPem: original.privateKeyPem,
+        createdAtMs: Date.now(),
+      };
+
+      await fs.mkdir(path.dirname(identityPath), { recursive: true });
+      await fs.writeFile(identityPath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+
+      await expect(() => loadOrCreateDeviceIdentity()).toThrow(
+        DeviceIdentityMigrationRequiredError,
+      );
+      await expect(() => loadOrCreateDeviceIdentity()).toThrow(/openclaw doctor --fix/u);
+
+      expect(importLegacyDeviceIdentityFileToSqlite()).toEqual({ imported: true });
+      expect(loadOrCreateDeviceIdentity().deviceId).toBe(original.deviceId);
+    });
+  });
+
+  it("fails closed when the legacy identity file is invalid", async () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const identityPath = path.join(stateDir, "identity", "device.json");
       await fs.mkdir(path.dirname(identityPath), { recursive: true });
       await fs.writeFile(identityPath, '{"version":1,"deviceId":"broken"}\n', "utf8");
 
-      const regenerated = loadOrCreateDeviceIdentity();
-      const stored = loadDeviceIdentityIfPresent(identityPath);
-
-      expect(stored).toEqual(regenerated);
+      await expect(() => loadOrCreateDeviceIdentity()).toThrow(
+        DeviceIdentityMigrationRequiredError,
+      );
     });
   });
 });

@@ -14,7 +14,6 @@ function makeRun(): FollowupRun["run"] {
     agentDir: "/tmp/agent",
     sessionId: "session-1",
     sessionKey: QUEUE_KEY,
-    sessionFile: "/tmp/session-1.jsonl",
     workspaceDir: "/tmp/workspace",
     config: {} as FollowupRun["run"]["config"],
     provider: "anthropic",

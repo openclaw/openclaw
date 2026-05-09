@@ -81,7 +81,6 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
         provider: string;
         reasoningLevel?: unknown;
         senderIsOwner?: boolean;
-        sessionFile: string;
         sessionId: string;
         sessionKey: string;
         skillsSnapshot?: unknown;
@@ -106,7 +105,6 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       provider: params.followupRun.run.provider,
       reasoningLevel: params.followupRun.run.reasoningLevel,
       senderIsOwner: params.followupRun.run.senderIsOwner,
-      sessionFile: params.followupRun.run.sessionFile,
       sessionId: params.followupRun.run.sessionId,
       sessionKey: params.followupRun.run.sessionKey,
       skillsSnapshot: params.followupRun.run.skillsSnapshot,

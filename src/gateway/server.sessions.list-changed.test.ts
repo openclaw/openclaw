@@ -93,13 +93,11 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-parent",
-    transcriptPath: sqliteTranscript("sess-parent"),
     events: [{ type: "session", version: 1, id: "sess-parent" }],
   });
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-child",
-    transcriptPath: sqliteTranscript("sess-child"),
     events: [
       { type: "session", version: 1, id: "sess-child" },
       {
@@ -270,7 +268,6 @@ test("sessions.list yields before responding during bulk transcript hydration", 
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId,
-      transcriptPath: sqliteTranscript(sessionId),
       events: [
         { type: "message", message: { role: "user", content: `title ${i}` } },
         { type: "message", message: { role: "assistant", content: `last ${i}` } },
@@ -372,7 +369,6 @@ test("sessions.changed mutation events include live usage metadata", async () =>
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath: sqliteTranscript("sess-main"),
     events: [
       {
         type: "message",

@@ -1,4 +1,3 @@
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   exportSqliteSessionTranscriptJsonl,
   hasSqliteSessionTranscriptEvents,
@@ -38,7 +37,6 @@ function parseTranscriptMessages(content: string): unknown[] {
 
 type BeforeResetTranscriptScope = {
   agentId?: string;
-  transcriptLocator?: string;
   sessionId?: string;
 };
 
@@ -60,13 +58,12 @@ function hasScopedSqliteTranscriptEvents(
 
 function loadScopedBeforeResetTranscript(
   params: BeforeResetTranscriptScope,
-): { transcriptLocator?: string; messages: unknown[] } | undefined {
+): { messages: unknown[] } | undefined {
   if (!hasScopedSqliteTranscriptEvents(params)) {
     return undefined;
   }
   try {
     return {
-      transcriptLocator: params.transcriptLocator,
       messages: parseTranscriptMessages(
         exportSqliteSessionTranscriptJsonl({
           agentId: params.agentId,
@@ -81,9 +78,8 @@ function loadScopedBeforeResetTranscript(
 
 async function loadBeforeResetTranscript(params: {
   agentId?: string;
-  transcriptLocator?: string;
   sessionId?: string;
-}): Promise<{ transcriptLocator?: string; messages: unknown[] }> {
+}): Promise<{ messages: unknown[] }> {
   const scopedTranscript = loadScopedBeforeResetTranscript(params);
   if (scopedTranscript) {
     return scopedTranscript;
@@ -92,7 +88,7 @@ async function loadBeforeResetTranscript(params: {
   logVerbose(
     "before_reset: no scoped SQLite transcript available, firing hook with empty messages",
   );
-  return { transcriptLocator: params.transcriptLocator, messages: [] };
+  return { messages: [] };
 }
 
 export async function emitResetCommandHooks(params: {
@@ -147,20 +143,14 @@ export async function emitResetCommandHooks(params: {
     const prevEntry = params.previousSessionEntry;
     const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
     void (async () => {
-      const { transcriptLocator, messages } = await loadBeforeResetTranscript({
+      const { messages } = await loadBeforeResetTranscript({
         agentId,
-        transcriptLocator: prevEntry?.sessionId
-          ? createSqliteSessionTranscriptLocator({
-              agentId,
-              sessionId: prevEntry.sessionId,
-            })
-          : undefined,
         sessionId: prevEntry?.sessionId,
       });
 
       try {
         await hookRunner.runBeforeReset(
-          { transcriptLocator, messages, reason: params.action },
+          { messages, reason: params.action },
           {
             agentId,
             sessionKey: params.sessionKey,

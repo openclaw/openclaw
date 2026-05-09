@@ -65,7 +65,7 @@ export async function resolveParentForkDecision(params: {
 export async function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
   agentId: string;
-}): Promise<{ sessionId: string; sessionFile: string } | null> {
+}): Promise<{ sessionId: string } | null> {
   const runtime = await loadSessionForkRuntime();
   return runtime.forkSessionFromParentRuntime(params);
 }

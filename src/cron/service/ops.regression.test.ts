@@ -61,7 +61,6 @@ describe("cron service ops regressions", () => {
     const store = opsRegressionFixtures.makeStorePath();
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -116,7 +115,6 @@ describe("cron service ops regressions", () => {
 
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -177,7 +175,6 @@ describe("cron service ops regressions", () => {
 
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
@@ -240,7 +237,6 @@ describe("cron service ops regressions", () => {
 
     const state = createCronServiceState({
       cronEnabled: false,
-      storePath: store.storePath,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -275,7 +271,6 @@ describe("cron service ops regressions", () => {
       const abortAwareRunner = createAbortAwareIsolatedRunner();
       const state = createCronServiceState({
         cronEnabled: false,
-        storePath: store.storePath,
         log: noopLogger,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
@@ -326,7 +321,6 @@ describe("cron service ops regressions", () => {
     const enqueueSystemEvent = vi.fn();
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent,
@@ -388,7 +382,6 @@ describe("cron service ops regressions", () => {
     });
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
       cronConfig: { maxConcurrentRuns: 1 },
       log: noopLogger,
       nowMs: () => now,
@@ -437,7 +430,6 @@ describe("cron service ops regressions", () => {
     const job = createDueIsolatedJob({ id: "queued-failure", nowMs: dueAt, nextRunAtMs: dueAt });
     await writeCronJobs(store.storePath, [job]);
     const state = createRunningCronServiceState({
-      storePath: store.storePath,
       log: noopLogger,
       nowMs: () => dueAt,
       jobs: [job],

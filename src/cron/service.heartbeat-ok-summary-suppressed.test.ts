@@ -29,13 +29,13 @@ function createDueIsolatedAnnounceJob(params: {
 }
 
 function createCronServiceForSummary(params: {
-  storePath: string;
+  storeKey: string;
   summary: string;
   enqueueSystemEvent: CronServiceParams["enqueueSystemEvent"];
   requestHeartbeat: CronServiceParams["requestHeartbeat"];
 }) {
   return new CronService({
-    storePath: params.storePath,
+    storeKey: params.storeKey,
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: params.enqueueSystemEvent,
@@ -73,7 +73,7 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const cron = createCronServiceForSummary({
-      storePath,
+      storeKey: storePath,
       summary: "HEARTBEAT_OK",
       enqueueSystemEvent,
       requestHeartbeat,
@@ -101,7 +101,7 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const cron = createCronServiceForSummary({
-      storePath,
+      storeKey: storePath,
       summary: "Weather update: sunny, 72°F",
       enqueueSystemEvent,
       requestHeartbeat,

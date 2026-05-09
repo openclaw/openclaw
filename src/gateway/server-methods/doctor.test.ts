@@ -22,7 +22,9 @@ const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
 const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
-const readDreamingWorkspaceMap = vi.hoisted(() => vi.fn(async () => ({})));
+const readDreamingWorkspaceMap = vi.hoisted(() =>
+  vi.fn(async (_namespace: string, _workspaceDir: string) => ({})),
+);
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig,

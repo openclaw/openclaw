@@ -198,7 +198,6 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-delete",
-    transcriptPath,
     events: [
       {
         type: "message",
@@ -211,9 +210,7 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
-      "discord:group:delete": sessionStoreEntry("sess-delete", {
-        sessionFile: transcriptPath,
-      }),
+      "discord:group:delete": sessionStoreEntry("sess-delete", {}),
     },
   });
 
@@ -233,9 +230,7 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
     sessionKey: "agent:main:discord:group:delete",
     reason: "deleted",
   });
-  expect((event as { sessionFile?: string } | undefined)?.sessionFile).toBe(
-    sqliteTranscript("sess-delete"),
-  );
+  expect(event).not.toHaveProperty("transcriptLocator");
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
   expect((context as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
   expect((context as { sessionKey?: string } | undefined)?.sessionKey).toBe(

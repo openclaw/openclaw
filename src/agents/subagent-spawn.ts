@@ -320,7 +320,7 @@ type PreparedSpawnContext =
       mode: "fork";
       parentEntry: SessionEntry;
       childEntry?: SessionEntry;
-      forked: { sessionId: string; transcriptLocator: string };
+      forked: { sessionId: string };
       forkFallbackNote?: never;
     }
   | { status: "error"; error: string };
@@ -367,7 +367,7 @@ async function prepareSubagentSessionContext(params: {
       parentEntry,
       agentId: params.requesterAgentId,
     });
-    let forked: { sessionId: string; transcriptLocator: string } | null = null;
+    let forked: { sessionId: string } | null = null;
     if (forkDecision.status === "skip") {
       forkFallbackNote = forkDecision.message;
     } else {
@@ -463,15 +463,12 @@ async function prepareContextEngineSubagentSpawn(params: {
           })
         : undefined,
       childSessionId,
-      childTranscriptLocator:
-        params.context.mode === "fork"
-          ? params.context.forked.transcriptLocator
-          : childSessionId
-            ? createSqliteSessionTranscriptLocator({
-                agentId: childAgentId,
-                sessionId: childSessionId,
-              })
-            : undefined,
+      childTranscriptLocator: childSessionId
+        ? createSqliteSessionTranscriptLocator({
+            agentId: childAgentId,
+            sessionId: childSessionId,
+          })
+        : undefined,
       ttlMs: params.runTimeoutSeconds > 0 ? params.runTimeoutSeconds * 1000 : undefined,
     });
     return { status: "ok", preparation };

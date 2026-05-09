@@ -350,12 +350,17 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
 
-        const messages = await readSessionMessagesAsync(entry.sessionId, undefined, {
-          agentId: resolveAgentIdFromSessionKey(childSessionKey),
-          mode: "recent",
-          maxMessages: 200,
-          maxBytes: 1024 * 1024,
-        });
+        const messages = await readSessionMessagesAsync(
+          {
+            agentId: resolveAgentIdFromSessionKey(childSessionKey),
+            sessionId: entry.sessionId,
+          },
+          {
+            mode: "recent",
+            maxMessages: 200,
+            maxBytes: 1024 * 1024,
+          },
+        );
         const lastHumanMessage = [...messages]
           .toReversed()
           .find((msg) => (msg as { role?: unknown } | null)?.role === "user");

@@ -1,9 +1,5 @@
 import { expect, test } from "vitest";
-import {
-  createSqliteSessionTranscriptLocator,
-  getSessionEntry,
-  upsertSessionEntry,
-} from "../config/sessions.js";
+import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { embeddedRunMock, seedGatewaySessionEntries, testState } from "./test-helpers.js";
 import {
@@ -21,43 +17,6 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
-
-type HookEventRecord = Record<string, unknown> & {
-  context?: Record<string, unknown> & {
-    previousSessionEntry?: { sessionId?: string };
-  };
-  messages?: Array<{ role?: string; content?: unknown }>;
-};
-
-function firstHookCall(mock: { mock: { calls: unknown[][] } }): [HookEventRecord, HookEventRecord] {
-  const call = mock.mock.calls.at(0);
-  if (!call) {
-    throw new Error("Expected hook call");
-  }
-  return [call[0] as HookEventRecord, call[1] as HookEventRecord];
-}
-
-function expectTranscriptResetEvent(params: {
-  event: HookEventRecord;
-  sessionFile: string;
-  content: string;
-}) {
-  expect(params.event.sessionFile).toBe(params.sessionFile);
-  expect(params.event.reason).toBe("new");
-  expect(params.event.messages).toHaveLength(1);
-  expect(params.event.messages?.[0]?.role).toBe("user");
-  expect(params.event.messages?.[0]?.content).toBe(params.content);
-}
-
-function expectMainHookContext(context: HookEventRecord, sessionId: string) {
-  expect(context.agentId).toBe("main");
-  expect(context.sessionKey).toBe("agent:main:main");
-  expect(context.sessionId).toBe(sessionId);
-}
-
-function sqliteTranscript(sessionId: string): string {
-  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
-}
 
 test("sessions.reset emits internal command hook with reason", async () => {
   const { dir } = await createSessionStoreDir();
@@ -84,11 +43,7 @@ test("sessions.reset emits internal command hook with reason", async () => {
       ): event is {
         type: string;
         action: string;
-        sessionKey?: string;
-        context?: {
-          commandSource?: string;
-          previousSessionEntry?: { sessionId?: string };
-        };
+        context?: { previousSessionEntry?: unknown };
       } =>
         Boolean(event) &&
         typeof event === "object" &&
@@ -100,20 +55,22 @@ test("sessions.reset emits internal command hook with reason", async () => {
   if (!event) {
     throw new Error("expected session hook event");
   }
-  expect(event.type).toBe("command");
-  expect(event.action).toBe("new");
-  expect(event.sessionKey).toBe("agent:main:main");
-  expect(event.context?.commandSource).toBe("gateway:sessions.reset");
-  expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
+  expect(event).toMatchObject({
+    type: "command",
+    action: "new",
+    sessionKey: "agent:main:main",
+    context: {
+      commandSource: "gateway:sessions.reset",
+    },
+  });
+  expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
 });
 
 test("sessions.reset emits before_reset hook with transcript context", async () => {
   await createSessionStoreDir();
-  const transcriptPath = sqliteTranscript("sess-main");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath,
     events: [
       {
         type: "message",
@@ -127,50 +84,6 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
     entries: {
       main: {
         sessionId: "sess-main",
-        sessionFile: transcriptPath,
-        updatedAt: Date.now(),
-      },
-    },
-  });
-
-  beforeResetHookState.hasBeforeResetHook = true;
-
-  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
-    key: "main",
-    reason: "new",
-  });
-  expect(reset.ok).toBe(true);
-  expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-  const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
-  expectTranscriptResetEvent({
-    event,
-    sessionFile: transcriptPath,
-    content: "hello from transcript",
-  });
-  expectMainHookContext(context, "sess-main");
-});
-
-test("sessions.reset emits before_reset hook with scoped SQLite transcript context", async () => {
-  await createSessionStoreDir();
-  const transcriptPath = sqliteTranscript("sess-main-sqlite");
-  replaceSqliteSessionTranscriptEvents({
-    agentId: "main",
-    sessionId: "sess-main-sqlite",
-    transcriptPath,
-    events: [
-      {
-        type: "message",
-        id: "m1",
-        message: { role: "user", content: "hello from sqlite transcript" },
-      },
-    ],
-  });
-
-  await seedGatewaySessionEntries({
-    entries: {
-      main: {
-        sessionId: "sess-main-sqlite",
-        sessionFile: transcriptPath,
         updatedAt: Date.now(),
       },
     },
@@ -188,7 +101,56 @@ test("sessions.reset emits before_reset hook with scoped SQLite transcript conte
     beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
   )[0] ?? [undefined, undefined];
   expect(event).toMatchObject({
-    sessionFile: transcriptPath,
+    reason: "new",
+    messages: [
+      {
+        role: "user",
+        content: "hello from transcript",
+      },
+    ],
+  });
+  expect(context).toMatchObject({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    sessionId: "sess-main",
+  });
+});
+
+test("sessions.reset emits before_reset hook with scoped SQLite transcript context", async () => {
+  await createSessionStoreDir();
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-main-sqlite",
+    events: [
+      {
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "hello from sqlite transcript" },
+      },
+    ],
+  });
+
+  await seedGatewaySessionEntries({
+    entries: {
+      main: {
+        sessionId: "sess-main-sqlite",
+        updatedAt: Date.now(),
+      },
+    },
+  });
+
+  beforeResetHookState.hasBeforeResetHook = true;
+
+  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
+    key: "main",
+    reason: "new",
+  });
+  expect(reset.ok).toBe(true);
+  expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+  const [event, context] = (
+    beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
+  )[0] ?? [undefined, undefined];
+  expect(event).toMatchObject({
     reason: "new",
     messages: [
       {
@@ -206,11 +168,9 @@ test("sessions.reset emits before_reset hook with scoped SQLite transcript conte
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
   await createSessionStoreDir();
-  const transcriptPath = sqliteTranscript("sess-main");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath,
     events: [
       {
         type: "message",
@@ -224,7 +184,6 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
     entries: {
       main: {
         sessionId: "sess-main",
-        sessionFile: transcriptPath,
         updatedAt: Date.now(),
       },
     },
@@ -238,17 +197,19 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
 
-  const [endEvent, endContext] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
-  const [startEvent, startContext] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
+  const [endEvent, endContext] = (
+    sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
+  )[0] ?? [undefined, undefined];
+  const [startEvent, startContext] = (
+    sessionLifecycleHookMocks.runSessionStart.mock.calls as unknown as Array<[unknown, unknown]>
+  )[0] ?? [undefined, undefined];
 
   expect(endEvent).toMatchObject({
     sessionId: "sess-main",
     sessionKey: "agent:main:main",
     reason: "new",
   });
-  expect((endEvent as { sessionFile?: string } | undefined)?.sessionFile).toBe(
-    createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "sess-main" }),
-  );
+  expect(endEvent).not.toHaveProperty("transcriptLocator");
   expect((endEvent as { nextSessionId?: string } | undefined)?.nextSessionId).toBe(
     (startEvent as { sessionId?: string } | undefined)?.sessionId,
   );
@@ -297,12 +258,9 @@ test("sessions.reset returns unavailable when active run does not stop", async (
 
 test("sessions.reset emits before_reset for the entry actually reset in the SQLite patch", async () => {
   await createSessionStoreDir();
-  const oldTranscriptPath = sqliteTranscript("sess-old");
-  const newTranscriptPath = sqliteTranscript("sess-new");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-old",
-    transcriptPath: oldTranscriptPath,
     events: [
       {
         type: "message",
@@ -314,7 +272,6 @@ test("sessions.reset emits before_reset for the entry actually reset in the SQLi
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-new",
-    transcriptPath: newTranscriptPath,
     events: [
       {
         type: "message",
@@ -328,7 +285,6 @@ test("sessions.reset emits before_reset for the entry actually reset in the SQLi
     entries: {
       main: {
         sessionId: "sess-old",
-        sessionFile: oldTranscriptPath,
         updatedAt: Date.now(),
       },
     },
@@ -339,9 +295,7 @@ test("sessions.reset emits before_reset for the entry actually reset in the SQLi
   upsertSessionEntry({
     agentId: "main",
     sessionKey: "agent:main:main",
-    entry: sessionStoreEntry("sess-new", {
-      sessionFile: newTranscriptPath,
-    }),
+    entry: sessionStoreEntry("sess-new", {}),
   });
 
   const reset = await performGatewaySessionReset({
@@ -355,9 +309,23 @@ test("sessions.reset emits before_reset for the entry actually reset in the SQLi
   )[0]?.[0] as { context?: { previousSessionEntry?: { sessionId?: string } } } | undefined;
   expect(internalEvent?.context?.previousSessionEntry?.sessionId).toBe("sess-new");
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-  const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
-  expectTranscriptResetEvent({ event, sessionFile: newTranscriptPath, content: "new transcript" });
-  expectMainHookContext(context, "sess-new");
+  const [event, context] = (
+    beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
+  )[0] ?? [undefined, undefined];
+  expect(event).toMatchObject({
+    reason: "new",
+    messages: [
+      {
+        role: "user",
+        content: "new transcript",
+      },
+    ],
+  });
+  expect(context).toMatchObject({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    sessionId: "sess-new",
+  });
 });
 
 test("sessions.create with emitCommandHooks=true fires command:new hook against parent (#76957)", async () => {
@@ -388,18 +356,18 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
         (event as { action?: unknown }).action === "new",
     );
   expect(commandNewEvents).toHaveLength(1);
-  expect(commandNewEvents[0]?.type).toBe("command");
-  expect(commandNewEvents[0]?.action).toBe("new");
-  expect(commandNewEvents[0]?.context?.commandSource).toBe("webchat");
+  expect(commandNewEvents[0]).toMatchObject({
+    type: "command",
+    action: "new",
+    context: { commandSource: "webchat" },
+  });
 });
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
   await createSessionStoreDir();
-  const transcriptPath = sqliteTranscript("sess-parent-hooks");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-parent-hooks",
-    transcriptPath,
     events: [
       {
         type: "message",
@@ -413,7 +381,6 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
     entries: {
       main: {
         sessionId: "sess-parent-hooks",
-        sessionFile: transcriptPath,
         updatedAt: Date.now(),
       },
     },
@@ -428,36 +395,54 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
   expect(result.ok).toBe(true);
 
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-  const [beforeResetEvent, beforeResetContext] = firstHookCall(beforeResetHookMocks.runBeforeReset);
-  expectTranscriptResetEvent({
-    event: beforeResetEvent,
-    sessionFile: transcriptPath,
-    content: "remember this before new",
+  const [beforeResetEvent, beforeResetContext] = (
+    beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
+  )[0] ?? [undefined, undefined];
+  expect(beforeResetEvent).toMatchObject({
+    reason: "new",
+    messages: [
+      {
+        role: "user",
+        content: "remember this before new",
+      },
+    ],
   });
-  expectMainHookContext(beforeResetContext, "sess-parent-hooks");
+  expect(beforeResetContext).toMatchObject({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    sessionId: "sess-parent-hooks",
+  });
 
   expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
-  const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
-  const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
-  expect(endEvent.sessionId).toBe("sess-parent-hooks");
-  expect(endEvent.sessionKey).toBe("agent:main:main");
-  expect(endEvent.reason).toBe("new");
-  expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
-  expect(endEvent.nextSessionKey).toBe(startEvent.sessionKey);
-  expect(startEvent.resumedFrom).toBe("sess-parent-hooks");
-  expect(startEvent.sessionId).toBeTypeOf("string");
-  expect(startEvent.sessionId).not.toBe("");
-  expectStringWithPrefix(startEvent.sessionKey, "agent:main:dashboard:", "created session key");
+  const [endEvent] = (
+    sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
+  )[0] ?? [undefined, undefined];
+  const [startEvent] = (
+    sessionLifecycleHookMocks.runSessionStart.mock.calls as unknown as Array<[unknown, unknown]>
+  )[0] ?? [undefined, undefined];
+  expect(endEvent).toMatchObject({
+    sessionId: "sess-parent-hooks",
+    sessionKey: "agent:main:main",
+    reason: "new",
+    nextSessionId: (startEvent as { sessionId?: string } | undefined)?.sessionId,
+    nextSessionKey: (startEvent as { sessionKey?: string } | undefined)?.sessionKey,
+  });
+  expect(startEvent).toMatchObject({
+    resumedFrom: "sess-parent-hooks",
+  });
+  expect((startEvent as { sessionId?: string } | undefined)?.sessionId).toBeTypeOf("string");
+  expect((startEvent as { sessionId?: string } | undefined)?.sessionId).not.toBe("");
+  expect((startEvent as { sessionKey?: string } | undefined)?.sessionKey).toMatch(
+    /^agent:main:dashboard:/,
+  );
 });
 
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
   await createSessionStoreDir();
-  const transcriptPath = sqliteTranscript("sess-parent-dms");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-parent-dms",
-    transcriptPath,
     events: [
       {
         type: "message",
@@ -473,7 +458,6 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
       entries: {
         main: {
           sessionId: "sess-parent-dms",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
       },
@@ -496,13 +480,21 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
 
     expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
     expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
-    const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
-    expect(endEvent.sessionId).toBe("sess-parent-dms");
-    expect(endEvent.sessionKey).toBe("agent:main:main");
-    expect(endEvent.reason).toBe("new");
-    expect(startEvent.sessionKey).toBe("agent:main:main");
-    expect(startEvent.resumedFrom).toBe("sess-parent-dms");
+    const [endEvent] = (
+      sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    const [startEvent] = (
+      sessionLifecycleHookMocks.runSessionStart.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    expect(endEvent).toMatchObject({
+      sessionId: "sess-parent-dms",
+      sessionKey: "agent:main:main",
+      reason: "new",
+    });
+    expect(startEvent).toMatchObject({
+      sessionKey: "agent:main:main",
+      resumedFrom: "sess-parent-dms",
+    });
   } finally {
     testState.sessionConfig = undefined;
   }

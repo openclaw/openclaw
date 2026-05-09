@@ -1,11 +1,4 @@
-import {
-  createSqliteSessionTranscriptLocator,
-  type SessionEntry as StoredSessionEntry,
-} from "../config/sessions.js";
-import {
-  loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScope,
-} from "../config/sessions/transcript-store.sqlite.js";
+import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import {
   buildSessionContext,
@@ -13,22 +6,6 @@ import {
   type FileEntry,
   type SessionEntry as PiSessionEntry,
 } from "./transcript/session-transcript-contract.js";
-
-export function resolveBtwSessionTranscriptPath(params: {
-  sessionId: string;
-  sessionEntry?: StoredSessionEntry;
-  sessionKey?: string;
-}): string | undefined {
-  try {
-    const agentId = params.sessionKey?.split(":")[1];
-    return createSqliteSessionTranscriptLocator({ agentId, sessionId: params.sessionId });
-  } catch (error) {
-    diag.debug(
-      `createSqliteSessionTranscriptLocator failed: sessionId=${params.sessionId} err=${String(error)}`,
-    );
-    return undefined;
-  }
-}
 
 function readSessionEntryId(entry: PiSessionEntry): string | undefined {
   const id = (entry as { id?: unknown }).id;
@@ -97,19 +74,18 @@ function isTrailingUserMessage(entry: PiSessionEntry | undefined): boolean {
 }
 
 export async function readBtwTranscriptMessages(params: {
-  transcriptLocator: string;
+  agentId: string;
   sessionId: string;
   snapshotLeafId?: string | null;
 }): Promise<unknown[]> {
   try {
-    const scope = resolveSqliteSessionTranscriptScope({
-      sessionId: params.sessionId,
-      transcriptLocator: params.transcriptLocator,
-    });
-    if (!scope) {
+    if (!params.agentId.trim() || !params.sessionId.trim()) {
       return [];
     }
-    const entries = loadSqliteSessionTranscriptEvents(scope)
+    const entries = loadSqliteSessionTranscriptEvents({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    })
       .map((entry) => entry.event)
       .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
     migrateSessionEntries(entries);

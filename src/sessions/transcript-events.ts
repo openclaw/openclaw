@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 export type SessionTranscriptUpdate = {
   agentId?: string;
   sessionId?: string;
-  sessionFile: string;
+  transcriptLocator?: string;
   sessionKey?: string;
   message?: unknown;
   messageId?: string;
@@ -20,33 +20,27 @@ export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): 
   };
 }
 
-export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUpdate): void {
-  const normalized =
-    typeof update === "string"
-      ? { sessionFile: update }
-      : {
-          agentId: update.agentId,
-          sessionId: update.sessionId,
-          sessionFile: update.sessionFile,
-          sessionKey: update.sessionKey,
-          message: update.message,
-          messageId: update.messageId,
-        };
-  const trimmed = normalizeOptionalString(normalized.sessionFile);
-  if (!trimmed) {
+export function emitSessionTranscriptUpdate(update: SessionTranscriptUpdate): void {
+  const normalized = {
+    agentId: update.agentId,
+    sessionId: update.sessionId,
+    transcriptLocator: update.transcriptLocator,
+    sessionKey: update.sessionKey,
+    message: update.message,
+    messageId: update.messageId,
+  };
+  const trimmed = normalizeOptionalString(normalized.transcriptLocator);
+  const agentId = normalizeOptionalString(normalized.agentId);
+  const sessionId = normalizeOptionalString(normalized.sessionId);
+  const sessionKey = normalizeOptionalString(normalized.sessionKey);
+  if (!trimmed && !sessionId && !sessionKey) {
     return;
   }
   const nextUpdate: SessionTranscriptUpdate = {
-    ...(normalizeOptionalString(normalized.agentId)
-      ? { agentId: normalizeOptionalString(normalized.agentId) }
-      : {}),
-    ...(normalizeOptionalString(normalized.sessionId)
-      ? { sessionId: normalizeOptionalString(normalized.sessionId) }
-      : {}),
-    sessionFile: trimmed,
-    ...(normalizeOptionalString(normalized.sessionKey)
-      ? { sessionKey: normalizeOptionalString(normalized.sessionKey) }
-      : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(trimmed ? { transcriptLocator: trimmed } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
     ...(normalized.message !== undefined ? { message: normalized.message } : {}),
     ...(normalizeOptionalString(normalized.messageId)
       ? { messageId: normalizeOptionalString(normalized.messageId) }

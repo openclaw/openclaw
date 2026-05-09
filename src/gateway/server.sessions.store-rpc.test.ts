@@ -27,13 +27,11 @@ test("lists and patches session entries via sessions.* RPC", async () => {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath: sqliteTranscript("sess-main"),
     events: Array.from({ length: 10 }, (_, idx) => ({ role: "user", content: `line ${idx}` })),
   });
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-group",
-    transcriptPath: sqliteTranscript("sess-group"),
     events: [{ role: "user", content: "group line 0" }],
   });
 

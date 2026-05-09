@@ -172,7 +172,7 @@ async function requestManagedImage(params: {
   authResponse?: Record<string, unknown>;
   headers?: Record<string, string>;
   transcriptMessages?: Record<string, unknown>[];
-  sessionEntry?: { sessionId: string; sessionFile?: string };
+  sessionEntry?: { sessionId: string; transcriptLocator?: string };
 }) {
   authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) => {
     if (params.denyAuth) {
@@ -196,7 +196,7 @@ async function requestManagedImage(params: {
     storePath: path.join(params.stateDir, "openclaw-state.sqlite"),
     entry: params.sessionEntry ?? {
       sessionId: "sess-1",
-      sessionFile: sqliteTranscript("sess-1"),
+      transcriptLocator: sqliteTranscript("sess-1"),
     },
   });
   readSessionMessagesMock.mockReturnValue(
@@ -410,11 +410,10 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
   it("reuses the session attachment index across requests until the transcript changes", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
-    const sessionFile = sqliteTranscript("sess-main");
+    const transcriptLocator = sqliteTranscript("sess-main");
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "sess-main",
-      transcriptPath: sessionFile,
       events: [{ message: {} }],
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       now: () => 1,
@@ -438,14 +437,14 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       stateDir,
       pathName,
       authResponse: { authMethod: "token" },
-      sessionEntry: { sessionId: "sess-main", sessionFile },
+      sessionEntry: { sessionId: "sess-main", transcriptLocator },
       transcriptMessages,
     });
     const second = await requestManagedImage({
       stateDir,
       pathName,
       authResponse: { authMethod: "token" },
-      sessionEntry: { sessionId: "sess-main", sessionFile },
+      sessionEntry: { sessionId: "sess-main", transcriptLocator },
       transcriptMessages,
     });
 
@@ -456,7 +455,6 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "sess-main",
-      transcriptPath: sessionFile,
       events: [{ message: {} }, { message: { content: "updated" } }],
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       now: () => 2,
@@ -466,7 +464,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       stateDir,
       pathName,
       authResponse: { authMethod: "token" },
-      sessionEntry: { sessionId: "sess-main", sessionFile },
+      sessionEntry: { sessionId: "sess-main", transcriptLocator },
       transcriptMessages,
     });
 
@@ -843,7 +841,7 @@ describe("createManagedOutgoingImageBlocks", () => {
       stateDir,
       localRoots: [stateDir],
     });
-    expect(blocks).toStrictEqual([]);
+    expect(blocks).toEqual([]);
     const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
     let originals: string[] | null = null;
     try {
@@ -851,7 +849,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     } catch (error) {
       expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
     }
-    expect(originals ?? []).toStrictEqual([]);
+    expect(originals ?? []).toEqual([]);
   });
 
   it("skips oversized downloaded non-image sources instead of failing finalization", async () => {
@@ -865,7 +863,7 @@ describe("createManagedOutgoingImageBlocks", () => {
       localRoots: [stateDir],
       limits: { maxBytes: 1024 },
     });
-    expect(blocks).toStrictEqual([]);
+    expect(blocks).toEqual([]);
     const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
     let originals: string[] | null = null;
     try {
@@ -873,7 +871,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     } catch (error) {
       expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
     }
-    expect(originals ?? []).toStrictEqual([]);
+    expect(originals ?? []).toEqual([]);
   });
 
   it("does not reap older transient records while creating a new managed image", async () => {
@@ -981,7 +979,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     const fixture = await createFixture(stateDir);
     loadSessionEntryMock.mockReturnValue({
       storePath: path.join(stateDir, "openclaw-state.sqlite"),
-      entry: { sessionId: "sess-main", sessionFile: sqliteTranscript("sess-main") },
+      entry: { sessionId: "sess-main", transcriptLocator: sqliteTranscript("sess-main") },
     });
     readSessionMessagesMock.mockReturnValue([]);
 
@@ -997,7 +995,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     const fixture = await createFixture(stateDir);
     loadSessionEntryMock.mockReturnValue({
       storePath: path.join(stateDir, "openclaw-state.sqlite"),
-      entry: { sessionId: "sess-main", sessionFile: sqliteTranscript("sess-main") },
+      entry: { sessionId: "sess-main", transcriptLocator: sqliteTranscript("sess-main") },
     });
     readSessionMessagesMock.mockReturnValue([
       {
@@ -1031,7 +1029,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     });
     loadSessionEntryMock.mockReturnValue({
       storePath: path.join(stateDir, "openclaw-state.sqlite"),
-      entry: { sessionId: "sess-main", sessionFile: sqliteTranscript("sess-main") },
+      entry: { sessionId: "sess-main", transcriptLocator: sqliteTranscript("sess-main") },
     });
     readSessionMessagesMock.mockReturnValue([
       {
@@ -1073,7 +1071,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       storePath: path.join(stateDir, "openclaw-state.sqlite"),
       entry: {
         sessionId: sessionKey === retainedFixture.sessionKey ? "sess-other" : "sess-main",
-        sessionFile:
+        transcriptLocator:
           sessionKey === retainedFixture.sessionKey
             ? sqliteTranscript("sess-other", "other")
             : sqliteTranscript("sess-main"),

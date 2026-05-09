@@ -45,14 +45,12 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 }
 
 function createIsolatedCronWithFinishedBarrier(params: {
-  storePath: string;
   delivered?: boolean;
   error?: string;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
 }) {
   const finished = createFinishedBarrier();
   const cron = new CronService({
-    storePath: params.storePath,
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
@@ -132,7 +130,6 @@ async function runIsolatedJobAndReadState(params: {
 }) {
   const store = await makeStorePath();
   const { cron, finished } = createIsolatedCronWithFinishedBarrier({
-    storePath: store.storePath,
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
     ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.onFinished ? { onFinished: params.onFinished } : {}),
@@ -215,7 +212,6 @@ describe("CronService persists delivered status", () => {
   it("does not set lastDelivered for main session jobs", async () => {
     const store = await makeStorePath();
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
       logger: noopLogger,
     });
 

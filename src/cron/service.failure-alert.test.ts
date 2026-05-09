@@ -16,7 +16,6 @@ const noopLogger = {
 async function makeStorePath() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-failure-alert-"));
   return {
-    storePath: path.join(dir, "cron", "jobs.json"),
     cleanup: async () => {
       await fs.rm(dir, { recursive: true, force: true });
     },
@@ -24,13 +23,11 @@ async function makeStorePath() {
 }
 
 function createFailureAlertCron(params: {
-  storePath: string;
   cronConfig?: CronServiceParams["cronConfig"];
   runIsolatedAgentJob: NonNullable<CronServiceParams["runIsolatedAgentJob"]>;
   sendCronFailureAlert: NonNullable<CronServiceParams["sendCronFailureAlert"]>;
 }) {
   return new CronService({
-    storePath: params.storePath,
     cronEnabled: true,
     cronConfig: params.cronConfig,
     log: noopLogger,
@@ -100,7 +97,6 @@ describe("CronService failure alerts", () => {
     }));
 
     const cron = createFailureAlertCron({
-      storePath: store.storePath,
       cronConfig: {
         failureAlert: {
           enabled: true,
@@ -156,7 +152,6 @@ describe("CronService failure alerts", () => {
     }));
 
     const cron = createFailureAlertCron({
-      storePath: store.storePath,
       cronConfig: {
         failureAlert: {
           enabled: false,
@@ -202,7 +197,6 @@ describe("CronService failure alerts", () => {
     }));
 
     const cron = createFailureAlertCron({
-      storePath: store.storePath,
       cronConfig: {
         failureAlert: {
           enabled: true,
@@ -241,7 +235,6 @@ describe("CronService failure alerts", () => {
     }));
 
     const cron = createFailureAlertCron({
-      storePath: store.storePath,
       cronConfig: {
         failureAlert: {
           enabled: true,
@@ -304,7 +297,6 @@ describe("CronService failure alerts", () => {
     }));
 
     const cron = createFailureAlertCron({
-      storePath: store.storePath,
       cronConfig: {
         failureAlert: {
           enabled: true,
@@ -366,7 +358,6 @@ describe("CronService failure alerts", () => {
     }));
 
     const cron = createFailureAlertCron({
-      storePath: store.storePath,
       cronConfig: {
         failureAlert: {
           enabled: true,
@@ -423,7 +414,6 @@ describe("CronService failure alerts", () => {
     }));
 
     const cron = createFailureAlertCron({
-      storePath: store.storePath,
       cronConfig: {
         failureAlert: {
           enabled: true,

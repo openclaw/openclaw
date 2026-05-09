@@ -9,10 +9,7 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
-import {
-  loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForLocator,
-} from "../../config/sessions/transcript-store.sqlite.js";
+import { loadSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
@@ -72,17 +69,15 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
   }
 }
 
-function sqliteTranscriptHasAssistantMessage(transcriptLocator: string | undefined): boolean {
-  if (!transcriptLocator) {
+function sqliteTranscriptHasAssistantMessage(
+  scope: { agentId?: string; sessionId?: string } | undefined,
+): boolean {
+  const agentId = scope?.agentId?.trim();
+  const sessionId = scope?.sessionId?.trim();
+  if (!agentId || !sessionId) {
     return false;
   }
-  const scope = resolveSqliteSessionTranscriptScopeForLocator({
-    transcriptLocator: transcriptLocator,
-  });
-  if (!scope) {
-    return false;
-  }
-  return loadSqliteSessionTranscriptEvents(scope).some((entry) => {
+  return loadSqliteSessionTranscriptEvents({ agentId, sessionId }).some((entry) => {
     const record = entry.event as Record<string, unknown> | null;
     return (record?.message as Record<string, unknown> | undefined)?.role === "assistant";
   });
@@ -90,9 +85,9 @@ function sqliteTranscriptHasAssistantMessage(transcriptLocator: string | undefin
 
 /** Check whether the SQLite transcript contains at least one assistant message. */
 export async function sessionTranscriptHasContent(
-  transcriptLocator: string | undefined,
+  scope: { agentId?: string; sessionId?: string } | undefined,
 ): Promise<boolean> {
-  return sqliteTranscriptHasAssistantMessage(transcriptLocator);
+  return sqliteTranscriptHasAssistantMessage(scope);
 }
 
 export async function claudeCliSessionTranscriptHasContent(params: {

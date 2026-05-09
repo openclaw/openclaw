@@ -50,11 +50,15 @@ export async function delegateCompactionToRuntime(
     runtimeContext.currentTokenCount > 0
       ? Math.floor(runtimeContext.currentTokenCount)
       : undefined);
+  const agentId =
+    typeof runtimeContext.agentId === "string" && runtimeContext.agentId.trim()
+      ? runtimeContext.agentId.trim()
+      : undefined;
 
   const result = await compactEmbeddedPiSessionDirect({
     ...runtimeContext,
     sessionId: params.sessionId,
-    sessionFile: params.sessionFile,
+    agentId,
     tokenBudget: params.tokenBudget,
     ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     force: params.force,
@@ -75,7 +79,6 @@ export async function delegateCompactionToRuntime(
           tokensAfter: result.result.tokensAfter,
           details: result.result.details,
           sessionId: result.result.sessionId,
-          sessionFile: result.result.sessionFile,
         }
       : undefined,
   };

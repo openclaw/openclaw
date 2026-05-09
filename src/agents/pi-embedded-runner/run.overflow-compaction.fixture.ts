@@ -14,7 +14,6 @@ export function makeCompactionSuccess(params: {
   tokensBefore?: number;
   tokensAfter?: number;
   sessionId?: string;
-  sessionFile?: string;
 }) {
   return {
     ok: true as const,
@@ -25,7 +24,6 @@ export function makeCompactionSuccess(params: {
       ...(params.tokensBefore !== undefined ? { tokensBefore: params.tokensBefore } : {}),
       ...(params.tokensAfter !== undefined ? { tokensAfter: params.tokensAfter } : {}),
       ...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
-      ...(params.sessionFile !== undefined ? { sessionFile: params.sessionFile } : {}),
     },
   };
 }
@@ -91,7 +89,6 @@ type MockCompactDirect = {
       tokensBefore?: number;
       tokensAfter?: number;
       sessionId?: string;
-      sessionFile?: string;
     };
   }) => unknown;
 };

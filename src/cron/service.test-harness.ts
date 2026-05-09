@@ -62,8 +62,8 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
   return { makeStorePath };
 }
 
-export async function writeCronStoreSnapshot(params: { storePath: string; jobs: CronJob[] }) {
-  await saveCronStore(params.storePath, { version: 1, jobs: params.jobs });
+export async function writeCronStoreSnapshot(params: { storePath?: string; jobs: CronJob[] }) {
+  await saveCronStore(params.storePath ?? "default", { version: 1, jobs: params.jobs });
 }
 
 export function installCronTestHooks(options: {
@@ -121,7 +121,7 @@ export function createFinishedBarrier() {
 }
 
 export function createStartedCronServiceWithFinishedBarrier(params: {
-  storePath: string;
+  storePath?: string;
   logger: ReturnType<typeof createNoopLogger>;
 }): {
   cron: CronService;
@@ -133,7 +133,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   const requestHeartbeat = vi.fn();
   const finished = createFinishedBarrier();
   const cron = new CronService({
-    storeKey: params.storePath,
+    storeKey: params.storePath ?? "default",
     cronEnabled: true,
     log: params.logger,
     enqueueSystemEvent,
@@ -181,14 +181,14 @@ export async function withCronServiceForTest(
 }
 
 export function createRunningCronServiceState(params: {
-  storePath: string;
+  storePath?: string;
   log: ReturnType<typeof createNoopLogger>;
   nowMs: () => number;
   jobs: CronJob[];
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
-    storeKey: params.storePath,
+    storeKey: params.storePath ?? "default",
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),

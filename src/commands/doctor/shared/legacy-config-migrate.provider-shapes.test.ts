@@ -295,8 +295,10 @@ describe("legacy migrate provider-shaped config", () => {
       "Removed plugins.entries.voice-call.config.tts.prefsPath; TTS prefs now use SQLite plugin state.",
     ]);
     expect(res.config?.messages?.tts).toEqual({ auto: "always" });
-    expect(res.config?.agents?.defaults?.tts).toEqual({});
-    expect(res.config?.channels?.discord?.accounts?.primary?.tts).toEqual({});
+    expect((res.config?.agents?.defaults as { tts?: unknown } | undefined)?.tts).toEqual({});
+    expect(
+      (res.config?.channels?.discord?.accounts?.primary as { tts?: unknown } | undefined)?.tts,
+    ).toEqual({});
     expect(res.config?.plugins?.entries?.["voice-call"]?.config?.tts).toEqual({});
   });
 

@@ -2,30 +2,24 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
-import {
-  loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForLocator,
-} from "../../config/sessions/transcript-store.sqlite.js";
+import { loadSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { openTranscriptSessionManager } from "./session-manager.js";
+import { openTranscriptSessionManagerForSession } from "./session-manager.js";
 import { SessionManager } from "./session-transcript-contract.js";
-import { replaceTranscriptStateEventsSync } from "./transcript-state.js";
 
-async function makeTempTranscriptLocator(name = "session.jsonl"): Promise<string> {
+async function useTempStateDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-session-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
-  return path.join(dir, name);
+  return dir;
 }
 
-function readSessionEntries(transcriptLocator: string) {
-  const scope = resolveSqliteSessionTranscriptScopeForLocator({
-    transcriptLocator: transcriptLocator,
-  });
-  if (!scope) {
-    return [];
-  }
+type TranscriptScope = {
+  agentId: string;
+  sessionId: string;
+};
+
+function readSessionEntries(scope: TranscriptScope) {
   return loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
 }
 
@@ -37,7 +31,7 @@ afterEach(() => {
 
 describe("TranscriptSessionManager", () => {
   it("exposes create, in-memory, list, continue, and fork through the contract value", async () => {
-    await makeTempTranscriptLocator();
+    await useTempStateDir();
     const memory = SessionManager.inMemory("/tmp/memory-workspace");
     expect(memory.isPersisted()).toBe(false);
     expect(memory.getTranscriptLocator()).toBeUndefined();
@@ -50,77 +44,42 @@ describe("TranscriptSessionManager", () => {
 
     const created = SessionManager.create("/tmp/workspace");
     created.appendMessage({ role: "user", content: "persist me", timestamp: 2 });
-    const transcriptLocator = created.getTranscriptLocator();
-    expect(transcriptLocator).toBeTruthy();
-    if (!transcriptLocator) {
-      throw new Error("expected created transcript locator");
-    }
+    const sourceSessionId = created.getSessionId();
 
     const listed = await SessionManager.list("/tmp/workspace");
-    expect(listed.map((session) => session.id)).toContain(created.getSessionId());
+    expect(listed.map((session) => session.id)).toContain(sourceSessionId);
 
     const continued = SessionManager.continueRecent("/tmp/workspace");
-    expect(continued.getSessionId()).toBe(created.getSessionId());
+    expect(continued.getSessionId()).toBe(sourceSessionId);
 
-    const forked = SessionManager.forkFrom(transcriptLocator, "/tmp/forked-workspace");
+    const forked = SessionManager.forkFromSession({
+      agentId: "main",
+      sessionId: sourceSessionId,
+      targetCwd: "/tmp/forked-workspace",
+    });
     expect(forked.getHeader()).toMatchObject({
       cwd: "/tmp/forked-workspace",
-      parentSession: transcriptLocator,
+      parentSession: created.getTranscriptLocator(),
     });
     expect(forked.buildSessionContext().messages).toMatchObject([
       { role: "user", content: "persist me" },
     ]);
   });
 
-  it("rejects filesystem transcript locators at runtime", async () => {
-    const transcriptLocator = await makeTempTranscriptLocator();
-
-    expect(() =>
-      openTranscriptSessionManager({
-        transcriptLocator,
-        sessionId: "session-1",
-        cwd: "/tmp/workspace",
-      }),
-    ).toThrow(/Transcript locator must be SQLite-backed/);
-  });
-
-  it("rejects runtime writes to filesystem transcript locators", async () => {
-    const transcriptLocator = await makeTempTranscriptLocator();
-
-    expect(() =>
-      replaceTranscriptStateEventsSync(transcriptLocator, [
-        {
-          type: "session",
-          version: 3,
-          id: "session-legacy-write",
-          timestamp: new Date(0).toISOString(),
-          cwd: "/tmp/workspace",
-        },
-      ]),
-    ).toThrow(/Transcript locator must be SQLite-backed/);
-  });
-
-  it("opens virtual sqlite transcript locators without resolving them as filesystem paths", async () => {
-    await makeTempTranscriptLocator();
-    const transcriptLocator = createSqliteSessionTranscriptLocator({
+  it("opens sqlite transcripts by agent and session scope", async () => {
+    await useTempStateDir();
+    const scope = {
       agentId: "main",
       sessionId: "virtual-session",
-    });
+    };
 
-    const sessionManager = openTranscriptSessionManager({
-      transcriptLocator,
-      sessionId: "virtual-session",
+    const sessionManager = openTranscriptSessionManagerForSession({
+      ...scope,
       cwd: "/tmp/workspace",
     });
 
-    expect(sessionManager.getTranscriptLocator()).toBe(transcriptLocator);
-    expect(
-      resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: transcriptLocator }),
-    ).toMatchObject({
-      agentId: "main",
-      sessionId: "virtual-session",
-    });
-    expect(readSessionEntries(transcriptLocator)).toMatchObject([
+    expect(sessionManager.getSessionId()).toBe("virtual-session");
+    expect(readSessionEntries(scope)).toMatchObject([
       {
         type: "session",
         id: "virtual-session",
@@ -129,21 +88,21 @@ describe("TranscriptSessionManager", () => {
     ]);
   });
 
-  it("uses the virtual sqlite transcript locator session id when no explicit id is supplied", async () => {
-    await makeTempTranscriptLocator();
-    const transcriptLocator = createSqliteSessionTranscriptLocator({
+  it("uses the scoped session id when opening an empty transcript", async () => {
+    await useTempStateDir();
+    const scope = {
       agentId: "main",
       sessionId: "locator-session",
-    });
+    };
 
-    const sessionManager = openTranscriptSessionManager({
-      transcriptLocator,
+    const sessionManager = openTranscriptSessionManagerForSession({
+      ...scope,
       cwd: "/tmp/workspace",
     });
     sessionManager.appendMessage({ role: "user", content: "seed", timestamp: 1 });
 
     expect(sessionManager.getSessionId()).toBe("locator-session");
-    expect(readSessionEntries(transcriptLocator)).toMatchObject([
+    expect(readSessionEntries(scope)).toMatchObject([
       {
         type: "session",
         id: "locator-session",
@@ -156,14 +115,10 @@ describe("TranscriptSessionManager", () => {
     ]);
   });
 
-  it("creates, branches, lists, and forks default sessions with virtual sqlite locators", async () => {
-    await makeTempTranscriptLocator();
+  it("creates, branches, lists, and forks default sessions in sqlite", async () => {
+    await useTempStateDir();
     const sessionManager = SessionManager.create("/tmp/sqlite-workspace");
-    const transcriptLocator = sessionManager.getTranscriptLocator();
-    if (!transcriptLocator) {
-      throw new Error("expected transcript locator");
-    }
-    expect(transcriptLocator).toMatch(/^sqlite-transcript:\/\/main\//);
+    const sessionId = sessionManager.getSessionId();
 
     const userId = sessionManager.appendMessage({
       role: "user",
@@ -172,62 +127,54 @@ describe("TranscriptSessionManager", () => {
     });
     const branchFile = sessionManager.createBranchedSession(userId);
     if (!branchFile) {
-      throw new Error("expected branch file");
+      throw new Error("expected branched session");
     }
-    expect(branchFile).toMatch(/^sqlite-transcript:\/\/main\//);
 
     const listed = await SessionManager.list("/tmp/sqlite-workspace");
     expect(listed.map((session) => session.id)).toContain(sessionManager.getSessionId());
 
-    const forked = SessionManager.forkFrom(transcriptLocator, "/tmp/sqlite-fork");
-    expect(forked.getTranscriptLocator()).toMatch(/^sqlite-transcript:\/\/main\//);
+    const forked = SessionManager.forkFromSession({
+      agentId: "main",
+      sessionId,
+      targetCwd: "/tmp/sqlite-fork",
+    });
     expect(forked.getHeader()).toMatchObject({
       cwd: "/tmp/sqlite-fork",
-      parentSession: transcriptLocator,
+      parentSession: sessionManager.getTranscriptLocator(),
     });
   });
 
-  it("allocates a fresh sqlite transcript locator when starting a new persisted session", async () => {
-    await makeTempTranscriptLocator();
-    const sessionManager = openTranscriptSessionManager({
-      transcriptLocator: createSqliteSessionTranscriptLocator({
-        agentId: "main",
-        sessionId: "first-session",
-      }),
-      sessionId: "first-session",
+  it("allocates a fresh sqlite session when starting a new persisted session", async () => {
+    await useTempStateDir();
+    const firstScope = { agentId: "main", sessionId: "first-session" };
+    const sessionManager = openTranscriptSessionManagerForSession({
+      ...firstScope,
       cwd: "/tmp/workspace",
     });
     sessionManager.appendMessage({ role: "user", content: "first", timestamp: 1 });
 
-    const firstTranscriptLocator = sessionManager.getTranscriptLocator();
     const secondTranscriptLocator = sessionManager.newSession({ id: "second-session" });
     sessionManager.appendMessage({ role: "user", content: "second", timestamp: 2 });
 
-    expect(secondTranscriptLocator).toBe(
-      createSqliteSessionTranscriptLocator({
-        agentId: "main",
-        sessionId: "second-session",
-      }),
-    );
-    expect(secondTranscriptLocator).not.toBe(firstTranscriptLocator);
-    expect(
-      readSessionEntries(firstTranscriptLocator!).map((entry) => (entry as { id?: string }).id),
-    ).toEqual(["first-session", expect.any(String)]);
-    expect(readSessionEntries(secondTranscriptLocator!)).toMatchObject([
+    expect(secondTranscriptLocator).toBeTruthy();
+    expect(readSessionEntries(firstScope).map((entry) => (entry as { id?: string }).id)).toEqual([
+      "first-session",
+      expect.any(String),
+    ]);
+    expect(readSessionEntries({ agentId: "main", sessionId: "second-session" })).toMatchObject([
       { type: "session", id: "second-session" },
       { type: "message", message: { role: "user", content: "second" } },
     ]);
   });
 
-  it("preserves non-main agent scope for virtual sqlite branches and forks", async () => {
-    await makeTempTranscriptLocator();
-    const transcriptLocator = createSqliteSessionTranscriptLocator({
+  it("preserves non-main agent scope for sqlite branches and forks", async () => {
+    await useTempStateDir();
+    const scope = {
       agentId: "qa",
       sessionId: "qa-source-session",
-    });
-    const sessionManager = openTranscriptSessionManager({
-      transcriptLocator,
-      sessionId: "qa-source-session",
+    };
+    const sessionManager = openTranscriptSessionManagerForSession({
+      ...scope,
       cwd: "/tmp/qa-workspace",
     });
     const userId = sessionManager.appendMessage({
@@ -237,33 +184,26 @@ describe("TranscriptSessionManager", () => {
     });
 
     const branchFile = sessionManager.createBranchedSession(userId);
-    expect(branchFile).toMatch(/^sqlite-transcript:\/\/qa\//);
-    expect(
-      resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: branchFile! }),
-    ).toMatchObject({
-      agentId: "qa",
-    });
+    expect(branchFile).toBeTruthy();
 
-    const forked = SessionManager.forkFrom(transcriptLocator, "/tmp/qa-fork");
-    expect(forked.getTranscriptLocator()).toMatch(/^sqlite-transcript:\/\/qa\//);
-    expect(
-      resolveSqliteSessionTranscriptScopeForLocator({
-        transcriptLocator: forked.getTranscriptLocator()!,
-      }),
-    ).toMatchObject({
-      agentId: "qa",
+    const forked = SessionManager.forkFromSession({
+      ...scope,
+      targetCwd: "/tmp/qa-fork",
     });
+    expect(forked.getHeader()).toMatchObject({
+      cwd: "/tmp/qa-fork",
+    });
+    expect(readSessionEntries({ agentId: "qa", sessionId: forked.getSessionId() })).toHaveLength(2);
   });
 
   it("persists initial user messages synchronously before the first assistant message", async () => {
-    await makeTempTranscriptLocator();
-    const transcriptLocator = createSqliteSessionTranscriptLocator({
+    await useTempStateDir();
+    const scope = {
       agentId: "main",
       sessionId: "session-sync",
-    });
-    const sessionManager = openTranscriptSessionManager({
-      transcriptLocator,
-      sessionId: "session-sync",
+    };
+    const sessionManager = openTranscriptSessionManagerForSession({
+      ...scope,
       cwd: "/tmp/workspace",
     });
 
@@ -273,7 +213,7 @@ describe("TranscriptSessionManager", () => {
       timestamp: 1,
     });
 
-    const afterUser = readSessionEntries(transcriptLocator);
+    const afterUser = readSessionEntries(scope);
     expect(afterUser).toHaveLength(2);
     expect(afterUser[1]).toMatchObject({
       type: "message",
@@ -300,7 +240,7 @@ describe("TranscriptSessionManager", () => {
       timestamp: 2,
     });
 
-    const reopened = openTranscriptSessionManager({ transcriptLocator });
+    const reopened = openTranscriptSessionManagerForSession(scope);
     expect(reopened.getBranch().map((entry) => entry.id)).toEqual([userId, assistantId]);
     expect(reopened.buildSessionContext().messages.map((message) => message.role)).toEqual([
       "user",
@@ -309,14 +249,13 @@ describe("TranscriptSessionManager", () => {
   });
 
   it("removes persisted tail entries through SQLite instead of rewriting JSONL", async () => {
-    await makeTempTranscriptLocator();
-    const transcriptLocator = createSqliteSessionTranscriptLocator({
+    await useTempStateDir();
+    const scope = {
       agentId: "main",
       sessionId: "session-tail",
-    });
-    const sessionManager = openTranscriptSessionManager({
-      transcriptLocator,
-      sessionId: "session-tail",
+    };
+    const sessionManager = openTranscriptSessionManagerForSession({
+      ...scope,
       cwd: "/tmp/workspace",
     });
 
@@ -347,23 +286,23 @@ describe("TranscriptSessionManager", () => {
       sessionManager.removeTailEntries((entry) => (entry as { id?: string }).id === assistantId),
     ).toBe(1);
 
-    const reopened = openTranscriptSessionManager({ transcriptLocator });
+    const reopened = openTranscriptSessionManagerForSession(scope);
     expect(reopened.getEntry(assistantId)).toBeUndefined();
     expect(reopened.getLeafId()).toBe(userId);
-    expect(
-      readSessionEntries(transcriptLocator).map((entry) => (entry as { id?: string }).id),
-    ).toEqual(["session-tail", userId]);
+    expect(readSessionEntries(scope).map((entry) => (entry as { id?: string }).id)).toEqual([
+      "session-tail",
+      userId,
+    ]);
   });
 
   it("supports tree, label, name, and branch summary session APIs", async () => {
-    await makeTempTranscriptLocator();
-    const transcriptLocator = createSqliteSessionTranscriptLocator({
+    await useTempStateDir();
+    const scope = {
       agentId: "main",
       sessionId: "session-tree",
-    });
-    const sessionManager = openTranscriptSessionManager({
-      transcriptLocator,
-      sessionId: "session-tree",
+    };
+    const sessionManager = openTranscriptSessionManagerForSession({
+      ...scope,
       cwd: "/tmp/workspace",
     });
     const rootId = sessionManager.appendMessage({ role: "user", content: "root", timestamp: 1 });
@@ -389,7 +328,7 @@ describe("TranscriptSessionManager", () => {
       children: [{ entry: { id: childId } }, { entry: { id: siblingId }, label: "alternate" }],
     });
 
-    const reopened = openTranscriptSessionManager({ transcriptLocator });
+    const reopened = openTranscriptSessionManagerForSession(scope);
     expect(reopened.getEntry(summaryId)).toMatchObject({
       type: "branch_summary",
       fromId: childId,

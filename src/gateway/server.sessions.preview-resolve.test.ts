@@ -19,29 +19,17 @@ function sqliteTranscript(sessionId: string, agentId = "main"): string {
   return createSqliteSessionTranscriptLocator({ agentId, sessionId });
 }
 
-function seedTranscript(params: {
-  sessionId: string;
-  transcriptPath: string;
-  events: unknown[];
-  agentId?: string;
-}) {
+function seedTranscript(params: { sessionId: string; events: unknown[]; agentId?: string }) {
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId ?? "main",
     sessionId: params.sessionId,
-    transcriptPath: params.transcriptPath,
     events: params.events,
   });
 }
 
-function seedTranscriptLines(
-  sessionId: string,
-  transcriptPath: string,
-  lines: string[],
-  agentId?: string,
-) {
+function seedTranscriptLines(sessionId: string, lines: string[], agentId?: string) {
   seedTranscript({
     sessionId,
-    transcriptPath,
     agentId,
     events: lines.map((line) => JSON.parse(line) as unknown),
   });
@@ -74,9 +62,8 @@ function seedRawSessionStore(store: Record<string, unknown>) {
 test("sessions.preview returns transcript previews", async () => {
   await createSessionStoreDir();
   const sessionId = "sess-preview";
-  const transcriptPath = sqliteTranscript(sessionId);
   const lines = createToolSummaryPreviewTranscriptLines(sessionId);
-  seedTranscriptLines(sessionId, transcriptPath, lines);
+  seedTranscriptLines(sessionId, lines);
 
   await seedGatewaySessionEntries({
     entries: {
@@ -104,10 +91,8 @@ test("sessions.resolve and mutators use canonical main key without cleaning lega
   testState.agentsConfig = { list: [{ id: "ops", default: true }] };
   testState.sessionConfig = { mainKey: "work" };
   const sessionId = "sess-alias-cleanup";
-  const transcriptPath = sqliteTranscript(sessionId, "ops");
   seedTranscript({
     sessionId,
-    transcriptPath,
     agentId: "ops",
     events: Array.from({ length: 8 }).map((_, idx) => ({
       type: "message",

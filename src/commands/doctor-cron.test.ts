@@ -51,7 +51,7 @@ function createCronConfig(storePath: string): OpenClawConfig {
     cron: {
       store: storePath,
       webhook: "https://example.invalid/cron-finished",
-    },
+    } as OpenClawConfig["cron"] & { store: string },
   };
 }
 
@@ -413,7 +413,7 @@ describe("maybeRepairLegacyCronStore", () => {
         cron: {
           store: storePath,
           webhook: "https://example.invalid/cron-finished",
-        },
+        } as OpenClawConfig["cron"] & { store: string },
       },
       options: { nonInteractive: true },
       prompter: makePrompter(true),
@@ -486,7 +486,7 @@ describe("maybeRepairLegacyCronStore", () => {
         cron: {
           store: storePath,
           webhook: "https://example.invalid/cron-finished",
-        },
+        } as OpenClawConfig["cron"] & { store: string },
       },
       options: {},
       prompter: makePrompter(true),

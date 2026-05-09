@@ -24,13 +24,11 @@ function createIssue66019Job(params: { id: string; scheduledAt: number }) {
 }
 
 function createIssue66019State(params: {
-  storePath: string;
   nowMs: () => number;
   runIsolatedAgentJob: Parameters<typeof createCronServiceState>[0]["runIsolatedAgentJob"];
 }) {
   return createCronServiceState({
     cronEnabled: true,
-    storePath: params.storePath,
     log: noopLogger,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),
@@ -77,7 +75,6 @@ describe("#66019 unresolved next-run repro", () => {
     const runIsolatedAgentJob = createDefaultIsolatedRunner();
     const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
     const state = createIssue66019State({
-      storePath: store.storePath,
       nowMs: () => now,
       runIsolatedAgentJob,
     });
@@ -115,7 +112,6 @@ describe("#66019 unresolved next-run repro", () => {
     });
     const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
     const state = createIssue66019State({
-      storePath: store.storePath,
       nowMs: () => now,
       runIsolatedAgentJob,
     });
@@ -159,7 +155,6 @@ describe("#66019 unresolved next-run repro", () => {
       .mockReturnValueOnce(undefined)
       .mockReturnValue(naturalNext);
     const state = createIssue66019State({
-      storePath: store.storePath,
       nowMs: () => now,
       runIsolatedAgentJob,
     });

@@ -1,20 +1,7 @@
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  pruneExpiredPending,
-  reconcilePendingPairingRequests,
-  resolvePairingPaths,
-} from "./pairing-files.js";
+import { pruneExpiredPending, reconcilePendingPairingRequests } from "./pairing-files.js";
 
 describe("pairing file helpers", () => {
-  it("resolves pairing file paths from explicit base dirs", () => {
-    expect(resolvePairingPaths("/tmp/openclaw-state", "devices")).toEqual({
-      dir: path.join("/tmp/openclaw-state", "devices"),
-      pendingPath: path.join("/tmp/openclaw-state", "devices", "pending.json"),
-      pairedPath: path.join("/tmp/openclaw-state", "devices", "paired.json"),
-    });
-  });
-
   it("prunes only entries older than the ttl", () => {
     const pendingById = {
       stale: { ts: 10, requestId: "stale" },

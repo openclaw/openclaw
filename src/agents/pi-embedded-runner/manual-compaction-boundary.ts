@@ -1,8 +1,8 @@
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../../config/sessions/transcript-store.sqlite.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { AgentMessage } from "../agent-core-contract.js";
 import type { SessionEntry, SessionHeader } from "../transcript/session-transcript-contract.js";
 import { TranscriptState } from "../transcript/transcript-state.js";
@@ -72,16 +72,16 @@ function hasMessagesToSummarizeBeforeKeptTail(params: {
 }
 
 export async function hardenManualCompactionBoundary(params: {
-  transcriptLocator: string;
+  agentId: string;
+  sessionId: string;
   preserveRecentTail?: boolean;
 }): Promise<HardenedManualCompactionBoundary> {
-  const scope = resolveSqliteSessionTranscriptScopeForLocator({
-    transcriptLocator: params.transcriptLocator,
-  });
-  if (!scope) {
-    throw new Error(
-      `SQLite transcript is missing from the state database: ${params.transcriptLocator}. Run "openclaw doctor --fix" if legacy transcript files still need import.`,
-    );
+  const scope = {
+    agentId: normalizeAgentId(params.agentId),
+    sessionId: params.sessionId.trim(),
+  };
+  if (!scope.sessionId) {
+    throw new Error("SQLite transcript scope requires a session id.");
   }
   const events = loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
   const fileEntries = events.filter((event): event is SessionEntry | SessionHeader =>

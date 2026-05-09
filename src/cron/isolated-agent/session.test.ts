@@ -173,12 +173,11 @@ describe("resolveCronSession", () => {
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
-    it("clears stale sessionFile when forceNew rolls to a fresh session", () => {
+    it("clears stale transcriptLocator when forceNew rolls to a fresh session", () => {
       const result = resolveWithStoredEntry({
         entry: {
           sessionId: "existing-session-id-456",
           updatedAt: NOW_MS - 1000,
-          sessionFile: "/tmp/stale-session.jsonl",
           modelOverride: "sonnet-4",
         },
         fresh: true,
@@ -187,7 +186,7 @@ describe("resolveCronSession", () => {
 
       expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-456");
       expect(result.isNewSession).toBe(true);
-      expect(result.sessionEntry.sessionFile).toBeUndefined();
+      expect(result.sessionEntry).not.toHaveProperty("transcriptLocator");
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
     });
 

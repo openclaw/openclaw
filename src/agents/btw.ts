@@ -7,8 +7,8 @@ import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
-import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
-import { resolveAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
+import { readBtwTranscriptMessages } from "./btw-transcript.js";
+import { resolveAgentHarnessPolicy } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
   type ImageSanitizationLimits,
@@ -294,14 +294,10 @@ export async function runBtwSideQuestion(
     throw new Error("No active session context.");
   }
 
-  const sessionFile = resolveBtwSessionTranscriptPath({
-    sessionId,
-    sessionEntry: params.sessionEntry,
+  const sessionAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
+    config: params.cfg,
   });
-  if (!sessionFile) {
-    throw new Error("No active session transcript.");
-  }
 
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
@@ -363,7 +359,7 @@ export async function runBtwSideQuestion(
   if (messages.length === 0) {
     messages = await toSimpleContextMessages({
       messages: await readBtwTranscriptMessages({
-        sessionFile,
+        agentId: sessionAgentId,
         sessionId,
         snapshotLeafId: activeRunSnapshot?.transcriptLeafId,
       }),
@@ -374,6 +370,7 @@ export async function runBtwSideQuestion(
     throw new Error("No active session context.");
   }
 
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   const { model, authProfileId } = await resolveRuntimeModel({
     cfg: params.cfg,
     provider: params.provider,

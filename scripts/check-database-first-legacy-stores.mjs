@@ -175,6 +175,24 @@ const writeApiPattern =
   /\b(?:appendFile|appendFileSync|appendRegularFile|appendRegularFileSync|createWriteStream|getQueuedFileWriter|openSync|rename|renameSync|rm|rmSync|unlink|unlinkSync|writeFile|writeFileSync|writeJson|writeJsonAtomic)\b/u;
 const legacySessionStoreApiPattern =
   /\b(?:loadSessionStore|saveSessionStore|updateSessionStore|updateSessionStoreEntry|resolveStorePath|resolveLegacySessionStorePath)\b/u;
+const forbiddenRuntimeLocatorContractMarkers = [
+  {
+    label: "session accounting transcript locator output",
+    pattern: /\bnewTranscriptLocator\b/u,
+  },
+  {
+    label: "embedded run agent meta transcript locator output",
+    pattern: /\bagentMeta\??\.transcriptLocator\b/u,
+  },
+  {
+    label: "embedded attempt transcript locator output",
+    pattern: /\btranscriptLocatorUsed\b/u,
+  },
+  {
+    label: "context engine compaction transcript locator output",
+    pattern: /\bresult\??\.transcriptLocator\b/u,
+  },
+];
 
 const allowedExactPaths = new Set([
   "extensions/discord/src/state-migrations.ts",
@@ -291,6 +309,15 @@ function findViolations(content, relativePath) {
           label: marker.label,
         });
       }
+    }
+  }
+  for (const marker of forbiddenRuntimeLocatorContractMarkers) {
+    for (const match of content.matchAll(new RegExp(marker.pattern, "gu"))) {
+      violations.push({
+        path: relativePath,
+        line: lineForIndex(content, match.index ?? 0),
+        label: marker.label,
+      });
     }
   }
   return violations;

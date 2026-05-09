@@ -101,19 +101,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     };
   }
 
-  function requireTranscriptUpdateCall(spy: TranscriptUpdateEmitterSpy): SessionTranscriptUpdate {
-    const call = spy.mock.calls[0];
-    if (!call) {
-      throw new Error("expected transcript update event");
-    }
-    const event = call[0];
-    if (typeof event === "string") {
-      throw new Error("expected structured transcript update event");
-    }
-    return event;
-  }
-
-  it("creates transcript file and appends message for valid session", async () => {
+  it("appends SQLite transcript message for valid session", async () => {
     await writeTranscriptStore();
 
     const result = await appendAssistantMessageToSessionTranscript({
@@ -123,7 +111,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(fs.existsSync(result.sessionFile)).toBe(false);
       const events = readEvents();
       expect(events.length).toBe(2);
 
@@ -154,7 +141,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionFile: result.ok ? result.sessionFile : expect.any(String),
+        transcriptLocator: expect.stringMatching(/^sqlite-transcript:\/\/main\/test-session-id$/),
         sessionKey,
         messageId: expect.any(String),
         message: expect.objectContaining({
@@ -432,7 +419,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     if (result.ok) {
       expect(emitSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          sessionFile: result.sessionFile,
+          transcriptLocator: expect.stringMatching(/^sqlite-transcript:\/\/main\/test-session-id$/),
           sessionKey,
         }),
       );
@@ -442,10 +429,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("serializes concurrent parent-linked transcript appends", async () => {
     const targetSessionId = "concurrent-tree-session";
-    const sessionFile = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: targetSessionId,
-    });
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: targetSessionId,
@@ -466,7 +449,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     await Promise.all(
       Array.from({ length: 8 }, (_, index) =>
         appendSessionTranscriptMessage({
-          transcriptPath: sessionFile,
           agentId: "main",
           sessionId: targetSessionId,
           message: { role: "assistant", content: `reply ${index}` },
@@ -484,10 +466,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("appends to existing SQLite transcript chains", async () => {
     const targetSessionId = "small-linear-session";
-    const sessionFile = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: targetSessionId,
-    });
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: targetSessionId,
@@ -517,7 +495,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     });
 
     const appended = await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
       agentId: "main",
       sessionId: targetSessionId,
       message: { role: "assistant", content: "new reply" },
@@ -542,10 +519,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("appends scoped SQLite transcript entries without importing JSONL at runtime", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionFile = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: "sqlite-import-session",
-    });
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "sqlite-import-session",
@@ -566,7 +539,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     });
 
     const appended = await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
       agentId: "main",
       sessionId: "sqlite-import-session",
       message: { role: "assistant", content: "new reply" },
@@ -589,13 +561,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("mirrors a newly created scoped transcript header into SQLite", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionFile = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: "sqlite-new-session",
-    });
 
     const appended = await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
       agentId: "main",
       sessionId: "sqlite-new-session",
       cwd: "/workspace",
@@ -623,15 +590,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
-  it("preserves virtual SQLite transcript locators instead of registering fake file paths", async () => {
+  it("appends scoped SQLite transcript entries without registering fake file paths", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const sessionId = "sqlite-locator-session";
-    const sessionFile = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
 
     await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
       agentId: "main",
       sessionId,
       cwd: "/workspace",
@@ -688,7 +653,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     });
 
     await expect(
-      readLatestAssistantTextFromSessionTranscript(undefined, {
+      readLatestAssistantTextFromSessionTranscript({
         agentId: "main",
         sessionId: "sqlite-read-session",
       }),
@@ -698,7 +663,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       timestamp: 300,
     });
     await expect(
-      readTailAssistantTextFromSessionTranscript(undefined, {
+      readTailAssistantTextFromSessionTranscript({
         agentId: "main",
         sessionId: "sqlite-read-session",
       }),

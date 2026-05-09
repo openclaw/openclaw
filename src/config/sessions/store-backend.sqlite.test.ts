@@ -32,11 +32,6 @@ function sqliteTranscript(agentId: string, sessionId: string): string {
   return createSqliteSessionTranscriptLocator({ agentId, sessionId });
 }
 
-function withoutTranscriptLocator(entry: SessionEntry): SessionEntry {
-  const { transcriptLocator: _transcriptLocator, ...rest } = entry;
-  return rest;
-}
-
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -53,12 +48,10 @@ describe("SQLite session store backend", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const mainEntry: SessionEntry = {
       sessionId: "main-session",
-      transcriptLocator: sqliteTranscript("main", "main-session"),
       updatedAt: 123,
     };
     const opsEntry: SessionEntry = {
       sessionId: "ops-session",
-      transcriptLocator: sqliteTranscript("ops", "ops-session"),
       updatedAt: 456,
     };
 
@@ -66,10 +59,10 @@ describe("SQLite session store backend", () => {
     upsertSessionEntry({ agentId: "ops", env, sessionKey: "discord:u1", entry: opsEntry });
 
     expect(loadSqliteSessionEntries({ agentId: "main", env })).toEqual({
-      "discord:u1": withoutTranscriptLocator(mainEntry),
+      "discord:u1": mainEntry,
     });
     expect(loadSqliteSessionEntries({ agentId: "ops", env })).toEqual({
-      "discord:u1": withoutTranscriptLocator(opsEntry),
+      "discord:u1": opsEntry,
     });
   });
 
@@ -82,7 +75,6 @@ describe("SQLite session store backend", () => {
     });
     const entry: SessionEntry = {
       sessionId: "sqlite-primary",
-      transcriptLocator: sqliteTranscript("ops", "sqlite-primary"),
       updatedAt: 100,
     };
 
@@ -101,7 +93,7 @@ describe("SQLite session store backend", () => {
     expect(fs.existsSync(storePath)).toBe(false);
     expect(loadSqliteSessionEntries({ agentId: "ops", env })).toEqual({
       "discord:ops": {
-        ...withoutTranscriptLocator(entry),
+        ...entry,
         updatedAt: 200,
         modelOverride: "gpt-5.5",
       },
@@ -117,7 +109,6 @@ describe("SQLite session store backend", () => {
       sessionKey: "discord:ops",
       entry: {
         sessionId: "ops-session",
-        transcriptLocator: sqliteTranscript("ops", "ops-session"),
         updatedAt: 100,
       },
     });
@@ -127,7 +118,6 @@ describe("SQLite session store backend", () => {
       sessionKey: "discord:other",
       entry: {
         sessionId: "other-session",
-        transcriptLocator: sqliteTranscript("ops", "other-session"),
         updatedAt: 50,
       },
     });
@@ -162,7 +152,6 @@ describe("SQLite session store backend", () => {
       sessionKey: "discord:ops",
       entry: {
         sessionId: "ops-session",
-        transcriptLocator: sqliteTranscript("ops", "ops-session"),
         updatedAt: 100,
       },
     });
@@ -172,7 +161,6 @@ describe("SQLite session store backend", () => {
       sessionKey: "discord:other",
       entry: {
         sessionId: "other-session",
-        transcriptLocator: sqliteTranscript("ops", "other-session"),
         updatedAt: 50,
       },
     });
@@ -198,7 +186,6 @@ describe("SQLite session store backend", () => {
     });
     const entry: SessionEntry = {
       sessionId: "sqlite-default",
-      transcriptLocator: sqliteTranscript("ops", "sqlite-default"),
       updatedAt: 100,
     };
 
@@ -206,7 +193,7 @@ describe("SQLite session store backend", () => {
 
     expect(fs.existsSync(storePath)).toBe(false);
     expect(loadSqliteSessionEntries({ agentId: "ops", env })).toEqual({
-      "discord:ops": withoutTranscriptLocator(entry),
+      "discord:ops": entry,
     });
   });
 });

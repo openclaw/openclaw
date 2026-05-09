@@ -39,10 +39,14 @@ export type SessionManager = SessionManagerType;
 
 export const SessionManager = SessionManagerValue as {
   create(cwd: string): SessionManagerType;
-  open(transcriptLocator: string, cwdOverride?: string): SessionManagerType;
+  openForSession(params: { agentId: string; sessionId: string; cwd?: string }): SessionManagerType;
   continueRecent(cwd: string): SessionManagerType;
   inMemory(cwd?: string): SessionManagerType;
-  forkFrom(sourceTranscriptLocator: string, targetCwd: string): SessionManagerType;
+  forkFromSession(params: {
+    agentId: string;
+    sessionId: string;
+    targetCwd: string;
+  }): SessionManagerType;
   list(cwd: string, onProgress?: SessionListProgress): Promise<SessionInfo[]>;
   listAll(onProgress?: SessionListProgress): Promise<SessionInfo[]>;
 };

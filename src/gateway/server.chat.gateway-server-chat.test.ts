@@ -134,7 +134,6 @@ describe("gateway server chat", () => {
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "sess-main",
-      transcriptPath: resolveMainTranscriptPath(),
       events,
     });
   };

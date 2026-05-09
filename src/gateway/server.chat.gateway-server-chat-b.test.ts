@@ -116,7 +116,6 @@ async function writeMainSessionTranscript(_sessionDir: string, lines: string[]) 
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath: resolveMainTranscriptPath(),
     events: lines.map((line) => JSON.parse(line) as unknown),
   });
 }

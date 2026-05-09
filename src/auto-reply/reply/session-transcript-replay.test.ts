@@ -35,36 +35,31 @@ describe("replayRecentUserAssistantMessages", () => {
   function seedTranscript(params: {
     agentId?: string;
     sessionId: string;
-    transcriptPath?: string;
     events: unknown[];
-  }): string {
+  }): void {
     const agentId = params.agentId ?? "main";
-    const transcriptPath =
-      params.transcriptPath ??
-      path.join(root, "agents", agentId, "sessions", `${params.sessionId}.jsonl`);
     replaceSqliteSessionTranscriptEvents({
       agentId,
       sessionId: params.sessionId,
-      transcriptPath,
       events: params.events,
       now: () => 1_770_000_000_000,
     });
-    return transcriptPath;
   }
 
   function readEvents(agentId = "main", sessionId = "new-session"): unknown[] {
     return loadSqliteSessionTranscriptEvents({ agentId, sessionId }).map((entry) => entry.event);
   }
 
-  const call = (sourceTranscript: string, targetTranscript: string): Promise<number> =>
+  const call = (sourceSessionId: string, targetAgentId = "main"): Promise<number> =>
     replayRecentUserAssistantMessages({
-      sourceTranscript,
-      targetTranscript,
+      sourceAgentId: "main",
+      sourceSessionId,
+      targetAgentId,
       newSessionId: "new-session",
     });
 
   it("replays only the user/assistant tail and skips tool/system records", async () => {
-    const source = seedTranscript({
+    seedTranscript({
       sessionId: "prev",
       events: [
         { type: "session", id: "old" },
@@ -75,42 +70,39 @@ describe("replayRecentUserAssistantMessages", () => {
         { type: "compaction", timestamp: new Date().toISOString() },
       ],
     });
-    const target = path.join(root, "agents", "main", "sessions", "next.jsonl");
 
-    expect(await call(source, target)).toBe(DEFAULT_REPLAY_MAX_MESSAGES);
+    expect(await call("prev")).toBe(DEFAULT_REPLAY_MAX_MESSAGES);
     const records = readEvents();
     expect(records[0]).toMatchObject({ type: "session", id: "new-session" });
     expect(records).toHaveLength(1 + DEFAULT_REPLAY_MAX_MESSAGES);
     for (const r of records.slice(1) as Array<{ message: { role: string } }>) {
       expect(["user", "assistant"]).toContain(r.message.role);
     }
-    expect(await call(path.join(root, "missing.jsonl"), target)).toBe(0);
+    expect(await call("missing")).toBe(0);
 
-    const assistantSource = seedTranscript({
+    seedTranscript({
       sessionId: "all-assistant",
       events: Array.from({ length: 3 }, () => ({
         message: { role: "assistant", content: "x" },
       })),
     });
-    expect(
-      await call(assistantSource, path.join(root, "agents", "main", "sessions", "out.jsonl")),
-    ).toBe(0);
+    expect(await call("all-assistant")).toBe(0);
     expect(readEvents("main", "new-session")).toHaveLength(1 + DEFAULT_REPLAY_MAX_MESSAGES);
   });
 
   it("keeps a pre-existing target header and aligns the tail to a user turn", async () => {
-    const target = seedTranscript({
+    seedTranscript({
       sessionId: "new-session",
       events: [{ type: "session", id: "existing" }],
     });
-    const source = seedTranscript({
+    seedTranscript({
       sessionId: "prev",
       events: Array.from({ length: DEFAULT_REPLAY_MAX_MESSAGES + 1 }, (_, i) => ({
         message: { role: i % 2 === 0 ? "user" : "assistant", content: `m${i}` },
       })),
     });
 
-    expect(await call(source, target)).toBe(DEFAULT_REPLAY_MAX_MESSAGES - 1);
+    expect(await call("prev")).toBe(DEFAULT_REPLAY_MAX_MESSAGES - 1);
     const records = readEvents();
     expect(records.filter((r) => (r as { type?: unknown }).type === "session")).toHaveLength(1);
     expect(records[0]).toMatchObject({ id: "existing" });
@@ -118,7 +110,7 @@ describe("replayRecentUserAssistantMessages", () => {
   });
 
   it("coalesces same-role runs so replayed records strictly alternate", async () => {
-    const source = seedTranscript({
+    seedTranscript({
       sessionId: "prev",
       events: [
         { message: { role: "user", content: "older user" } },
@@ -129,9 +121,8 @@ describe("replayRecentUserAssistantMessages", () => {
         { message: { role: "assistant", content: "answer" } },
       ],
     });
-    const target = path.join(root, "agents", "main", "sessions", "next.jsonl");
 
-    expect(await call(source, target)).toBe(4);
+    expect(await call("prev")).toBe(4);
     const records = readEvents().slice(1) as Array<{ message: { role: string; content: string } }>;
     expect(records.map((r) => r.message.role)).toEqual(["user", "assistant", "user", "assistant"]);
     expect(records.map((r) => r.message.content)).toEqual([
@@ -153,15 +144,12 @@ describe("replayRecentUserAssistantMessages", () => {
         { message: { role: "assistant", content: "sqlite assistant" } },
       ],
     });
-    const target = path.join(root, "agents", "target", "sessions", "next.jsonl");
 
     expect(
       await replayRecentUserAssistantMessages({
         sourceAgentId: "target",
         sourceSessionId: "old-session",
-        sourceTranscript: path.join(root, "missing.jsonl"),
         targetAgentId: "target",
-        targetTranscript: target,
         newSessionId: "new-session",
       }),
     ).toBe(2);

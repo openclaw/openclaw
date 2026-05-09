@@ -423,7 +423,6 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
           newSessionId: runResult.meta?.agentMeta?.sessionId,
-          newTranscriptLocator: runResult.meta?.agentMeta?.transcriptLocator,
         });
         const refreshedSessionEntry =
           sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
@@ -434,7 +433,6 @@ export function createFollowupRunner(params: {
               key: queueKey,
               previousSessionId,
               nextSessionId: refreshedSessionEntry.sessionId,
-              nextTranscriptLocator: runResult.meta?.agentMeta?.transcriptLocator,
             });
           }
         }

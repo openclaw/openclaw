@@ -1,12 +1,8 @@
 import { randomUUID } from "node:crypto";
-import {
-  createSqliteSessionTranscriptLocator,
-  isSqliteSessionTranscriptLocator,
-} from "../../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -41,16 +37,14 @@ export function shouldRotateCompactionTranscript(config?: OpenClawConfig): boole
 
 export async function rotateTranscriptAfterCompaction(params: {
   sessionManager: ReadonlySessionManagerForRotation;
-  agentId?: string;
-  transcriptLocator: string;
+  agentId: string;
+  sessionId: string;
   now?: () => Date;
 }): Promise<CompactionTranscriptRotation> {
-  const transcriptLocator = params.transcriptLocator.trim();
-  if (!transcriptLocator) {
-    return { rotated: false, reason: "missing transcript locator" };
-  }
-  if (!isSqliteSessionTranscriptLocator(transcriptLocator)) {
-    return { rotated: false, reason: "transcript not in SQLite" };
+  const agentId = normalizeAgentId(params.agentId);
+  const sourceSessionId = params.sessionId.trim();
+  if (!sourceSessionId) {
+    return { rotated: false, reason: "missing session id" };
   }
 
   const branch = params.sessionManager.getBranch();
@@ -62,16 +56,13 @@ export async function rotateTranscriptAfterCompaction(params: {
   const compaction = branch[latestCompactionIndex] as CompactionEntry;
   const timestamp = (params.now?.() ?? new Date()).toISOString();
   const sessionId = randomUUID();
-  const sourceScope = resolveSourceTranscriptScope({
-    agentId: params.agentId,
-    transcriptLocator,
+  const sourceTranscriptLocator = createSqliteSessionTranscriptLocator({
+    agentId,
+    sessionId: sourceSessionId,
   });
-  if (!sourceScope) {
-    return { rotated: false, reason: "transcript not in SQLite" };
-  }
   const successorTranscriptLocator = resolveSuccessorTranscriptLocator({
     sessionId,
-    agentId: sourceScope.agentId,
+    agentId,
   });
   const successorEntries = buildSuccessorEntries({
     allEntries: params.sessionManager.getEntries(),
@@ -87,10 +78,10 @@ export async function rotateTranscriptAfterCompaction(params: {
     sessionId,
     timestamp,
     cwd: params.sessionManager.getCwd(),
-    parentSession: transcriptLocator,
+    parentSession: sourceTranscriptLocator,
   });
   replaceSqliteSessionTranscriptEvents({
-    agentId: sourceScope.agentId,
+    agentId,
     sessionId,
     events: [header, ...successorEntries],
   });
@@ -107,52 +98,31 @@ export async function rotateTranscriptAfterCompaction(params: {
 }
 
 export async function rotateSqliteTranscriptAfterCompaction(params: {
-  agentId?: string;
-  transcriptLocator: string;
+  agentId: string;
+  sessionId: string;
   now?: () => Date;
 }): Promise<CompactionTranscriptRotation> {
-  const state = loadTranscriptStateFromSqlite({
-    agentId: params.agentId,
-    transcriptLocator: params.transcriptLocator,
-  });
+  const state = loadTranscriptStateFromSqlite(params);
   if (!state) {
     return { rotated: false, reason: "transcript not in SQLite" };
   }
   return rotateTranscriptAfterCompaction({
     sessionManager: state,
     agentId: params.agentId,
-    transcriptLocator: params.transcriptLocator,
+    sessionId: params.sessionId,
     ...(params.now ? { now: params.now } : {}),
   });
 }
 
-function resolveSourceTranscriptScope(params: { agentId?: string; transcriptLocator: string }): {
-  agentId: string;
-} | null {
-  const existing = resolveSqliteSessionTranscriptScopeForLocator({
-    transcriptLocator: params.transcriptLocator,
-  });
-  if (!existing) {
-    return null;
-  }
-  if (params.agentId?.trim()) {
-    return { agentId: normalizeAgentId(params.agentId) };
-  }
-  return { agentId: existing.agentId };
-}
-
 function loadTranscriptStateFromSqlite(params: {
-  agentId?: string;
-  transcriptLocator: string;
+  agentId: string;
+  sessionId: string;
 }): TranscriptState | null {
-  const scope = resolveSqliteSessionTranscriptScopeForLocator({
-    transcriptLocator: params.transcriptLocator,
-  });
-  const sessionId = scope?.sessionId;
+  const sessionId = params.sessionId.trim();
   if (!sessionId) {
     return null;
   }
-  const agentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : scope.agentId;
+  const agentId = normalizeAgentId(params.agentId);
   const events = loadSqliteSessionTranscriptEvents({ agentId, sessionId }).map(
     (entry) => entry.event,
   );

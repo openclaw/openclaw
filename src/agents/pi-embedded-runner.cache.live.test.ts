@@ -346,7 +346,6 @@ async function compactLiveCacheSession(params: {
     compactEmbeddedPiSessionDirect({
       sessionId: params.sessionId,
       sessionKey: `live-cache:${params.providerTag}:${params.sessionId}`,
-      transcriptLocator: sessionPaths.transcriptLocator,
       workspaceDir: sessionPaths.workspaceDir,
       agentDir: sessionPaths.agentDir,
       config: buildEmbeddedRunnerConfig({

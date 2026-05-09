@@ -11,7 +11,6 @@ import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { resolveSessionRowEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
@@ -790,7 +789,6 @@ export async function runPreparedReply(
   const resolvePreparedSessionState = (): {
     sessionEntry: SessionEntry | undefined;
     sessionId: string;
-    sessionFile: string;
   } => {
     const latestSessionEntry =
       sessionStore && sessionKey
@@ -803,10 +801,6 @@ export async function runPreparedReply(
     return {
       sessionEntry: latestSessionEntry,
       sessionId: latestSessionId,
-      sessionFile: createSqliteSessionTranscriptLocator({
-        agentId,
-        sessionId: latestSessionId,
-      }),
     };
   };
   let preparedSessionState = resolvePreparedSessionState();
@@ -992,7 +986,6 @@ export async function runPreparedReply(
       traceAuthorized:
         (forceSenderIsOwnerFalseFromSystemEvents ? false : command.senderIsOwner) ||
         (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
-      sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       config: cfg,
       skillsSnapshot,

@@ -1,8 +1,6 @@
-import { isSqliteSessionTranscriptLocator } from "../../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
-  resolveSqliteSessionTranscriptScopeForLocator,
   type SqliteSessionTranscriptScope,
 } from "../../../config/sessions/transcript-store.sqlite.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
@@ -27,13 +25,10 @@ function extractTextMessageContent(content: unknown): string | undefined {
 }
 
 export async function getRecentTranscriptContent(
-  target:
-    | string
-    | {
-        agentId?: string;
-        sessionId?: string;
-        transcriptLocator?: string;
-      },
+  target: {
+    agentId?: string;
+    sessionId?: string;
+  },
   messageCount: number = 15,
 ): Promise<string | null> {
   try {
@@ -78,31 +73,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function resolveScopeForTranscriptTarget(
-  target:
-    | string
-    | {
-        agentId?: string;
-        sessionId?: string;
-        transcriptLocator?: string;
-      },
-): SqliteSessionTranscriptScope | undefined {
-  if (typeof target !== "string") {
-    const sessionId = target.sessionId?.trim();
-    if (sessionId) {
-      return resolveSqliteSessionTranscriptScope({
-        agentId: target.agentId,
-        sessionId,
-      });
-    }
-    if (!target.transcriptLocator?.trim()) {
-      return undefined;
-    }
-    target = target.transcriptLocator;
-  }
-
-  if (!isSqliteSessionTranscriptLocator(target)) {
+function resolveScopeForTranscriptTarget(target: {
+  agentId?: string;
+  sessionId?: string;
+}): SqliteSessionTranscriptScope | undefined {
+  const sessionId = target.sessionId?.trim();
+  if (!sessionId) {
     return undefined;
   }
-  return resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: target });
+  return resolveSqliteSessionTranscriptScope({
+    agentId: target.agentId,
+    sessionId,
+  });
 }

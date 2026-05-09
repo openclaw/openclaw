@@ -27,7 +27,7 @@ vi.mock("../../config/sessions/group.js", () => ({
 vi.mock("../../config/sessions/paths.js", () => ({
   createSqliteSessionTranscriptLocator: vi.fn(
     ({ agentId, sessionId }: { agentId?: string; sessionId: string }) =>
-      `sqlite-transcript://${agentId ?? "main"}/${sessionId}.jsonl`,
+      `sqlite-transcript://${agentId ?? "main"}/${sessionId}`,
   ),
 }));
 
@@ -1019,7 +1019,6 @@ describe("runPreparedReply media-only handling", () => {
     const sessionStore: Record<string, SessionEntry> = {
       "session-key": {
         sessionId: "session-auth-profile",
-        sessionFile: "/tmp/session-auth-profile.jsonl",
         authProfileOverride: "profile-before-wait",
         authProfileOverrideSource: "auto",
         updatedAt: 1,
@@ -1071,7 +1070,6 @@ describe("runPreparedReply media-only handling", () => {
     const sessionStore: Record<string, SessionEntry> = {
       "session-key": {
         sessionId: "session-before-rotation",
-        sessionFile: "/tmp/session-before-rotation.jsonl",
         updatedAt: 1,
       },
     };
@@ -1100,7 +1098,6 @@ describe("runPreparedReply media-only handling", () => {
     sessionStore["session-key"] = {
       ...sessionStore["session-key"],
       sessionId: "session-after-rotation",
-      sessionFile: "/tmp/session-after-rotation.jsonl",
       updatedAt: 2,
     };
     rotatedRun.updateSessionId("session-after-rotation");

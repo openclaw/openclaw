@@ -2856,7 +2856,6 @@ export async function runEmbeddedAttempt(
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
-      let transcriptLocatorUsed: string | undefined = sessionTranscriptLocator;
       const onAbort = () => {
         externalAbort = true;
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
@@ -3837,12 +3836,11 @@ export async function runEmbeddedAttempt(
           try {
             const rotation = await rotateTranscriptAfterCompaction({
               sessionManager,
-              agentId: params.agentId,
-              transcriptLocator: sessionTranscriptLocator,
+              agentId: sessionAgentId,
+              sessionId: params.sessionId,
             });
             if (rotation.rotated) {
               sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
-              transcriptLocatorUsed = rotation.transcriptLocator ?? transcriptLocatorUsed;
               log.info(
                 `[compaction] rotated active transcript after automatic compaction ` +
                   `(sessionKey=${params.sessionKey ?? params.sessionId})`,
@@ -4094,7 +4092,6 @@ export async function runEmbeddedAttempt(
         promptErrorSource,
         preflightRecovery,
         sessionIdUsed,
-        transcriptLocatorUsed,
         diagnosticTrace,
         bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
