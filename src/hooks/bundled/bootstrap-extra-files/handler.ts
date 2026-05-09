@@ -22,6 +22,20 @@ function resolveExtraBootstrapPatterns(hookConfig: Record<string, unknown>): str
   return normalizeTrimmedStringList(hookConfig.files);
 }
 
+function resolveSessionBootstrapPatterns(
+  hookConfig: Record<string, unknown>,
+  sessionKey?: string,
+): string[] {
+  if (!sessionKey) {
+    return [];
+  }
+  const sessions = hookConfig.sessions;
+  if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
+    return [];
+  }
+  return normalizeTrimmedStringList((sessions as Record<string, unknown>)[sessionKey]);
+}
+
 const bootstrapExtraFilesHook: HookHandler = async (event) => {
   if (!isAgentBootstrapEvent(event)) {
     return;
@@ -33,16 +47,32 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     return;
   }
 
-  const patterns = resolveExtraBootstrapPatterns(hookConfig as Record<string, unknown>);
-  if (patterns.length === 0) {
+  const typedConfig = hookConfig as Record<string, unknown>;
+  const globalPatterns = resolveExtraBootstrapPatterns(typedConfig);
+  const sessionPatterns = resolveSessionBootstrapPatterns(typedConfig, context.sessionKey);
+  if (globalPatterns.length === 0 && sessionPatterns.length === 0) {
     return;
   }
 
   try {
-    const { files: extras, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(
+    const globalResult = await loadExtraBootstrapFilesWithDiagnostics(
       context.workspaceDir,
-      patterns,
+      globalPatterns,
     );
+    const sessionResult = await loadExtraBootstrapFilesWithDiagnostics(
+      context.workspaceDir,
+      sessionPatterns,
+      { allowArbitraryBasenames: true },
+    );
+    const seenExtraPaths = new Set<string>();
+    const extras = [...globalResult.files, ...sessionResult.files].filter((file) => {
+      if (seenExtraPaths.has(file.path)) {
+        return false;
+      }
+      seenExtraPaths.add(file.path);
+      return true;
+    });
+    const diagnostics = [...globalResult.diagnostics, ...sessionResult.diagnostics];
     if (diagnostics.length > 0) {
       log.debug("skipped extra bootstrap candidates", {
         skipped: diagnostics.length,

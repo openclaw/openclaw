@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Hooks: add exact-session `bootstrap-extra-files.sessions` config entries that can include custom bootstrap filenames while global extra-file globs keep the recognized basename allowlist. Thanks @presidenzo.
+
 ### Fixes
 
 - Feishu: auto-thread `message(action="send")` replies inside the topic when the active session is group_topic or group_topic_sender, and propagate `replyInThread` through text, card, and media outbound adapters so topic-scoped sessions no longer post at the group root. Fixes #74903. (#77151) Thanks @ai-hpc.
