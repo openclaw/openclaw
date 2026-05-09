@@ -263,26 +263,25 @@ supplementing thread history, swap this projection layer to use that API.
 In `extensions/codex/src/app-server/run-attempt.ts`:
 
 - Read mirrored session history as today.
-- Determine whether the session file existed before this run. Prefer a helper
-  that checks `fs.stat(params.sessionFile)` before mirroring writes.
-- Open a `SessionManager` or use a narrow session manager adapter if the helper
-  requires it.
+- Determine whether SQLite already has transcript rows for `{agentId, sessionId}`
+  before mirroring writes.
+- Use the SQLite transcript scope helpers; do not open a transcript file or
+  derive a locator.
 - Call the neutral bootstrap helper when `params.contextEngine` exists.
 
 Pseudo-flow:
 
 ```ts
-const hadSessionFile = await fileExists(params.sessionFile);
-const sessionManager = SessionManager.open(params.sessionFile);
-const historyMessages = sessionManager.buildSessionContext().messages;
+const transcriptScope = { agentId: params.agentId, sessionId: params.sessionId };
+const historyMessages = readMirroredSessionHistoryMessages(transcriptScope);
+const hadTranscriptRows = historyMessages.length > 0;
 
 await bootstrapHarnessContextEngine({
-  hadSessionFile,
+  hadTranscriptRows,
   contextEngine: params.contextEngine,
   sessionId: params.sessionId,
   sessionKey: sandboxSessionKey,
-  sessionFile: params.sessionFile,
-  sessionManager,
+  transcriptScope,
   runtimeContext: buildHarnessContextEngineRuntimeContext(...),
   runMaintenance: runHarnessContextEngineMaintenance,
   warn,
@@ -366,15 +365,15 @@ best available message snapshot:
 
 - Prefer full mirrored session context after the write, because `afterTurn`
   expects the session snapshot, not only the current turn.
-- Fall back to `historyMessages + result.messagesSnapshot` if the session file
-  cannot be reopened.
+- Fall back to `historyMessages + result.messagesSnapshot` if the SQLite read
+  fails.
 
 Pseudo-flow:
 
 ```ts
 const prePromptMessageCount = historyMessages.length;
 await mirrorTranscriptBestEffort(...);
-const finalMessages = readMirroredSessionHistoryMessages(params.sessionFile)
+const finalMessages = readMirroredSessionHistoryMessages(transcriptScope)
   ?? [...historyMessages, ...result.messagesSnapshot];
 
 await finalizeHarnessContextEngineTurn({
@@ -384,7 +383,7 @@ await finalizeHarnessContextEngineTurn({
   yieldAborted,
   sessionIdUsed: params.sessionId,
   sessionKey: sandboxSessionKey,
-  sessionFile: params.sessionFile,
+  transcriptScope,
   messagesSnapshot: finalMessages,
   prePromptMessageCount,
   tokenBudget: params.contextTokenBudget,
