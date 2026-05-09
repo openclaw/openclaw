@@ -88,11 +88,8 @@ describe("gateway server chat", () => {
   const loadChatHistoryWithMessages = async (
     messages: Array<Record<string, unknown>>,
   ): Promise<unknown[]> => {
-    return withMainSessionStore(async (dir) => {
-      writeMainSessionTranscript(
-        dir,
-        messages.map((message) => ({ message })),
-      );
+    return withMainSessionStore(async () => {
+      writeMainSessionTranscript(messages.map((message) => ({ message })));
 
       const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -126,7 +123,7 @@ describe("gateway server chat", () => {
     }
   };
 
-  const writeMainSessionTranscript = (_dir: string, events: unknown[]): void => {
+  const writeMainSessionTranscript = (events: unknown[]): void => {
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "sess-main",
@@ -601,22 +598,17 @@ describe("gateway server chat", () => {
         },
       });
 
-      const lines: string[] = [];
+      const events: unknown[] = [];
       for (let i = 0; i < 201; i += 1) {
-        lines.push(
-          JSON.stringify({
-            message: {
-              role: "user",
-              content: [{ type: "text", text: `m${i}` }],
-              timestamp: Date.now() + i,
-            },
-          }),
-        );
+        events.push({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: `m${i}` }],
+            timestamp: Date.now() + i,
+          },
+        });
       }
-      writeMainSessionTranscript(
-        historyDir,
-        lines.map((line) => JSON.parse(line) as unknown),
-      );
+      writeMainSessionTranscript(events);
 
       const defaultRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -760,8 +752,8 @@ describe("gateway server chat", () => {
   });
 
   test("routes /btw replies through side-result events without transcript injection", async () => {
-    await withMainSessionStore(async (dir) => {
-      writeMainSessionTranscript(dir, [
+    await withMainSessionStore(async () => {
+      writeMainSessionTranscript([
         {
           message: {
             role: "user",
@@ -846,8 +838,8 @@ describe("gateway server chat", () => {
   });
 
   test("routes block-streamed /btw replies through side-result events", async () => {
-    await withMainSessionStore(async (dir) => {
-      writeMainSessionTranscript(dir, [
+    await withMainSessionStore(async () => {
+      writeMainSessionTranscript([
         {
           message: {
             role: "assistant",
