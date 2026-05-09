@@ -538,6 +538,7 @@ async function withTelegramThreadFallback<
   params: TParams,
   label: string,
   verbose: boolean | undefined,
+  allowThreadlessRetry: boolean,
   attempt: (effectiveParams: TParams, effectiveLabel: string) => Promise<T>,
 ): Promise<T> {
   try {
@@ -545,7 +546,11 @@ async function withTelegramThreadFallback<
   } catch (err) {
     // Do not widen this fallback to cover "chat not found".
     // chat-not-found is routing/auth/membership/token; stripping thread IDs hides root cause.
-    if (!hasMessageThreadIdParam(params) || !isTelegramThreadNotFoundError(err)) {
+    if (
+      !allowThreadlessRetry ||
+      !hasMessageThreadIdParam(params) ||
+      !isTelegramThreadNotFoundError(err)
+    ) {
       throw err;
     }
     if (verbose) {
@@ -659,6 +664,7 @@ export async function sendMessageTelegram(
       params,
       "message",
       opts.verbose,
+      target.chatType !== "direct",
       async (effectiveParams, label) => {
         const baseParams = effectiveParams ? { ...effectiveParams } : {};
         if (linkPreviewOptions) {
@@ -855,6 +861,7 @@ export async function sendMessageTelegram(
         mediaParams,
         label,
         opts.verbose,
+        target.chatType !== "direct",
         async (effectiveParams, retryLabel) =>
           requestWithChatNotFound(() => sender(effectiveParams), retryLabel),
       );
@@ -1508,6 +1515,7 @@ export async function sendStickerTelegram(
     stickerParams,
     "sticker",
     opts.verbose,
+    target.chatType !== "direct",
     async (effectiveParams, label) =>
       requestWithChatNotFound(() => api.sendSticker(chatId, fileId.trim(), effectiveParams), label),
   );
@@ -1615,6 +1623,7 @@ export async function sendPollTelegram(
     pollParams,
     "poll",
     opts.verbose,
+    target.chatType !== "direct",
     async (effectiveParams, label) =>
       requestWithChatNotFound(
         () => api.sendPoll(chatId, normalizedPoll.question, pollOptions, effectiveParams),
