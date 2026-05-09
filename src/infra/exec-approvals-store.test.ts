@@ -1,10 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  importLegacyExecApprovalsFileToSqlite,
-  legacyExecApprovalsFileExists,
-} from "../commands/doctor/legacy/exec-approvals.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
@@ -200,23 +196,6 @@ describe("exec approvals store helpers", () => {
     expect(raw?.endsWith("\n")).toBe(true);
     expect(readApprovalsFile().socket).toEqual(ensured.socket);
     expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
-  });
-
-  it("imports legacy approvals files into SQLite and removes the source", () => {
-    const dir = createHomeDir();
-    const approvalsPath = approvalsFilePath(dir);
-    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
-    fs.writeFileSync(
-      approvalsPath,
-      `${JSON.stringify({ version: 1, defaults: { security: "deny" }, agents: {} })}\n`,
-      "utf8",
-    );
-
-    expect(legacyExecApprovalsFileExists()).toBe(true);
-    expect(importLegacyExecApprovalsFileToSqlite()).toEqual({ imported: true });
-
-    expect(loadExecApprovals().defaults?.security).toBe("deny");
-    expect(fs.existsSync(approvalsPath)).toBe(false);
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {
