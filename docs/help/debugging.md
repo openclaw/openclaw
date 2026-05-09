@@ -261,23 +261,16 @@ Enable it via CLI:
 pnpm gateway:watch --raw-stream
 ```
 
-Optional path override:
-
-```bash
-pnpm gateway:watch --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
-```
-
 Equivalent env vars:
 
 ```bash
 OPENCLAW_RAW_STREAM=1
-OPENCLAW_RAW_STREAM_PATH=~/.openclaw/logs/raw-stream.jsonl
 ```
 
 Default storage:
 
-SQLite diagnostics (`diagnostics.raw_stream`). Set `--raw-stream-path` or
-`OPENCLAW_RAW_STREAM_PATH` only when you need an explicit JSONL export file.
+SQLite diagnostics (`diagnostics.raw_stream`). Use an explicit export/debug
+command when you need a file artifact.
 
 ## Raw chunk logging (pi-mono)
 

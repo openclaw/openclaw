@@ -101,9 +101,6 @@ openclaw gateway run
 <ParamField path="--raw-stream" type="boolean">
   Log raw model stream events to SQLite diagnostics.
 </ParamField>
-<ParamField path="--raw-stream-path <path>" type="string">
-  Optional raw stream JSONL export path.
-</ParamField>
 
 ## Restart the Gateway
 
