@@ -51,7 +51,7 @@ describe("createDeepSeekTextFilter", () => {
   it("holds a partial open token until it can classify it", () => {
     const filter = createDeepSeekTextFilter();
     const mid = filter.push("safe text<｜DSM");
-    expect(mid.join("")).not.toContain("<｜DSM");
+    expect(mid.join("")).toBe("safe text");
 
     const all = [
       ...mid,
@@ -59,5 +59,11 @@ describe("createDeepSeekTextFilter", () => {
       ...filter.flush(),
     ];
     expect(all.join("")).toBe("safe text done");
+  });
+
+  it("emits normal short text immediately", () => {
+    const filter = createDeepSeekTextFilter();
+    expect(filter.push("hello")).toEqual(["hello"]);
+    expect(filter.flush()).toEqual([]);
   });
 });

@@ -1480,12 +1480,19 @@ async function processOpenAICompletionsStream(
       appendTextDelta(text);
     }
   };
-  const flushDeepSeekTextFilter = () => {
-    if (!deepSeekTextFilter) {
+  const appendFilteredVisibleTextDelta = (text: string) => {
+    const parts = deepSeekTextFilter?.push(text) ?? [text];
+    for (const part of parts) {
+      appendVisibleTextDelta(part);
+    }
+  };
+  const flushDeepSeekTextFilterAtEnd = () => {
+    const parts = deepSeekTextFilter?.flush();
+    if (!parts) {
       return;
     }
-    for (const event of deepSeekTextFilter.flush()) {
-      appendVisibleTextDelta(event);
+    for (const part of parts) {
+      appendVisibleTextDelta(part);
     }
   };
   for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
@@ -1520,29 +1527,19 @@ async function processOpenAICompletionsStream(
       // same delta, so route each extracted block through the normal stream path.
       const contentDeltas = getCompletionsContentDeltas(choice.delta.content);
       for (const contentDelta of contentDeltas) {
-        if (currentBlock?.type === "toolCall") {
+        if (contentDelta.kind === "text") {
+          appendFilteredVisibleTextDelta(contentDelta.text);
+        } else if (currentBlock?.type === "toolCall") {
           queuePostToolCallDelta(contentDelta);
-        } else if (contentDelta.kind === "text") {
-          const filtered = deepSeekTextFilter?.push(contentDelta.text) ?? [contentDelta.text];
-          for (const part of filtered) {
-            appendVisibleTextDelta(part);
-          }
         } else {
           appendThinkingDelta(contentDelta);
         }
       }
     }
-    if (!choice.delta.content) {
-      flushDeepSeekTextFilter();
-    }
     const reasoningDeltas = getCompletionsReasoningDeltas(
       choice.delta as Record<string, unknown>,
       compat.visibleReasoningDetailTypes,
     );
-    const hasNativeToolCalls = Boolean(choice.delta.tool_calls?.length);
-    if (choice.delta.content && (reasoningDeltas.length > 0 || hasNativeToolCalls)) {
-      flushDeepSeekTextFilter();
-    }
     for (const reasoningDelta of reasoningDeltas) {
       if (currentBlock?.type === "toolCall") {
         queuePostToolCallDelta({ ...reasoningDelta });
@@ -1615,7 +1612,7 @@ async function processOpenAICompletionsStream(
     }
     flushPendingPostToolCallDeltas();
   }
-  flushDeepSeekTextFilter();
+  flushDeepSeekTextFilterAtEnd();
   finishCurrentBlock();
   if (currentBlock?.type === "toolCall") {
     currentBlock = null;
