@@ -593,6 +593,46 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
   });
 
+  it("plans the Codex on-demand onboarding lane as package-backed npm proof", () => {
+    const plan = planFor({ selectedLaneNames: ["codex-on-demand"] });
+
+    expect(plan.lanes).toEqual([
+      expect.objectContaining({
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand",
+        imageKind: "bare",
+        live: false,
+        name: "codex-on-demand",
+        resources: ["docker", "npm", "service"],
+        stateScenario: "empty",
+      }),
+    ]);
+    expect(plan.needs).toMatchObject({
+      bareImage: true,
+      package: true,
+    });
+  });
+
+  it("plans the live plugin tool lane as package-backed OpenAI proof", () => {
+    const plan = planFor({ selectedLaneNames: ["live-plugin-tool"] });
+
+    expect(plan.credentials).toEqual(["openai"]);
+    expect(plan.lanes).toEqual([
+      expect.objectContaining({
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
+        imageKind: "bare",
+        live: true,
+        name: "live-plugin-tool",
+        resources: ["docker", "live", "live:openai", "npm"],
+        stateScenario: "empty",
+      }),
+    ]);
+    expect(plan.needs).toMatchObject({
+      bareImage: true,
+      liveImage: true,
+      package: true,
+    });
+  });
+
   it("plans Open WebUI as a live-auth functional image lane", () => {
     const plan = planFor({
       includeOpenWebUI: true,

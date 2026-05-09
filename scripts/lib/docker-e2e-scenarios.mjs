@@ -182,6 +182,11 @@ export const mainLanes = [
     stateScenario: "empty",
     weight: 2,
   }),
+  npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
+    resources: ["service"],
+    stateScenario: "empty",
+    weight: 3,
+  }),
   npmLane(
     "npm-onboard-channel-agent",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
@@ -360,6 +365,15 @@ export const tailLanes = [
       weight: 3,
     },
   ),
+  liveLane("live-plugin-tool", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool", {
+    cacheKey: "plugin-tool",
+    e2eImageKind: "bare",
+    provider: "openai",
+    resources: ["npm"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+    weight: 3,
+  }),
   liveLane(
     "live-cli-backend-codex",
     liveDockerScriptCommand(
