@@ -15,7 +15,6 @@ import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store
 import {
   hasSqliteSessionTranscriptEvents,
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -217,19 +216,14 @@ function countJsonlLines(filePath: string): number {
   }
 }
 
-function resolveTranscriptSqliteScope(params: {
+function resolveTranscriptSqliteScope(params: { agentId: string; sessionId: string }): {
   agentId: string;
   sessionId: string;
-  transcriptPath: string;
-}): { agentId: string; sessionId: string } {
-  return (
-    resolveSqliteSessionTranscriptScopeForLocator({
-      transcriptLocator: params.transcriptPath,
-    }) ?? {
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    }
-  );
+} {
+  return {
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+  };
 }
 
 function hasSessionTranscript(params: {

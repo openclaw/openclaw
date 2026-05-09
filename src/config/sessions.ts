@@ -4,13 +4,7 @@ export * from "./sessions/metadata.js";
 export * from "./sessions/main-session.js";
 export * from "./sessions/main-session.runtime.js";
 export * from "./sessions/lifecycle.js";
-export {
-  createSqliteSessionTranscriptLocator,
-  isSqliteSessionTranscriptLocator,
-  parseSqliteSessionTranscriptLocator,
-  SAFE_SESSION_ID_RE,
-  validateSessionId,
-} from "./sessions/paths.js";
+export { SAFE_SESSION_ID_RE, validateSessionId } from "./sessions/paths.js";
 export * from "./sessions/reset.js";
 export * from "./sessions/session-key.js";
 export * from "./sessions/store.js";

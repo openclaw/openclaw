@@ -14,7 +14,6 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
-import { parseSqliteSessionTranscriptLocator } from "./paths.js";
 
 export type SqliteSessionTranscriptEvent = {
   seq: number;
@@ -212,16 +211,6 @@ function insertTranscriptEvent(params: {
       ),
   );
   upsertTranscriptEventIdentity(params);
-}
-
-export function resolveSqliteSessionTranscriptScopeForLocator(
-  options: OpenClawStateDatabaseOptions & { transcriptLocator: string },
-): SqliteSessionTranscriptScope | undefined {
-  const parsedLocator = parseSqliteSessionTranscriptLocator(options.transcriptLocator);
-  if (parsedLocator) {
-    return parsedLocator;
-  }
-  return undefined;
 }
 
 export function resolveSqliteSessionTranscriptScope(
