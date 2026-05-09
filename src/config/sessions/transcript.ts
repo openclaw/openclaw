@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
@@ -295,7 +296,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   }
 
   const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
-    ? await findLatestEquivalentAssistantMessageId(sessionFile, params.message)
+    ? await findLatestEquivalentAssistantMessageId(sessionFile, params.message, params.config)
     : undefined;
   if (latestEquivalentAssistantId) {
     return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
@@ -381,8 +382,11 @@ function extractAssistantMessageText(message: SessionTranscriptAssistantMessage)
 async function findLatestEquivalentAssistantMessageId(
   transcriptPath: string,
   message: SessionTranscriptAssistantMessage,
+  config?: OpenClawConfig,
 ): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(message);
+  const expectedText = extractAssistantMessageText(
+    redactTranscriptMessage(message, config) as unknown as SessionTranscriptAssistantMessage,
+  );
   if (!expectedText) {
     return undefined;
   }

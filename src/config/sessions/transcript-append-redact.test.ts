@@ -6,7 +6,10 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
-import { appendExactAssistantMessageToSessionTranscript } from "./transcript.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  appendExactAssistantMessageToSessionTranscript,
+} from "./transcript.js";
 
 function readMessages(sessionFile: string) {
   return fs
@@ -261,5 +264,44 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     } finally {
       unsubscribe();
     }
+  });
+
+  it("dedupes delivery mirrors against the redacted persisted text", async () => {
+    const sessionsDir = fixture.sessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionId = "test-session-redact-dedupe";
+    const sessionKey = "test-channel:test-redact-dedupe";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [sessionKey]: { sessionId, updatedAt: Date.now() } }, null, 2),
+      { encoding: "utf-8", mode: 0o600 },
+    );
+
+    const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
+    const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
+
+    const first = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath,
+      config,
+      text: `Here is your key: ${fakeApiKey}`,
+    });
+    const second = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath,
+      config,
+      text: `Here is your key: ${fakeApiKey}`,
+    });
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!first.ok || !second.ok) {
+      return;
+    }
+    expect(second.messageId).toBe(first.messageId);
+
+    const raw = fs.readFileSync(second.sessionFile, "utf-8");
+    expect(raw).not.toContain(fakeApiKey);
+    expect(readMessages(second.sessionFile)).toHaveLength(1);
   });
 });
