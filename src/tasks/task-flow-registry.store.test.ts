@@ -14,7 +14,12 @@ import {
   resolveTaskFlowRegistrySqlitePath,
 } from "./task-flow-registry.paths.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import {
+  parseOptionalTaskFlowSyncMode,
+  parseTaskFlowStatus,
+  type TaskFlowRecord,
+} from "./task-flow-registry.types.js";
+import { parseTaskNotifyPolicy } from "./task-registry.types.js";
 
 function createStoredFlow(): TaskFlowRecord {
   return {
@@ -123,6 +128,19 @@ describe("task-flow-registry store runtime", () => {
       throw new Error("Expected restored task flow");
     }
     expect(restoredFlow.goal).toBe("Restored flow");
+  });
+
+  it("rejects invalid persisted flow enum values", () => {
+    expect(parseOptionalTaskFlowSyncMode("managed")).toBe("managed");
+    expect(parseOptionalTaskFlowSyncMode(null)).toBeUndefined();
+    expect(parseTaskFlowStatus("waiting")).toBe("waiting");
+    expect(parseTaskNotifyPolicy("state_changes")).toBe("state_changes");
+
+    expect(() => parseOptionalTaskFlowSyncMode("legacy")).toThrow(
+      "Invalid persisted task flow sync mode",
+    );
+    expect(() => parseTaskFlowStatus("done")).toThrow("Invalid persisted task flow status");
+    expect(() => parseTaskNotifyPolicy("verbose")).toThrow("Invalid persisted task notify policy");
   });
 
   it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {

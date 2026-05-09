@@ -196,4 +196,39 @@ describe("DebugProxyCaptureStore", () => {
     expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toContain('"shared":true');
     expect(store.listSessions(10).map((session) => session.id)).toEqual(["session-b"]);
   });
+
+  it("purges sessions, events, and blobs in one store mutation", () => {
+    const store = makeStore();
+    store.upsertSession({
+      id: "session-purge",
+      startedAt: Date.now(),
+      mode: "proxy-run",
+      sourceScope: "openclaw",
+      sourceProcess: "openclaw",
+      dbPath: store.dbPath,
+      blobDir: store.blobDir,
+    });
+    const payload = persistEventPayload(store, {
+      data: "purge me",
+      contentType: "text/plain",
+    });
+    store.recordEvent({
+      sessionId: "session-purge",
+      ts: Date.now(),
+      sourceScope: "openclaw",
+      sourceProcess: "openclaw",
+      protocol: "https",
+      direction: "outbound",
+      kind: "request",
+      flowId: "flow-purge",
+      method: "POST",
+      host: "api.example.com",
+      path: "/v1/purge",
+      ...payload,
+    });
+
+    expect(store.purgeAll()).toEqual({ sessions: 1, events: 1, blobs: 1 });
+    expect(store.listSessions(10)).toEqual([]);
+    expect(store.readBlob(payload.dataBlobId ?? "")).toBeNull();
+  });
 });
