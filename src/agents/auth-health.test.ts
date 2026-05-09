@@ -157,6 +157,9 @@ describe("buildAuthHealthSummary", () => {
     const provider = summary.providers.find((entry) => entry.provider === "openai-codex");
     expect(provider?.status).toBe("ok");
     expect(provider?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
+    expect(provider?.effectiveProfiles?.map((profile) => profile.profileId)).toEqual([
+      "openai-codex:named",
+    ]);
     expect(provider?.profiles.map((profile) => profile.profileId)).toEqual([
       "openai-codex:default",
       "openai-codex:named",
@@ -188,6 +191,7 @@ describe("buildAuthHealthSummary", () => {
 
     const provider = summary.providers.find((entry) => entry.provider === "codex-cli");
     expect(provider?.status).toBe("missing");
+    expect(provider?.effectiveProfiles).toEqual([]);
     expect(provider?.profiles.map((profile) => profile.profileId)).toEqual(["codex-cli:legacy"]);
   });
 
@@ -403,6 +407,7 @@ describe("buildAuthHealthSummary", () => {
       {
         provider: "zai",
         status: "static",
+        effectiveProfiles: summary.profiles,
         profiles: summary.profiles,
       },
     ]);

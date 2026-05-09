@@ -10,8 +10,7 @@ import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { findNormalizedProviderValue } from "./provider-id.js";
-import { normalizeProviderId } from "./provider-id.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 type AuthProfileSource = "store";
 
@@ -36,6 +35,11 @@ export type AuthProviderHealth = {
   status: AuthProviderHealthStatus;
   expiresAt?: number;
   remainingMs?: number;
+  /**
+   * Full credential inventory stays in `profiles`; provider rollups use this
+   * effective subset after auth order, aliases, and explicit exclusions apply.
+   */
+  effectiveProfiles?: AuthProfileHealth[];
   profiles: AuthProfileHealth[];
 };
 
@@ -298,8 +302,9 @@ export function buildAuthHealthSummary(params: {
   };
 
   for (const provider of providersMap.values()) {
-    const statusProfiles = resolveProviderStatusProfiles(provider);
-    if (statusProfiles.length === 0) {
+    const effectiveProfiles = resolveProviderStatusProfiles(provider);
+    provider.effectiveProfiles = effectiveProfiles;
+    if (effectiveProfiles.length === 0) {
       provider.status = "missing";
       provider.expiresAt = undefined;
       provider.remainingMs = undefined;
@@ -311,7 +316,7 @@ export function buildAuthHealthSummary(params: {
     let hasExpiredOrMissing = false;
     let hasExpiring = false;
     let earliestExpiry: number | undefined;
-    for (const profile of statusProfiles) {
+    for (const profile of effectiveProfiles) {
       if (profile.type === "api_key") {
         hasApiKeyProfile = true;
         continue;
