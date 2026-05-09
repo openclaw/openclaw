@@ -109,6 +109,18 @@ export function buildStatusCommandOverviewRows(
     suffixRows: [
       { Item: "Memory", Value: memoryValue },
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
+      ...(params.summary.modelPricing?.state === "degraded"
+        ? [
+            {
+              Item: "Model pricing",
+              Value: params.warn(
+                params.summary.modelPricing?.detail?.trim()
+                  ? `degraded (${params.summary.modelPricing.detail.trim()})`
+                  : "degraded",
+              ),
+            },
+          ]
+        : []),
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },
       { Item: "Tasks", Value: tasksValue },

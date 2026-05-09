@@ -1,6 +1,8 @@
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
-import { getStatusSummary } from "../../commands/status.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getGatewayModelPricingBootstrapHealth } from "../model-pricing-bootstrap-health.js";
+import { isGatewayModelPricingEnabled } from "../model-pricing-config.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
@@ -82,6 +84,22 @@ function cachedHealthDiffersFromRuntime(
   return false;
 }
 
+function attachLatestModelPricingHealth(summary: HealthSummary, cfg: OpenClawConfig): void {
+  if (!isGatewayModelPricingEnabled(cfg)) {
+    delete summary.modelPricing;
+    return;
+  }
+  const h = getGatewayModelPricingBootstrapHealth();
+  summary.modelPricing =
+    h.state === "ok"
+      ? { state: "ok" }
+      : {
+          state: "degraded",
+          detail: h.detail,
+          lastFailureAt: h.lastFailureAt,
+        };
+}
+
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params, client }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
@@ -110,6 +128,7 @@ export const healthHandlers: GatewayRequestHandlers = {
       if (context.getEventLoopHealth) {
         cached.eventLoop = context.getEventLoopHealth();
       }
+      attachLatestModelPricingHealth(cached, context.getRuntimeConfig());
       respond(true, cached, undefined, { cached: true });
       void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err) =>
         logHealth.error(`background health refresh failed: ${formatError(err)}`),
@@ -118,6 +137,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     try {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
+      attachLatestModelPricingHealth(snap, context.getRuntimeConfig());
       respond(true, snap, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));

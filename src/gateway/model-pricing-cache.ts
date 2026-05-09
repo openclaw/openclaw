@@ -24,6 +24,10 @@ import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snap
 import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
+  clearGatewayModelPricingBootstrapFailure,
+  recordGatewayModelPricingBootstrapFailure,
+} from "./model-pricing-bootstrap-health.js";
+import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
   getGatewayModelPricingCacheMeta as getGatewayModelPricingCacheMetaState,
@@ -1123,6 +1127,7 @@ function scheduleRefresh(
     }
     void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
       log.warn(`pricing refresh failed: ${String(error)}`);
+      recordGatewayModelPricingBootstrapFailure(String(error));
     });
   }, CACHE_TTL_MS);
   refreshTimer.unref?.();
@@ -1215,6 +1220,7 @@ export async function refreshGatewayModelPricingCache(
         return;
       }
       replaceGatewayModelPricingCache(seededPricing);
+      clearGatewayModelPricingBootstrapFailure();
       clearRefreshTimer();
       return;
     }
@@ -1317,6 +1323,7 @@ export async function refreshGatewayModelPricingCache(
       return;
     }
     replaceGatewayModelPricingCache(nextPricing);
+    clearGatewayModelPricingBootstrapFailure();
     scheduleRefresh({ ...params, fetchImpl });
   })();
 
@@ -1332,6 +1339,7 @@ export function startGatewayModelPricingRefresh(
 ): () => void {
   if (!isGatewayModelPricingEnabled(params.config)) {
     clearRefreshTimer();
+    clearGatewayModelPricingBootstrapFailure();
     return () => {};
   }
   let stopped = false;
@@ -1343,6 +1351,7 @@ export function startGatewayModelPricingRefresh(
     void refreshGatewayModelPricingCache({ ...params, signal: abortController.signal }).catch(
       (error: unknown) => {
         log.warn(`pricing bootstrap failed: ${String(error)}`);
+        recordGatewayModelPricingBootstrapFailure(String(error));
       },
     );
   });
@@ -1354,6 +1363,7 @@ export function startGatewayModelPricingRefresh(
 }
 
 export function __resetGatewayModelPricingCacheForTest(): void {
+  clearGatewayModelPricingBootstrapFailure();
   clearGatewayModelPricingCacheState();
   clearRefreshTimer();
   inFlightRefresh = null;

@@ -35,12 +35,23 @@ export type PluginHealthSummary = {
   errors: PluginHealthErrorSummary[];
 };
 
+export type ModelPricingHealthSummary =
+  | { state: "ok" }
+  | {
+      state: "degraded";
+      detail: string;
+      /** Epoch ms — present when degraded from a bootstrap/refresh failure. */
+      lastFailureAt?: number;
+    };
+
 export type HealthSummary = {
   ok: true;
   ts: number;
   durationMs: number;
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
   plugins?: PluginHealthSummary;
+  /** Present when Gateway model-pricing bootstrap is enabled (embedded catalog telemetry). */
+  modelPricing?: ModelPricingHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];
   channelLabels: Record<string, string>;

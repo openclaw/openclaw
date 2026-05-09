@@ -7,6 +7,8 @@ import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { getGatewayModelPricingBootstrapHealth } from "../gateway/model-pricing-bootstrap-health.js";
+import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
@@ -14,6 +16,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import type { ModelPricingHealthSummary } from "./health.types.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 const channelSummaryModuleLoader = createLazyImportLoader(
@@ -96,6 +99,19 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
       })),
     },
   };
+}
+
+function resolveStatusModelPricingHealth(
+  cfg: OpenClawConfig,
+): ModelPricingHealthSummary | undefined {
+  if (!isGatewayModelPricingEnabled(cfg)) {
+    return undefined;
+  }
+  const h = getGatewayModelPricingBootstrapHealth();
+  if (h.state === "ok") {
+    return { state: "ok" };
+  }
+  return { state: "degraded", detail: h.detail, lastFailureAt: h.lastFailureAt };
 }
 
 export async function getStatusSummary(
@@ -274,6 +290,8 @@ export async function getStatusSummary(
   const recent = allSessions.slice(0, 10);
   const totalSessions = allSessions.length;
 
+  const modelPricingHealth = resolveStatusModelPricingHealth(cfg);
+
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
     linkChannel: linkContext
@@ -292,6 +310,7 @@ export async function getStatusSummary(
     queuedSystemEvents,
     tasks,
     taskAudit,
+    ...(modelPricingHealth ? { modelPricing: modelPricingHealth } : {}),
     sessions: {
       paths: Array.from(paths),
       count: totalSessions,

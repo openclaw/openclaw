@@ -19,6 +19,8 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
+import { getGatewayModelPricingBootstrapHealth } from "../gateway/model-pricing-bootstrap-health.js";
+import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -38,6 +40,7 @@ import type {
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
   HealthSummary,
+  ModelPricingHealthSummary,
   PluginHealthErrorSummary,
   PluginHealthSummary,
 } from "./health.types.js";
@@ -48,6 +51,7 @@ export type {
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
   HealthSummary,
+  ModelPricingHealthSummary,
 } from "./health.types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -109,6 +113,24 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   )}ms p99=${Math.round(eventLoop.delayP99Ms)}ms util=${eventLoop.utilization} cpu=${
     eventLoop.cpuCoreRatio
   }`;
+}
+
+function resolveModelPricingHealth(cfg: OpenClawConfig): ModelPricingHealthSummary | undefined {
+  if (!isGatewayModelPricingEnabled(cfg)) {
+    return undefined;
+  }
+  const h = getGatewayModelPricingBootstrapHealth();
+  if (h.state === "ok") {
+    return { state: "ok" };
+  }
+  return { state: "degraded", detail: h.detail, lastFailureAt: h.lastFailureAt };
+}
+
+function formatModelPricingHealthLine(summary: Pick<HealthSummary, "modelPricing">): string | null {
+  if (!summary.modelPricing || summary.modelPricing.state === "ok") {
+    return null;
+  }
+  return `Model pricing: degraded (${summary.modelPricing.detail})`;
 }
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
@@ -508,12 +530,14 @@ export async function getHealthSnapshot(params?: {
   }
 
   const pluginHealth = buildPluginHealthSummary();
+  const modelPricingHealth = resolveModelPricingHealth(cfg);
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
     ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
+    ...(modelPricingHealth ? { modelPricing: modelPricingHealth } : {}),
     channels,
     channelOrder,
     channelLabels,
@@ -700,6 +724,10 @@ export async function healthCommand(
     const eventLoopLine = formatEventLoopHealthLine(summary);
     if (eventLoopLine) {
       runtime.log(styleHealthChannelLine(eventLoopLine, rich));
+    }
+    const modelPricingLine = formatModelPricingHealthLine(summary);
+    if (modelPricingLine) {
+      runtime.log(styleHealthChannelLine(modelPricingLine, rich));
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];

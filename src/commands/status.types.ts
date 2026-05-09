@@ -1,6 +1,7 @@
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { TaskAuditSummary } from "../tasks/task-registry.audit.js";
 import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
+import type { ModelPricingHealthSummary } from "./health.types.js";
 
 export type SessionStatus = {
   agentId?: string;
@@ -55,6 +56,7 @@ export type StatusSummary = {
   queuedSystemEvents: string[];
   tasks: TaskRegistrySummary;
   taskAudit: TaskAuditSummary;
+  modelPricing?: ModelPricingHealthSummary;
   sessions: {
     paths: string[];
     count: number;
