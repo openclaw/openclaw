@@ -31,6 +31,8 @@ const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
 export const MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 
 export type CapturedCompactionCheckpointSnapshot = {
+  agentId: string;
+  sourceSessionId: string;
   sessionId: string;
   sessionFile?: string;
   leafId: string;
@@ -289,6 +291,8 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
     },
   });
   return {
+    agentId: snapshotAgentId,
+    sourceSessionId: sourceHeader.id,
     sessionId: snapshotSessionId,
     sessionFile: snapshotFile,
     leafId,
@@ -298,7 +302,18 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
 export async function cleanupCompactionCheckpointSnapshot(
   snapshot: CapturedCompactionCheckpointSnapshot | null | undefined,
 ): Promise<void> {
-  void snapshot;
+  if (!snapshot) {
+    return;
+  }
+  deleteSqliteSessionTranscriptSnapshot({
+    agentId: snapshot.agentId,
+    sessionId: snapshot.sourceSessionId,
+    snapshotId: snapshot.sessionId,
+  });
+  deleteSqliteSessionTranscript({
+    agentId: snapshot.agentId,
+    sessionId: snapshot.sessionId,
+  });
 }
 
 export async function persistSessionCompactionCheckpoint(params: {
