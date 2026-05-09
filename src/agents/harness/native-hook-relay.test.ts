@@ -205,7 +205,7 @@ describe("native hook relay registry", () => {
         },
       }),
     ).rejects.toThrow("native hook relay bridge target mismatch");
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
+    expect(__testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
   });
 
   it("rejects oversized direct bridge responses", async () => {
@@ -357,7 +357,7 @@ describe("native hook relay registry", () => {
     relay.unregister();
 
     expect(__testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
+    expect(__testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
   });
 
   it("keeps only a bounded history of retained invocations", async () => {

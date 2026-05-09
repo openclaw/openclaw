@@ -2434,7 +2434,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
-    expect(seenContext.messages).toEqual([]);
+    expect(seenContext.messages).toStrictEqual([]);
   });
 
   it("drops ambiguous mangled replay names instead of guessing a tool", async () => {
@@ -2459,7 +2459,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
-    expect(seenContext.messages).toEqual([]);
+    expect(seenContext.messages).toStrictEqual([]);
   });
 
   it("preserves matching tool results for retained errored assistant turns", async () => {
