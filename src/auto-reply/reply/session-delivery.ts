@@ -5,7 +5,6 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import type { MsgContext } from "../templating.js";
 
 function isExternalRoutingChannel(channel?: string): channel is string {
   return Boolean(
