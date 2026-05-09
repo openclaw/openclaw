@@ -338,12 +338,18 @@ export class GatewayPlugin extends Plugin {
       maxConcurrency: this.gatewayInfo?.session_start_limit.max_concurrency,
     });
     const socket = this.ws;
-    if (!socket || socket.readyState !== READY_STATE_OPEN) {
-      const error = new Error("Discord gateway socket closed before IDENTIFY could be sent");
-      this.emitter.emit("error", error);
-      if (socket) {
-        this.scheduleReconnect(false);
-      }
+    if (!socket) {
+      // Socket was cleared by disconnect() or scheduleReconnect() while the
+      // limiter was waiting. A reconnect is already scheduled or the client
+      // disconnected intentionally — nothing to do here.
+      return;
+    }
+    if (socket.readyState !== READY_STATE_OPEN) {
+      // Socket exists but is not yet open (CONNECTING) or is closing/closed.
+      // Force a clean reconnect; the existing socket's close event is guarded
+      // by the socket-identity check in setupWebSocket so it will not
+      // double-schedule.
+      this.scheduleReconnect(false);
       return;
     }
     this.identify();

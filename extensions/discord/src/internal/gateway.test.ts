@@ -155,13 +155,43 @@ describe("GatewayPlugin", () => {
     }
 
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(errorSpy).toHaveBeenCalledWith(
-      new Error("Discord gateway socket closed before IDENTIFY could be sent"),
-    );
+    expect(errorSpy).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(gateway.connectCalls).toEqual([false, false]);
     expect(gateway.sockets).toHaveLength(2);
+  });
+
+  it("does not reconnect or emit when ws is null while waiting for identify concurrency", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+    const errorSpy = vi.fn();
+    gateway.emitter.on("error", errorSpy);
+
+    gateway.connect(false);
+    const socket = gateway.sockets[0];
+    socket?.emit("open");
+    socket?.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOpcodes.Hello,
+        d: { heartbeat_interval: 45_000 },
+        s: null,
+      }),
+    );
+    // Simulate disconnect() clearing ws while limiter waits.
+    gateway.disconnect();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(errorSpy).not.toHaveBeenCalled();
+    // No additional connect calls beyond the initial one.
+    expect(gateway.connectCalls).toEqual([false]);
+    expect(gateway.sockets).toHaveLength(1);
   });
 
   it("preserves MESSAGE_CREATE author payloads for inbound dispatch", async () => {
