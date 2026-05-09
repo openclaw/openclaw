@@ -1132,7 +1132,7 @@ describe("classifyFailoverReason provider messages", () => {
     expect(classifyFailoverReason("no api key found")).toBe("auth");
     expect(
       classifyFailoverReason(
-        'No API key found for provider "openai". Auth store: /tmp/openclaw-agent-abc/auth-profiles.json (agentDir: /tmp/openclaw-agent-abc).',
+        'No API key found for provider "openai". Auth store: /tmp/openclaw-state/openclaw.sqlite#kv/auth-profiles//tmp/openclaw-agent-abc (agentDir: /tmp/openclaw-agent-abc).',
       ),
     ).toBe("auth");
     expect(classifyFailoverReason("You have insufficient permissions for this operation.")).toBe(
@@ -1467,7 +1467,7 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).toBe("refresh_contention");
     expect(
       classifyProviderRuntimeFailureKind(
-        "OAuth token refresh failed for openai-codex: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.",
+        "OAuth token refresh failed for openai-codex: SQLite busy timeout for /tmp/openclaw-state/openclaw.sqlite#kv/auth-profiles//tmp/agent. Please try again or re-authenticate.",
       ),
     ).toBe("auth_refresh");
   });

@@ -4,6 +4,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
+import { savePersistedAuthProfileSecretsStore } from "../../agents/auth-profiles/persisted.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
@@ -595,18 +596,10 @@ describe("buildStatusReply subagent summary", () => {
 
     await withTempHome(
       async (dir) => {
-        const authPath = path.join(
-          dir,
-          ".openclaw",
-          "agents",
-          "main",
-          "agent",
-          "auth-profiles.json",
-        );
-        fs.mkdirSync(path.dirname(authPath), { recursive: true });
-        fs.writeFileSync(
-          authPath,
-          JSON.stringify({
+        const stateDir = path.join(dir, ".openclaw");
+        const agentDir = path.join(stateDir, "agents", "main", "agent");
+        savePersistedAuthProfileSecretsStore(
+          {
             version: 1,
             profiles: {
               "openai-codex:status": {
@@ -617,8 +610,9 @@ describe("buildStatusReply subagent summary", () => {
                 expires: Date.now() + 60 * 60_000,
               },
             },
-          }),
-          "utf8",
+          },
+          agentDir,
+          { env: { HOME: dir, OPENCLAW_STATE_DIR: stateDir } },
         );
         const usageResetBase = Math.floor(Date.now() / 1000);
         providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
