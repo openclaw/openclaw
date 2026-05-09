@@ -2,7 +2,9 @@
  * Universal `setOcPath` / `resolveOcPath` / `detectInsertion`.
  * Addressing is universal; encoding is per-kind. Callers pass any AST
  * + path + value; the substrate dispatches on `ast.kind` and coerces
- * the value based on the AST shape at the resolution point.
+ * the value based on the AST shape at the resolution point. Wildcard,
+ * union, and predicate expansion belong to `findOcPaths`; `resolveOcPath`
+ * and `setOcPath` require concrete paths.
  *
  *   oc://FILE/section/item/field   → leaf address
  *   oc://FILE/section/+            → end-insertion

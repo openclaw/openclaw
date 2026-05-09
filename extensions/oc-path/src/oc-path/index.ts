@@ -7,16 +7,17 @@
  * addressing (resolve/set) is universal.
  *
  * **Public verbs**:
- *   - One `setOcPath(ast, path, value)` — universal, kind-dispatched
- *   - One `resolveOcPath(ast, path)` — universal, kind-dispatched
- *   - Per-kind `parseXxx` / `emitXxx` (parsing IS per-kind by nature)
+ *   - One `resolveOcPath(ast, path)` - concrete, kind-dispatched
+ *   - One `findOcPaths(ast, pattern)` - multi-match, kind-dispatched
+ *   - One `setOcPath(ast, path, value)` - concrete mutation / insertion
+ *   - Per-kind `parseXxx` / `emitXxx` (parsing is per-kind by nature)
  *
  * `setOcPath` accepts a string value; the substrate coerces based on
  * AST shape at the path location. The OcPath syntax encodes the
  * operation: plain path = leaf set, `+` suffix = insertion.
  *
  * Per-kind set/resolve helpers exist as internal implementation; they
- * aren't on the public surface. Callers don't need to pick a kind —
+ * aren't on the public surface. Callers don't need to pick a kind -
  * the AST carries its `kind` discriminator and the universal verbs
  * dispatch internally.
  *

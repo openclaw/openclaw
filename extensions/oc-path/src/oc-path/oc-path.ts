@@ -3,7 +3,9 @@
  *
  *     oc://{file}[/{section}[/{item}[/{field}]]][?session={id}]
  *
- * Round-trip contract: `formatOcPath(parseOcPath(s)) === s`.
+ * Canonical round-trip contract: `formatOcPath(parseOcPath(s)) === s`
+ * for canonical paths. Extra query parameters are ignored except for
+ * the first non-empty `session=` value.
  *
  * @module @openclaw/oc-path/oc-path
  */
@@ -49,7 +51,9 @@ function printable(s: string): string {
  * Parsed `oc://` path. Components nest strictly: `item` implies
  * `section`, `field` implies `item`. `field` directly under file
  * addresses a frontmatter key; under item it addresses the value of a
- * `- key: value` bullet.
+ * `- key: value` bullet. `session` is an opaque raw scope string; it is
+ * not percent-decoded and cannot contain control characters or reserved
+ * query delimiters (`?`, `&`, `%`).
  */
 export interface OcPath {
   readonly file: string;
@@ -102,6 +106,23 @@ function validateFileSlot(file: string, contextInput: string): void {
   }
 }
 
+function validateSessionSlot(session: string, contextInput: string): void {
+  if (hasControlChar(session)) {
+    fail(
+      `Control character in oc:// session query: ${printable(contextInput)}`,
+      contextInput,
+      "OC_PATH_CONTROL_CHAR",
+    );
+  }
+  if (RESERVED_CHARS_RE.test(session)) {
+    fail(
+      `Reserved character (\`?\` / \`&\` / \`%\`) in oc:// session query: ${printable(contextInput)}`,
+      contextInput,
+      "OC_PATH_RESERVED_CHAR",
+    );
+  }
+}
+
 /** Parse an `oc://` path string into a structured `OcPath`. */
 export function parseOcPath(input: string): OcPath {
   if (typeof input !== "string") {
@@ -130,6 +151,13 @@ export function parseOcPath(input: string): OcPath {
   }
   if (!normalized.startsWith(OC_SCHEME)) {
     fail(`Missing oc:// scheme: ${printable(input)}`, input, "OC_PATH_MISSING_SCHEME");
+  }
+  if (hasControlChar(normalized)) {
+    fail(
+      `Control character in oc:// path: ${printable(input)}`,
+      input,
+      "OC_PATH_CONTROL_CHAR",
+    );
   }
 
   const afterScheme = normalized.slice(OC_SCHEME.length);
@@ -178,7 +206,7 @@ export function parseOcPath(input: string): OcPath {
   const file = isQuotedSeg(fileSeg) ? unquoteSeg(fileSeg) : fileSeg;
   validateFileSlot(file, input);
 
-  const session = extractSession(queryPart);
+  const session = extractSession(queryPart, input);
   return {
     file,
     ...(segments[1] !== undefined ? { section: segments[1] } : {}),
@@ -244,7 +272,10 @@ export function formatOcPath(path: OcPath): string {
   if (path.section !== undefined) {out += "/" + formatSlot(path.section, "section");}
   if (path.item !== undefined) {out += "/" + formatSlot(path.item, "item");}
   if (path.field !== undefined) {out += "/" + formatSlot(path.field, "field");}
-  if (path.session !== undefined) {out += "?session=" + path.session;}
+  if (path.session !== undefined) {
+    validateSessionSlot(path.session, path.file);
+    out += "?session=" + path.session;
+  }
 
   if (out.length > MAX_PATH_LENGTH) {
     fail(
@@ -464,14 +495,17 @@ export function repackPath(pattern: OcPath, subs: readonly string[]): OcPath {
   };
 }
 
-function extractSession(queryPart: string): string | undefined {
+function extractSession(queryPart: string, input: string): string | undefined {
   if (queryPart.length === 0) {return undefined;}
   for (const pair of queryPart.split("&")) {
     const eqIndex = pair.indexOf("=");
     if (eqIndex === -1) {continue;}
     const key = pair.slice(0, eqIndex);
     const value = pair.slice(eqIndex + 1);
-    if (key === "session" && value.length > 0) {return value;}
+    if (key === "session" && value.length > 0) {
+      validateSessionSlot(value, input);
+      return value;
+    }
   }
   return undefined;
 }

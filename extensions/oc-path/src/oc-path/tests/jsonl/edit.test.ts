@@ -85,6 +85,15 @@ describe("appendJsonlOcPath — session checkpointing primitive", () => {
     expect(out).toHaveLength(2);
     expect(JSON.parse(out[1] ?? "")).toEqual({ b: 2 });
   });
+
+  it("preserves CRLF line endings when appending", () => {
+    const { ast } = parseJsonl('{"a":1}\r\n');
+    const next = appendJsonlOcPath(ast, {
+      kind: "object",
+      entries: [{ key: "b", line: 0, value: { kind: "number", value: 2 } }],
+    });
+    expect(emitJsonl(next)).toBe('{"a":1}\r\n{"b":2}');
+  });
 });
 
 describe("setJsonlOcPath — $last line address", () => {

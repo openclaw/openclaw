@@ -37,6 +37,27 @@ describe("parseOcPath", () => {
     });
   });
 
+  it("rejects reserved chars in session query values", () => {
+    expectOcPathError(
+      () => parseOcPath("oc://SOUL.md?session=cron%2Fdaily"),
+      "OC_PATH_RESERVED_CHAR",
+    );
+  });
+
+  it("rejects control chars in session query values", () => {
+    expectOcPathError(
+      () => parseOcPath("oc://SOUL.md?session=daily\x00cron"),
+      "OC_PATH_CONTROL_CHAR",
+    );
+  });
+
+  it("rejects control chars in ignored query values", () => {
+    expectOcPathError(
+      () => parseOcPath("oc://SOUL.md?ignored=\x00"),
+      "OC_PATH_CONTROL_CHAR",
+    );
+  });
+
   it("rejects missing scheme", () => {
     expectOcPathError(() => parseOcPath("SOUL.md"), "OC_PATH_MISSING_SCHEME");
   });
@@ -86,6 +107,13 @@ describe("formatOcPath", () => {
 
   it("round-trips session", () => {
     expect(formatOcPath({ file: "SOUL.md", session: "cron" })).toBe("oc://SOUL.md?session=cron");
+  });
+
+  it("rejects reserved chars in formatted session values", () => {
+    expectOcPathError(
+      () => formatOcPath({ file: "SOUL.md", session: "cron&scope=daily" }),
+      "OC_PATH_RESERVED_CHAR",
+    );
   });
 
   it("rejects empty file", () => {
