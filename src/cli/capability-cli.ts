@@ -681,6 +681,10 @@ async function runModelRun(params: {
     cfg,
     preserveAuthProfile: params.transport === "local",
   });
+  const explicitModelOverride = resolveModelRefOverride(params.model);
+  const hasExplicitProviderModelOverride = Boolean(
+    params.model?.trim() && explicitModelOverride.provider && explicitModelOverride.model,
+  );
   const imageFiles = await readModelRunImageFiles(params.files);
   const messageContent =
     imageFiles.length > 0
@@ -699,6 +703,7 @@ async function runModelRun(params: {
       agentId,
       modelRef,
       allowMissingApiKeyModes: ["aws-sdk"],
+      ...(hasExplicitProviderModelOverride ? { allowBundledStaticCatalogFallback: true } : {}),
       skipPiDiscovery: true,
     });
     if ("error" in prepared) {

@@ -467,6 +467,39 @@ describe("prepareSimpleCompletionModel", () => {
       },
     );
   });
+
+  it("passes static catalog fallback opt-in to skip-discovery model resolution", async () => {
+    hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
+      model: {
+        provider: "mistral",
+        id: "mistral-medium-3-5",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      allowBundledStaticCatalogFallback: true,
+      skipPiDiscovery: true,
+    });
+
+    expect(result).not.toHaveProperty("error");
+    expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
+      "mistral",
+      "mistral-medium-3-5",
+      undefined,
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        skipPiDiscovery: true,
+      },
+    );
+  });
 });
 
 describe("completeWithPreparedSimpleCompletionModel", () => {

@@ -474,6 +474,32 @@ describe("capability cli", () => {
     expect(call.context).not.toHaveProperty("systemPrompt");
   });
 
+  it("opts explicit local provider/model probes into bundled static catalog fallback", async () => {
+    await runModelRunWithModel("mistral/mistral-medium-3-5", "local");
+
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "mistral/mistral-medium-3-5",
+        allowBundledStaticCatalogFallback: true,
+        skipPiDiscovery: true,
+      }),
+    );
+  });
+
+  it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+    });
+
+    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    const params = calls[0]?.[0];
+    expect(params).toBeDefined();
+    expect(params).not.toHaveProperty("allowBundledStaticCatalogFallback");
+  });
+
   it("passes image files to local model probes", async () => {
     const tempInput = path.join(os.tmpdir(), `openclaw-model-run-image-${Date.now()}.png`);
     await fs.writeFile(tempInput, Buffer.from(PNG_1X1_BASE64, "base64"));

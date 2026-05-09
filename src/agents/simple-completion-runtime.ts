@@ -167,10 +167,14 @@ export async function prepareSimpleCompletionModel(params: {
   profileId?: string;
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
+  allowBundledStaticCatalogFallback?: boolean;
   skipPiDiscovery?: boolean;
 }): Promise<PreparedSimpleCompletionModel> {
   const resolved = params.skipPiDiscovery
     ? await resolveModelAsync(params.provider, params.modelId, params.agentDir, params.cfg, {
+        ...(params.allowBundledStaticCatalogFallback !== undefined
+          ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+          : {}),
         skipPiDiscovery: true,
       })
     : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
@@ -247,6 +251,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   modelRef?: string;
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
+  allowBundledStaticCatalogFallback?: boolean;
   skipPiDiscovery?: boolean;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
   const selection = resolveSimpleCompletionSelectionForAgent({
@@ -267,6 +272,9 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     profileId: selection.profileId,
     preferredProfile: params.preferredProfile,
     allowMissingApiKeyModes: params.allowMissingApiKeyModes,
+    ...(params.allowBundledStaticCatalogFallback !== undefined
+      ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+      : {}),
     skipPiDiscovery: params.skipPiDiscovery,
   });
   if ("error" in prepared) {

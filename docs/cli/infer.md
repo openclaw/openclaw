@@ -169,6 +169,7 @@ openclaw infer model run --local --model ollama/qwen2.5vl:7b --prompt "Describe 
 Notes:
 
 - Local `model run` is the narrowest CLI smoke for provider/model/auth health because, for non-Codex providers, it sends only the supplied prompt to the selected model.
+- Local `model run --model <provider/model>` can use exact bundled static catalog rows from `models list --all` before that provider is written to config. Provider auth is still required; missing credentials fail as auth errors, not `Unknown model`.
 - For Mistral Medium 3.5 reasoning probes, leave temperature unset/default. Mistral rejects `reasoning_effort="high"` plus `temperature: 0`; use `mistral/mistral-medium-3-5` with default temperature or a non-zero reasoning-mode value such as `0.7`.
 - `openai-codex/*` local probes are the narrow exception: OpenClaw adds a minimal system instruction so the Codex Responses transport can populate its required `instructions` field, without adding full agent context, tools, memory, or session transcript.
 - Local `model run --file` keeps that lean path and attaches image content directly to the single user message. Common image files such as PNG, JPEG, and WebP work when their MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called.
