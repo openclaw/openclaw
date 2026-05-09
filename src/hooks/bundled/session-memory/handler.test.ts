@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { createSqliteSessionTranscriptLocator } from "../../../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -87,17 +88,24 @@ function parseMockSessionContent(content: string): unknown[] {
 
 function seedSessionTranscript(params: {
   sessionId: string;
-  sessionFile: string;
+  sessionFile?: string;
   content: string;
   agentId?: string;
-}): void {
+}): string {
+  const transcriptPath =
+    params.sessionFile ??
+    createSqliteSessionTranscriptLocator({
+      agentId: params.agentId ?? "main",
+      sessionId: params.sessionId,
+    });
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId ?? "main",
     sessionId: params.sessionId,
-    transcriptPath: params.sessionFile,
+    transcriptPath,
     events: parseMockSessionContent(params.content),
     now: () => 1_770_000_000_000,
   });
+  return transcriptPath;
 }
 
 async function runNewWithPreviousSessionEntry(params: {
@@ -144,10 +152,8 @@ async function runNewWithPreviousSession(params: {
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await createCaseWorkspace("workspace");
 
-  const sessionFile = path.join(tempDir, "transcript-fixtures", "test-session.jsonl");
-  seedSessionTranscript({
+  const sessionFile = seedSessionTranscript({
     sessionId: "test-123",
-    sessionFile,
     content: params.sessionContent,
   });
 
@@ -179,10 +185,8 @@ async function createSessionMemoryWorkspace(params?: {
     return { tempDir, transcriptDir };
   }
 
-  const activeSessionFile = path.join(transcriptDir, params.activeSession.name);
-  seedSessionTranscript({
+  const activeSessionFile = seedSessionTranscript({
     sessionId: path.basename(params.activeSession.name, ".jsonl"),
-    sessionFile: activeSessionFile,
     content: params.activeSession.content,
   });
   return { tempDir, transcriptDir, activeSessionFile };
@@ -194,10 +198,8 @@ async function writeSessionTranscript(params: {
   content: string;
 }): Promise<{ tempDir: string; transcriptDir: string; sessionFile: string }> {
   const { tempDir, transcriptDir } = await createSessionMemoryWorkspace();
-  const sessionFile = path.join(transcriptDir, params.name);
-  seedSessionTranscript({
+  const sessionFile = seedSessionTranscript({
     sessionId: params.sessionId ?? path.basename(params.name, ".jsonl"),
-    sessionFile,
     content: params.content,
   });
   return { tempDir, transcriptDir, sessionFile };
@@ -356,10 +358,8 @@ describe("session-memory hook", () => {
   it("does not block reset command handling on opt-in model slug generation", async () => {
     const tempDir = await createCaseWorkspace("workspace");
 
-    const sessionFile = path.join(tempDir, "transcript-fixtures", "test-session.jsonl");
-    seedSessionTranscript({
+    const sessionFile = seedSessionTranscript({
       sessionId: "test-123",
-      sessionFile,
       content: createMockSessionContent([
         { role: "user", content: "Investigate slow WhatsApp reset" },
         { role: "assistant", content: "Checking reset hooks" },
@@ -489,10 +489,8 @@ describe("session-memory hook", () => {
     const mainWorkspace = await createCaseWorkspace("workspace-main");
     const naviWorkspace = await createCaseWorkspace("workspace-navi");
 
-    const sessionFile = path.join(naviWorkspace, "transcript-fixtures", "navi-session.jsonl");
-    seedSessionTranscript({
+    const sessionFile = seedSessionTranscript({
       sessionId: "navi-session",
-      sessionFile,
       content: createMockSessionContent([
         { role: "user", content: "Remember this under Navi" },
         { role: "assistant", content: "Stored in the bound workspace" },
@@ -630,7 +628,6 @@ describe("session-memory hook", () => {
     const sessionId = "missing-session-file";
     seedSessionTranscript({
       sessionId,
-      sessionFile: path.join(tempDir, "transcript-fixtures", `${sessionId}.jsonl`),
       content: createMockSessionContent([
         { role: "user", content: "Recovered with missing sessionFile pointer" },
         { role: "assistant", content: "Recovered by sessionId fallback" },
@@ -652,14 +649,8 @@ describe("session-memory hook", () => {
     const defaultWorkspace = await createCaseWorkspace("workspace-default");
     const customAgentWorkspace = await createCaseWorkspace("workspace-custom-agent");
 
-    const sessionFile = path.join(
-      customAgentWorkspace,
-      "transcript-fixtures",
-      "custom-agent-session.jsonl",
-    );
-    seedSessionTranscript({
+    const sessionFile = seedSessionTranscript({
       sessionId: "custom-agent-session",
-      sessionFile,
       content: createMockSessionContent([
         { role: "user", content: "Custom agent conversation" },
         { role: "assistant", content: "Stored in agent workspace" },

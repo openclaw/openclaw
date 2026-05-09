@@ -1,4 +1,4 @@
-import path from "node:path";
+import { isSqliteSessionTranscriptLocator } from "../../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
@@ -78,16 +78,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function extractSessionIdFromTranscriptPath(transcriptPath: string): string | undefined {
-  const base = path.basename(transcriptPath);
-  if (!base.endsWith(".jsonl")) {
-    return undefined;
-  }
-  const stem = base.slice(0, -".jsonl".length);
-  const topicIndex = stem.indexOf("-topic-");
-  return topicIndex > 0 ? stem.slice(0, topicIndex) : stem || undefined;
-}
-
 function resolveScopeForTranscriptTarget(
   target:
     | string
@@ -103,7 +93,6 @@ function resolveScopeForTranscriptTarget(
       return resolveSqliteSessionTranscriptScope({
         agentId: target.agentId,
         sessionId,
-        transcriptPath: target.transcriptPath,
       });
     }
     if (!target.transcriptPath?.trim()) {
@@ -112,16 +101,9 @@ function resolveScopeForTranscriptTarget(
     target = target.transcriptPath;
   }
 
-  const byPath = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: target });
-  if (byPath) {
-    return byPath;
-  }
-  const sessionId = extractSessionIdFromTranscriptPath(target);
-  if (!sessionId) {
+  if (!isSqliteSessionTranscriptLocator(target)) {
     return undefined;
   }
-  return resolveSqliteSessionTranscriptScope({
-    sessionId,
-    transcriptPath: target,
-  });
+  const byPath = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: target });
+  return byPath;
 }
