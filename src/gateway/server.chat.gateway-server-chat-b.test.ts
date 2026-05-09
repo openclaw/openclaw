@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
-import { getSessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator, getSessionEntry } from "../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
@@ -65,8 +65,8 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-function resolveMainTranscriptPath(root: string): string {
-  return path.join(root, "agents", "main", "sessions", "sess-main.jsonl");
+function resolveMainTranscriptPath(): string {
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "sess-main" });
 }
 
 async function withGatewayChatHarness(
@@ -112,11 +112,11 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   clearConfigCache();
 }
 
-async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
+async function writeMainSessionTranscript(_sessionDir: string, lines: string[]) {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath: resolveMainTranscriptPath(sessionDir),
+    transcriptPath: resolveMainTranscriptPath(),
     events: lines.map((line) => JSON.parse(line) as unknown),
   });
 }

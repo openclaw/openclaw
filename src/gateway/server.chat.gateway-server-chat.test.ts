@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { getSessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator, getSessionEntry } from "../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
@@ -30,8 +30,8 @@ const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 let ws: WebSocket;
 let port: number;
 
-function resolveMainTranscriptPath(root: string): string {
-  return path.join(root, "agents", "main", "sessions", "sess-main.jsonl");
+function resolveMainTranscriptPath(): string {
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "sess-main" });
 }
 
 installConnectedControlUiServerSuite((started) => {
@@ -130,11 +130,11 @@ describe("gateway server chat", () => {
     }
   };
 
-  const writeMainSessionTranscript = (dir: string, events: unknown[]): void => {
+  const writeMainSessionTranscript = (_dir: string, events: unknown[]): void => {
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "sess-main",
-      transcriptPath: resolveMainTranscriptPath(dir),
+      transcriptPath: resolveMainTranscriptPath(),
       events,
     });
   };
