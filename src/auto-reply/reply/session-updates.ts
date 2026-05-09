@@ -15,6 +15,7 @@ import {
   type SessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-paths.js";
 import { logVerbose } from "../../globals.js";
@@ -82,6 +83,7 @@ function emitCompactionSessionLifecycleHooks(params: {
     const transcript = resolveStableSessionEndTranscript({
       sessionId: params.previousEntry.sessionId,
       agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      topicId: resolveCompactionTopicId(params.sessionKey),
     });
     const payload = buildSessionEndHookPayload({
       sessionId: params.previousEntry.sessionId,
@@ -107,6 +109,15 @@ function emitCompactionSessionLifecycleHooks(params: {
       logVerbose(`session_start hook failed: ${String(err)}`);
     });
   }
+}
+
+function resolveCompactionTopicId(sessionKey: string): string | undefined {
+  const parsedThreadId = parseSessionThreadInfoFast(sessionKey).threadId;
+  if (parsedThreadId) {
+    return parsedThreadId;
+  }
+  const match = /(?:^|:)topic:([^:]+)/u.exec(sessionKey);
+  return match?.[1];
 }
 
 function resolvePositiveTokenCount(value: number | undefined): number | undefined {
@@ -287,8 +298,9 @@ export async function incrementCompactionCount(params: {
     updates.cacheRead = undefined;
     updates.cacheWrite = undefined;
   }
+  const { transcriptLocator: _derivedTranscriptLocator, ...entryWithoutLocator } = entry;
   sessionStore[sessionKey] = {
-    ...entry,
+    ...entryWithoutLocator,
     ...updates,
   };
   const agentId =

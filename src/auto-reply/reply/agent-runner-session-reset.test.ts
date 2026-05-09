@@ -53,7 +53,7 @@ describe("resetReplyRunSession", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
-      sessionFile: path.join(transcriptDir, "session.jsonl"),
+      transcriptLocator: path.join(transcriptDir, "session.jsonl"),
       modelProvider: "qwencode",
       model: "qwen",
       contextTokens: 123,
@@ -108,12 +108,13 @@ describe("resetReplyRunSession", () => {
       key: "main",
       previousSessionId: "session",
       nextSessionId: activeSessionEntry?.sessionId,
-      nextSessionFile: activeSessionEntry?.sessionFile,
+      nextTranscriptLocator: followupRun.run.transcriptLocator,
     });
     expect(errorMock).toHaveBeenCalledWith("reset 00000000-0000-0000-0000-000000000123");
 
     const persisted = readTestSessionRow("main");
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
+    expect(persisted?.transcriptLocator).toBeUndefined();
     expect(persisted?.fallbackNoticeReason).toBeUndefined();
   });
 
@@ -122,7 +123,7 @@ describe("resetReplyRunSession", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
-      sessionFile: path.join(transcriptDir, "session.jsonl"),
+      transcriptLocator: path.join(transcriptDir, "session.jsonl"),
       totalTokens: 42,
       compactionCount: 1,
     };
@@ -148,7 +149,10 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.sessionId).toBe("00000000-0000-0000-0000-000000000123");
     expect(activeSessionEntry?.totalTokens).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(1);
+    expect(activeSessionEntry?.transcriptLocator).toBeUndefined();
     expect(followupRun.run.sessionId).toBe(activeSessionEntry?.sessionId);
-    expect(readTestSessionRow("main")?.sessionId).toBe(activeSessionEntry?.sessionId);
+    const persisted = readTestSessionRow("main");
+    expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
+    expect(persisted?.transcriptLocator).toBeUndefined();
   });
 });

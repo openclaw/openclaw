@@ -88,10 +88,10 @@ describe("runMemoryFlushIfNeeded", () => {
       };
       if (typeof params.newSessionId === "string" && params.newSessionId) {
         nextEntry.sessionId = params.newSessionId;
-        if (typeof params.newSessionFile === "string" && params.newSessionFile) {
-          nextEntry.sessionFile = params.newSessionFile;
+        if (typeof params.newTranscriptLocator === "string" && params.newTranscriptLocator) {
+          nextEntry.transcriptLocator = params.newTranscriptLocator;
         } else {
-          nextEntry.sessionFile = resolveMainTranscriptPath(rootDir, params.newSessionId);
+          nextEntry.transcriptLocator = resolveMainTranscriptPath(rootDir, params.newSessionId);
         }
       }
       params.sessionStore[sessionKey] = nextEntry;
@@ -178,15 +178,16 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.prompt).not.toBe(flushCall.transcriptPrompt);
     expect(flushCall.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
     expect(flushCall.silentExpected).toBe(true);
-    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledTimes(1);
-    const refreshCall = requireRefreshQueuedFollowupSessionCall();
-    expect(refreshCall.key).toBe(sessionKey);
-    expect(refreshCall.previousSessionId).toBe("session");
-    expect(refreshCall.nextSessionId).toBe("session-rotated");
-    expect(refreshCall.nextSessionFile).toContain("session-rotated.jsonl");
+    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
+      key: sessionKey,
+      previousSessionId: "session",
+      nextSessionId: "session-rotated",
+      nextTranscriptLocator: "sqlite-transcript://main/session-rotated",
+    });
 
     const persisted = readTestSessionRow(sessionKey);
     expect(persisted?.sessionId).toBe("session-rotated");
+    expect(persisted?.transcriptLocator).toBeUndefined();
     expect(persisted?.compactionCount).toBe(2);
     expect(persisted?.memoryFlushCompactionCount).toBe(1);
     expect(persisted?.memoryFlushAt).toBe(1_700_000_000_000);
@@ -510,11 +511,11 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("passes runtime policy session key to preflight compaction sandbox resolution", async () => {
-    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
+    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m1",
@@ -531,7 +532,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptLocator,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -540,7 +541,7 @@ describe("runMemoryFlushIfNeeded", () => {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         sessionId: "session",
-        sessionFile,
+        transcriptLocator,
         sessionKey: "agent:main:main",
         runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
       }),
@@ -561,12 +562,12 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("updates the active preflight run after transcript rotation", async () => {
-    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
+    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     const successorFile = resolveMainTranscriptPath(rootDir, "session-rotated");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m1",
@@ -587,19 +588,19 @@ describe("runMemoryFlushIfNeeded", () => {
       result: {
         tokensAfter: 42,
         sessionId: "session-rotated",
-        sessionFile: successorFile,
+        transcriptLocator: successorFile,
       },
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptLocator,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
     const sessionStore = { "agent:main:main": sessionEntry };
     const followupRun = createTestFollowupRun({
       sessionId: "session",
-      sessionFile,
+      transcriptLocator,
       sessionKey: "agent:main:main",
     });
     const updateSessionId = vi.fn();
@@ -622,24 +623,24 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(entry?.sessionId).toBe("session-rotated");
-    expect(entry?.sessionFile).toBe(successorFile);
+    expect(entry?.transcriptLocator).toBeUndefined();
     expect(followupRun.run.sessionId).toBe("session-rotated");
-    expect(followupRun.run.sessionFile).toBe(successorFile);
+    expect(followupRun.run.transcriptLocator).toBe(successorFile);
     expect(updateSessionId).toHaveBeenCalledWith("session-rotated");
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
       key: "agent:main:main",
       previousSessionId: "session",
       nextSessionId: "session-rotated",
-      nextSessionFile: successorFile,
+      nextTranscriptLocator: successorFile,
     });
   });
 
   it("includes recent output tokens when deciding preflight compaction", async () => {
-    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
+    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m1",
@@ -660,7 +661,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptLocator,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -669,7 +670,7 @@ describe("runMemoryFlushIfNeeded", () => {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         sessionId: "session",
-        sessionFile,
+        transcriptLocator,
         sessionKey: "main",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
@@ -685,12 +686,12 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
   });
 
-  it("uses the active run sessionFile when the session entry has no transcript path", async () => {
-    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
+  it("uses the active run transcriptLocator when the session entry has no transcript path", async () => {
+    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m1",
@@ -719,7 +720,7 @@ describe("runMemoryFlushIfNeeded", () => {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         sessionId: "session",
-        sessionFile,
+        transcriptLocator,
         sessionKey: "main",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
@@ -734,17 +735,17 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedPiSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session",
-        sessionFile,
+        transcriptLocator,
       }),
     );
   });
 
   it("keeps preflight compaction conservative for content appended after latest usage", async () => {
-    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
+    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m1",
@@ -758,7 +759,7 @@ describe("runMemoryFlushIfNeeded", () => {
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m2",
@@ -778,7 +779,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptLocator,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -787,7 +788,7 @@ describe("runMemoryFlushIfNeeded", () => {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         sessionId: "session",
-        sessionFile,
+        transcriptLocator,
         sessionKey: "main",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
@@ -804,11 +805,11 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("combines latest usage with post-usage tail pressure for preflight compaction", async () => {
-    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
+    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m1",
@@ -822,7 +823,7 @@ describe("runMemoryFlushIfNeeded", () => {
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m2",
@@ -842,7 +843,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptLocator,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -851,7 +852,7 @@ describe("runMemoryFlushIfNeeded", () => {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         sessionId: "session",
-        sessionFile,
+        transcriptLocator,
         sessionKey: "main",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
@@ -868,11 +869,11 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("does not count bytes from a large latest usage record as post-usage tail pressure", async () => {
-    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
+    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "session",
         id: "session",
@@ -881,7 +882,7 @@ describe("runMemoryFlushIfNeeded", () => {
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m1",
@@ -902,7 +903,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptLocator,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -911,7 +912,7 @@ describe("runMemoryFlushIfNeeded", () => {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         sessionId: "session",
-        sessionFile,
+        transcriptLocator,
         sessionKey: "main",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
@@ -928,11 +929,11 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("does not treat raw transcript metadata bytes as token pressure", async () => {
-    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
+    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "session",
         id: "session",
@@ -941,7 +942,7 @@ describe("runMemoryFlushIfNeeded", () => {
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "custom",
         payload: "x".repeat(450_000),
@@ -950,7 +951,7 @@ describe("runMemoryFlushIfNeeded", () => {
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m1",
@@ -971,7 +972,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptLocator,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -990,7 +991,7 @@ describe("runMemoryFlushIfNeeded", () => {
       },
       followupRun: createTestFollowupRun({
         sessionId: "session",
-        sessionFile,
+        transcriptLocator,
         sessionKey: "main",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
@@ -1007,11 +1008,11 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("triggers preflight compaction when the active transcript exceeds the configured byte threshold", async () => {
-    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
+    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m1",
@@ -1020,7 +1021,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptLocator,
       updatedAt: Date.now(),
       totalTokens: 10,
       totalTokensFresh: true,
@@ -1046,7 +1047,7 @@ describe("runMemoryFlushIfNeeded", () => {
       },
       followupRun: createTestFollowupRun({
         sessionId: "session",
-        sessionFile,
+        transcriptLocator,
         sessionKey: "main",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
@@ -1062,7 +1063,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
     const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
       currentTokenCount?: number;
-      sessionFile?: string;
+      transcriptLocator?: string;
       sessionId?: string;
       trigger?: string;
     };
@@ -1073,15 +1074,15 @@ describe("runMemoryFlushIfNeeded", () => {
         currentTokenCount: 10,
       }),
     );
-    expect(compactCall.sessionFile).toBe(sessionFile);
+    expect(compactCall.transcriptLocator).toBe(transcriptLocator);
   });
 
   it("keeps the active transcript byte threshold inactive unless transcript rotation is enabled", async () => {
-    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
+    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       event: {
         type: "message",
         id: "m1",
@@ -1090,7 +1091,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptLocator,
       updatedAt: Date.now(),
       totalTokens: 10,
       totalTokensFresh: true,
@@ -1109,7 +1110,7 @@ describe("runMemoryFlushIfNeeded", () => {
       },
       followupRun: createTestFollowupRun({
         sessionId: "session",
-        sessionFile,
+        transcriptLocator,
         sessionKey: "main",
       }),
       defaultModel: "anthropic/claude-opus-4-6",

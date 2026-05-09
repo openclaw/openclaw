@@ -44,7 +44,7 @@ export async function resetReplyRunSession(params: {
   messageThreadId?: string;
   followupRun: FollowupRun;
   onActiveSessionEntry: (entry: SessionEntry) => void;
-  onNewSession: (newSessionId: string, nextSessionFile: string) => void;
+  onNewSession: (newSessionId: string, nextTranscriptLocator: string) => void;
 }): Promise<boolean> {
   if (!params.sessionKey) {
     return false;
@@ -86,11 +86,10 @@ export async function resetReplyRunSession(params: {
     fallbackNoticeActiveModel: undefined,
     fallbackNoticeReason: undefined,
   };
-  const nextSessionFile = createSqliteSessionTranscriptLocator({
+  const nextTranscriptLocator = createSqliteSessionTranscriptLocator({
     sessionId: nextSessionId,
     agentId,
   });
-  nextEntry.sessionFile = nextSessionFile;
   if (params.activeSessionStore) {
     params.activeSessionStore[params.sessionKey] = nextEntry;
   }
@@ -112,21 +111,20 @@ export async function resetReplyRunSession(params: {
   await replayRecentUserAssistantMessages({
     sourceAgentId: agentId,
     sourceSessionId: prevEntry.sessionId,
-    sourceTranscript: prevEntry.sessionFile,
     targetAgentId: agentId,
-    targetTranscript: nextSessionFile,
+    targetTranscript: nextTranscriptLocator,
     newSessionId: nextSessionId,
   });
   params.followupRun.run.sessionId = nextSessionId;
-  params.followupRun.run.sessionFile = nextSessionFile;
+  params.followupRun.run.transcriptLocator = nextTranscriptLocator;
   deps.refreshQueuedFollowupSession({
     key: params.queueKey,
     previousSessionId: prevEntry.sessionId,
     nextSessionId,
-    nextSessionFile,
+    nextTranscriptLocator,
   });
   params.onActiveSessionEntry(nextEntry);
-  params.onNewSession(nextSessionId, nextSessionFile);
+  params.onNewSession(nextSessionId, nextTranscriptLocator);
   deps.error(params.options.buildLogMessage(nextSessionId));
   return true;
 }

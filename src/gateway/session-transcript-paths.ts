@@ -10,8 +10,9 @@ function normalizeTranscriptLocator(value: string | undefined): string | undefin
 
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
-  sessionFile?: string,
+  transcriptLocator?: string,
   agentId?: string,
+  topicId?: string | number,
 ): string[] {
   const candidates: string[] = [];
   const pushCandidate = (resolve: () => string): void => {
@@ -22,13 +23,13 @@ export function resolveSessionTranscriptCandidates(
     }
   };
 
-  const normalizedSessionFile = normalizeTranscriptLocator(sessionFile);
-  if (normalizedSessionFile) {
-    candidates.push(normalizedSessionFile);
+  const normalizedTranscriptLocator = normalizeTranscriptLocator(transcriptLocator);
+  if (normalizedTranscriptLocator) {
+    candidates.push(normalizedTranscriptLocator);
   }
 
   if (agentId) {
-    pushCandidate(() => createSqliteSessionTranscriptLocator({ sessionId, agentId }));
+    pushCandidate(() => createSqliteSessionTranscriptLocator({ sessionId, agentId, topicId }));
   }
 
   return Array.from(new Set(candidates));
@@ -36,18 +37,20 @@ export function resolveSessionTranscriptCandidates(
 
 export function resolveStableSessionEndTranscript(params: {
   sessionId: string;
-  sessionFile?: string;
+  transcriptLocator?: string;
   agentId?: string;
-}): { sessionFile?: string } {
-  const stableLocator = normalizeTranscriptLocator(params.sessionFile);
+  topicId?: string | number;
+}): { transcriptLocator?: string } {
+  const stableLocator = normalizeTranscriptLocator(params.transcriptLocator);
   if (stableLocator) {
-    return { sessionFile: stableLocator };
+    return { transcriptLocator: stableLocator };
   }
 
   const [candidate] = resolveSessionTranscriptCandidates(
     params.sessionId,
-    params.sessionFile,
+    params.transcriptLocator,
     params.agentId,
+    params.topicId,
   );
-  return candidate ? { sessionFile: candidate } : {};
+  return candidate ? { transcriptLocator: candidate } : {};
 }

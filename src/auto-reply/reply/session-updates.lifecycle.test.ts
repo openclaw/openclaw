@@ -30,8 +30,7 @@ async function createFixture() {
   }
   process.env.OPENCLAW_STATE_DIR = root;
   const sessionKey = "agent:main:forum:direct:compaction";
-  const transcriptPath = path.join(root, "transcripts", "s1.jsonl");
-  await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+  const transcriptPath = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "s1" });
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "s1",
@@ -40,7 +39,6 @@ async function createFixture() {
   });
   const entry = {
     sessionId: "s1",
-    sessionFile: transcriptPath,
     updatedAt: Date.now(),
     compactionCount: 0,
   } as SessionEntry;
@@ -119,7 +117,7 @@ describe("session-updates lifecycle hooks", () => {
       sessionKey,
       reason: "compaction",
     });
-    expect(endEvent?.sessionFile).toBe(
+    expect(endEvent?.transcriptLocator).toBe(
       createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "s1" }),
     );
     expect(endContext).toMatchObject({
@@ -136,7 +134,7 @@ describe("session-updates lifecycle hooks", () => {
     expect(startContext?.agentId).toBe("main");
   });
 
-  it("keeps SQLite transcript locators virtual when compaction rotates topic sessions", async () => {
+  it("keeps topic compaction identity out of active session rows", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-updates-sqlite-"));
     tempDirs.push(root);
     if (!previousStateDirCaptured) {
@@ -145,7 +143,7 @@ describe("session-updates lifecycle hooks", () => {
     }
     process.env.OPENCLAW_STATE_DIR = root;
     const sessionKey = "agent:main:forum:direct:compaction:topic:456";
-    const sessionFile = createSqliteSessionTranscriptLocator({
+    const transcriptLocator = createSqliteSessionTranscriptLocator({
       agentId: "main",
       sessionId: "s1",
       topicId: 456,
@@ -153,12 +151,11 @@ describe("session-updates lifecycle hooks", () => {
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "s1",
-      transcriptPath: sessionFile,
+      transcriptPath: transcriptLocator,
       events: [{ type: "message" }],
     });
     const entry = {
       sessionId: "s1",
-      sessionFile,
       updatedAt: Date.now(),
       compactionCount: 0,
     } as SessionEntry;
@@ -176,15 +173,9 @@ describe("session-updates lifecycle hooks", () => {
       newSessionId: "s2",
     });
 
-    const expectedNextFile = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: "s2",
-      topicId: 456,
-    });
-    expect(sessionStore[sessionKey]?.sessionFile).toBe(expectedNextFile);
-    expect(sessionStore[sessionKey]?.sessionFile).toContain("sqlite-transcript://");
-    expect(sessionStore[sessionKey]?.sessionFile).not.toMatch(/^sqlite-transcript:\/[^/]/u);
+    expect(sessionStore[sessionKey]?.sessionId).toBe("s2");
+    expect(sessionStore[sessionKey]?.transcriptLocator).toBeUndefined();
     const [endEvent] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-    expect(endEvent?.sessionFile).toBe(sessionFile);
+    expect(endEvent?.transcriptLocator).toBe(transcriptLocator);
   });
 });
