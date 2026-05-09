@@ -84,6 +84,20 @@ function requireFetchCallHeaders(index: number): Headers {
   return new Headers(init.headers);
 }
 
+function expectOpenRouterFetchCall(index: number, url: string, auditContext: string) {
+  const call = fetchWithTimeoutGuardedMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected OpenRouter fetch call ${index + 1}`);
+  }
+  const [actualUrl, init, timeoutMs, fetchFn, guardOptions] = call;
+  expect(actualUrl).toBe(url);
+  expect(init).toMatchObject({ method: "GET" });
+  expect(Number.isInteger(timeoutMs)).toBe(true);
+  expect(timeoutMs).toBeGreaterThan(0);
+  expect(fetchFn).toBe(fetch);
+  expect(guardOptions).toMatchObject({ auditContext });
+}
+
 function requireGeneratedVideo(result: OpenRouterVideoResult, index: number) {
   const video = result.videos[index];
   if (!video) {
@@ -237,22 +251,16 @@ describe("openrouter video generation provider", () => {
         },
       }),
     );
-    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
-      1,
+    expectOpenRouterFetchCall(
+      0,
       "https://custom.openrouter.test/api/v1/videos/job-123",
-      expect.objectContaining({ method: "GET" }),
-      expect.any(Number),
-      expect.any(Function),
-      expect.objectContaining({ auditContext: "openrouter-video-status" }),
+      "openrouter-video-status",
     );
     expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer openrouter-key");
-    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
-      2,
+    expectOpenRouterFetchCall(
+      1,
       "https://custom.openrouter.test/api/v1/videos/job-123/content?index=0",
-      expect.objectContaining({ method: "GET" }),
-      expect.any(Number),
-      expect.any(Function),
-      expect.objectContaining({ auditContext: "openrouter-video-download" }),
+      "openrouter-video-download",
     );
     expect(requireFetchCallHeaders(1).get("authorization")).toBe("Bearer openrouter-key");
     const { video, buffer } = requireGeneratedVideoBuffer(result, 0);
@@ -292,22 +300,16 @@ describe("openrouter video generation provider", () => {
       cfg: {} as never,
     });
 
-    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
-      1,
+    expectOpenRouterFetchCall(
+      0,
       "https://polling.example.test/videos/job-123",
-      expect.objectContaining({ method: "GET" }),
-      expect.any(Number),
-      expect.any(Function),
-      expect.objectContaining({ auditContext: "openrouter-video-status" }),
+      "openrouter-video-status",
     );
     expect(requireFetchCallHeaders(0).get("authorization")).toBeNull();
-    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
-      2,
+    expectOpenRouterFetchCall(
+      1,
       "https://cdn.openrouter.test/video.mp4",
-      expect.objectContaining({ method: "GET" }),
-      expect.any(Number),
-      expect.any(Function),
-      expect.objectContaining({ auditContext: "openrouter-video-download" }),
+      "openrouter-video-download",
     );
     expect(requireFetchCallHeaders(1).get("authorization")).toBeNull();
   });
@@ -332,12 +334,10 @@ describe("openrouter video generation provider", () => {
       cfg: {} as never,
     });
 
-    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledWith(
+    expectOpenRouterFetchCall(
+      0,
       "https://openrouter.ai/api/v1/videos/job-123/content?index=0",
-      expect.objectContaining({ method: "GET" }),
-      expect.any(Number),
-      expect.any(Function),
-      expect.objectContaining({ auditContext: "openrouter-video-download" }),
+      "openrouter-video-download",
     );
     const { video, buffer } = requireGeneratedVideoBuffer(result, 0);
     expect(buffer.toString()).toBe("webm-bytes");

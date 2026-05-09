@@ -27,7 +27,8 @@ async function setupPairedNode(baseDir: string): Promise<string> {
     baseDir,
   );
   const paired = await getPairedNode("node-1", baseDir);
-  expect(paired?.token).toEqual(expect.any(String));
+  expect(typeof paired?.token).toBe("string");
+  expect(paired?.token.length).toBeGreaterThan(0);
   return paired!.token;
 }
 
