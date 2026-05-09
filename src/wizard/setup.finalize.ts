@@ -1,5 +1,8 @@
+﻿import fs from "node:fs/promises";
+
 import fs from "node:fs/promises";
 import path from "node:path";
+import { t } from "./i18n/index.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -115,7 +118,7 @@ export async function finalizeSetupWizard(
     installDaemon = true;
   } else {
     installDaemon = await prompter.confirm({
-      message: "Install Gateway service (recommended)",
+      message: t("Install Gateway service (recommended)"),
       initialValue: true,
     });
   }
@@ -133,7 +136,7 @@ export async function finalizeSetupWizard(
       flow === "quickstart"
         ? DEFAULT_GATEWAY_DAEMON_RUNTIME
         : await prompter.select({
-            message: "Gateway service runtime",
+            message: t("Gateway service runtime"),
             options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
             initialValue: opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME,
           });
@@ -148,11 +151,11 @@ export async function finalizeSetupWizard(
     let restartWasScheduled = false;
     if (loaded) {
       const action = await prompter.select({
-        message: "Gateway service already installed",
+        message: t("Gateway service already installed"),
         options: [
-          { value: "restart", label: "Restart" },
-          { value: "reinstall", label: "Reinstall" },
-          { value: "skip", label: "Skip" },
+          { value: "restart", label: t("Restart") },
+          { value: "reinstall", label: t("Reinstall") },
+          { value: "skip", label: t("Skip") },
         ],
       });
       if (action === "restart") {
@@ -161,7 +164,7 @@ export async function finalizeSetupWizard(
           "Gateway service",
           { doneMessage: () => restartDoneMessage },
           async (progress) => {
-            progress.update("Restarting Gateway service…");
+            progress.update("Restarting Gateway service鈥?);
             const restartResult = await service.restart({
               env: process.env,
               stdout: process.stdout,
@@ -176,7 +179,7 @@ export async function finalizeSetupWizard(
           "Gateway service",
           { doneMessage: "Gateway service uninstalled." },
           async (progress) => {
-            progress.update("Uninstalling Gateway service…");
+            progress.update("Uninstalling Gateway service鈥?);
             await service.uninstall({ env: process.env, stdout: process.stdout });
           },
         );
@@ -190,7 +193,7 @@ export async function finalizeSetupWizard(
       const progress = prompter.progress("Gateway service");
       let installError: string | null = null;
       try {
-        progress.update("Preparing Gateway service…");
+        progress.update("Preparing Gateway service鈥?);
         const tokenResolution = await resolveGatewayInstallToken({
           config: nextConfig,
           env: process.env,
@@ -215,7 +218,7 @@ export async function finalizeSetupWizard(
             },
           );
 
-          progress.update("Installing Gateway service…");
+          progress.update("Installing Gateway service鈥?);
           await service.install({
             env: process.env,
             stdout: process.stdout,
@@ -441,13 +444,13 @@ export async function finalizeSetupWizard(
     }
 
     const hatchOptions: { value: "tui" | "web" | "later"; label: string }[] = [
-      { value: "tui", label: "Hatch in Terminal (recommended)" },
-      ...(gatewayProbe.ok ? [{ value: "web" as const, label: "Open the Web UI" }] : []),
-      { value: "later", label: "Do this later" },
+      { value: "tui", label: t("Hatch in Terminal (recommended)") },
+      ...(gatewayProbe.ok ? [{ value: "web" as const, label: t("Open the Web UI") }] : []),
+      { value: "later", label: t("Do this later") },
     ];
 
     hatchChoice = await prompter.select({
-      message: "How do you want to hatch your bot?",
+      message: t("How do you want to hatch your bot?"),
       options: hatchOptions,
       initialValue: "tui",
     });
@@ -514,7 +517,7 @@ export async function finalizeSetupWizard(
   );
 
   await prompter.note(
-    "Running agents on your computer is risky — harden your setup: https://docs.openclaw.ai/security",
+    "Running agents on your computer is risky 鈥?harden your setup: https://docs.openclaw.ai/security",
     "Security",
   );
 
@@ -686,3 +689,4 @@ export async function finalizeSetupWizard(
 
   return { launchedTui };
 }
+

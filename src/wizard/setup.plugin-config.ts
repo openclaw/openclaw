@@ -1,3 +1,6 @@
+﻿import type { OpenClawConfig } from "../config/types.openclaw.js";
+
+import { t } from "./i18n/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
@@ -186,9 +189,9 @@ async function promptPluginFields(params: {
 
     const schemaProp = resolveJsonSchemaProperty(plugin.jsonSchema, key);
     const label = hint.label ?? key;
-    const helpSuffix = hint.help ? ` — ${hint.help}` : "";
+    const helpSuffix = hint.help ? ` 鈥?${hint.help}` : "";
 
-    // Skip sensitive fields — WizardPrompter has no masked input;
+    // Skip sensitive fields 鈥?WizardPrompter has no masked input;
     // direct users to openclaw config set or the Web UI instead.
     if (hint.sensitive) {
       await prompter.note(
@@ -235,7 +238,7 @@ async function promptPluginFields(params: {
       continue;
     }
 
-    // Handle array fields — prompt as comma-separated string
+    // Handle array fields 鈥?prompt as comma-separated string
     if (schemaProp?.type === "array") {
       const currentStr = Array.isArray(currentValue) ? (currentValue as unknown[]).join(", ") : "";
       const input = await prompter.text({
@@ -331,12 +334,12 @@ export async function setupPluginConfig(params: {
   }
 
   const selected = await params.prompter.multiselect({
-    message: "Configure plugins (select to set up now, or skip)",
+    message: t("Configure plugins (select to set up now, or skip)"),
     options: [
       {
         value: "__skip__",
-        label: "Skip for now",
-        hint: "Continue without configuring plugins",
+        label: t("Skip for now"),
+        hint: t("Continue without configuring plugins"),
       },
       ...unconfigured.map((p) => ({
         value: p.id,
@@ -387,7 +390,7 @@ export async function configurePluginConfig(params: {
   }
 
   const selected = await params.prompter.select({
-    message: "Select plugin to configure",
+    message: t("Select plugin to configure"),
     options: [
       ...configurable.map((p) => {
         const existing = getExistingPluginConfig(params.config, p.id);
@@ -402,7 +405,7 @@ export async function configurePluginConfig(params: {
           hint: `${configuredCount}/${totalCount} configured`,
         };
       }),
-      { value: "__skip__", label: "Back", hint: "Return to section menu" },
+      { value: "__skip__", label: t("Back"), hint: t("Return to section menu") },
     ],
     searchable: true,
   });
@@ -423,3 +426,4 @@ export async function configurePluginConfig(params: {
     showConfigured: true,
   });
 }
+

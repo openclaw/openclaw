@@ -1,4 +1,14 @@
+﻿[
+
 [
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "ClawHub",
+    "target": "ClawHub"
+  },
   {
     "source": "ACP",
     "target": "ACP"
@@ -6,10 +16,6 @@
   {
     "source": "Active Memory",
     "target": "Active Memory"
-  },
-  {
-    "source": "ClawHub",
-    "target": "ClawHub"
   },
   {
     "source": "CLI",
@@ -44,10 +50,6 @@
     "target": "Node"
   },
   {
-    "source": "OpenClaw",
-    "target": "OpenClaw"
-  },
-  {
     "source": "Pi",
     "target": "Pi"
   },
@@ -74,5 +76,350 @@
   {
     "source": "Webhook",
     "target": "Webhook"
+  },
+  {
+    "source": "Getting Started",
+    "target": "閸忋儵鏉搁幐鍥у础"
+  },
+  {
+    "source": "Getting started",
+    "target": "閸忋儵鏉搁幐鍥у础"
+  },
+  {
+    "source": "Quick start",
+    "target": "韫囶偊鈧喖鏋婃慨?
+  },
+  {
+    "source": "Quick Start",
+    "target": "韫囶偊鈧喖鏋婃慨?
+  },
+  {
+    "source": "Install overview",
+    "target": "鐎瑰顥㈠鍌濐瀴"
+  },
+  {
+    "source": "onboarding",
+    "target": "閺傜増澧滃鏇炵毇"
+  },
+  {
+    "source": "Onboarding",
+    "target": "閺傜増澧滃鏇炵毇"
+  },
+  {
+    "source": "wizard",
+    "target": "缁箖娼?
+  },
+  {
+    "source": "Setup Wizard",
+    "target": "鐟奉厼鐣剧划楣冩綇"
+  },
+  {
+    "source": "Setup Wizard Reference",
+    "target": "鐟奉厼鐣剧划楣冩綇閸欏啳鈧?
+  },
+  {
+    "source": "Setup Wizard (CLI)",
+    "target": "鐟奉厼鐣剧划楣冩綇閿涘湑LI閿?
+  },
+  {
+    "source": "CLI Setup Reference",
+    "target": "CLI 鐟奉厼鐣鹃崣鍐偓?
+  },
+  {
+    "source": "install wizard",
+    "target": "鐎瑰顥㈢划楣冩綇"
+  },
+  {
+    "source": "Install wizard",
+    "target": "鐎瑰顥㈢划楣冩綇"
+  },
+  {
+    "source": "CLI install wizard",
+    "target": "CLI 鐎瑰顥㈢划楣冩綇"
+  },
+  {
+    "source": "non-interactive",
+    "target": "闂堢偘绨伴崟?
+  },
+  {
+    "source": "non-interactive mode",
+    "target": "闂堢偘绨伴崟鏇熌佸?
+  },
+  {
+    "source": "Non-interactive mode",
+    "target": "闂堢偘绨伴崟鏇熌佸?
+  },
+  {
+    "source": "daemon",
+    "target": "鐢悂顫曠粙瀣础"
+  },
+  {
+    "source": "Daemon",
+    "target": "鐢悂顫曠粙瀣础"
+  },
+  {
+    "source": "health check",
+    "target": "閸嬨儱鎮嶉悪鈧幈瀣€侀弻?
+  },
+  {
+    "source": "Health check",
+    "target": "閸嬨儱鎮嶉悪鈧幈瀣€侀弻?
+  },
+  {
+    "source": "gateway token",
+    "target": "缂嶆煡妫炲▎濠冩綘"
+  },
+  {
+    "source": "Gateway token",
+    "target": "缂嶆煡妫炲▎濠冩綘"
+  },
+  {
+    "source": "secret reference",
+    "target": "鐎靛棝鎳撻崣鍐偓?
+  },
+  {
+    "source": "Secret reference",
+    "target": "鐎靛棝鎳撻崣鍐偓?
+  },
+  {
+    "source": "workspace",
+    "target": "瀹搞儰缍旈崡鈧?
+  },
+  {
+    "source": "Workspace",
+    "target": "瀹搞儰缍旈崡鈧?
+  },
+  {
+    "source": "auth",
+    "target": "闊偂鍞ゆす妤勭搼"
+  },
+  {
+    "source": "authentication",
+    "target": "闊偂鍞ゆす妤勭搼"
+  },
+  {
+    "source": "secret",
+    "target": "鐎靛棝鎳?
+  },
+  {
+    "source": "Secret",
+    "target": "鐎靛棝鎳?
+  },
+  {
+    "source": "agent",
+    "target": "閺呴缚鍏樻?
+  },
+  {
+    "source": "channel",
+    "target": "闂嬪浜?
+  },
+  {
+    "source": "session",
+    "target": "瀹搞儰缍旈梾搴㈩唽"
+  },
+  {
+    "source": "provider",
+    "target": "閹绘劒绶甸懓?
+  },
+  {
+    "source": "model",
+    "target": "濡€崇€?
+  },
+  {
+    "source": "tool",
+    "target": "瀹搞儱鍙?
+  },
+  {
+    "source": "Models",
+    "target": "濡€崇€?
+  },
+  {
+    "source": "environment variables",
+    "target": "閻犳澘顣ㄧ拋濠冩毄"
+  },
+  {
+    "source": "environment variable",
+    "target": "閻犳澘顣ㄧ拋濠冩毄"
+  },
+  {
+    "source": "env vars",
+    "target": "閻犳澘顣ㄧ拋濠冩毄"
+  },
+  {
+    "source": "env var",
+    "target": "閻犳澘顣ㄧ拋濠冩毄"
+  },
+  {
+    "source": "sandbox",
+    "target": "濞屾瑧顔?
+  },
+  {
+    "source": "Sandbox",
+    "target": "濞屾瑧顔?
+  },
+  {
+    "source": "sandboxing",
+    "target": "濞屾瑧顔堥梾鏃堟礋"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "濞屾瑧顔堥梾鏃堟礋"
+  },
+  {
+    "source": "Config",
+    "target": "鐟奉厼鐣?
+  },
+  {
+    "source": "Setup",
+    "target": "鐟奉厼鐣?
+  },
+  {
+    "source": "Configuration reference",
+    "target": "鐟奉厼鐣鹃崣鍐偓?
+  },
+  {
+    "source": "Channel configuration",
+    "target": "闂嬪浜剧懛顓炵暰"
+  },
+  {
+    "source": "Platforms",
+    "target": "楠炲啿褰?
+  },
+  {
+    "source": "DMs",
+    "target": "缁変浇鈻?
+  },
+  {
+    "source": "DM",
+    "target": "缁変浇鈻?
+  },
+  {
+    "source": "Messages",
+    "target": "鐟峰﹥浼?
+  },
+  {
+    "source": "troubleshooting",
+    "target": "閻ゆ垿娲犻幒鎺曅?
+  },
+  {
+    "source": "FAQ",
+    "target": "鐢瓕顩伴崯蹇涱攽"
+  },
+  {
+    "source": "Discovery",
+    "target": "閹恒垻鍌?
+  },
+  {
+    "source": "Discovery + transports",
+    "target": "閹恒垻鍌?+ 閸屽疇鍑犻崡鏃囶劑"
+  },
+  {
+    "source": "Network model",
+    "target": "缂嶈尪鐭惧Ο鈥崇€?
+  },
+  {
+    "source": "Plugins",
+    "target": "閹绘帊娆?
+  },
+  {
+    "source": "Plugin SDK",
+    "target": "閹绘帊娆?SDK"
+  },
+  {
+    "source": "Plugin hooks",
+    "target": "閹绘帊娆㈤柎銈呯摍"
+  },
+  {
+    "source": "Plugin manifest",
+    "target": "閹绘帊娆㈠〒鍛焾"
+  },
+  {
+    "source": "Building plugins",
+    "target": "瀵ょ儤顫愰幓鎺嶆"
+  },
+  {
+    "source": "Plugin Setup",
+    "target": "閹绘帊娆㈢懛顓炵暰"
+  },
+  {
+    "source": "Plugin Runtime",
+    "target": "閹绘帊娆㈤崺鐤攽閻犳澘顣?
+  },
+  {
+    "source": "Runtime",
+    "target": "閸╃柉顢戦悹鏉款暔"
+  },
+  {
+    "source": "Channel Plugins",
+    "target": "闂嬪浜鹃幓鎺嶆"
+  },
+  {
+    "source": "Channel Plugin SDK",
+    "target": "闂嬪浜鹃幓鎺嶆 SDK"
+  },
+  {
+    "source": "Model providers",
+    "target": "濡€崇€烽幓鎰返閼?
+  },
+  {
+    "source": "Model Providers",
+    "target": "濡€崇€烽幓鎰返閼?
+  },
+  {
+    "source": "Migrate",
+    "target": "闁些"
+  },
+  {
+    "source": "Migrating",
+    "target": "闁些"
+  },
+  {
+    "source": "Migration",
+    "target": "闁些"
+  },
+  {
+    "source": "Memory overview",
+    "target": "鐟锋ɑ鍠嶅鍌濐瀴"
+  },
+  {
+    "source": "Active memory",
+    "target": "娑撹瀚婄懛妯诲枍"
+  },
+  {
+    "source": "Scheduled tasks",
+    "target": "閹烘帞鈻兼禒璇插珡"
+  },
+  {
+    "source": "Sessions",
+    "target": "瀹搞儰缍旈梾搴㈩唽"
+  },
+  {
+    "source": "install sanity",
+    "target": "鐎瑰顥㈢€瑰本鏆ｉ幀褎顎侀弻?
+  },
+  {
+    "source": "get unstuck",
+    "target": "鐟欙絾鐒欓崯蹇涱攽"
+  },
+  {
+    "source": "Commitments",
+    "target": "瀵板懓鐫涢幍鑳伝"
+  },
+  {
+    "source": "Features",
+    "target": "閸旂喕鍏?
+  },
+  {
+    "source": "Testing",
+    "target": "濞擃剝鈹?
+  },
+  {
+    "source": "Release Policy",
+    "target": "閻х厧绔风粵鏍殣"
+  },
+  {
+    "source": "Release policy",
+    "target": "閻х厧绔风粵鏍殣"
   }
 ]
+

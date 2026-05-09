@@ -1,4 +1,7 @@
+﻿import { html, nothing } from "lit";
+
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 
 export type ChatRunControlsProps = {
@@ -24,8 +27,8 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
             <button
               class="btn btn--ghost"
               @click=${props.onNewSession}
-              title="New session"
-              aria-label="New session"
+              title={t("chat.welcome.newSession")}
+              aria-label={t("chat.welcome.newSession")}
             >
               ${icons.plus}
             </button>
@@ -34,7 +37,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
         class="btn btn--ghost"
         @click=${props.onExport}
         title="Export"
-        aria-label="Export chat"
+        aria-label={t("chat.welcome.exportChat")}
         ?disabled=${!props.hasMessages}
       >
         ${icons.download}
@@ -51,16 +54,16 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
                 props.onSend();
               }}
               ?disabled=${!props.connected || props.sending}
-              title="Queue"
-              aria-label="Queue message"
+              title={t("chat.welcome.sendMessage")}
+              aria-label={t("chat.welcome.sendMessage")}
             >
               ${icons.send}
             </button>
             <button
               class="chat-send-btn chat-send-btn--stop"
               @click=${props.onAbort}
-              title="Stop"
-              aria-label="Stop generating"
+              title={t("chat.welcome.stopGenerating")}
+              aria-label={t("chat.welcome.stopGenerating")}
             >
               ${icons.stop}
             </button>
@@ -75,8 +78,8 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
                 props.onSend();
               }}
               ?disabled=${!props.connected || props.sending}
-              title=${props.isBusy ? "Queue" : "Send"}
-              aria-label=${props.isBusy ? "Queue message" : "Send message"}
+              title=${props.isBusy ? t("chat.welcome.queueMessage") : t("chat.welcome.sendMessage")}
+              aria-label=${props.isBusy ? t("chat.welcome.queueMessage") : t("chat.welcome.sendMessage")}
             >
               ${icons.send}
             </button>
@@ -84,3 +87,4 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
     </div>
   `;
 }
+

@@ -1,6 +1,9 @@
+﻿import fs from "node:fs/promises";
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OnboardOptions } from "../commands/onboard-types.js";
+import { t } from "./i18n/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { MigrationProviderPlugin } from "../plugins/types.js";
@@ -169,7 +172,7 @@ async function selectSetupMigrationProvider(params: {
   const providerId =
     params.opts.importFrom?.trim() ||
     (await params.prompter.select({
-      message: "Migration source",
+      message: t("Migration source"),
       options: [
         ...params.detections.map((detection) => ({
           value: detection.providerId,
@@ -186,7 +189,7 @@ async function selectSetupMigrationProvider(params: {
           .map((provider) => ({
             value: provider.id,
             label: provider.label,
-            hint: provider.description ?? "Enter a source path next",
+            hint: provider.description ?? t("Enter a source path next"),
           })),
       ],
       initialValue: params.detections[0]?.providerId ?? providers[0]?.id,
@@ -238,7 +241,7 @@ export async function runSetupMigrationImport(params: {
           throw new Error("--import-source is required for non-interactive migration import.");
         })()
       : await params.prompter.text({
-          message: "Source agent home",
+          message: t("Source agent home"),
           initialValue: providerId === "hermes" ? "~/.hermes" : undefined,
         }));
   const workspaceInput =
@@ -246,7 +249,7 @@ export async function runSetupMigrationImport(params: {
     (params.opts.nonInteractive
       ? (params.baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE)
       : await params.prompter.text({
-          message: "Target workspace directory",
+          message: t("Target workspace directory"),
           initialValue:
             params.baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
         }));
@@ -280,7 +283,7 @@ export async function runSetupMigrationImport(params: {
     params.opts.nonInteractive === true
       ? true
       : await params.prompter.confirm({
-          message: "Apply this migration now?",
+          message: t("Apply this migration now?"),
           initialValue: false,
         });
   if (!confirmed) {
@@ -310,3 +313,4 @@ export async function runSetupMigrationImport(params: {
   await params.prompter.note(formatMigrationPlan(withReport).join("\n"), "Migration applied");
   await params.prompter.outro("Migration complete. Run `openclaw doctor` next.");
 }
+

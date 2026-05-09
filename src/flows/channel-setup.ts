@@ -1,3 +1,6 @@
+﻿import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+
+import { t } from "../wizard/i18n/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -238,7 +241,7 @@ export async function setupChannels(
   const shouldConfigure = options?.skipConfirm
     ? true
     : await prompter.confirm({
-        message: "Configure chat channels now?",
+        message: t("Configure chat channels now?"),
         initialValue: true,
       });
   if (!shouldConfigure) {
@@ -322,13 +325,13 @@ export async function setupChannels(
   // Decorates the runtime status map with synthetic `selectionHint` entries for
   // installable catalog channels (e.g. WeCom shipped via npm). In QuickStart we
   // run with `deferStatusUntilSelection`, which leaves `statusByChannel` empty
-  // until the user picks a channel — without this overlay the selection menu
+  // until the user picks a channel 鈥?without this overlay the selection menu
   // would render those options without any "download from <npm-spec>" hint.
   //
   // Bundled channels (Signal / Tlon / Twitch / Slack ...) reach this code path
   // too whenever their plugin is not yet enabled, because they share the same
   // "installable catalog" bucket. For those we must NOT show "download from
-  // <npm-spec>" — the plugin already lives under `extensions/<id>` and the
+  // <npm-spec>" 鈥?the plugin already lives under `extensions/<id>` and the
   // hint would mislead users into thinking the plugin is missing.
   const buildStatusByChannelForSelection = (
     catalogById: ReturnType<typeof getChannelEntries>["catalogById"],
@@ -591,7 +594,7 @@ export async function setupChannels(
       if (!plugin && installedCatalogEntry.install?.npmSpec) {
         // The channel is recorded in the user's config (e.g. a stale
         // `channels.<id>` entry left over from a previous install) but the
-        // plugin runtime cannot be loaded from disk — typically because the
+        // plugin runtime cannot be loaded from disk 鈥?typically because the
         // externalized npm package was uninstalled or pruned during an
         // upgrade. Rather than dead-ending with "plugin not available", fall
         // back to the catalog-driven install flow so onboard can recover by
@@ -717,7 +720,7 @@ export async function setupChannels(
     while (true) {
       const { entries, catalogById } = getChannelEntries();
       const choice = await prompter.select({
-        message: "Select channel (QuickStart)",
+        message: t("Select channel (QuickStart)"),
         options: [
           ...resolveChannelSetupSelectionContributions({
             entries,
@@ -726,7 +729,7 @@ export async function setupChannels(
           }).map((contribution) => contribution.option),
           {
             value: "__skip__",
-            label: "Skip for now",
+            label: t("Skip for now"),
             hint: `You can add channels later via \`${formatCliCommand("openclaw channels add")}\``,
           },
         ],
@@ -746,7 +749,7 @@ export async function setupChannels(
     while (true) {
       const { entries, catalogById } = getChannelEntries();
       const choice = await prompter.select({
-        message: "Select a channel",
+        message: t("Select a channel"),
         options: [
           ...resolveChannelSetupSelectionContributions({
             entries,
@@ -755,8 +758,8 @@ export async function setupChannels(
           }).map((contribution) => contribution.option),
           {
             value: doneValue,
-            label: "Finished",
-            hint: selection.length > 0 ? "Done" : "Skip for now",
+            label: t("Finished"),
+            hint: selection.length > 0 ? "Done" : t("Skip for now"),
           },
         ],
         initialValue,
@@ -791,3 +794,4 @@ export async function setupChannels(
 
   return next;
 }
+

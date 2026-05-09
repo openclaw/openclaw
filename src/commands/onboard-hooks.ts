@@ -1,3 +1,6 @@
+﻿import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+
+import { t } from "../wizard/i18n/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -41,7 +44,7 @@ export async function setupInternalHooks(
       { value: "__skip__", label: "Skip for now" },
       ...eligibleHooks.map((hook) => ({
         value: hook.name,
-        label: `${hook.emoji ?? "🔗"} ${hook.name}`,
+        label: `${hook.emoji ?? "馃敆"} ${hook.name}`,
         hint: hook.description,
       })),
     ],
@@ -83,3 +86,4 @@ export async function setupInternalHooks(
 
   return next;
 }
+

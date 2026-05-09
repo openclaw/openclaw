@@ -1,10 +1,13 @@
+﻿import { modelKey } from "../agents/model-selection.js";
+
 import { modelKey } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { t } from "../wizard/i18n/index.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   applyCustomApiConfig,
@@ -50,18 +53,18 @@ const COMPATIBILITY_OPTIONS: Array<{
 }> = [
   {
     value: "openai",
-    label: "OpenAI-compatible",
-    hint: "Uses /chat/completions",
+    label: t("OpenAI-compatible"),
+    hint: t("Uses /chat/completions"),
   },
   {
     value: "anthropic",
-    label: "Anthropic-compatible",
-    hint: "Uses /messages",
+    label: t("Anthropic-compatible"),
+    hint: t("Uses /messages"),
   },
   {
     value: "unknown",
-    label: "Unknown (detect automatically)",
-    hint: "Probes OpenAI then Anthropic endpoints",
+    label: t("Unknown (detect automatically)"),
+    hint: t("Probes OpenAI then Anthropic endpoints"),
   },
 ];
 
@@ -135,7 +138,7 @@ async function promptBaseUrlAndKey(params: {
   initialBaseUrl?: string;
 }): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
   const baseUrlInput = await params.prompter.text({
-    message: "API Base URL",
+    message: t("API Base URL"),
     initialValue: params.initialBaseUrl,
     placeholder: "https://api.example.com/v1",
     validate: (val) => {
@@ -149,7 +152,7 @@ async function promptBaseUrlAndKey(params: {
     config: params.config,
     provider: providerHint,
     envLabel: "CUSTOM_API_KEY",
-    promptMessage: "API Key (leave blank if not required)",
+    promptMessage: t("API Key (leave blank if not required)"),
     normalize: normalizeSecretInput,
     validate: () => undefined,
     prompter: params.prompter,
@@ -169,11 +172,11 @@ type CustomApiRetryChoice = "baseUrl" | "model" | "both";
 
 async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<CustomApiRetryChoice> {
   return await prompter.select({
-    message: "What would you like to change?",
+    message: t("What would you like to change?"),
     options: [
-      { value: "baseUrl", label: "Change base URL" },
-      { value: "model", label: "Change model" },
-      { value: "both", label: "Change base URL and model" },
+      { value: "baseUrl", label: t("Change base URL") },
+      { value: "model", label: t("Change model") },
+      { value: "both", label: t("Change base URL and model") },
     ],
   });
 }
@@ -181,7 +184,7 @@ async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<Cus
 async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
   return (
     await prompter.text({
-      message: "Model ID",
+      message: t("Model ID"),
       placeholder: "e.g. llama3, claude-3-7-sonnet",
       validate: (val) => (val.trim() ? undefined : "Model ID is required"),
     })
@@ -231,7 +234,7 @@ export async function promptCustomApiConfig(params: {
   let resolvedApiKey = baseInput.resolvedApiKey;
 
   const compatibilityChoice = await prompter.select({
-    message: "Endpoint compatibility",
+    message: t("Endpoint compatibility"),
     options: COMPATIBILITY_OPTIONS.map((option) => ({
       value: option.value,
       label: option.label,
@@ -319,7 +322,7 @@ export async function promptCustomApiConfig(params: {
 
   const suggestedId = buildEndpointIdFromUrl(baseUrl);
   const providerIdInput = await prompter.text({
-    message: "Endpoint ID",
+    message: t("Endpoint ID"),
     initialValue: suggestedId,
     placeholder: "custom",
     validate: (value) => {
@@ -331,7 +334,7 @@ export async function promptCustomApiConfig(params: {
     },
   });
   const aliasInput = await prompter.text({
-    message: "Model alias (optional)",
+    message: t("Model alias (optional)"),
     placeholder: "e.g. local, ollama",
     initialValue: "",
     validate: (value) => {
@@ -349,7 +352,7 @@ export async function promptCustomApiConfig(params: {
     imageInputInference.confidence === "known"
       ? imageInputInference.supportsImageInput
       : await prompter.confirm({
-          message: "Does this model support image input?",
+          message: t("Does this model support image input?"),
           initialValue: imageInputInference.supportsImageInput,
         });
   const resolvedCompatibility = compatibility ?? "openai";
@@ -374,3 +377,4 @@ export async function promptCustomApiConfig(params: {
   runtime.log(`Configured custom provider: ${result.providerId}/${result.modelId}`);
   return result;
 }
+

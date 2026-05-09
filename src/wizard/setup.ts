@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+﻿import { normalizeProviderId } from "../agents/provider-id.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { commitConfigWriteWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import type {
@@ -28,6 +28,7 @@ import {
   SECURITY_NOTE_TITLE,
 } from "./setup.security-note.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
+import { t } from "./i18n/index.js";
 
 type SetupFlowChoice = WizardFlow | "import";
 
@@ -183,7 +184,7 @@ export async function runSetupWizard(
 ) {
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
-  await prompter.intro("OpenClaw setup");
+  await prompter.intro(t("OpenClaw setup"));
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readSetupConfigFileSnapshot();
@@ -233,8 +234,8 @@ export async function runSetupWizard(
     );
   }
 
-  const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
-  const manualHint = "Configure port, network, Tailscale, and auth options.";
+  const quickstartHint = t(`Configure details later via ${formatCliCommand("openclaw configure")}.`);
+  const manualHint = t("Configure port, network, Tailscale, and auth options.");
   const migrationDetections = await detectSetupMigrationSources({ config: baseConfig, runtime });
   const firstMigrationDetection = migrationDetections[0];
   const importOption = firstMigrationDetection
@@ -265,10 +266,10 @@ export async function runSetupWizard(
   let flow: SetupFlowChoice =
     explicitFlow ??
     (await prompter.select({
-      message: "Setup mode",
+      message: t("Setup mode"),
       options: [
-        { value: "quickstart", label: "QuickStart", hint: quickstartHint },
-        { value: "advanced", label: "Manual", hint: manualHint },
+        { value: "quickstart", label: t("QuickStart"), hint: quickstartHint },
+        { value: "advanced", label: t("Manual"), hint: manualHint },
         ...(importOption ? [importOption] : []),
       ],
       initialValue: "quickstart",
@@ -289,11 +290,11 @@ export async function runSetupWizard(
     );
 
     const action = await prompter.select({
-      message: "Config handling",
+      message: t("Config handling"),
       options: [
-        { value: "keep", label: "Use existing values" },
-        { value: "modify", label: "Update values" },
-        { value: "reset", label: "Reset" },
+        { value: "keep", label: t("Use existing values") },
+        { value: "modify", label: t("Update values") },
+        { value: "reset", label: t("Reset") },
       ],
     });
 
@@ -301,16 +302,16 @@ export async function runSetupWizard(
       const workspaceDefault =
         baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE;
       const resetScope = (await prompter.select({
-        message: "Reset scope",
+        message: t("Reset scope"),
         options: [
-          { value: "config", label: "Config only" },
+          { value: "config", label: t("Config only") },
           {
             value: "config+creds+sessions",
-            label: "Config + creds + sessions",
+            label: t("Config + creds + sessions"),
           },
           {
             value: "full",
-            label: "Full reset (config + creds + sessions + workspace)",
+            label: t("Full reset (config + creds + sessions + workspace)"),
           },
         ],
       })) as ResetScope;
@@ -517,18 +518,18 @@ export async function runSetupWizard(
     (flow === "quickstart"
       ? "local"
       : ((await prompter.select({
-          message: "What do you want to set up?",
+          message: t("What do you want to set up?"),
           options: [
             {
               value: "local",
-              label: "Local gateway (this machine)",
+              label: t("Local gateway (this machine)"),
               hint: localProbe.ok
                 ? `Gateway reachable (${localUrl})`
                 : `No gateway detected (${localUrl})`,
             },
             {
               value: "remote",
-              label: "Remote gateway (info-only)",
+              label: t("Remote gateway (info-only)"),
               hint: !remoteUrl
                 ? "No remote URL configured yet"
                 : remoteProbe?.ok
@@ -560,7 +561,7 @@ export async function runSetupWizard(
     (flow === "quickstart"
       ? (baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE)
       : await prompter.text({
-          message: "Workspace directory",
+          message: t("Workspace directory"),
           initialValue: baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
         }));
 
@@ -799,3 +800,4 @@ export async function runSetupWizard(
     return;
   }
 }
+

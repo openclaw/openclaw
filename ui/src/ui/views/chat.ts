@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+﻿import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -700,7 +700,7 @@ function renderSlashMenu(
           )}
         </div>
         <div class="slash-menu-footer">
-          <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> run <kbd>Esc</kbd> close
+          <kbd>鈫戔啌</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> run <kbd>Esc</kbd> close
         </div>
       </div>
     `;
@@ -781,7 +781,7 @@ function renderSlashMenu(
           </button>`
         : nothing}
       <div class="slash-menu-footer">
-        <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> select <kbd>Esc</kbd> close
+        <kbd>鈫戔啌</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> select <kbd>Esc</kbd> close
       </div>
     </div>
   `;
@@ -808,7 +808,7 @@ export function renderChat(props: ChatProps) {
   const placeholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
-      : `Message ${props.assistantName || "agent"} (Enter to send)`
+      : t("chat.welcome.messagePlaceholder")
     : "Connect to the gateway to start chatting...";
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
@@ -1001,7 +1001,7 @@ export function renderChat(props: ChatProps) {
   `;
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    // Slash menu navigation — arg mode
+    // Slash menu navigation 鈥?arg mode
     if (vs.slashMenuOpen && vs.slashMenuMode === "args" && vs.slashMenuArgItems.length > 0) {
       const len = vs.slashMenuArgItems.length;
       switch (e.key) {
@@ -1032,7 +1032,7 @@ export function renderChat(props: ChatProps) {
       }
     }
 
-    // Slash menu navigation — command mode
+    // Slash menu navigation 鈥?command mode
     if (vs.slashMenuOpen && vs.slashMenuItems.length > 0) {
       const len = vs.slashMenuItems.length;
       switch (e.key) {
@@ -1291,8 +1291,8 @@ export function renderChat(props: ChatProps) {
               @click=${() => {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
-              title="Attach file"
-              aria-label="Attach file"
+               title={t("chat.welcome.attachFile")}
+               aria-label={t("chat.welcome.attachFile")}
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
@@ -1305,8 +1305,8 @@ export function renderChat(props: ChatProps) {
                       ? "agent-chat__input-btn--talk"
                       : ""}"
                     @click=${props.onToggleRealtimeTalk}
-                    title=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
-                    aria-label=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    title=${props.realtimeTalkActive ? t("chat.welcome.stopTalk") : t("chat.welcome.startTalk")}
+                    aria-label=${props.realtimeTalkActive ? t("chat.welcome.stopTalk") : t("chat.welcome.startTalk")}
                     ?disabled=${!props.connected}
                   >
                     ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
@@ -1334,3 +1334,4 @@ export function renderChat(props: ChatProps) {
     </section>
   `;
 }
+

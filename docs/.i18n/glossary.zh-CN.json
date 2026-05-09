@@ -1,4 +1,4 @@
-[
+﻿[
   {
     "source": "OpenClaw",
     "target": "OpenClaw"
@@ -17,11 +17,11 @@
   },
   {
     "source": "Pairing",
-    "target": "配对"
+    "target": "閰嶅"
   },
   {
     "source": "Channel Routing",
-    "target": "频道路由"
+    "target": "棰戦亾璺敱"
   },
   {
     "source": "ClawHub",
@@ -33,7 +33,7 @@
   },
   {
     "source": "OpenAI provider",
-    "target": "OpenAI provider"
+    "target": "OpenAI 閹绘劒绶甸崯?
   },
   {
     "source": "Mantis",
@@ -41,27 +41,27 @@
   },
   {
     "source": "OpenClaw App SDK",
-    "target": "OpenClaw 应用 SDK"
+    "target": "OpenClaw 搴旂敤 SDK"
   },
   {
     "source": "OpenClaw App SDK API design",
-    "target": "OpenClaw 应用 SDK API 设计"
+    "target": "OpenClaw 搴旂敤 SDK API 璁捐"
   },
   {
     "source": "Message lifecycle refactor",
-    "target": "消息生命周期重构"
+    "target": "娑堟伅鐢熷懡鍛ㄦ湡閲嶆瀯"
   },
   {
     "source": "ACP lifecycle refactor",
-    "target": "ACP 生命周期重构"
+    "target": "ACP 鐢熷懡鍛ㄦ湡閲嶆瀯"
   },
   {
     "source": "Channel message API",
-    "target": "频道消息 API"
+    "target": "棰戦亾娑堟伅 API"
   },
   {
     "source": "Talk mode",
-    "target": "Talk 模式"
+    "target": "Talk 妯″紡"
   },
   {
     "source": "Azure Speech",
@@ -69,11 +69,11 @@
   },
   {
     "source": "Azure Speech provider",
-    "target": "Azure Speech provider"
+    "target": "Azure Speech 閹绘劒绶甸崯?
   },
   {
     "source": "Web tools",
-    "target": "Web 工具"
+    "target": "Web 宸ュ叿"
   },
   {
     "source": "Status",
@@ -81,19 +81,19 @@
   },
   {
     "source": "Gateway",
-    "target": "Gateway 网关"
+    "target": "Gateway 缃戝叧"
   },
   {
     "source": "Gateway RPC reference",
-    "target": "Gateway RPC 参考"
+    "target": "Gateway RPC 鍙傝€?
   },
   {
     "source": "Secure file operations",
-    "target": "安全文件操作"
+    "target": "瀹夊叏鏂囦欢鎿嶄綔"
   },
   {
     "source": "Sessions",
-    "target": "会话"
+    "target": "浼氳瘽"
   },
   {
     "source": "Pi",
@@ -137,11 +137,11 @@
   },
   {
     "source": "Skills config",
-    "target": "Skills 配置"
+    "target": "Skills 閰嶇疆"
   },
   {
     "source": "Skills Config",
-    "target": "Skills 配置"
+    "target": "Skills 閰嶇疆"
   },
   {
     "source": "local loopback",
@@ -153,19 +153,19 @@
   },
   {
     "source": "Getting Started",
-    "target": "入门指南"
+    "target": "鍏ラ棬鎸囧崡"
   },
   {
     "source": "Getting started",
-    "target": "入门指南"
+    "target": "鍏ラ棬鎸囧崡"
   },
   {
     "source": "Quick start",
-    "target": "快速开始"
+    "target": "蹇€熷紑濮?
   },
   {
     "source": "Quick Start",
-    "target": "快速开始"
+    "target": "蹇€熷紑濮?
   },
   {
     "source": "Chutes",
@@ -181,19 +181,19 @@
   },
   {
     "source": "Feishu",
-    "target": "Feishu"
+    "target": "妞嬬偘鍔?
   },
   {
     "source": "Yuanbao",
-    "target": "腾讯元宝"
+    "target": "鑵捐鍏冨疂"
   },
   {
     "source": "WeChat",
-    "target": "微信"
+    "target": "寰俊"
   },
   {
     "source": "Weixin",
-    "target": "微信"
+    "target": "寰俊"
   },
   {
     "source": "Mattermost",
@@ -201,7 +201,7 @@
   },
   {
     "source": "BytePlus (International)",
-    "target": "BytePlus（国际版）"
+    "target": "BytePlus锛堝浗闄呯増锛?
   },
   {
     "source": "Volcengine TTS HTTP API",
@@ -213,7 +213,7 @@
   },
   {
     "source": "Anthropic (API + Claude CLI)",
-    "target": "Anthropic（API + Claude CLI）"
+    "target": "Anthropic锛圓PI + Claude CLI锛?
   },
   {
     "source": "Moonshot AI",
@@ -221,11 +221,11 @@
   },
   {
     "source": "Model providers",
-    "target": "模型提供商"
+    "target": "妯″瀷鎻愪緵鍟?
   },
   {
     "source": "Model Providers",
-    "target": "模型提供商"
+    "target": "妯″瀷鎻愪緵鍟?
   },
   {
     "source": "NVIDIA",
@@ -233,19 +233,19 @@
   },
   {
     "source": "NVIDIA API key",
-    "target": "NVIDIA API key"
+    "target": "NVIDIA API 鐎靛棝鎸?
   },
   {
     "source": "Provider directory",
-    "target": "提供商目录"
+    "target": "鎻愪緵鍟嗙洰褰?
   },
   {
     "source": "Additional bundled variants",
-    "target": "其他内置变体"
+    "target": "鍏朵粬鍐呯疆鍙樹綋"
   },
   {
     "source": "Diffs",
-    "target": "Diffs"
+    "target": "瀹割喖绱?
   },
   {
     "source": "Dreaming",
@@ -253,11 +253,11 @@
   },
   {
     "source": "Capability Cookbook",
-    "target": "能力扩展手册"
+    "target": "鑳藉姏鎵╁睍鎵嬪唽"
   },
   {
     "source": "WhatsApp group messages",
-    "target": "WhatsApp 群组消息"
+    "target": "WhatsApp 缇ょ粍娑堟伅"
   },
   {
     "source": "Oracle Cloud",
@@ -265,131 +265,131 @@
   },
   {
     "source": "Install overview",
-    "target": "安装概览"
+    "target": "瀹夎姒傝"
   },
   {
     "source": "VPS hosting",
-    "target": "VPS 托管"
+    "target": "VPS 鎵樼"
   },
   {
     "source": "Linux server",
-    "target": "Linux 服务器"
+    "target": "Linux 鏈嶅姟鍣?
   },
   {
     "source": "Platforms",
-    "target": "平台"
+    "target": "骞冲彴"
   },
   {
     "source": "Adding capabilities (redirect)",
-    "target": "添加能力（重定向）"
+    "target": "娣诲姞鑳藉姏锛堥噸瀹氬悜锛?
   },
   {
     "source": "Adding capabilities (contributor guide)",
-    "target": "添加能力（贡献者指南）"
+    "target": "娣诲姞鑳藉姏锛堣础鐚€呮寚鍗楋級"
   },
   {
     "source": "Plugin internals",
-    "target": "插件内部机制"
+    "target": "鎻掍欢鍐呴儴鏈哄埗"
   },
   {
     "source": "SDK overview",
-    "target": "SDK 概览"
+    "target": "SDK 姒傝"
   },
   {
     "source": "Creating skills",
-    "target": "创建技能"
+    "target": "鍒涘缓鎶€鑳?
   },
   {
     "source": "Setup Wizard Reference",
-    "target": "设置向导参考"
+    "target": "璁剧疆鍚戝鍙傝€?
   },
   {
     "source": "CLI Setup Reference",
-    "target": "CLI 设置参考"
+    "target": "CLI 璁剧疆鍙傝€?
   },
   {
     "source": "Setup Wizard (CLI)",
-    "target": "设置向导（CLI）"
+    "target": "璁剧疆鍚戝锛圕LI锛?
   },
   {
     "source": "Docs directory",
-    "target": "文档目录"
+    "target": "鏂囨。鐩綍"
   },
   {
     "source": "Credits",
-    "target": "致谢"
+    "target": "鑷磋阿"
   },
   {
     "source": "Features",
-    "target": "功能"
+    "target": "鍔熻兘"
   },
   {
     "source": "DMs",
-    "target": "私信"
+    "target": "绉佷俊"
   },
   {
     "source": "DM",
-    "target": "私信"
+    "target": "绉佷俊"
   },
   {
     "source": "sandbox",
-    "target": "沙箱"
+    "target": "娌欑"
   },
   {
     "source": "Sandbox",
-    "target": "沙箱"
+    "target": "娌欑"
   },
   {
     "source": "sandboxing",
-    "target": "沙箱隔离"
+    "target": "娌欑闅旂"
   },
   {
     "source": "Sandboxing",
-    "target": "沙箱隔离"
+    "target": "娌欑闅旂"
   },
   {
     "source": "sandboxed",
-    "target": "沙箱隔离"
+    "target": "娌欑闅旂"
   },
   {
     "source": "Sandboxed",
-    "target": "沙箱隔离"
+    "target": "娌欑闅旂"
   },
   {
     "source": "Sandboxing note",
-    "target": "沙箱注意事项"
+    "target": "娌欑娉ㄦ剰浜嬮」"
   },
   {
     "source": "Companion apps",
-    "target": "配套应用"
+    "target": "閰嶅搴旂敤"
   },
   {
     "source": "expected keys",
-    "target": "预期键名"
+    "target": "棰勬湡閿悕"
   },
   {
     "source": "block streaming",
-    "target": "分块流式传输"
+    "target": "鍒嗗潡娴佸紡浼犺緭"
   },
   {
     "source": "Block streaming",
-    "target": "分块流式传输"
+    "target": "鍒嗗潡娴佸紡浼犺緭"
   },
   {
     "source": "Progress drafts",
-    "target": "进度草稿"
+    "target": "杩涘害鑽夌"
   },
   {
     "source": "Streaming and chunking",
-    "target": "流式传输和分块"
+    "target": "娴佸紡浼犺緭鍜屽垎鍧?
   },
   {
     "source": "Messages",
-    "target": "消息"
+    "target": "娑堟伅"
   },
   {
     "source": "Channel configuration",
-    "target": "频道配置"
+    "target": "棰戦亾閰嶇疆"
   },
   {
     "source": "Discord",
@@ -413,19 +413,19 @@
   },
   {
     "source": "Discovery + transports",
-    "target": "设备发现 + 传输协议"
+    "target": "璁惧鍙戠幇 + 浼犺緭鍗忚"
   },
   {
     "source": "Discovery",
-    "target": "设备发现"
+    "target": "璁惧鍙戠幇"
   },
   {
     "source": "Network model",
-    "target": "网络模型"
+    "target": "缃戠粶妯″瀷"
   },
   {
     "source": "Bridge protocol (legacy nodes, historical)",
-    "target": "Bridge protocol（旧版节点，历史参考）"
+    "target": "Bridge protocol锛堟棫鐗堣妭鐐癸紝鍘嗗彶鍙傝€冿級"
   },
   {
     "source": "Doctor",
@@ -433,7 +433,7 @@
   },
   {
     "source": "Config",
-    "target": "配置"
+    "target": "閰嶇疆"
   },
   {
     "source": "Memory Wiki",
@@ -441,23 +441,23 @@
   },
   {
     "source": "Memory overview",
-    "target": "记忆概览"
+    "target": "璁板繂姒傝"
   },
   {
     "source": "Active memory",
-    "target": "主动记忆"
+    "target": "涓诲姩璁板繂"
   },
   {
     "source": "Commitments",
-    "target": "跟进承诺"
+    "target": "璺熻繘鎵胯"
   },
   {
     "source": "Inferred Commitments",
-    "target": "推断式跟进承诺"
+    "target": "鎺ㄦ柇寮忚窡杩涙壙璇?
   },
   {
     "source": "Inferred commitments",
-    "target": "推断式跟进承诺"
+    "target": "鎺ㄦ柇寮忚窡杩涙壙璇?
   },
   {
     "source": "Heartbeat",
@@ -465,11 +465,11 @@
   },
   {
     "source": "Scheduled tasks",
-    "target": "定时任务"
+    "target": "瀹氭椂浠诲姟"
   },
   {
     "source": "Configuration reference",
-    "target": "配置参考"
+    "target": "閰嶇疆鍙傝€?
   },
   {
     "source": "wiki",
@@ -477,7 +477,7 @@
   },
   {
     "source": "Polls",
-    "target": "投票"
+    "target": "鎶曠エ"
   },
   {
     "source": "QQ Bot",
@@ -485,47 +485,47 @@
   },
   {
     "source": "Release Policy",
-    "target": "发布策略"
+    "target": "鍙戝竷绛栫暐"
   },
   {
     "source": "Release policy",
-    "target": "发布策略"
+    "target": "鍙戝竷绛栫暐"
   },
   {
     "source": "for full details",
-    "target": "了解详情"
+    "target": "浜嗚В璇︽儏"
   },
   {
     "source": "First 60 seconds",
-    "target": "最初的六十秒"
+    "target": "鏈€鍒濈殑鍏崄绉?
   },
   {
     "source": "Auth: where it lives (important)",
-    "target": "凭证：存储位置（重要）"
+    "target": "鍑瘉锛氬瓨鍌ㄤ綅缃紙閲嶈锛?
   },
   {
     "source": "agent",
-    "target": "智能体"
+    "target": "鏅鸿兘浣?
   },
   {
     "source": "channel",
-    "target": "渠道"
+    "target": "娓犻亾"
   },
   {
     "source": "session",
-    "target": "会话"
+    "target": "浼氳瘽"
   },
   {
     "source": "provider",
-    "target": "提供商"
+    "target": "鎻愪緵鍟?
   },
   {
     "source": "model",
-    "target": "模型"
+    "target": "妯″瀷"
   },
   {
     "source": "tool",
-    "target": "工具"
+    "target": "宸ュ叿"
   },
   {
     "source": "CLI",
@@ -541,23 +541,23 @@
   },
   {
     "source": "install sanity",
-    "target": "安装完整性检查"
+    "target": "瀹夎瀹屾暣鎬ф鏌?
   },
   {
     "source": "get unstuck",
-    "target": "解决问题"
+    "target": "瑙ｅ喅闂"
   },
   {
     "source": "troubleshooting",
-    "target": "故障排除"
+    "target": "鏁呴殰鎺掗櫎"
   },
   {
     "source": "FAQ",
-    "target": "常见问题"
+    "target": "甯歌闂"
   },
   {
     "source": "Ollama Web Search",
-    "target": "Ollama Web 搜索"
+    "target": "Ollama Web 鎼滅储"
   },
   {
     "source": "Memory LanceDB",
@@ -565,151 +565,151 @@
   },
   {
     "source": "onboarding",
-    "target": "新手引导"
+    "target": "鏂版墜寮曞"
   },
   {
     "source": "Onboarding",
-    "target": "新手引导"
+    "target": "鏂版墜寮曞"
   },
   {
     "source": "wizard",
-    "target": "向导"
+    "target": "鍚戝"
   },
   {
     "source": "environment variables",
-    "target": "环境变量"
+    "target": "鐜鍙橀噺"
   },
   {
     "source": "environment variable",
-    "target": "环境变量"
+    "target": "鐜鍙橀噺"
   },
   {
     "source": "env vars",
-    "target": "环境变量"
+    "target": "鐜鍙橀噺"
   },
   {
     "source": "env var",
-    "target": "环境变量"
+    "target": "鐜鍙橀噺"
   },
   {
     "source": "Google Meet Plugin",
-    "target": "Google Meet 插件"
+    "target": "Google Meet 鎻掍欢"
   },
   {
     "source": "Plugin SDK",
-    "target": "插件 SDK"
+    "target": "鎻掍欢 SDK"
   },
   {
     "source": "Plugins",
-    "target": "插件"
+    "target": "鎻掍欢"
   },
   {
     "source": "Manage plugins",
-    "target": "管理插件"
+    "target": "绠＄悊鎻掍欢"
   },
   {
     "source": "Plugin path ownership",
-    "target": "插件路径所有权"
+    "target": "鎻掍欢璺緞鎵€鏈夋潈"
   },
   {
     "source": "Path",
-    "target": "路径"
+    "target": "璺緞"
   },
   {
     "source": "OC Path plugin",
-    "target": "OC Path 插件"
+    "target": "OC Path 鎻掍欢"
   },
   {
     "source": "CLI reference",
-    "target": "CLI 参考"
+    "target": "CLI 鍙傝€?
   },
   {
     "source": "Docker permissions",
-    "target": "Docker 权限"
+    "target": "Docker 鏉冮檺"
   },
   {
     "source": "Plugin manifest",
-    "target": "插件清单"
+    "target": "鎻掍欢娓呭崟"
   },
   {
     "source": "Building plugins",
-    "target": "构建插件"
+    "target": "鏋勫缓鎻掍欢"
   },
   {
     "source": "Plugin SDK Overview",
-    "target": "插件 SDK 概览"
+    "target": "鎻掍欢 SDK 姒傝"
   },
   {
     "source": "Plugin SDK overview",
-    "target": "插件 SDK 概览"
+    "target": "鎻掍欢 SDK 姒傝"
   },
   {
     "source": "SDK Overview",
-    "target": "SDK 概览"
+    "target": "SDK 姒傝"
   },
   {
     "source": "Plugin Entry Points",
-    "target": "插件入口点"
+    "target": "鎻掍欢鍏ュ彛鐐?
   },
   {
     "source": "Plugin entry points",
-    "target": "插件入口点"
+    "target": "鎻掍欢鍏ュ彛鐐?
   },
   {
     "source": "Plugin hooks",
-    "target": "插件钩子"
+    "target": "鎻掍欢閽╁瓙"
   },
   {
     "source": "Internal hooks",
-    "target": "内部钩子"
+    "target": "鍐呴儴閽╁瓙"
   },
   {
     "source": "Plugin architecture internals",
-    "target": "插件架构内部机制"
+    "target": "鎻掍欢鏋舵瀯鍐呴儴鏈哄埗"
   },
   {
     "source": "Entry Points",
-    "target": "入口点"
+    "target": "鍏ュ彛鐐?
   },
   {
     "source": "Plugin Runtime",
-    "target": "插件运行时"
+    "target": "鎻掍欢杩愯鏃?
   },
   {
     "source": "Runtime",
-    "target": "运行时"
+    "target": "杩愯鏃?
   },
   {
     "source": "Plugin Setup",
-    "target": "插件设置"
+    "target": "鎻掍欢璁剧疆"
   },
   {
     "source": "Setup",
-    "target": "设置"
+    "target": "璁剧疆"
   },
   {
     "source": "Migrate",
-    "target": "迁移"
+    "target": "杩佺Щ"
   },
   {
     "source": "Migrating",
-    "target": "迁移"
+    "target": "杩佺Щ"
   },
   {
     "source": "Migrating from Hermes",
-    "target": "从 Hermes 迁移"
+    "target": "浠?Hermes 杩佺Щ"
   },
   {
     "source": "Migrating from Claude",
-    "target": "从 Claude 迁移"
+    "target": "浠?Claude 杩佺Щ"
   },
   {
     "source": "Agent workspace",
-    "target": "Agent 工作区"
+    "target": "Agent 宸ヤ綔鍖?
   },
   {
     "source": "Migration",
-    "target": "迁移"
+    "target": "杩佺Щ"
   },
   {
     "source": "Hermes",
@@ -717,43 +717,43 @@
   },
   {
     "source": "Archive-only",
-    "target": "仅归档"
+    "target": "浠呭綊妗?
   },
   {
     "source": "Channel Plugin SDK",
-    "target": "渠道插件 SDK"
+    "target": "娓犻亾鎻掍欢 SDK"
   },
   {
     "source": "Channel Plugins",
-    "target": "渠道插件"
+    "target": "娓犻亾鎻掍欢"
   },
   {
     "source": "Provider Plugin SDK",
-    "target": "提供商插件 SDK"
+    "target": "鎻愪緵鍟嗘彃浠?SDK"
   },
   {
     "source": "Provider Plugins",
-    "target": "提供商插件"
+    "target": "鎻愪緵鍟嗘彃浠?
   },
   {
     "source": "Plugin SDK Testing",
-    "target": "插件 SDK 测试"
+    "target": "鎻掍欢 SDK 娴嬭瘯"
   },
   {
     "source": "Testing",
-    "target": "测试"
+    "target": "娴嬭瘯"
   },
   {
     "source": "Update and plugin tests",
-    "target": "更新和插件测试"
+    "target": "鏇存柊鍜屾彃浠舵祴璇?
   },
   {
     "source": "Testing updates and plugins",
-    "target": "更新和插件测试"
+    "target": "鏇存柊鍜屾彃浠舵祴璇?
   },
   {
     "source": "Testing: updates and plugins",
-    "target": "更新和插件测试"
+    "target": "鏇存柊鍜屾彃浠舵祴璇?
   },
   {
     "source": "Async Exec Duplicate Completion Investigation",
@@ -761,7 +761,7 @@
   },
   {
     "source": "QA Refactor",
-    "target": "QA 重构"
+    "target": "QA 閲嶆瀯"
   },
   {
     "source": "Matrix QA",
@@ -769,23 +769,23 @@
   },
   {
     "source": "Matrix presentation metadata",
-    "target": "Matrix 呈现元数据"
+    "target": "Matrix 鍛堢幇鍏冩暟鎹?
   },
   {
     "source": "QA overview",
-    "target": "QA overview"
+    "target": "QA 濮掑倽顫?
   },
   {
     "source": "QA channel",
-    "target": "QA channel"
+    "target": "QA 妫版垿浜?
   },
   {
     "source": "Rich Output Protocol",
-    "target": "富输出协议"
+    "target": "瀵岃緭鍑哄崗璁?
   },
   {
     "source": "Tencent Cloud (TokenHub)",
-    "target": "腾讯云（TokenHub）"
+    "target": "鑵捐浜戯紙TokenHub锛?
   },
   {
     "source": "Codex Harness Context Engine Port",
@@ -793,15 +793,15 @@
   },
   {
     "source": "Plugin refactor plan",
-    "target": "插件重构计划"
+    "target": "鎻掍欢閲嶆瀯璁″垝"
   },
   {
     "source": "Retry policy",
-    "target": "重试策略"
+    "target": "閲嶈瘯绛栫暐"
   },
   {
     "source": "Channel turn kernel",
-    "target": "频道轮次内核"
+    "target": "棰戦亾杞鍐呮牳"
   },
   {
     "source": "/gateway/configuration#strict-validation",
@@ -820,3 +820,4 @@
     "target": "fs-safe Cleanup Plan"
   }
 ]
+

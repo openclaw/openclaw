@@ -1,3 +1,6 @@
+﻿import type { OpenClawConfig } from "../config/types.openclaw.js";
+
+import { t } from "../wizard/i18n/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { isSecureWebSocketUrl } from "../gateway/net.js";
@@ -59,7 +62,7 @@ export async function promptRemoteGatewayConfig(
   const hasBonjourTool = (await detectBinary("dns-sd")) || (await detectBinary("avahi-browse"));
   const wantsDiscover = hasBonjourTool
     ? await prompter.confirm({
-        message: "Discover gateway on LAN (Bonjour)?",
+        message: t("Discover gateway on LAN (Bonjour)?"),
         initialValue: true,
       })
     : false;
@@ -78,23 +81,23 @@ export async function promptRemoteGatewayConfig(
     const wideAreaDomain = resolveWideAreaDiscoveryDomain({
       configDomain: cfg.discovery?.wideArea?.domain,
     });
-    const spin = prompter.progress("Searching for gateways…");
+    const spin = prompter.progress("Searching for gateways鈥?);
     const beacons = await discoverGatewayBeacons({ timeoutMs: 2000, wideAreaDomain });
     spin.stop(beacons.length > 0 ? `Found ${beacons.length} gateway(s)` : "No gateways found");
 
     if (beacons.length > 0) {
       const selection = await prompter.select({
-        message: "Select gateway",
+        message: t("Select gateway"),
         options: [
-          ...beacons.map((beacon, index) => ({
-            value: String(index),
+          ...beacons.map((beacon) => ({
+            value: beacon as GatewayBonjourBeacon | "manual",
             label: buildLabel(beacon),
           })),
-          { value: "manual", label: "Enter URL manually" },
+          { value: "manual" as const, label: t("Enter URL manually") },
         ],
       });
-      if (selection !== "manual") {
-        const idx = Number.parseInt(selection, 10);
+      if (typeof selection === "string" && selection !== "manual") {
+        const idx = Number.parseInt(String(selection), 10);
         selectedBeacon = Number.isFinite(idx) ? (beacons[idx] ?? null) : null;
       }
     }
@@ -105,13 +108,13 @@ export async function promptRemoteGatewayConfig(
     if (target.endpoint) {
       const { host, port } = target.endpoint;
       const mode = await prompter.select({
-        message: "Connection method",
+        message: t("Connection method"),
         options: [
           {
             value: "direct",
             label: `Direct gateway WS (${host}:${port})`,
           },
-          { value: "ssh", label: "SSH tunnel (loopback)" },
+          { value: "ssh", label: t("SSH tunnel (loopback)") },
         ],
       });
       if (mode === "direct") {
@@ -152,7 +155,7 @@ export async function promptRemoteGatewayConfig(
   }
 
   const urlInput = await prompter.text({
-    message: "Gateway WebSocket URL",
+    message: t("Gateway WebSocket URL"),
     initialValue: suggestedUrl,
     validate: (value) => validateGatewayWebSocketUrl(value),
   });
@@ -161,11 +164,11 @@ export async function promptRemoteGatewayConfig(
     discoveryTlsFingerprint && url === trustedDiscoveryUrl ? discoveryTlsFingerprint : undefined;
 
   const authChoice = await prompter.select({
-    message: "Gateway auth",
+    message: t("Gateway auth"),
     options: [
-      { value: "token", label: "Token (recommended)" },
-      { value: "password", label: "Password" },
-      { value: "off", label: "No auth" },
+      { value: "token", label: t("Token (recommended)") },
+      { value: "password", label: t("Password") },
+      { value: "off", label: t("No auth") },
     ],
   });
 
@@ -176,9 +179,9 @@ export async function promptRemoteGatewayConfig(
       prompter,
       explicitMode: options?.secretInputMode,
       copy: {
-        modeMessage: "How do you want to provide this gateway token?",
-        plaintextLabel: "Enter token now",
-        plaintextHint: "Stores the token directly in OpenClaw config",
+        modeMessage: t("How do you want to provide this gateway token?"),
+        plaintextLabel: t("Enter token now"),
+        plaintextHint: t("Stores the token directly in OpenClaw config"),
       },
     });
     if (selectedMode === "ref") {
@@ -188,7 +191,7 @@ export async function promptRemoteGatewayConfig(
         prompter,
         preferredEnvVar: "OPENCLAW_GATEWAY_TOKEN",
         copy: {
-          sourceMessage: "Where is this gateway token stored?",
+          sourceMessage: t("Where is this gateway token stored?"),
           envVarPlaceholder: "OPENCLAW_GATEWAY_TOKEN",
         },
       });
@@ -206,7 +209,7 @@ export async function promptRemoteGatewayConfig(
       } else {
         token = (
           await prompter.text({
-            message: "Gateway token",
+            message: t("Gateway token"),
             validate: (value) => (value?.trim() ? undefined : "Required"),
             sensitive: true,
           })
@@ -219,9 +222,9 @@ export async function promptRemoteGatewayConfig(
       prompter,
       explicitMode: options?.secretInputMode,
       copy: {
-        modeMessage: "How do you want to provide this gateway password?",
-        plaintextLabel: "Enter password now",
-        plaintextHint: "Stores the password directly in OpenClaw config",
+        modeMessage: t("How do you want to provide this gateway password?"),
+        plaintextLabel: t("Enter password now"),
+        plaintextHint: t("Stores the password directly in OpenClaw config"),
       },
     });
     if (selectedMode === "ref") {
@@ -231,7 +234,7 @@ export async function promptRemoteGatewayConfig(
         prompter,
         preferredEnvVar: "OPENCLAW_GATEWAY_PASSWORD",
         copy: {
-          sourceMessage: "Where is this gateway password stored?",
+          sourceMessage: t("Where is this gateway password stored?"),
           envVarPlaceholder: "OPENCLAW_GATEWAY_PASSWORD",
         },
       });
@@ -249,7 +252,7 @@ export async function promptRemoteGatewayConfig(
       } else {
         password = (
           await prompter.text({
-            message: "Gateway password",
+            message: t("Gateway password"),
             validate: (value) => (value?.trim() ? undefined : "Required"),
             sensitive: true,
           })
@@ -276,3 +279,4 @@ export async function promptRemoteGatewayConfig(
     },
   };
 }
+

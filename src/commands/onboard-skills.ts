@@ -1,3 +1,6 @@
+﻿import { installSkill } from "../agents/skills-install.js";
+
+import { t } from "../wizard/i18n/index.js";
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -13,7 +16,7 @@ function summarizeInstallFailure(message: string): string | undefined {
     return undefined;
   }
   const maxLen = 140;
-  return cleaned.length > maxLen ? `${cleaned.slice(0, maxLen - 1)}…` : cleaned;
+  return cleaned.length > maxLen ? `${cleaned.slice(0, maxLen - 1)}鈥 : cleaned;
 }
 
 function formatSkillHint(skill: {
@@ -22,12 +25,12 @@ function formatSkillHint(skill: {
 }): string {
   const desc = skill.description?.trim();
   const installLabel = skill.install[0]?.label?.trim();
-  const combined = desc && installLabel ? `${desc} — ${installLabel}` : desc || installLabel;
+  const combined = desc && installLabel ? `${desc} 鈥?${installLabel}` : desc || installLabel;
   if (!combined) {
     return "install";
   }
   const maxLen = 90;
-  return combined.length > maxLen ? `${combined.slice(0, maxLen - 1)}…` : combined;
+  return combined.length > maxLen ? `${combined.slice(0, maxLen - 1)}鈥 : combined;
 }
 
 function upsertSkillEntry(
@@ -74,7 +77,7 @@ export async function setupSkills(
   );
 
   const shouldConfigure = await prompter.confirm({
-    message: "Configure skills now? (recommended)",
+    message: t("Configure skills now? (recommended)"),
     initialValue: true,
   });
   if (!shouldConfigure) {
@@ -87,16 +90,16 @@ export async function setupSkills(
   let next: OpenClawConfig = cfg;
   if (installable.length > 0) {
     const toInstall = await prompter.multiselect({
-      message: "Install missing skill dependencies",
+      message: t("Install missing skill dependencies"),
       options: [
         {
           value: "__skip__",
-          label: "Skip for now",
-          hint: "Continue without installing dependencies",
+          label: t("Skip for now"),
+          hint: t("Continue without installing dependencies"),
         },
         ...installable.map((skill) => ({
           value: skill.name,
-          label: `${skill.emoji ?? "🧩"} ${skill.name}`,
+          label: `${skill.emoji ?? "馃З"} ${skill.name}`,
           hint: formatSkillHint(skill),
         })),
       ],
@@ -122,7 +125,7 @@ export async function setupSkills(
         "Homebrew recommended",
       );
       const showBrewInstall = await prompter.confirm({
-        message: "Show Homebrew install command?",
+        message: t("Show Homebrew install command?"),
         initialValue: true,
       });
       if (showBrewInstall) {
@@ -141,7 +144,7 @@ export async function setupSkills(
     );
     if (needsNodeManagerPrompt) {
       const nodeManager = (await prompter.select({
-        message: "Preferred node manager for skill installs",
+        message: t("Preferred node manager for skill installs"),
         options: resolveNodeManagerOptions(),
       })) as "npm" | "pnpm" | "bun";
       next = {
@@ -165,7 +168,7 @@ export async function setupSkills(
       if (!installId) {
         continue;
       }
-      const spin = prompter.progress(`Installing ${name}…`);
+      const spin = prompter.progress(`Installing ${name}鈥);
       const result = await installSkill({
         workspaceDir,
         skillName: target.name,
@@ -182,7 +185,7 @@ export async function setupSkills(
       }
       const code = result.code == null ? "" : ` (exit ${result.code})`;
       const detail = summarizeInstallFailure(result.message);
-      spin.stop(`Install failed: ${name}${code}${detail ? ` — ${detail}` : ""}`);
+      spin.stop(`Install failed: ${name}${code}${detail ? ` 鈥?${detail}` : ""}`);
       for (const warning of warnings) {
         runtime.log(warning);
       }
@@ -219,3 +222,4 @@ export async function setupSkills(
 
   return next;
 }
+
