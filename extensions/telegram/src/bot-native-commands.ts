@@ -39,10 +39,9 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
-  createSqliteSessionTranscriptLocator,
   getSessionEntry,
   listSessionEntries,
-  resolveAndPersistSessionTranscriptLocator,
+  resolveAndPersistSessionTranscriptIdentity,
   resolveSessionRowEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -185,17 +184,12 @@ async function resolveTelegramCommandTranscriptLocator(params: {
       sessionKey,
     });
     const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
-    const fallbackTranscriptLocator = createSqliteSessionTranscriptLocator({
-      sessionId,
-      agentId: params.agentId,
-      topicId: params.threadId,
-    });
-    const persisted = await resolveAndPersistSessionTranscriptLocator({
+    const persisted = await resolveAndPersistSessionTranscriptIdentity({
       sessionId,
       sessionKey: resolved.normalizedKey,
       sessionEntry: resolved.existing,
       agentId: params.agentId,
-      fallbackTranscriptLocator,
+      topicId: params.threadId,
     });
     return { sessionId, sessionFile: persisted.transcriptLocator };
   } catch {
