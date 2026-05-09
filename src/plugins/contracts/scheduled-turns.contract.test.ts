@@ -3,6 +3,10 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+} from "../../gateway/server-methods/types.js";
 import { withEnv } from "../../test-utils/env.js";
 import { cleanupReplacedPluginHostRegistry } from "../host-hook-cleanup.js";
 import {
@@ -31,19 +35,7 @@ vi.mock("../../agents/tools/gateway.js", () => ({
 }));
 
 async function invokePluginGatewayHandler(params: {
-  handler: (options: {
-    req: unknown;
-    params: Record<string, unknown>;
-    client: null;
-    isWebchatConnect: () => false;
-    respond: (
-      ok: boolean,
-      payload?: unknown,
-      error?: { message?: string },
-      meta?: Record<string, unknown>,
-    ) => void;
-    context: unknown;
-  }) => void | Promise<void>;
+  handler: GatewayRequestHandler;
   method: string;
   params?: Record<string, unknown>;
 }): Promise<unknown> {
@@ -62,16 +54,20 @@ async function invokePluginGatewayHandler(params: {
       }
       reject(new Error(error?.message ?? `gateway handler failed: ${params.method}`));
     };
-    Promise.resolve(
-      params.handler({
-        req: { id: "test-request", method: params.method, params: handlerParams },
+    const handlerOptions: GatewayRequestHandlerOptions = {
+      req: {
+        type: "req",
+        id: "test-request",
+        method: params.method,
         params: handlerParams,
-        client: null,
-        isWebchatConnect: () => false,
-        respond,
-        context: {},
-      }),
-    ).catch(reject);
+      },
+      params: handlerParams,
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as GatewayRequestHandlerOptions["context"],
+    };
+    Promise.resolve(params.handler(handlerOptions)).catch(reject);
   });
 }
 
