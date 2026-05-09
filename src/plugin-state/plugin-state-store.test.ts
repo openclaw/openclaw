@@ -19,6 +19,23 @@ afterEach(() => {
   resetPluginStateStoreForTests();
 });
 
+async function expectPluginStateStoreError(
+  promise: Promise<unknown>,
+  expected: { code: string; operation?: string },
+): Promise<void> {
+  let storeError: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    storeError = error;
+  }
+  expect(storeError).toBeInstanceOf(PluginStateStoreError);
+  expect((storeError as PluginStateStoreError | undefined)?.code).toBe(expected.code);
+  if (expected.operation) {
+    expect((storeError as PluginStateStoreError | undefined)?.operation).toBe(expected.operation);
+  }
+}
+
 describe("plugin state keyed store", () => {
   it("registers and looks up values across store instances", async () => {
     await withOpenClawTestState({ label: "plugin-state-roundtrip" }, async () => {
@@ -51,7 +68,7 @@ describe("plugin state keyed store", () => {
       await store.register("b", { version: 2 });
 
       await expect(store.lookup("b")).resolves.toEqual({ version: 2 });
-      await expect(store.entries()).resolves.toMatchObject([
+      await expect(store.entries()).resolves.toEqual([
         { key: "a", value: { version: 1 }, createdAt: 2000 },
         { key: "b", value: { version: 2 }, createdAt: 3000 },
       ]);
@@ -76,7 +93,7 @@ describe("plugin state keyed store", () => {
       );
 
       await expect(store.lookup("claim")).resolves.toEqual({ version: 1 });
-      await expect(store.entries()).resolves.toMatchObject([
+      await expect(store.entries()).resolves.toEqual([
         { key: "claim", value: { version: 1 }, createdAt: 1000, expiresAt: 2000 },
       ]);
     });
@@ -98,7 +115,7 @@ describe("plugin state keyed store", () => {
       await expect(store.registerIfAbsent("claim", { version: 2 })).resolves.toBe(true);
 
       await expect(store.lookup("claim")).resolves.toEqual({ version: 2 });
-      await expect(store.entries()).resolves.toMatchObject([
+      await expect(store.entries()).resolves.toEqual([
         { key: "claim", value: { version: 2 }, createdAt: 1200 },
       ]);
     });
@@ -172,7 +189,7 @@ describe("plugin state keyed store", () => {
       await evicting.registerIfAbsent("b", 2);
       vi.setSystemTime(3000);
       await evicting.registerIfAbsent("c", 3);
-      await expect(evicting.entries()).resolves.toMatchObject([{ key: "b" }, { key: "c" }]);
+      expect((await evicting.entries()).map((entry) => entry.key)).toEqual(["b", "c"]);
 
       seedPluginStateEntriesForTests([
         ...Array.from({ length: 999 }, (_, entryIndex) => ({
@@ -192,7 +209,7 @@ describe("plugin state keyed store", () => {
         namespace: "limit",
         maxEntries: 1_001,
       });
-      await expect(limited.registerIfAbsent("overflow", { overflow: true })).rejects.toMatchObject({
+      await expectPluginStateStoreError(limited.registerIfAbsent("overflow", { overflow: true }), {
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
       await expect(limited.lookup("overflow")).resolves.toBeUndefined();
@@ -247,7 +264,7 @@ describe("plugin state keyed store", () => {
       await expect(store.lookup("default")).resolves.toBeUndefined();
       await expect(store.lookup("override")).resolves.toEqual({ value: "override" });
       expect(sweepExpiredPluginStateEntries()).toBe(1);
-      await expect(store.entries()).resolves.toMatchObject([{ key: "override" }]);
+      expect((await store.entries()).map((entry) => entry.key)).toEqual(["override"]);
     });
   });
 
@@ -262,7 +279,7 @@ describe("plugin state keyed store", () => {
       vi.setSystemTime(3000);
       await store.register("c", 3);
 
-      await expect(store.entries()).resolves.toMatchObject([{ key: "b" }, { key: "c" }]);
+      expect((await store.entries()).map((entry) => entry.key)).toEqual(["b", "c"]);
     });
   });
 
@@ -278,7 +295,7 @@ describe("plugin state keyed store", () => {
       await store.register("z", 1);
       await store.register("a", 2);
 
-      await expect(store.entries()).resolves.toMatchObject([{ key: "a", value: 2 }]);
+      await expect(store.entries()).resolves.toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
       await expect(store.lookup("z")).resolves.toBeUndefined();
     });
   });
@@ -295,7 +312,7 @@ describe("plugin state keyed store", () => {
       await expect(store.registerIfAbsent("z", 1)).resolves.toBe(true);
       await expect(store.registerIfAbsent("a", 2)).resolves.toBe(true);
 
-      await expect(store.entries()).resolves.toMatchObject([{ key: "a", value: 2 }]);
+      await expect(store.entries()).resolves.toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
       await expect(store.lookup("z")).resolves.toBeUndefined();
     });
   });
@@ -326,7 +343,7 @@ describe("plugin state keyed store", () => {
         maxEntries: 10,
       });
 
-      await expect(limitStore.register("overflow", { overflow: true })).rejects.toMatchObject({
+      await expectPluginStateStoreError(limitStore.register("overflow", { overflow: true }), {
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
       await expect(siblingStore.lookup("k-0")).resolves.toEqual({
@@ -383,7 +400,7 @@ describe("plugin state keyed store", () => {
       await expect(store.register("non-enumerable", nonEnumerable)).rejects.toThrow(
         PluginStateStoreError,
       );
-      await expect(store.register("big", "x".repeat(65_537))).rejects.toMatchObject({
+      await expectPluginStateStoreError(store.register("big", "x".repeat(65_537)), {
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
 
@@ -402,16 +419,16 @@ describe("plugin state keyed store", () => {
       for (let i = 0; i < 65; i += 1) {
         deep = { nested: deep };
       }
-      await expect(store.register("deep", deep)).rejects.toMatchObject({
+      await expectPluginStateStoreError(store.register("deep", deep), {
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
 
       // Validation errors surface the correct operation
-      await expect(store.lookup(" ")).rejects.toMatchObject({
+      await expectPluginStateStoreError(store.lookup(" "), {
         code: "PLUGIN_STATE_INVALID_INPUT",
         operation: "lookup",
       });
-      await expect(store.delete(" ")).rejects.toMatchObject({
+      await expectPluginStateStoreError(store.delete(" "), {
         code: "PLUGIN_STATE_INVALID_INPUT",
         operation: "delete",
       });
@@ -480,7 +497,7 @@ describe("plugin state keyed store", () => {
       db.close();
 
       const store = createPluginStateKeyedStore("discord", { namespace: "schema", maxEntries: 10 });
-      await expect(store.register("k", { ok: true })).rejects.toMatchObject({
+      await expectPluginStateStoreError(store.register("k", { ok: true }), {
         code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED",
       });
     });
