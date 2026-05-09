@@ -114,6 +114,11 @@ export type SessionInfo = {
   allMessagesText: string;
 };
 
+export type SessionTranscriptScope = {
+  agentId: string;
+  sessionId: string;
+};
+
 export type SessionListProgress = (loaded: number, total: number) => void;
 
 type PersistableSessionMessage = Exclude<
@@ -126,6 +131,7 @@ export type SessionManager = {
   isPersisted(): boolean;
   getCwd(): string;
   getSessionId(): string;
+  getTranscriptScope(): SessionTranscriptScope | undefined;
   getTranscriptLocator(): string | undefined;
   appendMessage(message: PersistableSessionMessage): string;
   appendThinkingLevelChange(thinkingLevel: string): string;

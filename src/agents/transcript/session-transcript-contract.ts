@@ -31,6 +31,7 @@ export type {
   SessionInfoEntry,
   SessionListProgress,
   SessionMessageEntry,
+  SessionTranscriptScope,
   SessionTreeNode,
   ThinkingLevelChangeEntry,
 } from "./session-transcript-types.js";

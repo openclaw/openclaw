@@ -49,6 +49,10 @@ describe("TranscriptSessionManager", () => {
     const created = SessionManager.create("/tmp/workspace");
     created.appendMessage({ role: "user", content: "persist me", timestamp: 2 });
     const sourceSessionId = created.getSessionId();
+    expect(created.getTranscriptScope()).toEqual({
+      agentId: "main",
+      sessionId: sourceSessionId,
+    });
 
     const listed = await SessionManager.list("/tmp/workspace");
     expect(listed.map((session) => session.id)).toContain(sourceSessionId);

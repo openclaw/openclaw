@@ -5,6 +5,7 @@ import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { createSqliteSessionTranscriptLocator } from "../../../config/sessions/paths.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -1648,12 +1649,13 @@ export async function runEmbeddedAttempt(
           },
         },
       );
-      const sessionTranscriptLocator = sessionManager.getTranscriptLocator();
-      if (!sessionTranscriptLocator) {
+      const sessionTranscriptScope = sessionManager.getTranscriptScope();
+      if (!sessionTranscriptScope) {
         throw new Error(
-          `SQLite transcript scope did not produce a runtime transcript handle: agentId=${sessionAgentId} sessionId=${params.sessionId}`,
+          `SQLite transcript manager did not expose a runtime transcript scope: agentId=${sessionAgentId} sessionId=${params.sessionId}`,
         );
       }
+      const sessionTranscriptLocator = createSqliteSessionTranscriptLocator(sessionTranscriptScope);
       await runAttemptContextEngineBootstrap({
         hadTranscriptLocator: hadTranscriptEvents,
         contextEngine: activeContextEngine,
