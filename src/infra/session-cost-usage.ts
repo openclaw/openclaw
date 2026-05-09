@@ -3,7 +3,7 @@ import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
-  listSqliteSessionTranscriptFiles,
+  listSqliteSessionTranscriptLocators,
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
@@ -263,7 +263,7 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
 };
 
 function getRememberedTranscriptPath(agentId: string, sessionId: string): string | undefined {
-  return listSqliteSessionTranscriptFiles().find(
+  return listSqliteSessionTranscriptLocators().find(
     (entry) => entry.agentId === agentId && entry.sessionId === sessionId,
   )?.path;
 }

@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -32,8 +33,8 @@ describe("session cost usage", () => {
 
   const makeRoot = async (prefix: string): Promise<string> => await suiteRootTracker.make(prefix);
 
-  const sessionPath = (root: string, sessionId: string, agentId = "main") =>
-    path.join(root, "agents", agentId, "sessions", `${sessionId}.jsonl`);
+  const sessionPath = (_root: string, sessionId: string, agentId = "main") =>
+    createSqliteSessionTranscriptLocator({ agentId, sessionId });
 
   const writeTranscript = (params: {
     agentId?: string;
@@ -41,11 +42,20 @@ describe("session cost usage", () => {
     transcriptPath?: string;
     events: unknown[];
   }) => {
+    const eventTimestamp = params.events
+      .map((event) =>
+        event && typeof event === "object"
+          ? Date.parse(String((event as { timestamp?: unknown }).timestamp ?? ""))
+          : NaN,
+      )
+      .find((value) => Number.isFinite(value));
     replaceSqliteSessionTranscriptEvents({
       agentId: params.agentId ?? "main",
       sessionId: params.sessionId,
-      transcriptPath: params.transcriptPath,
+      transcriptPath:
+        params.transcriptPath ?? sessionPath("", params.sessionId, params.agentId ?? "main"),
       events: [{ type: "session", version: 1, id: params.sessionId }, ...params.events],
+      ...(eventTimestamp !== undefined ? { now: () => eventTimestamp } : {}),
     });
   };
 
@@ -61,6 +71,14 @@ describe("session cost usage", () => {
   }) => ({
     type: "message",
     timestamp: params.timestamp,
+    provider: params.provider ?? "openai",
+    model: params.model ?? "gpt-5.4",
+    usage: {
+      input: params.input,
+      output: params.output,
+      totalTokens: params.totalTokens ?? params.input + params.output,
+      ...(params.cost === undefined ? {} : { cost: { total: params.cost } }),
+    },
     message: {
       role: "assistant",
       provider: params.provider ?? "openai",

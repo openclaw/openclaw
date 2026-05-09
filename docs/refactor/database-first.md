@@ -103,16 +103,16 @@ The branch already has a real shared SQLite base:
   file-to-database import remains in doctor code, and branch-local
   database upgrade helpers have been deleted.
 - Relational ownership is enforced where the ownership boundary is canonical:
-  transcript-file mappings cascade from `agent_databases`, source migration
-  rows cascade from `migration_runs`, task delivery state cascades from
-  `task_runs`, and transcript identity rows cascade from transcript events.
+  source migration rows cascade from `migration_runs`, task delivery state
+  cascades from `task_runs`, and transcript identity rows cascade from
+  transcript events.
 - Current shared tables include `kv`, `agents`, `agent_databases`,
-  `plugin_state_entries`, `plugin_blob_entries`, `transcript_files`,
-  `capture_sessions`, `capture_events`, `capture_blobs`,
-  `sandbox_registry_entries`, `cron_run_logs`, `cron_jobs`, `commitments`,
-  `delivery_queue_entries`, `current_conversation_bindings`,
-  `tui_last_sessions`, `task_runs`, `task_delivery_state`, `flow_runs`,
-  `subagent_runs`, `migration_runs`, and `backup_runs`.
+  `plugin_state_entries`, `plugin_blob_entries`, `capture_sessions`,
+  `capture_events`, `capture_blobs`, `sandbox_registry_entries`,
+  `cron_run_logs`, `cron_jobs`, `commitments`, `delivery_queue_entries`,
+  `current_conversation_bindings`, `tui_last_sessions`, `task_runs`,
+  `task_delivery_state`, `flow_runs`, `subagent_runs`, `migration_runs`, and
+  `backup_runs`.
 - `src/state/openclaw-agent-db.ts` opens
   `agents/<agentId>/agent/openclaw-agent.sqlite`, registers the database in the
   global DB, and owns agent-local session, transcript, VFS, artifact, and cache

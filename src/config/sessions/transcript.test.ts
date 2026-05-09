@@ -4,10 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createSqliteSessionTranscriptLocator } from "./paths.js";
 import { upsertSessionEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -631,11 +628,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       sessionId,
     }).map((entry) => entry.event as { type?: string; message?: unknown });
     expect(events.map((event) => event.type)).toEqual(["session", "message"]);
-
-    const stateDatabase = openOpenClawStateDatabase({ env });
-    expect(
-      stateDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_files").get(),
-    ).toEqual({ count: 0 });
 
     fs.rmSync(stateDir, { recursive: true, force: true });
   });

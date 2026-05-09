@@ -83,9 +83,9 @@ Per agent, on the Gateway host:
   sources after durable verification. Gateway startup leaves legacy indexes
   alone.
 - Transcripts: runtime transcript events live in the per-agent database
-  (`transcript_events` and `transcript_event_identities`). The global
-  `transcript_files` table maps legacy/export/debug path-shaped locators to
-  `{ agentId, sessionId }`; JSONL files are not runtime sidecars.
+  (`transcript_events` and `transcript_event_identities`). Session file values
+  are canonical `sqlite-transcript://<agentId>/<sessionId>.jsonl` locators;
+  JSONL files are doctor migration inputs, not runtime sidecars.
   - Telegram topic handles: `.../<sessionId>-topic-<threadId>.jsonl`
 
 OpenClaw resolves these via `src/config/sessions/*`.

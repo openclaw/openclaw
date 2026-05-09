@@ -329,14 +329,6 @@ export interface TaskRuns {
   terminal_summary: string | null;
 }
 
-export interface TranscriptFiles {
-  agent_id: string;
-  exported_at: number | null;
-  imported_at: number | null;
-  path: string;
-  session_id: string;
-}
-
 export interface TuiLastSessions {
   scope_key: string;
   session_key: string;
@@ -368,6 +360,5 @@ export interface DB {
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
-  transcript_files: TranscriptFiles;
   tui_last_sessions: TuiLastSessions;
 }

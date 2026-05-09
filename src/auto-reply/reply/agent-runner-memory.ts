@@ -18,7 +18,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import {
-  listSqliteSessionTranscriptFiles,
+  listSqliteSessionTranscriptLocators,
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
 } from "../../config/sessions/transcript-store.sqlite.js";
@@ -233,7 +233,7 @@ function resolveSqliteSessionTranscriptPath(params: {
     return undefined;
   }
   const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
-  const candidates = listSqliteSessionTranscriptFiles().filter(
+  const candidates = listSqliteSessionTranscriptLocators().filter(
     (entry) => (!agentId || entry.agentId === agentId) && entry.sessionId === sessionId,
   );
   if (candidates.length === 0) {
