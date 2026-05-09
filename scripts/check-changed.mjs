@@ -25,9 +25,6 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
 
 const KYSELY_CODEGEN_PATHS = new Set([
   "scripts/generate-kysely-types.mjs",
-  "src/proxy-capture/db.generated.d.ts",
-  "src/proxy-capture/schema.sql",
-  "src/proxy-capture/schema.generated.ts",
   "src/state/openclaw-agent-db.generated.d.ts",
   "src/state/openclaw-agent-schema.sql",
   "src/state/openclaw-agent-schema.generated.ts",
