@@ -9,7 +9,7 @@ title: "iMessage"
 <Note>
 For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host. If your Gateway runs on Linux or Windows, point `channels.imessage.cliPath` at an SSH wrapper that runs `imsg` on the Mac.
 
-**Known gap: no gateway-downtime catchup.** Messages that arrive while the gateway is down (crash, restart, Mac sleep, machine off) are not delivered to the agent once the gateway comes back up — `imsg watch` resumes from the current state and ignores anything that landed in `chat.db` during the gap. Tracked at [openclaw#78649](https://github.com/openclaw/openclaw/issues/78649).
+**Gateway-downtime catchup is opt-in.** When enabled (`channels.imessage.catchup.enabled: true`), the gateway replays inbound messages that landed in `chat.db` while it was offline (crash, restart, Mac sleep) on next startup. Disabled by default — see [Catching up after gateway downtime](#catching-up-after-gateway-downtime). Closes [openclaw#78649](https://github.com/openclaw/openclaw/issues/78649).
 </Note>
 
 <Warning>
@@ -633,6 +633,66 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
 | Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window | Two turns                               | Two turns (window expires between them)                                 |
 | Rapid flood (>10 small DMs inside window)                          | N rows                | N turns                                 | One turn, bounded output (first + latest, text/attachment caps applied) |
 | Two people typing in a group chat                                  | N rows from M senders | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced                                |
+
+## Catching up after gateway downtime
+
+When the gateway is offline (crash, restart, Mac sleep, machine off), `imsg watch` resumes from the current `chat.db` state once the gateway comes back up — anything that arrived during the gap is, by default, never seen. Catchup replays those messages on the next startup so the agent does not silently miss inbound traffic.
+
+Catchup is **disabled by default**. Enable it per channel:
+
+```ts
+channels: {
+  imessage: {
+    catchup: {
+      enabled: true,             // master switch (default: false)
+      maxAgeMinutes: 120,        // skip rows older than now - 2h (default: 120, clamp 1..720)
+      perRunLimit: 50,           // max rows replayed per startup (default: 50, clamp 1..500)
+      firstRunLookbackMinutes: 30, // first run with no cursor: look back 30 min (default: 30)
+      maxFailureRetries: 10,     // give up on a wedged guid after 10 dispatch failures (default: 10)
+    },
+  },
+}
+```
+
+### How it runs
+
+One pass per `monitorIMessageProvider` startup, sequenced as `imsg launch` ready → `watch.subscribe` → `performIMessageCatchup` → live dispatch loop. Catchup itself uses `chats.list` + per-chat `messages.history` against the same JSON-RPC client used by `imsg watch`. Anything that arrives during the catchup pass flows through live dispatch normally; the existing inbound-dedupe cache absorbs any overlap with replayed rows.
+
+Each replayed row is fed through the live dispatch path (`evaluateIMessageInbound` + `dispatchInboundMessage`), so allowlists, group policy, debouncer, echo cache, and read receipts behave identically on replayed and live messages.
+
+### Cursor and retry semantics
+
+Catchup keeps a per-account cursor at `<openclawStateDir>/imessage/catchup/<account>__<hash>.json` (the OpenClaw state dir defaults to `~/.openclaw`, overridable with `OPENCLAW_STATE_DIR`):
+
+```json
+{
+  "lastSeenMs": 1717900800000,
+  "lastSeenRowid": 482910,
+  "updatedAt": 1717900801234,
+  "failureRetries": { "<guid>": 1 }
+}
+```
+
+- The cursor advances on each successful dispatch and is held when a row's dispatch throws — the next startup retries the same row from the held cursor.
+- After `maxFailureRetries` consecutive throws against the same `guid`, catchup logs a `warn` and force-advances the cursor past the wedged message so subsequent startups can make progress.
+- Already-given-up guids are skipped on sight (no dispatch attempt) on later runs and counted under `skippedGivenUp` in the run summary.
+
+### Operator-visible signals
+
+```
+imessage catchup: replayed=N skippedFromMe=… skippedGivenUp=… failed=… givenUp=… fetchedCount=…
+imessage catchup: giving up on guid=<guid> after <N> failures; advancing cursor past it
+imessage catchup: fetched <X> rows across chats, capped to perRunLimit=<Y>
+```
+
+A `WARN ... capped to perRunLimit` line means a single startup did not drain the full backlog. Raise `perRunLimit` (max 500) if your gaps regularly exceed the default 50-row pass.
+
+### When to leave it off
+
+- Gateway runs continuously with watchdog auto-restart and gaps are always < a few seconds — the default of off is fine.
+- DM volume is low and missed messages would not change agent behavior — the `firstRunLookbackMinutes` initial window can dispatch surprising old context on first enable.
+
+When you turn catchup on, the first startup with no cursor only looks back `firstRunLookbackMinutes` (30 min default), not the full `maxAgeMinutes` window — this avoids replaying a long history of pre-enable messages.
 
 ## Troubleshooting
 

@@ -50,6 +50,8 @@ import {
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
+import { runIMessageCatchup } from "./catchup-bridge.js";
+import { resolveCatchupConfig } from "./catchup.js";
 import { combineIMessagePayloads } from "./coalesce.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
@@ -863,6 +865,35 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const activeClient = client;
   if (!activeClient) {
     return;
+  }
+
+  // Catchup runs once between watch.subscribe and the live dispatch loop.
+  // Anything that arrives during the catchup pass itself flows through
+  // `handleMessage` -> `handleMessageNow`; the inbound-dedupe cache absorbs
+  // any overlap with replayed rows. Disabled by default — opt-in via
+  // `channels.imessage.catchup.enabled`. See issue #78649.
+  const catchupCfg = resolveCatchupConfig(imessageCfg.catchup);
+  if (catchupCfg.enabled && !abort?.aborted) {
+    try {
+      await runIMessageCatchup({
+        client: activeClient,
+        accountId: accountInfo.accountId,
+        config: catchupCfg,
+        includeAttachments,
+        // Catchup bypasses the inbound debouncer so each row is awaited
+        // serially and dispatch failure can hold the cursor. Split-sends
+        // from before the gateway gap therefore arrive as separate turns
+        // rather than coalesced — same behavior the retired BlueBubbles
+        // catchup had. Live notifications continue to flow through the
+        // debouncer.
+        dispatchPayload: (message) => handleMessageNow(message),
+        runtime,
+      });
+    } catch (err) {
+      // Catchup is opt-in recovery — surface the error but do not block the
+      // monitor. The live dispatch loop is already up and running.
+      runtime.error?.(`imessage catchup: pass failed: ${String(err)}`);
+    }
   }
 
   try {
