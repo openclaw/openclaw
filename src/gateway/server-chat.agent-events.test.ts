@@ -1445,7 +1445,7 @@ describe("agent event handler", () => {
     expect(nodePayload.errorKind).toBe("rate_limit");
   });
 
-  it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {
+  it("suppresses lifecycle chat error during grace window but emits after grace expires (no chat link)", () => {
     vi.useFakeTimers();
     const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-chat-send",
@@ -1469,13 +1469,21 @@ describe("agent event handler", () => {
       data: { phase: "error", error: "chat.send failed" },
     });
 
+    // During grace window: error is suppressed so the outer chat.send can retry
+    expect(
+      chatBroadcastCalls(broadcast).some(
+        ([, payload]) => (payload as { state?: string }).state === "error",
+      ),
+    ).toBe(false);
+
+    // After grace expires: error must be emitted so webchat is not left in a polling state
     vi.advanceTimersByTime(100);
 
     expect(
       chatBroadcastCalls(broadcast).some(
         ([, payload]) => (payload as { state?: string }).state === "error",
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(clearAgentRunContext).toHaveBeenCalledWith("run-chat-send");
     expect(agentRunSeq.has("run-chat-send")).toBe(false);
   });

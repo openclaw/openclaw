@@ -380,7 +380,9 @@ export function createAgentEventHandler({
     clearPendingTerminalLifecycleError(evt.runId);
     const timer = setSafeTimeout(() => {
       pendingTerminalLifecycleErrors.delete(evt.runId);
-      finalizeLifecycleEvent(evt, opts);
+      // Grace period expired — retry window closed; always emit the final error
+      // regardless of skipChatErrorFinal so webchat is never left in a polling state.
+      finalizeLifecycleEvent(evt);
     }, lifecycleErrorRetryGraceMs);
     timer.unref?.();
     pendingTerminalLifecycleErrors.set(evt.runId, timer);
