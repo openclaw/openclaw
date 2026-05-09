@@ -142,13 +142,13 @@ describe("handleUsageCommand", () => {
     const params = buildUsageParams();
     params.sessionEntry = {
       sessionId: "wrapper-session",
-      sessionFile: "/tmp/wrapper-session.jsonl",
+      sessionFile: "sqlite-transcript://target/wrapper-session.jsonl",
       updatedAt: Date.now(),
     };
     params.sessionStore = {
       [params.sessionKey]: {
         sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
+        sessionFile: "sqlite-transcript://target/target-session.jsonl",
         updatedAt: Date.now(),
       },
     };
@@ -158,7 +158,7 @@ describe("handleUsageCommand", () => {
     expect(loadSessionCostSummaryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
+        sessionFile: "sqlite-transcript://target/target-session.jsonl",
       }),
     );
   });

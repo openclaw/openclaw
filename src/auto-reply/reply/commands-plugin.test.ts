@@ -86,13 +86,13 @@ describe("handlePluginCommand", () => {
     } as OpenClawConfig);
     params.sessionEntry = {
       sessionId: "wrapper-session",
-      sessionFile: "/tmp/wrapper-session.jsonl",
+      sessionFile: "sqlite-transcript://main/wrapper-session.jsonl",
       updatedAt: Date.now(),
     } as HandleCommandsParams["sessionEntry"];
     params.sessionStore = {
       [params.sessionKey]: {
         sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
+        sessionFile: "sqlite-transcript://main/target-session.jsonl",
         updatedAt: Date.now(),
       },
     };
@@ -102,7 +102,7 @@ describe("handlePluginCommand", () => {
     expect(executePluginCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
+        sessionFile: "sqlite-transcript://main/target-session.jsonl",
       }),
     );
   });
