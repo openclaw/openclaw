@@ -11,7 +11,7 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { createSqliteSessionTranscriptLocator } from "./paths.js";
-import { resolveAndPersistSessionTranscriptLocator } from "./session-locator.js";
+import { resolveAndPersistSessionTranscriptIdentity } from "./session-locator.js";
 import { getSessionEntry, normalizeSessionRowKey } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
@@ -24,7 +24,7 @@ import {
 import type { SessionEntry } from "./types.js";
 
 export type SessionTranscriptAppendResult =
-  | { ok: true; sessionFile: string; messageId: string }
+  | { ok: true; transcriptLocator: string; messageId: string }
   | { ok: false; reason: string };
 
 export type SessionTranscriptUpdateMode = "inline" | "signal-only" | "none";
@@ -108,41 +108,34 @@ export async function resolveSessionTranscriptTarget(params: {
   sessionStore?: Record<string, SessionEntry>;
   agentId: string;
   threadId?: string | number;
-}): Promise<{ sessionFile: string; sessionEntry: SessionEntry | undefined }> {
+}): Promise<{ transcriptLocator: string; sessionEntry: SessionEntry | undefined }> {
   let sessionEntry = params.sessionEntry;
 
   const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
-  const fallbackTranscriptLocator = !sessionEntry?.sessionFile
-    ? createSqliteSessionTranscriptLocator({
-        sessionId: params.sessionId,
-        agentId: params.agentId,
-        topicId: params.threadId ?? threadIdFromSessionKey,
-      })
-    : undefined;
-  const resolvedTranscript = await resolveAndPersistSessionTranscriptLocator({
+  const resolvedTranscript = await resolveAndPersistSessionTranscriptIdentity({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry,
     agentId: params.agentId,
-    fallbackTranscriptLocator,
+    topicId: params.threadId ?? threadIdFromSessionKey,
   });
-  const sessionFile = resolvedTranscript.transcriptLocator;
+  const transcriptLocator = resolvedTranscript.transcriptLocator;
   sessionEntry = resolvedTranscript.sessionEntry;
   if (params.sessionStore) {
     params.sessionStore[params.sessionKey] = sessionEntry;
   }
 
   return {
-    sessionFile,
+    transcriptLocator,
     sessionEntry,
   };
 }
 
 export async function readLatestAssistantTextFromSessionTranscript(
-  sessionFile: string | undefined,
+  transcriptLocator: string | undefined,
   scope?: TranscriptQueryScope,
 ): Promise<LatestAssistantTranscriptText | undefined> {
-  const scopedEvents = loadScopedSqliteTranscriptEvents(scope, sessionFile);
+  const scopedEvents = loadScopedSqliteTranscriptEvents(scope, transcriptLocator);
   if (scopedEvents) {
     for (const event of scopedEvents.toReversed()) {
       const assistantText = parseAssistantTranscriptEventText(event);
@@ -157,10 +150,10 @@ export async function readLatestAssistantTextFromSessionTranscript(
 }
 
 export async function readTailAssistantTextFromSessionTranscript(
-  sessionFile: string | undefined,
+  transcriptLocator: string | undefined,
   scope?: TranscriptQueryScope,
 ): Promise<TailAssistantTranscriptText | undefined> {
-  const scopedEvents = loadScopedSqliteTranscriptEvents(scope, sessionFile);
+  const scopedEvents = loadScopedSqliteTranscriptEvents(scope, transcriptLocator);
   if (scopedEvents) {
     const tail = scopedEvents.at(-1);
     return tail === undefined ? undefined : parseAssistantTranscriptEventText(tail);
@@ -248,15 +241,15 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
 
-  let sessionFile: string;
+  let transcriptLocator: string;
   try {
-    const resolvedTranscript = await resolveAndPersistSessionTranscriptLocator({
+    const resolvedTranscript = await resolveAndPersistSessionTranscriptIdentity({
       sessionId: entry.sessionId,
       sessionKey: normalizedKey,
       sessionEntry: entry,
       agentId,
     });
-    sessionFile = resolvedTranscript.transcriptLocator;
+    transcriptLocator = resolvedTranscript.transcriptLocator;
   } catch (err) {
     return {
       ok: false,
@@ -274,14 +267,14 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 
   const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
     ? await findLatestEquivalentAssistantMessageId(
-        sessionFile,
+        transcriptLocator,
         params.message,
         transcriptScope,
         params.config,
       )
     : undefined;
   if (latestEquivalentAssistantId) {
-    return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
+    return { ok: true, transcriptLocator, messageId: latestEquivalentAssistantId };
   }
 
   const message = {
@@ -289,7 +282,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   };
   const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
-    transcriptPath: sessionFile,
+    transcriptPath: transcriptLocator,
     agentId,
     message,
     sessionId: entry.sessionId,
@@ -301,7 +294,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       emitSessionTranscriptUpdate({
         agentId,
         sessionId: entry.sessionId,
-        sessionFile,
+        transcriptLocator: transcriptLocator,
         sessionKey,
         message: appendedMessage,
         messageId,
@@ -311,14 +304,14 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       emitSessionTranscriptUpdate({
         agentId,
         sessionId: entry.sessionId,
-        sessionFile,
+        transcriptLocator: transcriptLocator,
         sessionKey,
       });
       break;
     case "none":
       break;
   }
-  return { ok: true, sessionFile, messageId };
+  return { ok: true, transcriptLocator, messageId };
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
