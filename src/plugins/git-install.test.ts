@@ -103,8 +103,9 @@ describe("installPluginFromGitSpec", () => {
     ]);
     expect(runCommandWithTimeoutMock.mock.calls[1][0]).toEqual([
       "git",
-      "checkout",
+      "switch",
       "--detach",
+      "--",
       "v1.2.3",
     ]);
     expect(runCommandWithTimeoutMock.mock.calls[3][0]).toEqual([
@@ -222,6 +223,30 @@ describe("installPluginFromGitSpec", () => {
       expect(result.error).not.toContain("other");
       expect(result.error).not.toContain("credential");
     }
+    expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
+  });
+
+  it("separates requested refs from git options", async () => {
+    runCommandWithTimeoutMock
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({
+        code: 128,
+        stdout: "",
+        stderr: "fatal: invalid reference: --ignore-skip-worktree-bits",
+      });
+
+    const result = await installPluginFromGitSpec({
+      spec: "git:github.com/acme/demo@--ignore-skip-worktree-bits",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(runCommandWithTimeoutMock.mock.calls[1][0]).toEqual([
+      "git",
+      "switch",
+      "--detach",
+      "--",
+      "--ignore-skip-worktree-bits",
+    ]);
     expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
   });
 
