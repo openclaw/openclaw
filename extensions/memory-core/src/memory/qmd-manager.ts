@@ -307,6 +307,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly mcporterEnv: NodeJS.ProcessEnv;
   private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
@@ -378,6 +379,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       // Point it at the nested qmd config directory so per-agent collections are visible.
       QMD_CONFIG_DIR: path.join(this.xdgConfigHome, "qmd"),
       XDG_CACHE_HOME: this.xdgCacheHome,
+      NO_COLOR: "1",
+    };
+    // mcporter ≥0.10 honors XDG_CONFIG_HOME to locate its own config (~/.mcporter).
+    // Passing the qmd-scoped XDG vars breaks mcporter's config discovery.
+    // Use a separate env without the XDG overrides for all mcporter spawns.
+    this.mcporterEnv = {
+      ...process.env,
+      PATH: buildQmdProcessPath(process.env.PATH),
       NO_COLOR: "1",
     };
     this.closeSignal = new Promise<void>((resolve) => {
@@ -2006,14 +2015,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     const spawnInvocation = resolveCliSpawnInvocation({
       command: "mcporter",
       args,
-      env: this.env,
+      env: this.mcporterEnv,
       packageName: "mcporter",
     });
     return await runCliCommand({
       commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
       spawnInvocation,
-      // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
-      env: this.env,
+      env: this.mcporterEnv,
       cwd: this.workspaceDir,
       timeoutMs: opts?.timeoutMs,
       maxOutputChars: this.maxQmdOutputChars,
