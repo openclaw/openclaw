@@ -7,13 +7,15 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnv } from "../test-utils/env.js";
 import {
   buildGroupDisplayName,
-  createSqliteSessionTranscriptLocator,
   deriveSessionKey,
-  parseSqliteSessionTranscriptLocator,
   resolveSessionKey,
   updateLastRoute,
 } from "./sessions.js";
-import { resolveSessionTranscriptLocator } from "./sessions/paths.js";
+import {
+  createSqliteSessionTranscriptLocator,
+  parseSqliteSessionTranscriptLocator,
+  resolveSessionTranscriptLocator,
+} from "./sessions/paths.js";
 import {
   deleteSessionEntry,
   listSessionEntries,
