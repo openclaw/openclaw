@@ -15,6 +15,17 @@ function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
   return tools.map((tool) => tool.name);
 }
 
+function expectToolNamed(
+  tools: ReturnType<typeof createOpenClawTools>,
+  name: string,
+): ReturnType<typeof createOpenClawTools>[number] {
+  const tool = tools.find((candidate) => candidate.name === name);
+  if (!tool) {
+    throw new Error(`Expected tool ${name} to be registered`);
+  }
+  return tool;
+}
+
 function openAiGpt5Params(
   config: OpenClawConfig,
   overrides: Partial<UpdatePlanGatingParams> = {},
@@ -67,13 +78,9 @@ describe("openclaw-tools update_plan gating", () => {
       wrapBeforeToolCallHook: false,
     });
 
+    expect(isToolWrappedWithBeforeToolCallHook(expectToolNamed(tools, "sessions_list"))).toBe(true);
     expect(
-      isToolWrappedWithBeforeToolCallHook(tools.find((tool) => tool.name === "sessions_list")!),
-    ).toBe(true);
-    expect(
-      isToolWrappedWithBeforeToolCallHook(
-        unwrappedTools.find((tool) => tool.name === "sessions_list")!,
-      ),
+      isToolWrappedWithBeforeToolCallHook(expectToolNamed(unwrappedTools, "sessions_list")),
     ).toBe(false);
   });
 

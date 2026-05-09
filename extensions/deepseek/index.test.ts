@@ -16,6 +16,8 @@ type PayloadCapture = {
   payload?: Record<string, unknown>;
 };
 
+type RegisteredProvider = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
+
 const emptyUsage = {
   input: 0,
   output: 0,
@@ -24,6 +26,15 @@ const emptyUsage = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+function requireThinkingProfileResolver(
+  provider: RegisteredProvider,
+): NonNullable<RegisteredProvider["resolveThinkingProfile"]> {
+  if (!provider.resolveThinkingProfile) {
+    throw new Error("DeepSeek provider did not register a thinking profile resolver");
+  }
+  return provider.resolveThinkingProfile;
+}
 
 const readToolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
 const readToolResult = {
@@ -190,7 +201,7 @@ describe("deepseek provider plugin", () => {
 
   it("advertises max thinking levels for DeepSeek V4 models only", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
-    const resolveThinkingProfile = provider.resolveThinkingProfile!;
+    const resolveThinkingProfile = requireThinkingProfileResolver(provider);
     const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
     expect(

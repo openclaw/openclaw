@@ -21,6 +21,9 @@ let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands
 let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-native-commands.js").resolveTelegramNativeCommandDisableBlockStreaming;
 
 type CommandBotHarness = ReturnType<typeof createCommandBot>;
+type TelegramInlineKeyboardReplyMarkup = {
+  inline_keyboard?: Array<Array<{ callback_data?: string }>>;
+};
 type PlugCommandHarnessParams = {
   botHarness?: CommandBotHarness;
   cfg?: OpenClawConfig;
@@ -67,6 +70,18 @@ function registerPlugCommand(params: PlugCommandHarnessParams = {}) {
     ...botHarness,
     handler,
   };
+}
+
+function collectCallbackData(replyMarkup: TelegramInlineKeyboardReplyMarkup | undefined): string[] {
+  const callbackData: string[] = [];
+  for (const row of replyMarkup?.inline_keyboard ?? []) {
+    for (const button of row) {
+      if (button.callback_data) {
+        callbackData.push(button.callback_data);
+      }
+    }
+  }
+  return callbackData;
 }
 
 function registerCustomTelegramCommandMenu(
@@ -258,12 +273,9 @@ describe("registerTelegramNativeCommands", () => {
     await handler(createPrivateCommandContext());
 
     const replyMarkup = sendMessage.mock.calls[0]?.[2]?.reply_markup as
-      | { inline_keyboard?: Array<Array<{ callback_data?: string }>> }
+      | TelegramInlineKeyboardReplyMarkup
       | undefined;
-    const callbackData = replyMarkup?.inline_keyboard
-      ?.flat()
-      .map((button) => button.callback_data)
-      .filter(Boolean);
+    const callbackData = collectCallbackData(replyMarkup);
 
     expect(callbackData).toEqual(["tgcmd:/fast status", "tgcmd:/fast on", "tgcmd:/fast off"]);
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast status")).toBe("/fast status");

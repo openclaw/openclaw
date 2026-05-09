@@ -649,7 +649,7 @@ describe("browser config", () => {
 
   it("defaults browser SSRF policy to strict mode when unset", () => {
     const resolved = resolveBrowserConfig({});
-    expect(resolved.ssrfPolicy).toEqual({});
+    expect(resolved.ssrfPolicy).toStrictEqual({});
   });
 
   it("supports explicit strict mode by disabling private network access", () => {
@@ -692,7 +692,7 @@ describe("browser config", () => {
         },
       },
     });
-    expect(resolved.ssrfPolicy).toEqual({});
+    expect(resolved.ssrfPolicy).toStrictEqual({});
   });
 
   it("resolves existing-session profiles without cdpPort or cdpUrl", () => {

@@ -268,9 +268,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(source).toContain(providerOverride);
     expect(source).not.toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");
     expect(source).toContain('"--timeout",\n    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS)');
-    expect(source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g)?.length).toBeGreaterThanOrEqual(
-      2,
-    );
+    const agentTurnArgCalls = source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g) ?? [];
+    expect(agentTurnArgCalls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("treats explicit empty-string args as values instead of boolean flags", () => {

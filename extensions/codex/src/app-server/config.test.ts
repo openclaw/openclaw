@@ -131,7 +131,7 @@ describe("Codex app-server config", () => {
           approvalPolicy: "always",
         },
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("requires a websocket url when websocket transport is configured", () => {

@@ -631,7 +631,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as TrajectoryEvent);
-    expect(trajectoryEvents.filter((event) => event.type === "prompt.submitted")).toEqual([]);
+    expect(trajectoryEvents.some((event) => event.type === "prompt.submitted")).toBe(false);
     expect(trajectoryEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

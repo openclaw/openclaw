@@ -123,6 +123,10 @@ function resolvePath(tmp: string, relativePath: string) {
   return path.join(tmp, relativePath);
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 async function writeProjectFiles(tmp: string, files: Record<string, string>) {
   for (const [relativePath, contents] of Object.entries(files)) {
     const absolutePath = resolvePath(tmp, relativePath);
@@ -1053,10 +1057,19 @@ describe("run-node script", () => {
 
       let activePostbuilds = 0;
       let maxActivePostbuilds = 0;
+      let markPostbuildStarted!: () => void;
+      let releasePostbuild!: () => void;
+      const postbuildStarted = new Promise<void>((resolve) => {
+        markPostbuildStarted = resolve;
+      });
+      const postbuildRelease = new Promise<void>((resolve) => {
+        releasePostbuild = resolve;
+      });
       const runRuntimePostBuild = vi.fn(async () => {
         activePostbuilds += 1;
         maxActivePostbuilds = Math.max(maxActivePostbuilds, activePostbuilds);
-        await new Promise((resolve) => setTimeout(resolve, 25));
+        markPostbuildStarted();
+        await postbuildRelease;
         activePostbuilds -= 1;
       });
       const { spawn, spawnSync } = createSpawnRecorder({
@@ -1064,28 +1077,30 @@ describe("run-node script", () => {
         gitStatus: "",
       });
 
-      await expect(
-        Promise.all([
-          runStatusCommand({
-            tmp,
-            spawn,
-            spawnSync,
-            env: {
-              OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
-            },
-            runRuntimePostBuild,
-          }),
-          runStatusCommand({
-            tmp,
-            spawn,
-            spawnSync,
-            env: {
-              OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
-            },
-            runRuntimePostBuild,
-          }),
-        ]),
-      ).resolves.toEqual([0, 0]);
+      const runs = Promise.all([
+        runStatusCommand({
+          tmp,
+          spawn,
+          spawnSync,
+          env: {
+            OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
+          },
+          runRuntimePostBuild,
+        }),
+        runStatusCommand({
+          tmp,
+          spawn,
+          spawnSync,
+          env: {
+            OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
+          },
+          runRuntimePostBuild,
+        }),
+      ]);
+
+      await postbuildStarted;
+      releasePostbuild();
+      await expect(runs).resolves.toEqual([0, 0]);
 
       expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
       expect(maxActivePostbuilds).toBe(1);
@@ -1582,8 +1597,8 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
-      await expect(fs.access(resolvePath(tmp, DIST_EXTENSION_MANIFEST))).rejects.toThrow();
-      await expect(fs.access(resolvePath(tmp, DIST_EXTENSION_PACKAGE))).rejects.toThrow();
+      await expectPathMissing(resolvePath(tmp, DIST_EXTENSION_MANIFEST));
+      await expectPathMissing(resolvePath(tmp, DIST_EXTENSION_PACKAGE));
     });
   });
 

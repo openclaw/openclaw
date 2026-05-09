@@ -178,6 +178,10 @@ describe("QmdMemoryManager", () => {
     return value;
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
   async function createManager(params?: {
     mode?: "full" | "status" | "cli";
     cfg?: OpenClawConfig;
@@ -484,10 +488,12 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager({ mode: "full" });
-    if (releaseUpdate === null) {
-      throw new Error("Expected qmd update release callback");
-    }
-    releaseUpdate();
+    (
+      releaseUpdate ??
+      (() => {
+        throw new Error("Expected qmd update release callback");
+      })
+    )();
     await manager?.close();
   });
 
@@ -2972,7 +2978,7 @@ describe("QmdMemoryManager", () => {
     await manager.search("hello again", { sessionKey: "agent:main:slack:dm:u123" });
 
     expect(selectors.length).toBeGreaterThanOrEqual(2);
-    expect(selectors.filter((selector) => selector !== "qmd.query")).toEqual([]);
+    expect(selectors.every((selector) => selector === "qmd.query")).toBe(true);
     expect(logWarnMock).not.toHaveBeenCalledWith(
       expect.stringContaining("falling back to v1 tool names"),
     );
@@ -3041,7 +3047,7 @@ describe("QmdMemoryManager", () => {
 
     expect(runMcporterSpy).toHaveBeenCalled();
     expect(selectors.length).toBeGreaterThanOrEqual(1);
-    expect(selectors.filter((selector) => selector !== "qmd.query")).toEqual([]);
+    expect(selectors.every((selector) => selector === "qmd.query")).toBe(true);
     expect(logWarnMock).not.toHaveBeenCalledWith(
       expect.stringContaining("falling back to v1 tool names"),
     );
@@ -4967,7 +4973,7 @@ describe("QmdMemoryManager", () => {
             await fs.rm(defaultModelsDir, { recursive: true, force: true });
           },
           assert: async () => {
-            await expect(fs.lstat(customModelsDir)).rejects.toThrow();
+            await expectPathMissing(customModelsDir);
             expect(logWarnMock).not.toHaveBeenCalledWith(
               expect.stringContaining("failed to symlink qmd models directory"),
             );
@@ -4993,11 +4999,14 @@ describe("QmdMemoryManager", () => {
 });
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }

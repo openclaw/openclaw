@@ -460,13 +460,13 @@ describe("resolveLocalAuthSpawnOptions", () => {
         command: "/usr/local/bin/codex",
         platform: "linux",
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       resolveLocalAuthSpawnOptions({
         command: "C:\\tools\\codex.exe",
         platform: "win32",
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });
 

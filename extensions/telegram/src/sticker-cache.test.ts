@@ -59,7 +59,11 @@ describe("sticker-cache", () => {
       };
 
       stickerCache.cacheSticker(sticker);
-      expect(stickerCache.getCachedSticker("unique123")).not.toBeNull();
+      const cachedSticker = stickerCache.getCachedSticker("unique123");
+      if (!cachedSticker) {
+        throw new Error("expected cached Telegram sticker");
+      }
+      expect(cachedSticker.fileUniqueId).toBe("unique123");
 
       jsonStoreMocks.store.value = null;
 

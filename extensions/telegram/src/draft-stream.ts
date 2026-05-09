@@ -109,6 +109,7 @@ export function createTelegramDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
+  const allowThreadlessRetry = params.thread?.scope !== "dm";
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const replyParams =
     replyToMessageId != null
@@ -153,7 +154,7 @@ export function createTelegramDraftStream(params: {
         usedThreadParams,
       };
     } catch (err) {
-      if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
+      if (!allowThreadlessRetry || !usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
         throw err;
       }
       const threadlessParams: TelegramSendMessageParams = { ...sendParams };

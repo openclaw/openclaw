@@ -202,7 +202,7 @@ describe("memory watcher config", () => {
     if (!result.manager) {
       throw new Error("manager missing");
     }
-    manager = result.manager;
+    manager = result.manager as unknown as MemoryIndexManager;
 
     expect(watchMock).not.toHaveBeenCalled();
   });

@@ -855,7 +855,7 @@ describe("createOpenClawCodingTools", () => {
       const imageText = imageTextBlocks?.map((block) => block.text ?? "").join("\n") ?? "";
       expect(imageText).toContain("Read image file [image/png]");
       if ((imageBlocks?.length ?? 0) > 0) {
-        expect(imageBlocks?.filter((block) => block.mimeType !== "image/png")).toEqual([]);
+        expect(imageBlocks?.every((block) => block.mimeType === "image/png")).toBe(true);
       } else {
         expect(imageText).toContain("[Image omitted:");
       }
@@ -868,7 +868,7 @@ describe("createOpenClawCodingTools", () => {
         path: textPath,
       });
 
-      expect(textResult?.content?.filter((block) => block.type === "image")).toEqual([]);
+      expect(textResult?.content?.some((block) => block.type === "image")).toBe(false);
       const textBlocks = textResult?.content?.filter((block) => block.type === "text") as
         | Array<{ text?: string }>
         | undefined;

@@ -80,6 +80,17 @@ let mockedDispatchSequence: Array<{
     mediaUrls?: string[];
   };
 }> = [];
+
+function countFinalDispatches(): number {
+  let count = 0;
+  for (const entry of mockedDispatchSequence) {
+    if (entry.kind === "final") {
+      count++;
+    }
+  }
+  return count;
+}
+
 let mockedProgressEvents: string[] = [];
 let mockedReplyOptionEvents: Array<
   | {
@@ -624,7 +635,7 @@ vi.mock("../reply.runtime.js", () => ({
     return {
       queuedFinal: false,
       counts: {
-        final: mockedDispatchSequence.filter((entry) => entry.kind === "final").length,
+        final: countFinalDispatches(),
       },
     };
   },

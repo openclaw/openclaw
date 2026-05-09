@@ -20,6 +20,16 @@ function createCollectingMetrics() {
   };
 }
 
+function expectThrowsError(run: () => unknown): void {
+  let error: unknown;
+  try {
+    run();
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+}
+
 // ============================================================================
 // Fuzz Tests for validatePrivateKey
 // ============================================================================
@@ -28,7 +38,7 @@ describe("validatePrivateKey fuzz", () => {
   describe("validatePrivateKey type confusion", () => {
     it("rejects non-string input", () => {
       for (const value of [null, undefined, 123, true, {}, [], () => {}]) {
-        expect(() => validatePrivateKey(value as unknown as string)).toThrow();
+        expectThrowsError(() => validatePrivateKey(value as unknown as string));
       }
     });
   });
@@ -49,7 +59,7 @@ describe("validatePrivateKey fuzz", () => {
       ];
 
       for (const key of invalidKeys) {
-        expect(() => validatePrivateKey(key)).toThrow();
+        expectThrowsError(() => validatePrivateKey(key));
       }
     });
   });
@@ -57,18 +67,18 @@ describe("validatePrivateKey fuzz", () => {
   describe("edge cases", () => {
     it("rejects very long string", () => {
       const veryLong = "a".repeat(10000);
-      expect(() => validatePrivateKey(veryLong)).toThrow();
+      expectThrowsError(() => validatePrivateKey(veryLong));
     });
 
     it("rejects string of spaces matching length", () => {
       const spaces = " ".repeat(64);
-      expect(() => validatePrivateKey(spaces)).toThrow();
+      expectThrowsError(() => validatePrivateKey(spaces));
     });
 
     it("rejects hex with spaces between characters", () => {
       const withSpaces =
         "01 23 45 67 89 ab cd ef 01 23 45 67 89 ab cd ef 01 23 45 67 89 ab cd ef 01 23 45 67 89 ab cd ef";
-      expect(() => validatePrivateKey(withSpaces)).toThrow();
+      expectThrowsError(() => validatePrivateKey(withSpaces));
     });
   });
 
@@ -76,15 +86,15 @@ describe("validatePrivateKey fuzz", () => {
     it("rejects nsec with invalid bech32 characters", () => {
       // 'b', 'i', 'o' are not valid bech32 characters
       const invalidBech32 = "nsec1qypqxpq9qtpqscx7peytbfwtdjmcv0mrz5rjpej8vjppfkqfqy8skqfv3l";
-      expect(() => validatePrivateKey(invalidBech32)).toThrow();
+      expectThrowsError(() => validatePrivateKey(invalidBech32));
     });
 
     it("rejects nsec with wrong prefix", () => {
-      expect(() => validatePrivateKey("nsec0aaaa")).toThrow();
+      expectThrowsError(() => validatePrivateKey("nsec0aaaa"));
     });
 
     it("rejects partial nsec", () => {
-      expect(() => validatePrivateKey("nsec1")).toThrow();
+      expectThrowsError(() => validatePrivateKey("nsec1"));
     });
   });
 });
@@ -119,7 +129,7 @@ describe("normalizePubkey fuzz", () => {
   describe("prototype pollution attempts", () => {
     it("throws for prototype property names", () => {
       for (const value of ["__proto__", "constructor", "prototype"]) {
-        expect(() => normalizePubkey(value)).toThrow();
+        expectThrowsError(() => normalizePubkey(value));
       }
     });
   });

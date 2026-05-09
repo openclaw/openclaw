@@ -28,6 +28,16 @@ function makeTempDir() {
 
 const mkdirSafe = mkdirSafeDir;
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function withOpenClawPackageArgv<T>(packageRoot: string, fn: () => T): T {
   mkdirSafe(path.join(packageRoot, "bin"));
   fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}\n', "utf-8");
@@ -591,9 +601,10 @@ describe("discoverOpenClawPlugins", () => {
       }),
     );
 
-    expect(candidates.filter((candidate) => candidate.idHint === "feishu")).toEqual([
+    expect(candidates.find((candidate) => candidate.idHint === "feishu")).toEqual(
       expect.objectContaining({ origin: "bundled" }),
-    ]);
+    );
+    expect(countMatching(candidates, (candidate) => candidate.idHint === "feishu")).toBe(1);
     expect(diagnostics).toEqual([
       expect.objectContaining({
         level: "warn",
@@ -628,9 +639,10 @@ describe("discoverOpenClawPlugins", () => {
       }),
     );
 
-    expect(candidates.filter((candidate) => candidate.idHint === "telegram")).toEqual([
+    expect(candidates.find((candidate) => candidate.idHint === "telegram")).toEqual(
       expect.objectContaining({ origin: "bundled" }),
-    ]);
+    );
+    expect(countMatching(candidates, (candidate) => candidate.idHint === "telegram")).toBe(1);
     expect(diagnostics).toEqual([
       expect.objectContaining({
         level: "warn",
@@ -725,13 +737,14 @@ describe("discoverOpenClawPlugins", () => {
       }),
     );
 
-    expect(candidates.filter((candidate) => candidate.idHint === "synology-chat")).toEqual([
+    expect(candidates.find((candidate) => candidate.idHint === "synology-chat")).toEqual(
       expect.objectContaining({
         origin: "bundled",
         rootDir: fs.realpathSync(bundledPluginDir),
         source: fs.realpathSync(bundledEntryPath),
       }),
-    ]);
+    );
+    expect(countMatching(candidates, (candidate) => candidate.idHint === "synology-chat")).toBe(1);
     expect(diagnostics).toEqual([]);
   });
 

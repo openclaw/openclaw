@@ -272,6 +272,10 @@ function expectCopilotProviderFromPlan(
       ? (JSON.parse(plan.contents) as { providers?: Record<string, unknown> })
       : {};
   const provider = parsed.providers?.["github-copilot"];
-  expect(provider).toEqual(expect.any(Object));
+  expect(provider).not.toBeNull();
+  expect(typeof provider).toBe("object");
+  if (provider === null || typeof provider !== "object") {
+    throw new Error("Expected GitHub Copilot provider config");
+  }
   return provider;
 }

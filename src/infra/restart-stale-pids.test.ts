@@ -759,7 +759,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       cleanStaleGatewayProcessesSync();
 
       expect(events).toContain("port-free");
-      expect(events.filter((e) => e.startsWith("busy-poll")).length).toBeGreaterThan(0);
+      expect(events.some((e) => e.startsWith("busy-poll"))).toBe(true);
     });
 
     it("bails immediately when lsof is permanently unavailable (ENOENT) — Greptile edge case", () => {

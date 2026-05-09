@@ -1301,7 +1301,9 @@ describe("openai transport stream", () => {
       }>;
     };
 
-    expect(params.input?.filter((item) => item.type === "reasoning")).toHaveLength(1);
+    expect(
+      params.input?.reduce((count, item) => count + (item.type === "reasoning" ? 1 : 0), 0),
+    ).toBe(1);
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );
@@ -2799,7 +2801,7 @@ describe("openai transport stream", () => {
       tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
     };
 
-    expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toEqual({});
+    expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toStrictEqual({});
   });
 
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {

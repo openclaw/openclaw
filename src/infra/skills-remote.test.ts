@@ -225,7 +225,7 @@ describe("skills-remote", () => {
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     let invokeCount = 0;
-    let releaseProbe!: () => void;
+    let releaseProbe: (() => void) | undefined;
     const probeStarted = new Promise<void>((resolve) => {
       setSkillsRemoteRegistry({
         listConnected: () => [],
@@ -286,6 +286,9 @@ describe("skills-remote", () => {
         cfg,
         timeoutMs: 10,
       });
+      if (!releaseProbe) {
+        throw new Error("Expected remote skill probe release callback to be initialized");
+      }
       releaseProbe();
 
       await Promise.all([first, second]);

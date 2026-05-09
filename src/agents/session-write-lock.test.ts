@@ -20,7 +20,11 @@ async function expectLockRemovedOnlyAfterFinalRelease(params: {
   await params.firstLock.release();
   await expect(fs.access(params.lockPath)).resolves.toBeUndefined();
   await params.secondLock.release();
-  await expect(fs.access(params.lockPath)).rejects.toThrow();
+  await expectPathMissing(params.lockPath);
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 async function expectCurrentPidOwnsLock(params: {
@@ -282,7 +286,7 @@ describe("acquireSessionWriteLock", () => {
 
       const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10_000 });
       await lock.release();
-      await expect(fs.access(lockPath)).rejects.toThrow();
+      await expectPathMissing(lockPath);
     });
   });
 
@@ -300,7 +304,7 @@ describe("acquireSessionWriteLock", () => {
 
       const released = await __testing.runLockWatchdogCheck(Date.now() + 1000);
       expect(released).toBeGreaterThanOrEqual(1);
-      await expect(fs.access(lockPath)).rejects.toThrow();
+      await expectPathMissing(lockPath);
 
       const lockB = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
       await expect(fs.access(lockPath)).resolves.toBeUndefined();
@@ -323,7 +327,7 @@ describe("acquireSessionWriteLock", () => {
 
       __testing.releaseAllLocksSync();
 
-      await expect(fs.access(lockPath)).rejects.toThrow();
+      await expectPathMissing(lockPath);
       await lock.release();
     });
   });
@@ -405,8 +409,8 @@ describe("acquireSessionWriteLock", () => {
         "old-live.jsonl.lock",
       ]);
 
-      await expect(fs.access(staleDeadLock)).rejects.toThrow();
-      await expect(fs.access(staleAliveLock)).rejects.toThrow();
+      await expectPathMissing(staleDeadLock);
+      await expectPathMissing(staleAliveLock);
       await expect(fs.access(freshAliveLock)).resolves.toBeUndefined();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
@@ -445,7 +449,7 @@ describe("acquireSessionWriteLock", () => {
         "orphan-self.jsonl.lock",
       ]);
       expect(result.cleaned[0]?.staleReasons).toContain("orphan-self-pid");
-      await expect(fs.access(orphanSelfLock)).rejects.toThrow();
+      await expectPathMissing(orphanSelfLock);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -469,7 +473,7 @@ describe("acquireSessionWriteLock", () => {
 
           __testing.handleTerminationSignal(signal);
 
-          await expect(fs.stat(lockPath)).rejects.toThrow();
+          await expectPathMissing(lockPath);
           if (signal === "SIGINT") {
             process.off(signal, keepAlive);
           }
@@ -557,7 +561,7 @@ describe("acquireSessionWriteLock", () => {
 
       __testing.handleTerminationSignal("SIGINT");
 
-      await expect(fs.access(lockPath)).rejects.toThrow();
+      await expectPathMissing(lockPath);
       expect(otherHandlerCalled).toBe(false);
       expect(killCalls).toEqual([]);
     } finally {
@@ -573,7 +577,7 @@ describe("acquireSessionWriteLock", () => {
 
       process.emit("exit", 0);
 
-      await expect(fs.access(lockPath)).rejects.toThrow();
+      await expectPathMissing(lockPath);
     });
   });
 

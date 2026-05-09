@@ -256,6 +256,30 @@ describe("applyDefaultModel", () => {
     });
   });
 
+  it("normalizes existing retired Google Gemini model keys before writing defaults", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3-pro-preview": {
+              alias: "gemini",
+              params: { thinking: "high" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyDefaultModel(config, "google/gemini-3.1-pro-preview");
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "gemini",
+        params: { thinking: "high" },
+      },
+    });
+  });
+
   it("normalizes retired Google Gemini fallbacks when writing config", () => {
     const config = {
       agents: {

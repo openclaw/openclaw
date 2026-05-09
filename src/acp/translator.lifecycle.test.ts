@@ -141,16 +141,38 @@ describe("acp translator stable lifecycle handlers", () => {
 
     expect(capabilities.loadSession).toBe(true);
     expect(typeof agent.loadSession).toBe("function");
-    expect(capabilities.sessionCapabilities?.list).toEqual({});
+    expect(capabilities.sessionCapabilities?.list).toStrictEqual({});
     expect(typeof agent.listSessions).toBe("function");
-    expect(capabilities.sessionCapabilities?.resume).toEqual({});
+    expect(capabilities.sessionCapabilities?.resume).toStrictEqual({});
     expect(typeof agent.resumeSession).toBe("function");
-    expect(capabilities.sessionCapabilities?.close).toEqual({});
+    expect(capabilities.sessionCapabilities?.close).toStrictEqual({});
     expect(typeof agent.closeSession).toBe("function");
     expect(capabilities.sessionCapabilities?.fork).toBeUndefined();
     expect("unstable_listSessions" in agent).toBe(false);
 
     sessionStore.clearAllSessionsForTest();
+  });
+
+  it("captures ACP client capabilities during initialize", async () => {
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway());
+
+    expect(agent.supportsClientReadTextFile()).toBe(false);
+    expect(agent.supportsClientWriteTextFile()).toBe(false);
+    expect(agent.supportsClientTerminal()).toBe(false);
+
+    await agent.initialize({
+      ...createInitializeRequest(),
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: false },
+        terminal: true,
+      },
+      clientInfo: { name: "test-client", version: "1.2.3" },
+    } as InitializeRequest);
+
+    expect(agent.supportsClientReadTextFile()).toBe(true);
+    expect(agent.supportsClientWriteTextFile()).toBe(false);
+    expect(agent.supportsClientTerminal()).toBe(true);
+    expect(agent.getClientInfo()).toEqual({ name: "test-client", version: "1.2.3" });
   });
 
   it("lists Gateway sessions through the stable handler with opaque cursors and cwd filtering", async () => {
@@ -379,7 +401,9 @@ describe("acp translator stable lifecycle handlers", () => {
     });
     const pending = await startPendingPrompt({ agent, sentRunIds, sessionId: "session-1" });
 
-    await expect(agent.closeSession(createCloseSessionRequest("session-1"))).resolves.toEqual({});
+    await expect(agent.closeSession(createCloseSessionRequest("session-1"))).resolves.toStrictEqual(
+      {},
+    );
 
     expect(request).toHaveBeenCalledWith("chat.abort", {
       sessionKey: "agent:main:work",

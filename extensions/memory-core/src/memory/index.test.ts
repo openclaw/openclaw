@@ -278,7 +278,7 @@ describe("memory index", () => {
     if (!result.manager) {
       throw new Error(missingMessage);
     }
-    return result.manager;
+    return result.manager as unknown as MemoryIndexManager;
   }
 
   async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {

@@ -46,6 +46,16 @@ const mockReaddirSync = vi.fn();
 const mockSettingsExistsSync = vi.fn();
 const mockSettingsReadFileSync = vi.fn();
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("resolveGeminiCliSelectedAuthType", () => {
   const ENV_KEYS = ["GOOGLE_GENAI_USE_GCA"] as const;
 
@@ -843,7 +853,7 @@ describe("loginGeminiCliOAuth", () => {
     });
 
     await runProjectDiscoveryExpectingProjectId("env-project");
-    expect(requests.filter(({ url }) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
+    expect(countMatching(requests, ({ url }) => url.includes("v1internal:loadCodeAssist"))).toBe(3);
     expect(requests.map(({ url }) => url)).not.toEqual(
       expect.arrayContaining([expect.stringContaining("v1internal:onboardUser")]),
     );

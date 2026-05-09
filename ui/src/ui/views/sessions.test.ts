@@ -137,7 +137,7 @@ describe("sessions view", () => {
     expect(archivedToggle?.getAttribute("data-tooltip")).toBe("Include archived sessions.");
     expect(
       Array.from(filters?.querySelectorAll("[title]") ?? []).map((node) => node.className),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps active and limit together and renders streamlined source toggles", async () => {

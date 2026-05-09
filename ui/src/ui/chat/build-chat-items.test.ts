@@ -151,7 +151,7 @@ describe("buildChatItems", () => {
       }),
     );
 
-    expect(items).toEqual([]);
+    expect(items).toStrictEqual([]);
   });
 
   it("suppresses active sender metadata streams before rendering", () => {
@@ -162,7 +162,7 @@ describe("buildChatItems", () => {
       }),
     );
 
-    expect(items).toEqual([]);
+    expect(items).toStrictEqual([]);
   });
 
   it("strips sender metadata from active stream text that has visible content", () => {
@@ -195,7 +195,7 @@ describe("buildChatItems", () => {
       ],
     });
 
-    expect(groups).toEqual([]);
+    expect(groups).toStrictEqual([]);
   });
 
   it("renders only the last 100 history messages and shows a hidden-count notice", () => {
@@ -308,7 +308,7 @@ describe("buildChatItems", () => {
     });
 
     expect(canvasBlocksIn(groups[0])).toHaveLength(1);
-    expect(canvasBlocksIn(groups[1])).toEqual([]);
+    expect(canvasBlocksIn(groups[1])).toStrictEqual([]);
   });
 
   it("preserves a metadata-only assistant anchor when lifting canvas previews", () => {
@@ -386,7 +386,7 @@ describe("buildChatItems", () => {
       ],
     });
 
-    expect(canvasBlocksIn(groups[0])).toEqual([]);
+    expect(canvasBlocksIn(groups[0])).toStrictEqual([]);
   });
 
   it("lifts streamed canvas toolresult blocks into the assistant bubble", () => {

@@ -81,6 +81,14 @@ function requireButton(
   return button;
 }
 
+function requireElement<T extends Element>(element: T | null | undefined, label: string): T {
+  expect(element).toBeInstanceOf(Element);
+  if (!element) {
+    throw new Error(`Expected ${label} element`);
+  }
+  return element;
+}
+
 describe("chat header controls (browser)", () => {
   it("renders explicit hover tooltip metadata for the top-right action buttons", async () => {
     const container = document.createElement("div");
@@ -218,16 +226,19 @@ describe("chat header controls (browser)", () => {
       container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle"),
       "mobile controls toggle",
     );
-    const dropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
+    const dropdown = requireElement(
+      container.querySelector<HTMLElement>(".chat-controls-dropdown"),
+      "mobile controls dropdown",
+    );
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(toggle.getAttribute("aria-controls")).toBe("chat-mobile-controls-dropdown");
-    expect(dropdown?.id).toBe("chat-mobile-controls-dropdown");
-    expect(dropdown?.classList.contains("open")).toBe(false);
+    expect(dropdown.id).toBe("chat-mobile-controls-dropdown");
+    expect(dropdown.classList.contains("open")).toBe(false);
 
     toggle.click();
 
     expect(setChatMobileControlsOpen).toHaveBeenCalledWith(true, { trigger: toggle });
-    expect(dropdown?.classList.contains("open")).toBe(false);
+    expect(dropdown.classList.contains("open")).toBe(false);
 
     render(
       renderChatMobileToggle(
@@ -240,9 +251,15 @@ describe("chat header controls (browser)", () => {
     );
     await Promise.resolve();
 
-    const openToggle = container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
-    const openDropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
-    expect(openToggle?.getAttribute("aria-expanded")).toBe("true");
-    expect(openDropdown?.classList.contains("open")).toBe(true);
+    const openToggle = requireButton(
+      container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle"),
+      "open mobile controls toggle",
+    );
+    const openDropdown = requireElement(
+      container.querySelector<HTMLElement>(".chat-controls-dropdown"),
+      "open mobile controls dropdown",
+    );
+    expect(openToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(openDropdown.classList.contains("open")).toBe(true);
   });
 });

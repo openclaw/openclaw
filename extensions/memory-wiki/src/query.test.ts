@@ -45,6 +45,16 @@ const { createVault } = createMemoryWikiTestHarness();
 let suiteRoot = "";
 let caseIndex = 0;
 
+function collectWikiResultPaths(results: readonly { corpus: string; path: string }[]): string[] {
+  const paths: string[] = [];
+  for (const result of results) {
+    if (result.corpus === "wiki") {
+      paths.push(result.path);
+    }
+  }
+  return paths;
+}
+
 beforeEach(() => {
   getActiveMemorySearchManagerMock.mockReset();
   getActiveMemorySearchManagerMock.mockResolvedValue({ manager: null, error: "unavailable" });
@@ -693,9 +703,7 @@ describe("searchMemoryWiki", () => {
 
     expect(results).toHaveLength(5);
     expect(results.map((result) => result.corpus)).toContain("memory");
-    expect(
-      results.filter((result) => result.corpus === "wiki").map((result) => result.path),
-    ).toEqual([
+    expect(collectWikiResultPaths(results)).toEqual([
       "entities/alpha-1.md",
       "entities/alpha-2.md",
       "entities/alpha-3.md",
