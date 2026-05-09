@@ -30,6 +30,20 @@ first use:
 openclaw plugins enable oc-path
 ```
 
+## Why use it
+
+OpenClaw state is spread across human-edited markdown, commented JSONC config,
+and append-only JSONL logs. Shell scripts, hooks, and agents often need one
+small value from those files: a frontmatter key, a plugin setting, a log record
+field, or a bullet item under a named section.
+
+`openclaw path` gives those callers a stable address instead of a one-off grep,
+regex, or parser for each file kind. The same `oc://` path can be validated,
+resolved, searched, dry-run, and written from the terminal, which makes narrow
+automation easier to review and safer to replay. It is especially useful when
+you want to update one leaf while preserving the rest of the file's comments,
+line endings, and surrounding formatting.
+
 ## Subcommands
 
 | Subcommand              | Purpose                                                                      |
