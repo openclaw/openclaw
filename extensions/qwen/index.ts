@@ -1,12 +1,7 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyQwenNativeStreamingUsageCompat } from "./api.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import {
-  isQwenCodingPlanBaseUrl,
-  QWEN_36_PLUS_MODEL_ID,
-  QWEN_BASE_URL,
-  QWEN_DEFAULT_MODEL_REF,
-} from "./models.js";
+import { QWEN_BASE_URL, QWEN_DEFAULT_MODEL_REF } from "./models.js";
 import {
   applyQwenConfig,
   applyQwenConfigCn,
@@ -164,15 +159,7 @@ export default defineSingleProviderPluginEntry({
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyQwenNativeStreamingUsageCompat(providerConfig),
     wrapStreamFn: wrapQwenProviderStream,
-    normalizeConfig: ({ providerConfig }) => {
-      if (!isQwenCodingPlanBaseUrl(providerConfig.baseUrl)) {
-        return undefined;
-      }
-      const models = providerConfig.models?.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
-      return models && models.length !== providerConfig.models?.length
-        ? { ...providerConfig, models }
-        : undefined;
-    },
+    // normalizeConfig removed: qwen3.6-plus no longer filtered
   },
   register(api) {
     api.registerMediaUnderstandingProvider(buildQwenMediaUnderstandingProvider());
