@@ -57,7 +57,7 @@ targets:
         product: OpenClawProtocol
       - package: Swabble
         product: SwabbleKit
-      - sdk: AppIntents.framework
+        - sdk: AppIntents.framework
     preBuildScripts:
       - name: SwiftFormat (lint)
         basedOnDependencyAnalysis: false
