@@ -112,6 +112,39 @@ describe("modelsAuthListCommand", () => {
     });
   });
 
+  it("includes claude-cli profile when filtering by --provider anthropic", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access-secret",
+          refresh: "refresh-secret",
+          expires: 1_800_000_000_000,
+          email: "user@example.com",
+        },
+        "openai:api-key": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-secret",
+        },
+      },
+    };
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    const runtime = createRuntime();
+
+    await modelsAuthListCommand({ provider: "anthropic", json: true }, runtime);
+
+    expect(runtime.jsonPayloads).toHaveLength(1);
+    const payload = runtime.jsonPayloads[0] as { profiles: { id: string; provider: string }[] };
+    expect(payload.profiles).toHaveLength(1);
+    expect(payload.profiles[0]).toMatchObject({
+      id: "anthropic:claude-cli",
+      provider: "claude-cli",
+    });
+  });
+
   it("prints an empty profile list without failing", async () => {
     mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
     const runtime = createRuntime();

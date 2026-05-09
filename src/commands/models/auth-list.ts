@@ -8,6 +8,7 @@ import {
   type AuthProfileStore,
   type ProfileUsageStats,
 } from "../../agents/auth-profiles.js";
+import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
@@ -76,6 +77,16 @@ function summarizeProfile(params: {
   };
 }
 
+function buildProviderMatchSet(provider: string): Set<string> {
+  const set = new Set([provider]);
+  for (const alias of listLegacyRuntimeModelProviderAliases()) {
+    if (normalizeProviderId(alias.provider) === provider) {
+      set.add(normalizeProviderId(alias.legacyProvider));
+    }
+  }
+  return set;
+}
+
 function formatProfileLine(profile: AuthProfileSummary): string {
   const details = [`${profile.provider}/${profile.type}`];
   if (profile.expiresAt) {
@@ -97,6 +108,7 @@ export async function modelsAuthListCommand(
   const cfg = await loadModelsConfig({ commandName: "models auth list", runtime });
   const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
   const provider = opts.provider?.trim() ? normalizeProviderId(opts.provider) : undefined;
+  const providerMatchSet = provider ? buildProviderMatchSet(provider) : undefined;
   const store = ensureAuthProfileStore(
     agentDir,
     provider ? { externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }) } : undefined,
@@ -111,7 +123,7 @@ export async function modelsAuthListCommand(
         usage: store.usageStats?.[profileId],
       }),
     )
-    .filter((profile) => !provider || profile.provider === provider)
+    .filter((profile) => !providerMatchSet || providerMatchSet.has(profile.provider))
     .toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 
   if (opts.json) {

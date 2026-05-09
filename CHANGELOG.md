@@ -199,6 +199,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/auth: include `claude-cli` profiles in `models auth list --provider anthropic` output, since `claude-cli` is the stored runtime identity for Anthropic Claude CLI credentials. Fixes #79597.
 - Discord: preserve username target resolution for Discord outbound sends. (#79076) Thanks @vincentkoc.
 - Gateway/sessions: rotate generated transcript paths when gateway sessions reset, complementing the daily-rollover transcript persistence. (#79076) Thanks @vincentkoc.
 - Dependencies: pin the transitive `fast-uri` production dependency to `3.1.2` so the production dependency audit no longer resolves the vulnerable `<=3.1.1` range. Thanks @shakkernerd.
