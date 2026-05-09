@@ -636,6 +636,31 @@ async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function readResponseArrayBufferWithTimeout(params: {
+  response: Response;
+  timeoutMs?: number;
+  resourceLabel: string;
+}): Promise<ArrayBuffer> {
+  const timeoutMs = params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    return await new Promise<ArrayBuffer>((resolve, reject) => {
+      timeout = setTimeout(() => {
+        const err = new Error(
+          `ClawHub ${params.resourceLabel} body timed out after ${timeoutMs}ms`,
+        );
+        void params.response.body?.cancel(err).catch(() => undefined);
+        reject(err);
+      }, timeoutMs);
+      void params.response.arrayBuffer().then(resolve).catch(reject);
+    });
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export function resolveClawHubBaseUrl(baseUrl?: string): string {
   return normalizeBaseUrl(baseUrl);
 }
@@ -902,7 +927,13 @@ export async function downloadClawHubPackageArchive(params: {
     if (!response.ok) {
       throw await buildClawHubError(response, url, hasToken);
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = new Uint8Array(
+      await readResponseArrayBufferWithTimeout({
+        response,
+        timeoutMs: params.timeoutMs,
+        resourceLabel: `ClawPack download for ${params.name}@${params.version}`,
+      }),
+    );
     const sha256Hex = formatSha256Hex(bytes);
     const npmIntegrity = formatSha512Integrity(bytes);
     const npmShasum = formatSha1Hex(bytes);
@@ -977,7 +1008,13 @@ export async function downloadClawHubPackageArchive(params: {
   if (!response.ok) {
     throw await buildClawHubError(response, url, hasToken);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = new Uint8Array(
+    await readResponseArrayBufferWithTimeout({
+      response,
+      timeoutMs: params.timeoutMs,
+      resourceLabel: `package archive download for ${params.name}`,
+    }),
+  );
   const sha256Hex = formatSha256Hex(bytes);
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-package",
@@ -1018,7 +1055,13 @@ export async function downloadClawHubSkillArchive(params: {
   if (!response.ok) {
     throw await buildClawHubError(response, url, hasToken);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = new Uint8Array(
+    await readResponseArrayBufferWithTimeout({
+      response,
+      timeoutMs: params.timeoutMs,
+      resourceLabel: `skill archive download for ${params.slug}`,
+    }),
+  );
   const sha256Hex = formatSha256Hex(bytes);
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-skill",

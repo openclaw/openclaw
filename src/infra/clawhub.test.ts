@@ -484,6 +484,69 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/Rate limit exceeded$/);
   });
 
+  it("times out stalled skill archive body reads", async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      downloadClawHubSkillArchive({
+        slug: "agentreceipt",
+        version: "1.0.0",
+        timeoutMs: 5,
+        fetchImpl: async () =>
+          ({
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "application/zip" }),
+            body: { cancel },
+            arrayBuffer: () => new Promise<ArrayBuffer>(() => undefined),
+          }) as unknown as Response,
+      }),
+    ).rejects.toThrow(/skill archive download for agentreceipt body timed out after 5ms/i);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("times out stalled package archive body reads", async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      downloadClawHubPackageArchive({
+        name: "@hyf/zai-external-alpha",
+        version: "0.0.1",
+        timeoutMs: 5,
+        fetchImpl: async () =>
+          ({
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "application/zip" }),
+            body: { cancel },
+            arrayBuffer: () => new Promise<ArrayBuffer>(() => undefined),
+          }) as unknown as Response,
+      }),
+    ).rejects.toThrow(
+      /package archive download for @hyf\/zai-external-alpha body timed out after 5ms/i,
+    );
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("times out stalled ClawPack artifact body reads", async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      downloadClawHubPackageArchive({
+        name: "demo",
+        version: "1.2.3",
+        artifact: "clawpack",
+        timeoutMs: 5,
+        fetchImpl: async () =>
+          ({
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "application/octet-stream" }),
+            body: { cancel },
+            arrayBuffer: () => new Promise<ArrayBuffer>(() => undefined),
+          }) as unknown as Response,
+      }),
+    ).rejects.toThrow(/ClawPack download for demo@1.2.3 body timed out after 5ms/i);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("downloads skill archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubSkillArchive({
       slug: "agentreceipt",
