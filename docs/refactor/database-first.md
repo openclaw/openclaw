@@ -252,6 +252,9 @@ The remaining cleanup is mostly consolidation and deletion:
 - Automatic compaction transcript rotation writes successor transcript rows
   directly through the SQLite transcript store. Session rows keep only the
   successor session identity, not a durable JSONL path or persisted locator.
+- Embedded context-engine compaction uses SQLite-named transcript rotation
+  helpers. The rotation tests no longer construct JSONL successor paths or
+  model active sessions as files.
 - Managed outgoing image retention keys its transcript-message cache from
   SQLite transcript stats instead of filesystem stat calls.
 - Runtime session locks and the standalone legacy `.jsonl.lock` doctor
