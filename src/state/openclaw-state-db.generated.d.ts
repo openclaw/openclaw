@@ -199,10 +199,8 @@ export interface MigrationRuns {
   finished_at: number | null;
   id: string;
   report_json: string;
-  source_version: number | null;
   started_at: number;
   status: string;
-  target_version: number | null;
 }
 
 export interface MigrationSources {
@@ -244,11 +242,6 @@ export interface SandboxRegistryEntries {
   entry_json: string;
   registry_kind: string;
   updated_at: number;
-}
-
-export interface SchemaMigrations {
-  applied_at: number;
-  version: Generated<number>;
 }
 
 export interface SubagentRuns {
@@ -372,7 +365,6 @@ export interface DB {
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
   sandbox_registry_entries: SandboxRegistryEntries;
-  schema_migrations: SchemaMigrations;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
