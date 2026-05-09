@@ -26,11 +26,11 @@ export type JsoncOcPathMatch =
     };
 
 export function resolveJsoncOcPath(ast: JsoncAst, path: OcPath): JsoncOcPathMatch | null {
-  if (ast.root === null) return null;
+  if (ast.root === null) {return null;}
 
   const segments: string[] = [];
   const collect = (slot: string | undefined): void => {
-    if (slot === undefined) return;
+    if (slot === undefined) {return;}
     for (const s of splitRespectingBrackets(slot, ".")) {
       segments.push(isQuotedSeg(s) ? unquoteSeg(s) : s);
     }
@@ -39,35 +39,35 @@ export function resolveJsoncOcPath(ast: JsoncAst, path: OcPath): JsoncOcPathMatc
   collect(path.item);
   collect(path.field);
 
-  if (segments.length === 0) return { kind: "root", node: ast };
+  if (segments.length === 0) {return { kind: "root", node: ast };}
 
   let current: JsoncValue = ast.root;
   let lastEntry: JsoncEntry | null = null;
   const walked: string[] = [];
 
   for (let seg of segments) {
-    if (seg.length === 0) return null;
+    if (seg.length === 0) {return null;}
     // `-N` on an indexable container is positional; on a keyed
     // container it falls through to literal-key lookup (e.g. Telegram
     // supergroup IDs — openclaw#59934).
     if (isPositionalSeg(seg)) {
       const concrete = positionalForJsonc(current, seg);
-      if (concrete !== null) seg = concrete;
+      if (concrete !== null) {seg = concrete;}
     }
     walked.push(seg);
     if (current.kind === "object") {
       const entry = current.entries.find((e) => e.key === seg);
-      if (entry === undefined) return null;
+      if (entry === undefined) {return null;}
       lastEntry = entry;
       current = entry.value;
       continue;
     }
     if (current.kind === "array") {
       const idx = Number(seg);
-      if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) return null;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
       lastEntry = null;
       const item = current.items[idx];
-      if (item === undefined) return null;
+      if (item === undefined) {return null;}
       current = item;
       continue;
     }
