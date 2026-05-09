@@ -766,6 +766,11 @@ function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"
   return scopes.includes(ADMIN_SCOPE);
 }
 
+function canHideUserMessage(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE);
+}
+
 async function persistChatSendImages(params: {
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
@@ -1905,6 +1910,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: string;
       thinking?: string;
       deliver?: boolean;
+      hideUserMessage?: boolean;
       originatingChannel?: string;
       originatingTo?: string;
       originatingAccountId?: string;
@@ -1971,6 +1977,36 @@ export const chatHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "message or attachment required"),
+      );
+      return;
+    }
+    if (p.hideUserMessage && p.deliver === true) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "hideUserMessage cannot be combined with deliver=true",
+        ),
+      );
+      return;
+    }
+    if (p.hideUserMessage && normalizedAttachments.length > 0) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "hideUserMessage cannot be combined with attachments",
+        ),
+      );
+      return;
+    }
+    if (p.hideUserMessage && !canHideUserMessage(client)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
       );
       return;
     }
@@ -2307,6 +2343,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       let agentRunStarted = false;
       const hasBeforeAgentRunGate = getGlobalHookRunner()?.hasHooks("before_agent_run") === true;
       const emitUserTranscriptUpdate = async () => {
+        if (p.hideUserMessage) {
+          return;
+        }
         if (userTranscriptUpdatePromise) {
           await userTranscriptUpdatePromise;
           return;
@@ -2352,6 +2391,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       let transcriptMediaRewriteDone = false;
       const rewriteUserTranscriptMedia = async () => {
+        if (p.hideUserMessage) {
+          return;
+        }
         if (transcriptMediaRewriteDone) {
           return;
         }

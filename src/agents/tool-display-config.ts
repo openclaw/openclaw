@@ -569,3 +569,9 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     },
   },
 };
+
+export function serializeToolDisplayConfig(
+  config: ToolDisplayConfig = TOOL_DISPLAY_CONFIG,
+): string {
+  return `${JSON.stringify(config, null, 2)}\n`;
+}
