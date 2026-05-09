@@ -1007,8 +1007,12 @@ export function buildOpenAIResponsesParams(
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
+  const resolvedModelId =
+    model.provider === "openrouter" && model.id.startsWith("openrouter/")
+      ? model.id.slice("openrouter/".length)
+      : model.id;
   const params: OpenAIResponsesRequestParams = {
-    model: model.id,
+    model: resolvedModelId,
     input: messages,
     stream: true,
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
@@ -1948,8 +1952,12 @@ export function buildOpenAICompletionsParams(
   const messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+  const resolvedModelId =
+    model.provider === "openrouter" && model.id.startsWith("openrouter/")
+      ? model.id.slice("openrouter/".length)
+      : model.id;
   const params: Record<string, unknown> = {
-    model: model.id,
+    model: resolvedModelId,
     messages: compat.requiresStringContent
       ? flattenCompletionMessagesToStringContent(messages)
       : messages,
