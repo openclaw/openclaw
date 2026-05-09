@@ -445,7 +445,9 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   close: () => void;
 } {
   let closed = false;
-  const lateCallableMethods = new Set<keyof OpenClawPluginApi>(["sendSessionAttachment"]);
+  const lateCallableMethods = new Set<Extract<keyof OpenClawPluginApi, string>>([
+    "sendSessionAttachment",
+  ]);
   return {
     api: new Proxy(api, {
       get(target, prop, receiver) {
@@ -454,7 +456,10 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
           return value;
         }
         return (...args: unknown[]) => {
-          if (closed && !(typeof prop === "string" && lateCallableMethods.has(prop))) {
+          const isLateCallableMethod =
+            typeof prop === "string" &&
+            lateCallableMethods.has(prop as Extract<keyof OpenClawPluginApi, string>);
+          if (closed && !isLateCallableMethod) {
             return undefined;
           }
           return Reflect.apply(value, target, args);
