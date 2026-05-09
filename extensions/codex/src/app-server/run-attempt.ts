@@ -78,6 +78,11 @@ import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dyn
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
+  appendCodexNativeArtifactsToResult,
+  collectNewCodexNativeArtifacts,
+  snapshotCodexNativeArtifacts,
+} from "./native-artifacts.js";
+import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
@@ -1260,6 +1265,9 @@ export async function runCodexAppServerAttempt(
       content: [{ type: "text", text: promptBuild.prompt }],
     },
   ];
+  const codexNativeArtifactSnapshot = await snapshotCodexNativeArtifacts(
+    resolveCodexPluginAppCacheCodexHome(appServer, agentDir),
+  );
 
   let turn: CodexTurnStartResponse;
   try {
@@ -1417,7 +1425,11 @@ export async function runCodexAppServerAttempt(
 
   try {
     await completion;
-    const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
+    const projectedResult = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
+    const result = appendCodexNativeArtifactsToResult(
+      projectedResult,
+      await collectNewCodexNativeArtifacts(codexNativeArtifactSnapshot),
+    );
     const finalAborted = result.aborted || runAbortController.signal.aborted;
     const finalPromptError = turnCompletionIdleTimedOut
       ? turnCompletionIdleTimeoutMessage

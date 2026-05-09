@@ -2549,6 +2549,33 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
   });
 
+  it("surfaces Codex-native generated artifacts as reply media when assistant text is blank", async () => {
+    const harness = createStartedThreadHarness();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const generatedImage = path.join(
+      resolveCodexAppServerHomeDir(agentDir),
+      "generated_images",
+      "turn-1",
+      "edited.png",
+    );
+    await fs.mkdir(path.dirname(generatedImage), { recursive: true });
+    await fs.writeFile(generatedImage, "fake image bytes");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({
+      assistantTexts: [],
+      toolMediaUrls: [generatedImage],
+    });
+  });
+
   it("does not complete on unscoped turn/completed notifications", async () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(
