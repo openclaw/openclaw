@@ -458,22 +458,26 @@ describe("scripts/changed-lanes", () => {
       "live Docker shell syntax",
       "live Docker scheduler dry run",
     ]);
-    expect(
-      plan.commands.find((command) => command.name === "live Docker shell syntax"),
-    ).toMatchObject({
+    expect(plan.commands.find((command) => command.name === "live Docker shell syntax")).toEqual({
+      name: "live Docker shell syntax",
       bin: "bash",
-      args: expect.arrayContaining(["-n", "scripts/test-live-acp-bind-docker.sh"]),
+      args: [
+        "-n",
+        "scripts/lib/live-docker-auth.sh",
+        "scripts/test-live-acp-bind-docker.sh",
+        "scripts/test-live-cli-backend-docker.sh",
+        "scripts/test-live-codex-harness-docker.sh",
+        "scripts/test-live-gateway-models-docker.sh",
+        "scripts/test-live-models-docker.sh",
+      ],
     });
-    expect(
-      plan.commands.find((command) => command.name === "live Docker scheduler dry run"),
-    ).toMatchObject({
-      bin: "node",
-      args: ["scripts/test-docker-all.mjs"],
-      env: expect.objectContaining({
-        OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
-        OPENCLAW_DOCKER_ALL_LIVE_MODE: "only",
-      }),
-    });
+    const schedulerDryRun = plan.commands.find(
+      (command) => command.name === "live Docker scheduler dry run",
+    );
+    expect(schedulerDryRun?.bin).toBe("node");
+    expect(schedulerDryRun?.args).toEqual(["scripts/test-docker-all.mjs"]);
+    expect(schedulerDryRun?.env?.OPENCLAW_DOCKER_ALL_DRY_RUN).toBe("1");
+    expect(schedulerDryRun?.env?.OPENCLAW_DOCKER_ALL_LIVE_MODE).toBe("only");
   });
 
   it("routes live Docker package script-only changes through the focused gate", () => {
@@ -513,10 +517,8 @@ describe("scripts/changed-lanes", () => {
     });
     const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       liveDockerTooling: true,
-      releaseMetadata: false,
-      all: false,
     });
     expect(plan.commands.map((command) => command.name)).toContain("live Docker scheduler dry run");
   });
@@ -577,14 +579,10 @@ describe("scripts/changed-lanes", () => {
       },
     );
 
-    expect(JSON.parse(output)).toMatchObject({
-      paths: ["package.json"],
-      lanes: {
-        liveDockerTooling: true,
-        releaseMetadata: false,
-        all: false,
-      },
-    });
+    const result = parseChangedLaneOutput(output);
+
+    expect(result.paths).toEqual(["package.json"]);
+    expectLanes(result.lanes, { liveDockerTooling: true });
   });
 
   it("classifies normal package script changes from the git diff", () => {
@@ -648,14 +646,10 @@ describe("scripts/changed-lanes", () => {
       },
     );
 
-    expect(JSON.parse(output)).toMatchObject({
-      paths: ["package.json"],
-      lanes: {
-        tooling: true,
-        all: false,
-        liveDockerTooling: false,
-      },
-    });
+    const result = parseChangedLaneOutput(output);
+
+    expect(result.paths).toEqual(["package.json"]);
+    expectLanes(result.lanes, { tooling: true });
   });
 
   it("keeps non-script package changes off the live Docker focused gate", () => {
@@ -706,10 +700,8 @@ describe("scripts/changed-lanes", () => {
     });
     const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       tooling: true,
-      all: false,
-      liveDockerTooling: false,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
@@ -729,11 +721,9 @@ describe("scripts/changed-lanes", () => {
     ]);
     const plan = createChangedCheckPlan(result, { staged: true });
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
+      docs: true,
       releaseMetadata: true,
-      all: false,
-      core: false,
-      apps: false,
     });
     expect(plan.commands.map((command) => command.args[0])).toEqual([
       "check:no-conflict-markers",
@@ -754,10 +744,8 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
 
     expect(result.docsOnly).toBe(true);
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       docs: true,
-      releaseMetadata: false,
-      all: false,
     });
     expect(plan.commands.map((command) => command.args[0])).not.toContain("release-metadata:check");
   });
@@ -834,9 +822,8 @@ describe("scripts/changed-lanes", () => {
     ]);
     const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       tooling: true,
-      all: false,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
@@ -846,9 +833,8 @@ describe("scripts/changed-lanes", () => {
     const result = detectChangedLanes(["Swabble/Sources/SwabbleKit/WakeWordGate.swift"]);
     const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       apps: true,
-      all: false,
     });
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
@@ -860,9 +846,8 @@ describe("scripts/changed-lanes", () => {
     ]);
     const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       tooling: true,
-      all: false,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
@@ -875,10 +860,9 @@ describe("scripts/changed-lanes", () => {
     ]);
     const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       extensions: true,
       extensionTests: true,
-      all: false,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
