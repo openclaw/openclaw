@@ -1,5 +1,9 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  isDeepSeekV4ModelId,
+} from "../plugin-sdk/provider-stream-shared.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
@@ -319,7 +323,22 @@ export function wrapProviderStreamFn(params: {
   runtimeHandle?: ProviderRuntimePluginHandle;
   context: ProviderWrapStreamFnContext;
 }) {
-  return (
-    ensureProviderRuntimePluginHandle(params).plugin?.wrapStreamFn?.(params.context) ?? undefined
-  );
+  const pluginResult =
+    ensureProviderRuntimePluginHandle(params).plugin?.wrapStreamFn?.(params.context) ?? undefined;
+  if (pluginResult !== undefined) {
+    return pluginResult;
+  }
+  // Fallback: apply DeepSeek V4 reasoning-content wrapper for unowned providers
+  // (e.g. generic openai-compatible proxy providers configured with deepseek-v4-* models).
+  // DeepSeek's API requires reasoning_content on assistant messages in follow-up turns
+  // regardless of which proxy provider routes the request.
+  if (isDeepSeekV4ModelId(params.context.modelId ?? "")) {
+    return createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: params.context.streamFn,
+      thinkingLevel: params.context.thinkingLevel,
+      shouldPatchModel: (model) =>
+        typeof model.id === "string" && isDeepSeekV4ModelId(String(model.id)),
+    });
+  }
+  return undefined;
 }

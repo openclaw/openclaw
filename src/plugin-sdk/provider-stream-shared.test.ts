@@ -9,6 +9,7 @@ import {
   defaultToolStreamExtraParams,
   decodeHtmlEntitiesInObject,
   hasCopilotVisionInput,
+  isDeepSeekV4ModelId,
   isOpenAICompatibleThinkingEnabled,
   stripTrailingAssistantPrefillMessages,
   stripTrailingAnthropicAssistantPrefillWhenThinking,
@@ -103,6 +104,20 @@ describe("isOpenAICompatibleThinkingEnabled", () => {
         options: { reasoning: { effort: "off" } } as never,
       }),
     ).toBe(true);
+  });
+});
+
+describe("isDeepSeekV4ModelId", () => {
+  it("matches known V4 model IDs regardless of provider", () => {
+    expect(isDeepSeekV4ModelId("deepseek-v4-flash")).toBe(true);
+    expect(isDeepSeekV4ModelId("deepseek-v4-pro")).toBe(true);
+    expect(isDeepSeekV4ModelId("DEEPSEEK-V4-FLASH")).toBe(true);
+  });
+
+  it("does not match non-V4 or unrelated model IDs", () => {
+    expect(isDeepSeekV4ModelId("deepseek-chat")).toBe(false);
+    expect(isDeepSeekV4ModelId("gpt-5")).toBe(false);
+    expect(isDeepSeekV4ModelId("")).toBe(false);
   });
 });
 

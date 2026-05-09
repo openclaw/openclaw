@@ -246,6 +246,12 @@ export function isOpenAICompatibleThinkingEnabled(params: {
 export type DeepSeekV4ThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 export type DeepSeekV4ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+
+export function isDeepSeekV4ModelId(modelId: string): boolean {
+  return DEEPSEEK_V4_MODEL_IDS.has(modelId.toLowerCase());
+}
+
 function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLevel): boolean {
   const normalized = typeof thinkingLevel === "string" ? thinkingLevel.toLowerCase() : "";
   return normalized === "off" || normalized === "none";
