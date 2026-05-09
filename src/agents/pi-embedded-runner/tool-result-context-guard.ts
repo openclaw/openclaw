@@ -240,6 +240,13 @@ export function installContextEngineLoopHook(params: {
   tokenBudget?: number;
   modelId: string;
   getPrePromptMessageCount?: () => number;
+  /**
+   * Called each time the loop hook advances its lastSeenLength checkpoint after
+   * a successful afterTurn(). The finalizer can use this value as
+   * prePromptMessageCount to avoid re-emitting messages already delivered by
+   * the loop hook.
+   */
+  onLastSeenLengthUpdated?: (lastSeenLength: number) => void;
   getRuntimeContext?: (params: {
     messages: AgentMessage[];
     prePromptMessageCount: number;
@@ -324,6 +331,7 @@ export function installContextEngineLoopHook(params: {
         }
       }
       lastSeenLength = sourceMessages.length;
+      params.onLastSeenLengthUpdated?.(sourceMessages.length);
       lastSourceMessages = sourceMessages;
       const assembled = await contextEngine.assemble({
         sessionId,

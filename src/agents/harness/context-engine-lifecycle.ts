@@ -98,6 +98,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
   sessionFile: string;
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
+  loopHookLastSeenLength?: number | null;
   tokenBudget?: number;
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
@@ -109,9 +110,13 @@ export async function finalizeHarnessContextEngineTurn(params: {
     return { postTurnFinalizationSucceeded: true };
   }
 
+  const effectivePrePromptMessageCount =
+    params.loopHookLastSeenLength != null
+      ? params.loopHookLastSeenLength
+      : params.prePromptMessageCount;
   const conversationSnapshot = buildContextEngineConversationSnapshot({
     messagesSnapshot: params.messagesSnapshot,
-    prePromptMessageCount: params.prePromptMessageCount,
+    prePromptMessageCount: effectivePrePromptMessageCount,
   });
   let postTurnFinalizationSucceeded = true;
 

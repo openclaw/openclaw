@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Context engine: expose `onLastSeenLengthUpdated` callback from `installContextEngineLoopHook` so the post-attempt finalizer can use the loop hook's last-advanced checkpoint as its `prePromptMessageCount`, preventing duplicate `afterTurn` calls for messages already ingested during the tool loop. Fixes #79630.
 - Gateway/health: surface model-pricing bootstrap failures in `openclaw health` output as `model-pricing: degraded (...)` and expose them via the `health` endpoint `modelPricingError` field so degraded pricing state is visible without manually parsing gateway logs. Fixes #79599.
 - CLI: make parser, startup, config, guardrail, channel, agent, task, session, and MCP failures explain what happened and point to the next recovery command.
 - GitHub Copilot: refresh the model catalog from `${baseUrl}/models` so per-account entitlement and accurate context windows surface at runtime; static manifest catalog (now including `gpt-5.5`) remains the fallback when discovery is disabled or the API is unreachable.
