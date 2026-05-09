@@ -157,6 +157,7 @@ describe("resolveModelFromRegistryOrConfig", () => {
       models: {
         providers: {
           "aws-bedrock": {
+            baseUrl: "https://bedrock-runtime.example.test",
             api: "openai-responses",
             authHeader: true,
             models: [
