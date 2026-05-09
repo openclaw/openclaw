@@ -15,6 +15,9 @@ export type InputProvenance = {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  senderId?: string;
+  senderName?: string;
+  senderRole?: string;
 };
 
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
@@ -41,6 +44,9 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
     sourceSessionKey: normalizeOptionalString(record.sourceSessionKey),
     sourceChannel: normalizeOptionalString(record.sourceChannel),
     sourceTool: normalizeOptionalString(record.sourceTool),
+    senderId: normalizeOptionalString(record.senderId),
+    senderName: normalizeOptionalString(record.senderName),
+    senderRole: normalizeOptionalString(record.senderRole),
   };
 }
 
