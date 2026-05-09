@@ -108,9 +108,9 @@ The remaining work is not choosing SQLite; it is deleting compatibility-shaped
 interfaces that still look like the old file world:
 
 - Some compatibility call surfaces still carry `storePath` for explicit
-  migration/export/debug metadata, but hot session reads and writes now resolve
-  the SQLite row from `{ agentId, sessionKey }` instead of treating the path as
-  the runtime identity.
+  migration/export/debug metadata only. Hot session reads and writes resolve
+  the SQLite row from `{ agentId, sessionKey }`; runtime no longer treats a
+  file path as session identity.
 - Session writes no longer pass through the old in-process `store-writer.ts`
   queue. SQLite patch writes use conflict detection and bounded retry instead.
 - Legacy path discovery still has valid migration uses, but runtime code should
@@ -1141,11 +1141,10 @@ keeps only the version-1 schema plus doctor file-to-database import.
      Gateway/TUI/UI/macOS session-list responses now expose `databasePath`
      instead of legacy `path`; macOS debug surfaces show the per-agent database
      as read-only state instead of writing `session.store` config.
-     `/status` and chat-driven trajectory export no longer propagate legacy
-     store paths; transcript usage fallback reads SQLite by agent/session
-     identity. Remaining `storePath` call surfaces are migration/debug metadata
-     and older RPC response fields that still carry
-     SQLite keys for compatibility.
+     `/status`, chat-driven trajectory export, and CLI dependency proxies no
+     longer propagate legacy store paths; transcript usage fallback reads
+     SQLite by agent/session identity. Remaining `storePath` references are
+     migration/debug metadata or unrelated auth-profile display fields.
      Gateway combined-session loading no longer has a special runtime branch for
      non-templated `session.store` values; it aggregates per-agent SQLite rows.
      The legacy session-lock doctor lane and its `.jsonl.lock` cleanup helper

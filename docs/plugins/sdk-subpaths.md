@@ -273,7 +273,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
     | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, runtime-plan tool policy helpers, terminal outcome classification, tool progress formatting/detail helpers, and attempt result utilities |
     | `plugin-sdk/provider-zai-endpoint` | Deprecated Z.AI provider-owned endpoint detection facade; use the Z.AI plugin public API |
-    | `plugin-sdk/async-lock-runtime` | Process-local async lock helper for small runtime state files |
+    | `plugin-sdk/async-lock-runtime` | Process-local async lock helper for small runtime critical sections |
     | `plugin-sdk/channel-activity-runtime` | Channel activity telemetry helper |
     | `plugin-sdk/concurrency-runtime` | Bounded async task concurrency helper |
     | `plugin-sdk/dedupe-runtime` | In-memory dedupe cache helpers |
