@@ -530,28 +530,6 @@ describe("resolveAndPersistSessionTranscriptScope", () => {
     expect(saved[sessionKey]).toBeUndefined();
   });
 
-  it("strips legacy transcript locators from active session rows", async () => {
-    const sessionId = "legacy-path-session-id";
-    const sessionKey = "agent:main:telegram:group:456";
-    seedFixtureSessionEntries({
-      [sessionKey]: {
-        sessionId,
-        updatedAt: Date.now(),
-      },
-    });
-    const sessionStore = readFixtureSessionEntries();
-
-    const result = await resolveAndPersistSessionTranscriptScope({
-      sessionId,
-      sessionKey,
-      sessionEntry: sessionStore[sessionKey],
-      agentId: "main",
-    });
-
-    expect(result.sessionEntry).not.toHaveProperty("transcriptLocator");
-    expect(readFixtureSessionEntries()[sessionKey]).not.toHaveProperty("transcriptLocator");
-  });
-
   it("rotates SQLite scope when sessionId changes on the same session key", async () => {
     const previousSessionId = "old-session-id";
     const nextSessionId = "new-session-id";

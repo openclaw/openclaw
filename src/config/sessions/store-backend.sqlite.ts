@@ -47,26 +47,16 @@ function parseSessionEntry(row: SessionEntryRow): SessionEntry | null {
     }
     const store = { [row.session_key]: parsed as SessionEntry };
     normalizeSessionStore(store);
-    return stripDerivedTranscriptLocator(store[row.session_key] ?? null);
+    return store[row.session_key] ?? null;
   } catch {
     return null;
   }
 }
 
-function stripDerivedTranscriptLocator(entry: SessionEntry | null): SessionEntry | null {
-  if (!entry) {
-    return null;
-  }
-  const { transcriptLocator: _derivedTranscriptLocator, ...rest } = entry as SessionEntry & {
-    transcriptLocator?: unknown;
-  };
-  return rest;
-}
-
 function serializeSessionEntry(sessionKey: string, entry: SessionEntry): string {
   const store = { [sessionKey]: entry };
   normalizeSessionStore(store);
-  return JSON.stringify(stripDerivedTranscriptLocator(store[sessionKey] ?? entry) ?? entry);
+  return JSON.stringify(store[sessionKey] ?? entry);
 }
 
 function bindSessionEntry(params: {
