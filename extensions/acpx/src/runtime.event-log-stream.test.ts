@@ -139,7 +139,7 @@ async function drainEvents(events: AsyncIterable<AcpRuntimeEvent>): Promise<AcpR
   return collected;
 }
 
-function makeFixture(advertisedActivePath: string) {
+function makeFixture(advertisedActivePath: string, trustedBase?: string) {
   const baseStore: TestSessionStore = {
     load: vi.fn(async () => makePersistedRecord(advertisedActivePath)),
     save: vi.fn(async () => {}),
@@ -153,6 +153,9 @@ function makeFixture(advertisedActivePath: string) {
       list: () => ["codex"],
     },
     permissionMode: "approve-reads",
+    // Scope path-traversal validation to the test's tmp dir so the production
+    // default (~/.acpx/sessions) doesn't reject our synthetic advertised paths.
+    openclawEventLogTrustedBase: trustedBase,
   });
   // Reach in via the same `as unknown as { delegate: ... }` pattern used in
   // runtime.test.ts and runtime.pid-liveness.test.ts. Treating `delegate` as
@@ -171,6 +174,7 @@ function makeFixture(advertisedActivePath: string) {
 
 describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () => {
   let acpxBaseDir: string;
+  let mkdirSpy: ReturnType<typeof vi.spyOn>;
   let appendFileSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
@@ -181,7 +185,7 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
     // Mock fs.mkdir so directory-creation in the fire-and-forget chain resolves
     // immediately (as a mock microtask) rather than as a real syscall, keeping
     // test assertions synchronisable via two await Promise.resolve() ticks.
-    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
     // Default the spy to a no-op so any unexpected real fs side-effects from
     // a future fix don't escape the tmp tree. Tests can still inspect call
     // arguments via `mock.calls`.
@@ -193,11 +197,11 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
   });
 
   it(
-    "RED today: when a session/update tool_call is dispatched, fs.appendFile MUST be called " +
+    "when a session/update tool_call is dispatched, fs.appendFile MUST be called " +
       "with the path advertised in the session record's event_log.active_path",
     async () => {
       const advertisedActivePath = buildAdvertisedActivePath(acpxBaseDir, SESSION_KEY);
-      const { runtime, delegate } = makeFixture(advertisedActivePath);
+      const { runtime, delegate } = makeFixture(advertisedActivePath, acpxBaseDir);
       vi.spyOn(delegate, "runTurn").mockImplementation(() => yieldToolCallEvent());
 
       const handle: Parameters<AcpRuntime["runTurn"]>[0]["handle"] = {
@@ -244,97 +248,102 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
     },
   );
 
-  it(
-    "RED today (fix-shape): the appended payload is parseable JSON containing " +
-      '"sessionUpdate":"tool_call"',
-    async () => {
-      const advertisedActivePath = buildAdvertisedActivePath(acpxBaseDir, SESSION_KEY);
-      const { runtime, delegate } = makeFixture(advertisedActivePath);
-      vi.spyOn(delegate, "runTurn").mockImplementation(() => yieldToolCallEvent());
+  it("the appended payload is parseable JSON with _format:projected and sessionUpdate:tool_call", async () => {
+    const advertisedActivePath = buildAdvertisedActivePath(acpxBaseDir, SESSION_KEY);
+    const { runtime, delegate } = makeFixture(advertisedActivePath, acpxBaseDir);
+    vi.spyOn(delegate, "runTurn").mockImplementation(() => yieldToolCallEvent());
 
-      const handle: Parameters<AcpRuntime["runTurn"]>[0]["handle"] = {
-        sessionKey: SESSION_KEY,
-        backend: "acpx",
-        runtimeSessionName: SESSION_KEY,
-        acpxRecordId: SESSION_KEY,
-      };
+    const handle: Parameters<AcpRuntime["runTurn"]>[0]["handle"] = {
+      sessionKey: SESSION_KEY,
+      backend: "acpx",
+      runtimeSessionName: SESSION_KEY,
+      acpxRecordId: SESSION_KEY,
+    };
 
-      await drainEvents(
-        runtime.runTurn({
-          handle,
-          text: "hello",
-          mode: "prompt",
-          requestId: "req-1",
-        }),
-      );
-      // Flush the fire-and-forget mkdir → appendFile promise chain (two ticks).
-      await Promise.resolve();
-      await Promise.resolve();
+    await drainEvents(
+      runtime.runTurn({
+        handle,
+        text: "hello",
+        mode: "prompt",
+        requestId: "req-1",
+      }),
+    );
+    // Flush the fire-and-forget mkdir → appendFile promise chain (two ticks).
+    await Promise.resolve();
+    await Promise.resolve();
 
-      const matchingCalls = appendFileSpy.mock.calls.filter(
-        ([targetPath]: [unknown, ...unknown[]]) => {
-          return typeof targetPath === "string" && targetPath === advertisedActivePath;
-        },
-      );
-      // Fail-fast guard so the parse step doesn't blow up with a confusing
-      // index-out-of-bounds error before the path-match assertion above gets a
-      // chance to surface its own message.
-      expect(
-        matchingCalls.length,
-        "Pre-condition for fix-shape check: at least one appendFile call to " +
-          "the advertised stream.ndjson path is required before parsing " +
-          "appended frame content. See sibling RED test for the missing " +
-          "writer. Catalog #4.",
-      ).toBeGreaterThanOrEqual(1);
+    const matchingCalls = appendFileSpy.mock.calls.filter(
+      ([targetPath]: [unknown, ...unknown[]]) => {
+        return typeof targetPath === "string" && targetPath === advertisedActivePath;
+      },
+    );
+    // Fail-fast guard so the parse step doesn't blow up with a confusing
+    // index-out-of-bounds error before the path-match assertion above gets a
+    // chance to surface its own message.
+    expect(
+      matchingCalls.length,
+      "Pre-condition for fix-shape check: at least one appendFile call to " +
+        "the advertised stream.ndjson path is required before parsing " +
+        "appended frame content. See sibling RED test for the missing " +
+        "writer. Catalog #4.",
+    ).toBeGreaterThanOrEqual(1);
 
-      // Each appendFile call should write a single ndjson line that parses as
-      // a JSON-RPC notification of method `session/update` with a sessionUpdate
-      // body whose discriminator is `tool_call`. Loose-but-discriminating
-      // shape — keeps the test from over-pinning a future writer's exact
-      // framing convention while still proving the payload is structured.
-      const payloads = matchingCalls
-        .map(([, payload]: [unknown, unknown?, ...unknown[]]) =>
-          typeof payload === "string"
-            ? payload
-            : payload instanceof Uint8Array
-              ? new TextDecoder().decode(payload)
-              : undefined,
-        )
-        .filter((value: string | undefined): value is string => typeof value === "string");
-      const parsedFrames = payloads
-        .flatMap((payload: string) => payload.split("\n"))
-        .map((line: string) => line.trim())
-        .filter((line: string) => line.length > 0)
-        .map((line: string) => {
-          try {
-            return JSON.parse(line) as unknown;
-          } catch {
-            return null;
-          }
-        });
-      const toolCallFrame = parsedFrames.find((frame: unknown) => {
-        if (typeof frame !== "object" || frame === null) {
-          return false;
+    // Each appendFile call should write a single ndjson line that parses as
+    // a JSON-RPC notification of method `session/update` with a sessionUpdate
+    // body whose discriminator is `tool_call`. Loose-but-discriminating
+    // shape — keeps the test from over-pinning a future writer's exact
+    // framing convention while still proving the payload is structured.
+    const payloads = matchingCalls
+      .map(([, payload]: [unknown, unknown?, ...unknown[]]) =>
+        typeof payload === "string"
+          ? payload
+          : payload instanceof Uint8Array
+            ? new TextDecoder().decode(payload)
+            : undefined,
+      )
+      .filter((value: string | undefined): value is string => typeof value === "string");
+    const parsedFrames = payloads
+      .flatMap((payload: string) => payload.split("\n"))
+      .map((line: string) => line.trim())
+      .filter((line: string) => line.length > 0)
+      .map((line: string) => {
+        try {
+          return JSON.parse(line) as unknown;
+        } catch {
+          return null;
         }
-        const params = (frame as { params?: unknown }).params;
-        if (typeof params !== "object" || params === null) {
-          return false;
-        }
-        const update = (params as { update?: unknown }).update;
-        if (typeof update !== "object" || update === null) {
-          return false;
-        }
-        return (update as { sessionUpdate?: unknown }).sessionUpdate === "tool_call";
       });
-      expect(
-        toolCallFrame,
-        "Wire-byte writer landed but is NOT emitting parseable JSON-RPC " +
-          'session/update frames containing `"sessionUpdate":"tool_call"`. ' +
-          "Catalog #4 fix shape: write one JSON-RPC notification per " +
-          "sessionUpdate (one ndjson line per frame).",
-      ).toBeDefined();
-    },
-  );
+    const toolCallFrame = parsedFrames.find((frame: unknown) => {
+      if (typeof frame !== "object" || frame === null) {
+        return false;
+      }
+      const params = (frame as { params?: unknown }).params;
+      if (typeof params !== "object" || params === null) {
+        return false;
+      }
+      const update = (params as { update?: unknown }).update;
+      if (typeof update !== "object" || update === null) {
+        return false;
+      }
+      return (update as { sessionUpdate?: unknown }).sessionUpdate === "tool_call";
+    });
+    expect(
+      toolCallFrame,
+      "Wire-byte writer landed but is NOT emitting parseable JSON-RPC " +
+        'session/update frames containing `"sessionUpdate":"tool_call"`. ' +
+        "Catalog #4 fix shape: write one JSON-RPC notification per " +
+        "sessionUpdate (one ndjson line per frame).",
+    ).toBeDefined();
+
+    // F3 — _format discriminator: every frame must carry `_format: "projected"`
+    // so consumers can identify that the payload was translated by openclaw's
+    // projector layer rather than being a verbatim JSON-RPC wire frame.
+    expect(
+      (toolCallFrame as { _format?: unknown })._format,
+      'Frame is missing the `_format: "projected"` discriminator. ' +
+        "Galin review F3: add _format to every appended NDJSON frame.",
+    ).toBe("projected");
+  });
 
   it(
     "GREEN control: with NO session/update event dispatched, fs.appendFile is NOT called " +
@@ -344,7 +353,7 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
       // ensureSession or session-store load. The contract is event-driven:
       // a write only when a sessionUpdate arrives.
       const advertisedActivePath = buildAdvertisedActivePath(acpxBaseDir, SESSION_KEY);
-      const { runtime, delegate } = makeFixture(advertisedActivePath);
+      const { runtime, delegate } = makeFixture(advertisedActivePath, acpxBaseDir);
       vi.spyOn(delegate, "ensureSession").mockResolvedValue({
         sessionKey: SESSION_KEY,
         backend: "acpx",
@@ -372,4 +381,107 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
       ).toBe(0);
     },
   );
+
+  it(
+    "F2 — path-traversal: a session record with active_path outside the trusted base must not " +
+      "trigger fs.mkdir or fs.appendFile",
+    async () => {
+      // Simulates a corrupted/manipulated session record pointing at /etc/passwd
+      // (or any path outside ~/.acpx/sessions). The guard must reject it silently
+      // (with a console.warn) and skip all I/O for the turn. Galin review F2 (P2).
+      const outsidePath = "/etc/passwd";
+      // trustedBase is set to acpxBaseDir; /etc/passwd is definitively outside it.
+      const { runtime, delegate } = makeFixture(outsidePath, acpxBaseDir);
+      vi.spyOn(delegate, "runTurn").mockImplementation(() => yieldToolCallEvent());
+
+      const handle: Parameters<AcpRuntime["runTurn"]>[0]["handle"] = {
+        sessionKey: SESSION_KEY,
+        backend: "acpx",
+        runtimeSessionName: SESSION_KEY,
+        acpxRecordId: SESSION_KEY,
+      };
+
+      await drainEvents(
+        runtime.runTurn({
+          handle,
+          text: "hello",
+          mode: "prompt",
+          requestId: "req-1",
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(
+        mkdirSpy.mock.calls.length,
+        "F2: fs.mkdir was called despite active_path being outside the trusted base. " +
+          "The path-traversal guard must reject the path before any I/O.",
+      ).toBe(0);
+      expect(
+        appendFileSpy.mock.calls.filter(
+          ([p]: [unknown, ...unknown[]]) => typeof p === "string" && p === outsidePath,
+        ).length,
+        "F2: fs.appendFile was called with the traversal path /etc/passwd. " +
+          "The guard must block all writes for paths outside the trusted base.",
+      ).toBe(0);
+    },
+  );
+
+  it("F1 — mkdir is called exactly once per turn, not once per event", async () => {
+    // Emits three events in a single turn. mkdir must fire once, not three times.
+    // Galin review F1. Uses the shared mkdirSpy reset by beforeEach.
+
+    async function* yieldThreeEvents(): AsyncIterable<AcpRuntimeEvent> {
+      for (let i = 0; i < 3; i++) {
+        yield {
+          type: "tool_call",
+          text: `event ${i}`,
+          tag: "tool_call",
+          toolCallId: `tc-${i}`,
+          status: "in_progress",
+          title: "bash",
+        };
+      }
+    }
+
+    const advertisedActivePath = buildAdvertisedActivePath(acpxBaseDir, SESSION_KEY);
+    const { runtime, delegate } = makeFixture(advertisedActivePath, acpxBaseDir);
+    vi.spyOn(delegate, "runTurn").mockImplementation(() => yieldThreeEvents());
+
+    const handle: Parameters<AcpRuntime["runTurn"]>[0]["handle"] = {
+      sessionKey: SESSION_KEY,
+      backend: "acpx",
+      runtimeSessionName: SESSION_KEY,
+      acpxRecordId: SESSION_KEY,
+    };
+
+    await drainEvents(
+      runtime.runTurn({
+        handle,
+        text: "hello",
+        mode: "prompt",
+        requestId: "req-1",
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const mkdirCallsForPath = mkdirSpy.mock.calls.filter(
+      ([p]: [unknown, ...unknown[]]) => typeof p === "string" && advertisedActivePath.startsWith(p),
+    );
+    expect(
+      mkdirCallsForPath.length,
+      "F1: fs.mkdir was called more than once for the same turn. " +
+        "Directory creation must be hoisted outside the per-event loop.",
+    ).toBe(1);
+
+    // All three events should still be written.
+    const appendCalls = appendFileSpy.mock.calls.filter(
+      ([p]: [unknown, ...unknown[]]) => typeof p === "string" && p === advertisedActivePath,
+    );
+    expect(
+      appendCalls.length,
+      "F1: expected three appendFile calls (one per event) after mkdir hoist.",
+    ).toBe(3);
+  });
 });
