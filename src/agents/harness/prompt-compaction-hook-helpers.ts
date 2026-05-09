@@ -85,7 +85,6 @@ function resolvePromptBuildSystemPrompt(params: {
 }
 
 export async function runAgentHarnessBeforeCompactionHook(params: {
-  sessionFile: string;
   messages: AgentMessage[];
   ctx: AgentHarnessHookContext;
 }): Promise<void> {
@@ -98,7 +97,6 @@ export async function runAgentHarnessBeforeCompactionHook(params: {
       {
         messageCount: params.messages.length,
         messages: params.messages,
-        sessionFile: params.sessionFile,
       },
       buildAgentHookContext(params.ctx),
     );
@@ -108,7 +106,6 @@ export async function runAgentHarnessBeforeCompactionHook(params: {
 }
 
 export async function runAgentHarnessAfterCompactionHook(params: {
-  sessionFile: string;
   messages: AgentMessage[];
   ctx: AgentHarnessHookContext;
   compactedCount: number;
@@ -122,7 +119,6 @@ export async function runAgentHarnessAfterCompactionHook(params: {
       {
         messageCount: params.messages.length,
         compactedCount: params.compactedCount,
-        sessionFile: params.sessionFile,
       },
       buildAgentHookContext(params.ctx),
     );

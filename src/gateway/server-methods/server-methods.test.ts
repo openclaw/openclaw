@@ -693,7 +693,7 @@ describe("gateway chat transcript writes (guardrail)", () => {
 
     expect(helperSrc).toContain("appendSessionTranscriptMessage({");
     expect(helperSrc).toContain("useRawWhenLinear: true");
-    expect(helperSrc).not.toContain("SessionManager.open(params.transcriptPath)");
+    expect(helperSrc).not.toContain(`SessionManager.${"open("}`);
   });
 });
 

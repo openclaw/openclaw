@@ -15,9 +15,7 @@ import {
   type SessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-paths.js";
 import { logVerbose } from "../../globals.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -67,17 +65,11 @@ function emitCompactionSessionLifecycleHooks(params: {
   }
 
   if (hookRunner.hasHooks("session_end")) {
-    const transcript = resolveStableSessionEndTranscript({
-      sessionId: params.previousEntry.sessionId,
-      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
-      topicId: resolveCompactionTopicId(params.sessionKey),
-    });
     const payload = buildSessionEndHookPayload({
       sessionId: params.previousEntry.sessionId,
       sessionKey: params.sessionKey,
       cfg: params.cfg,
       reason: "compaction",
-      transcriptLocator: transcript.transcriptLocator,
       nextSessionId: params.nextEntry.sessionId,
     });
     void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {
@@ -96,15 +88,6 @@ function emitCompactionSessionLifecycleHooks(params: {
       logVerbose(`session_start hook failed: ${String(err)}`);
     });
   }
-}
-
-function resolveCompactionTopicId(sessionKey: string): string | undefined {
-  const parsedThreadId = parseSessionThreadInfoFast(sessionKey).threadId;
-  if (parsedThreadId) {
-    return parsedThreadId;
-  }
-  const match = /(?:^|:)topic:([^:]+)/u.exec(sessionKey);
-  return match?.[1];
 }
 
 function resolvePositiveTokenCount(value: number | undefined): number | undefined {
@@ -239,8 +222,6 @@ export async function incrementCompactionCount(params: {
   tokensAfter?: number;
   /** Session id after compaction, when the runtime rotated transcripts. */
   newSessionId?: string;
-  /** External transcript handle after compaction; not persisted on the session row. */
-  newTranscriptLocator?: string;
 }): Promise<number | undefined> {
   const {
     sessionEntry,

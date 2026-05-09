@@ -17,18 +17,8 @@ function createSessionTranscript(params: {
   rootDir: string;
   sessionId: string;
   agentId?: string;
-  filePath?: string;
   messages?: string[];
-}): string {
-  const sessionFile =
-    params.filePath ??
-    path.join(
-      params.rootDir,
-      "agents",
-      params.agentId ?? "main",
-      "sessions",
-      `${params.sessionId}.jsonl`,
-    );
+}): void {
   const events: unknown[] = [
     {
       type: "session",
@@ -54,23 +44,19 @@ function createSessionTranscript(params: {
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId ?? "main",
     sessionId: params.sessionId,
-    transcriptPath: sessionFile,
     events,
     now: () => 1_770_000_000_000,
   });
-  return sessionFile;
 }
 
 function appendSessionTranscriptEvents(params: {
   sessionId: string;
-  sessionFile: string;
   agentId?: string;
   events: unknown[];
 }): void {
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId ?? "main",
     sessionId: params.sessionId,
-    transcriptPath: params.sessionFile,
     events: params.events,
     now: () => 1_770_000_000_000,
   });
@@ -109,36 +95,32 @@ describe("loadCliSessionHistoryMessages", () => {
     vi.unstubAllEnvs();
   });
 
-  it("reads the canonical session transcript instead of an arbitrary external path", async () => {
+  it("reads the canonical SQLite transcript for the requested session", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-outside-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     createSessionTranscript({
       rootDir: stateDir,
       sessionId: "session-test",
       messages: ["expected history"],
     });
-    const outsideFile = path.join(outsideDir, "stolen.jsonl");
 
     try {
       expect(
         await loadCliSessionHistoryMessages({
           sessionId: "session-test",
-          sessionFile: outsideFile,
           sessionKey: "agent:main:main",
           agentId: "main",
         }),
       ).toMatchObject([{ role: "user", content: "expected history" }]);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
-      fs.rmSync(outsideDir, { recursive: true, force: true });
     }
   });
 
   it("keeps only the newest bounded history window", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionFile = createSessionTranscript({
+    createSessionTranscript({
       rootDir: stateDir,
       sessionId: "session-bounded",
       messages: Array.from(
@@ -150,7 +132,6 @@ describe("loadCliSessionHistoryMessages", () => {
     try {
       const history = await loadCliSessionHistoryMessages({
         sessionId: "session-bounded",
-        sessionFile,
         sessionKey: "agent:main:main",
         agentId: "main",
       });
@@ -165,33 +146,24 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
-  it("rejects symlinked transcripts instead of following them outside the sessions directory", async () => {
+  it("ignores transcripts owned by a different agent", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-outside-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const canonicalSessionFile = path.join(
-      stateDir,
-      "agents",
-      "main",
-      "sessions",
-      "session-symlink.jsonl",
-    );
     createSessionTranscript({
       rootDir: outsideDir,
       sessionId: "session-symlink",
       agentId: "other",
-      filePath: path.join(outsideDir, "outside.jsonl"),
       messages: ["stolen history"],
     });
     try {
       expect(
         await loadCliSessionHistoryMessages({
           sessionId: "session-symlink",
-          sessionFile: canonicalSessionFile,
           sessionKey: "agent:main:main",
           agentId: "main",
         }),
-      ).toStrictEqual([]);
+      ).toEqual([]);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
       fs.rmSync(outsideDir, { recursive: true, force: true });
@@ -201,17 +173,9 @@ describe("loadCliSessionHistoryMessages", () => {
   it("drops oversized transcript files instead of loading them into hook payloads", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionFile = path.join(
-      stateDir,
-      "agents",
-      "main",
-      "sessions",
-      "session-oversized.jsonl",
-    );
     createSessionTranscript({
       rootDir: stateDir,
       sessionId: "session-oversized",
-      filePath: sessionFile,
       messages: ["x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES + 1)],
     });
 
@@ -219,24 +183,22 @@ describe("loadCliSessionHistoryMessages", () => {
       expect(
         await loadCliSessionHistoryMessages({
           sessionId: "session-oversized",
-          sessionFile,
           sessionKey: "agent:main:main",
           agentId: "main",
         }),
-      ).toStrictEqual([]);
+      ).toEqual([]);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
-  it("honors custom transcript roots when resolving hook history transcripts", async () => {
+  it("reads transcript rows from the configured state database", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const customStoreDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-store-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionFile = createSessionTranscript({
+    createSessionTranscript({
       rootDir: customStoreDir,
       sessionId: "session-custom-store",
-      filePath: path.join(customStoreDir, "session-custom-store.jsonl"),
       messages: ["custom store history"],
     });
 
@@ -244,7 +206,6 @@ describe("loadCliSessionHistoryMessages", () => {
       expect(
         await loadCliSessionHistoryMessages({
           sessionId: "session-custom-store",
-          sessionFile,
           sessionKey: "agent:main:main",
           agentId: "main",
           config: {
@@ -268,7 +229,7 @@ describe("loadCliSessionReseedMessages", () => {
   it("does not reseed fresh CLI sessions from raw transcript history before compaction", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionFile = createSessionTranscript({
+    createSessionTranscript({
       rootDir: stateDir,
       sessionId: "session-no-compaction",
       messages: ["raw secret", "large context"],
@@ -278,11 +239,10 @@ describe("loadCliSessionReseedMessages", () => {
       expect(
         await loadCliSessionReseedMessages({
           sessionId: "session-no-compaction",
-          sessionFile,
           sessionKey: "agent:main:main",
           agentId: "main",
         }),
-      ).toStrictEqual([]);
+      ).toEqual([]);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -361,14 +321,13 @@ describe("loadCliSessionReseedMessages", () => {
   it("reseeds fresh CLI sessions from the latest compaction summary and post-compaction tail", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionFile = createSessionTranscript({
+    createSessionTranscript({
       rootDir: stateDir,
       sessionId: "session-compacted",
       messages: ["pre-compaction raw history"],
     });
     appendSessionTranscriptEvents({
       sessionId: "session-compacted",
-      sessionFile,
       events: [
         ...createSessionTranscriptEvents({
           rootDir: stateDir,
@@ -401,7 +360,6 @@ describe("loadCliSessionReseedMessages", () => {
     try {
       const reseed = await loadCliSessionReseedMessages({
         sessionId: "session-compacted",
-        sessionFile,
         sessionKey: "agent:main:main",
         agentId: "main",
       });

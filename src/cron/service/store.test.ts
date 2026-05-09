@@ -18,7 +18,7 @@ async function writeSingleJobStore(storePath: string, job: Record<string, unknow
 
 function createStoreTestState(storePath: string) {
   return createCronServiceState({
-    storePath,
+    storeKey: storePath,
     cronEnabled: true,
     log: logger,
     nowMs: () => STORE_TEST_NOW,

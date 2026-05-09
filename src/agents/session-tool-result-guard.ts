@@ -470,14 +470,14 @@ export function installSessionToolResultGuard(
     }
     const result = originalAppend(finalMessage as never);
 
-    const sessionFile = (
-      sessionManager as { getSessionFile?: () => string | null }
-    ).getSessionFile?.();
-    if (sessionFile) {
+    const transcriptLocator = (
+      sessionManager as { getTranscriptLocator?: () => string | null }
+    ).getTranscriptLocator?.();
+    if (transcriptLocator || opts?.sessionId || opts?.sessionKey) {
       emitSessionTranscriptUpdate({
         ...(opts?.agentId ? { agentId: opts.agentId } : {}),
         ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
-        sessionFile,
+        ...(transcriptLocator ? { transcriptLocator } : {}),
         sessionKey: opts?.sessionKey,
         message: finalMessage,
         messageId: typeof result === "string" ? result : undefined,

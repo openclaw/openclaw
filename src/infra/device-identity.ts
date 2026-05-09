@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -24,6 +25,15 @@ export type StoredDeviceIdentity = {
 const DEVICE_IDENTITY_SCOPE = "identity.device";
 const DEVICE_IDENTITY_KEY = "default";
 const DEVICE_IDENTITY_PATH_KEY_PREFIX = "path:";
+
+export class DeviceIdentityMigrationRequiredError extends Error {
+  constructor(filePath: string) {
+    super(
+      `Legacy device identity exists at ${filePath} but has not been imported into SQLite. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
+    );
+    this.name = "DeviceIdentityMigrationRequiredError";
+  }
+}
 
 function resolveDefaultIdentityPath(): string {
   return path.join(resolveStateDir(), "identity", "device.json");
@@ -132,6 +142,20 @@ function readStoredIdentityForEnv(env: NodeJS.ProcessEnv): StoredDeviceIdentity 
   );
 }
 
+function legacyIdentityFileExists(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function assertNoUnimportedLegacyIdentity(filePath: string): void {
+  if (legacyIdentityFileExists(filePath)) {
+    throw new DeviceIdentityMigrationRequiredError(filePath);
+  }
+}
+
 function writeStoredIdentity(filePath: string, stored: StoredDeviceIdentity): void {
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     DEVICE_IDENTITY_SCOPE,
@@ -169,6 +193,8 @@ export function loadOrCreateDeviceIdentity(
   } catch {
     // fall through to regenerate
   }
+
+  assertNoUnimportedLegacyIdentity(filePath);
 
   const identity = generateIdentity();
   const stored: StoredDeviceIdentity = {

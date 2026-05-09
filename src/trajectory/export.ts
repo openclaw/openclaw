@@ -121,7 +121,6 @@ function readSessionBranch(params: {
   const scope = resolveSqliteSessionTranscriptScope({
     agentId: params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined,
     sessionId: params.sessionId,
-    transcriptLocator: params.transcriptLocator,
   }) ?? {
     agentId: resolveAgentIdFromSessionKey(params.sessionKey),
     sessionId: params.sessionId,

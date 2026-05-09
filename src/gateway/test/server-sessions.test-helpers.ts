@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { AssistantMessage, UserMessage } from "../../agents/pi-ai-contract.js";
-import { readTranscriptState } from "../../agents/transcript/transcript-state.js";
+import { readTranscriptStateForSession } from "../../agents/transcript/transcript-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -324,12 +325,14 @@ export function setupGatewaySessionsTestHarness() {
 }
 
 export async function writeSingleLineSession(
-  dir: string,
+  _dir: string,
   sessionId: string,
   content: string,
   opts: { agentId?: string; transcriptPath?: string } = {},
 ) {
-  const transcriptPath = opts.transcriptPath ?? path.join(dir, `${sessionId}.jsonl`);
+  const transcriptPath =
+    opts.transcriptPath ??
+    createSqliteSessionTranscriptLocator({ agentId: opts.agentId ?? "main", sessionId });
   replaceSqliteSessionTranscriptEvents({
     agentId: opts.agentId ?? "main",
     sessionId,
@@ -389,19 +392,28 @@ export async function createCheckpointFixture(dir: string) {
   if (!preCompactionLeafId) {
     throw new Error("expected persisted session leaf before compaction");
   }
-  const sessionFile = session.getSessionFile();
-  if (!sessionFile) {
-    throw new Error("expected persisted session file");
+  const transcriptLocator = session.getTranscriptLocator();
+  if (!transcriptLocator) {
+    throw new Error("expected persisted transcript locator");
+  }
+  const header = session.getHeader();
+  if (!header?.id) {
+    throw new Error("expected persisted session header");
   }
   const checkpointSnapshot = await captureCompactionCheckpointSnapshotAsync({
+    agentId: "main",
+    sessionId: header.id,
     sessionManager: session,
-    sessionFile,
+    transcriptLocator,
   });
-  const preCompactionSessionFile = checkpointSnapshot?.sessionFile;
-  if (!preCompactionSessionFile) {
+  const preCompactionTranscriptLocator = checkpointSnapshot?.transcriptLocator;
+  if (!preCompactionTranscriptLocator) {
     throw new Error("expected persisted checkpoint snapshot");
   }
-  const preCompactionSession = await readTranscriptState(preCompactionSessionFile);
+  const preCompactionSession = await readTranscriptStateForSession({
+    agentId: checkpointSnapshot.agentId,
+    sessionId: checkpointSnapshot.sessionId,
+  });
   const preCompactionSessionId = preCompactionSession.getHeader()?.id;
   if (!preCompactionSessionId) {
     throw new Error("expected pre-compaction checkpoint session id");
@@ -414,10 +426,10 @@ export async function createCheckpointFixture(dir: string) {
   return {
     session,
     sessionId: session.getSessionId(),
-    sessionFile,
+    transcriptLocator,
     preCompactionSession,
     preCompactionSessionId,
-    preCompactionSessionFile,
+    preCompactionTranscriptLocator,
     preCompactionLeafId,
     postCompactionLeafId,
   };

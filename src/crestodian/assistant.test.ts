@@ -131,13 +131,13 @@ describe("Crestodian assistant", () => {
     expect(runCliAgent).toHaveBeenCalledTimes(1);
     const firstCliCall = runCliAgent.mock.calls[0][0];
     expect(firstCliCall).toMatchObject({
+      agentId: "crestodian",
       provider: "claude-cli",
       model: "claude-opus-4-7",
       cleanupCliLiveSessionOnRunEnd: true,
     });
-    expect(firstCliCall.sessionFile).toMatch(
-      /^sqlite-transcript:\/\/crestodian\/crestodian-planner-/,
-    );
+    expect(firstCliCall.sessionId).toMatch(/^crestodian-planner-.*-session$/);
+    expect(firstCliCall).not.toHaveProperty("transcriptLocator");
     expect(firstCliCall.config?.agents?.defaults?.cliBackends).toBeUndefined();
     expect(firstCliCall.extraSystemPrompt).toContain("Do not use tools, shell commands");
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
@@ -220,9 +220,7 @@ describe("Crestodian assistant", () => {
       disableTools: true,
       toolsAllow: [],
     });
-    expect(firstEmbeddedCall.sessionFile).toMatch(
-      /^sqlite-transcript:\/\/crestodian\/crestodian-planner-/,
-    );
+    expect(firstEmbeddedCall.sessionId).toMatch(/^crestodian-planner-/);
     expect(firstEmbeddedCall.config).toMatchObject({
       agents: {
         defaults: {
@@ -270,12 +268,12 @@ describe("Crestodian assistant", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
     expect(runCliAgent).toHaveBeenCalledTimes(1);
     expect(runCliAgent.mock.calls[0][0]).toMatchObject({
+      agentId: "crestodian",
       provider: "codex-cli",
       model: "gpt-5.5",
       cleanupCliLiveSessionOnRunEnd: true,
     });
-    expect(runCliAgent.mock.calls[0][0].sessionFile).toMatch(
-      /^sqlite-transcript:\/\/crestodian\/crestodian-planner-/,
-    );
+    expect(runCliAgent.mock.calls[0][0].sessionId).toMatch(/^crestodian-planner-.*-session$/);
+    expect(runCliAgent.mock.calls[0][0]).not.toHaveProperty("transcriptLocator");
   });
 });

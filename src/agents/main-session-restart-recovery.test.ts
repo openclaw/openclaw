@@ -46,7 +46,6 @@ async function writeTranscript(sessionId: string, messages: unknown[]): Promise<
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
-    transcriptPath: createSqliteSessionTranscriptLocator({ agentId: "main", sessionId }),
     events: [
       {
         type: "session",

@@ -122,12 +122,11 @@ type PersistableSessionMessage = Exclude<
 >;
 
 export type SessionManager = {
-  setSessionFile(sessionFile: string): void;
   newSession(options?: { id?: string; parentSession?: string }): string | undefined;
   isPersisted(): boolean;
   getCwd(): string;
   getSessionId(): string;
-  getSessionFile(): string | undefined;
+  getTranscriptLocator(): string | undefined;
   appendMessage(message: PersistableSessionMessage): string;
   appendThinkingLevelChange(thinkingLevel: string): string;
   appendModelChange(provider: string, modelId: string): string;

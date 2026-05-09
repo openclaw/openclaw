@@ -1,9 +1,5 @@
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createSqliteSessionTranscriptLocator,
-  parseSqliteSessionTranscriptLocator,
-} from "../config/sessions/paths.js";
 import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -22,7 +18,7 @@ import {
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
-import { readTranscriptState } from "./transcript/transcript-state.js";
+import { readTranscriptStateForSession } from "./transcript/transcript-state.js";
 
 const runEmbeddedAttemptMock = vi.fn();
 const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>(async () => {
@@ -208,20 +204,14 @@ beforeEach(() => {
   });
 });
 
-const nextTranscriptLocator = () => {
+const nextSessionId = () => {
   sessionCounter += 1;
-  return createSqliteSessionTranscriptLocator({
-    agentId: "test",
-    sessionId: `session-${sessionCounter}`,
-  });
+  return `session-${sessionCounter}`;
 };
-const sessionIdFromLocator = (transcriptLocator: string) =>
-  parseSqliteSessionTranscriptLocator(transcriptLocator)?.sessionId ?? "session:test";
-const appendTestSessionMessage = async (transcriptLocator: string, message: unknown) =>
+const appendTestSessionMessage = async (sessionId: string, message: unknown) =>
   await appendSessionTranscriptMessage({
     agentId: "test",
-    sessionId: sessionIdFromLocator(transcriptLocator),
-    transcriptPath: transcriptLocator,
+    sessionId,
     cwd: workspaceDir,
     message,
   });
@@ -229,8 +219,8 @@ const nextRunId = (prefix = "run-embedded-test") => `${prefix}-${++runCounter}`;
 const nextSessionKey = () => `agent:test:embedded:${nextRunId("session-key")}`;
 
 const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string) => {
-  const transcriptLocator = nextTranscriptLocator();
-  await appendTestSessionMessage(transcriptLocator, {
+  const sessionId = nextSessionId();
+  await appendTestSessionMessage(sessionId, {
     role: "user",
     content: [{ type: "text", text }],
     timestamp: Date.now(),
@@ -247,7 +237,7 @@ const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string
 
   const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
   return await runEmbeddedPiAgent({
-    sessionId: sessionIdFromLocator(transcriptLocator),
+    sessionId: sessionId,
     sessionKey,
     workspaceDir,
     config: cfg,
@@ -272,7 +262,7 @@ const textFromContent = (content: unknown) => {
 };
 
 const readSessionEntries = async (
-  transcriptLocator: string,
+  sessionId: string,
 ): Promise<
   Array<{
     type?: string;
@@ -281,21 +271,27 @@ const readSessionEntries = async (
   }>
 > => {
   try {
-    return (await readTranscriptState(transcriptLocator)).getEntries() as Array<{
+    return (
+      await readTranscriptStateForSession({ agentId: "test", sessionId })
+    ).getEntries() as Array<{
       type?: string;
       customType?: string;
       data?: unknown;
     }>;
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Transcript is not in SQLite:")) {
+    if (
+      error instanceof Error &&
+      (error.message.startsWith("Transcript is not in SQLite:") ||
+        error.message.startsWith("Transcript is not in the SQLite state database"))
+    ) {
       return [];
     }
     throw error;
   }
 };
 
-const readSessionMessages = async (transcriptLocator: string) => {
-  const entries = await readSessionEntries(transcriptLocator);
+const readSessionMessages = async (sessionId: string) => {
+  const entries = await readSessionEntries(sessionId);
   return entries
     .filter((entry) => entry.type === "message")
     .map(
@@ -303,11 +299,7 @@ const readSessionMessages = async (transcriptLocator: string) => {
     ) as Array<{ role?: string; content?: unknown }>;
 };
 
-const runDefaultEmbeddedTurn = async (
-  transcriptLocator: string,
-  prompt: string,
-  sessionKey: string,
-) => {
+const runDefaultEmbeddedTurn = async (sessionId: string, prompt: string, sessionKey: string) => {
   const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-error"]);
   runEmbeddedAttemptMock.mockResolvedValueOnce(
     makeEmbeddedRunnerAttempt({
@@ -318,7 +310,7 @@ const runDefaultEmbeddedTurn = async (
     }),
   );
   await runEmbeddedPiAgent({
-    sessionId: sessionIdFromLocator(transcriptLocator),
+    sessionId,
     sessionKey,
     workspaceDir,
     config: cfg,
@@ -334,7 +326,7 @@ const runDefaultEmbeddedTurn = async (
 
 describe("runEmbeddedPiAgent", () => {
   it("skips models.json generation when dynamic model resolution succeeds", async () => {
-    const transcriptLocator = nextTranscriptLocator();
+    const sessionId = nextSessionId();
     const cfg = createEmbeddedPiRunnerOpenAiConfig([]);
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
@@ -346,7 +338,7 @@ describe("runEmbeddedPiAgent", () => {
     );
 
     await runEmbeddedPiAgent({
-      sessionId: "dynamic-model",
+      sessionId,
       workspaceDir,
       config: cfg,
       prompt: "hello",
@@ -371,7 +363,7 @@ describe("runEmbeddedPiAgent", () => {
   });
 
   it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {
-    const transcriptLocator = nextTranscriptLocator();
+    const sessionId = nextSessionId();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
     resolveSessionKeyForRequestMock.mockReturnValue({
       sessionKey: "agent:test:resolved",
@@ -387,7 +379,7 @@ describe("runEmbeddedPiAgent", () => {
     );
 
     await runEmbeddedPiAgent({
-      sessionId: "resume-123",
+      sessionId,
       sessionKey: "   ",
       workspaceDir,
       config: cfg,
@@ -402,7 +394,7 @@ describe("runEmbeddedPiAgent", () => {
 
     expect(resolveSessionKeyForRequestMock).toHaveBeenCalledWith({
       cfg,
-      sessionId: "resume-123",
+      sessionId,
       agentId: undefined,
     });
     const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as { sessionKey?: string };
@@ -410,7 +402,7 @@ describe("runEmbeddedPiAgent", () => {
   });
 
   it("drops whitespace-only session keys when backfill cannot resolve a session key", async () => {
-    const transcriptLocator = nextTranscriptLocator();
+    const sessionId = nextSessionId();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
     resolveSessionKeyForRequestMock.mockReturnValue({
       sessionKey: undefined,
@@ -426,7 +418,7 @@ describe("runEmbeddedPiAgent", () => {
     );
 
     await runEmbeddedPiAgent({
-      sessionId: "resume-124",
+      sessionId,
       sessionKey: "   ",
       workspaceDir,
       config: cfg,
@@ -441,7 +433,7 @@ describe("runEmbeddedPiAgent", () => {
 
     expect(resolveSessionKeyForRequestMock).toHaveBeenCalledWith({
       cfg,
-      sessionId: "resume-124",
+      sessionId,
       agentId: undefined,
     });
     const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as { sessionKey?: string };
@@ -449,7 +441,7 @@ describe("runEmbeddedPiAgent", () => {
   });
 
   it("logs when embedded session-key backfill resolution fails", async () => {
-    const transcriptLocator = nextTranscriptLocator();
+    const sessionId = nextSessionId();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
     resolveSessionKeyForRequestMock.mockImplementation(() => {
       throw new Error("resolver exploded");
@@ -464,7 +456,7 @@ describe("runEmbeddedPiAgent", () => {
     );
 
     await runEmbeddedPiAgent({
-      sessionId: "resume-456",
+      sessionId,
       workspaceDir,
       config: cfg,
       prompt: "hello",
@@ -484,7 +476,7 @@ describe("runEmbeddedPiAgent", () => {
   });
 
   it("passes the current agentId when backfilling a session key", async () => {
-    const transcriptLocator = nextTranscriptLocator();
+    const sessionId = nextSessionId();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
     resolveStoredSessionKeyForSessionIdMock.mockReturnValue({
       sessionKey: "agent:test:resolved",
@@ -500,7 +492,7 @@ describe("runEmbeddedPiAgent", () => {
     );
 
     await runEmbeddedPiAgent({
-      sessionId: "resume-agent-1",
+      sessionId,
       sessionKey: undefined,
       workspaceDir,
       config: cfg,
@@ -516,15 +508,14 @@ describe("runEmbeddedPiAgent", () => {
 
     expect(resolveStoredSessionKeyForSessionIdMock).toHaveBeenCalledWith({
       cfg,
-      sessionId: "resume-agent-1",
+      sessionId,
       agentId: "embedded-agent",
     });
     expect(resolveSessionKeyForRequestMock).not.toHaveBeenCalled();
   });
 
   it("disposes bundle MCP once when a one-shot local run completes", async () => {
-    const transcriptLocator = nextTranscriptLocator();
-    const sessionId = sessionIdFromLocator(transcriptLocator);
+    const sessionId = nextSessionId();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
     const sessionKey = nextSessionKey();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
@@ -558,8 +549,7 @@ describe("runEmbeddedPiAgent", () => {
 
   it("preserves bundle MCP state across retries within one local run", async () => {
     refreshRuntimeAuthOnFirstPromptError = true;
-    const transcriptLocator = nextTranscriptLocator();
-    const sessionId = sessionIdFromLocator(transcriptLocator);
+    const sessionId = nextSessionId();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
     const sessionKey = nextSessionKey();
     runEmbeddedAttemptMock
@@ -601,7 +591,7 @@ describe("runEmbeddedPiAgent", () => {
   });
 
   it("retries a planning-only GPT turn once with an act-now steer", async () => {
-    const transcriptLocator = nextTranscriptLocator();
+    const sessionId = nextSessionId();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["gpt-5.4"]);
     const sessionKey = nextSessionKey();
 
@@ -635,7 +625,7 @@ describe("runEmbeddedPiAgent", () => {
       });
 
     const result = await runEmbeddedPiAgent({
-      sessionId: sessionIdFromLocator(transcriptLocator),
+      sessionId: sessionId,
       sessionKey,
       workspaceDir,
       config: cfg,
@@ -653,7 +643,7 @@ describe("runEmbeddedPiAgent", () => {
   });
 
   it("handles prompt error paths without dropping user state", async () => {
-    const transcriptLocator = nextTranscriptLocator();
+    const sessionId = nextSessionId();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-error"]);
     const sessionKey = nextSessionKey();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
@@ -663,7 +653,7 @@ describe("runEmbeddedPiAgent", () => {
     );
     await expect(
       runEmbeddedPiAgent({
-        sessionId: sessionIdFromLocator(transcriptLocator),
+        sessionId: sessionId,
         sessionKey,
         workspaceDir,
         config: cfg,
@@ -677,7 +667,7 @@ describe("runEmbeddedPiAgent", () => {
       }),
     ).rejects.toThrow("boom");
 
-    const messages = await readSessionMessages(transcriptLocator);
+    const messages = await readSessionMessages(sessionId);
     if (messages.length > 0) {
       const userIndex = messages.findIndex(
         (message) => message?.role === "user" && textFromContent(message.content) === "boom",
@@ -690,15 +680,15 @@ describe("runEmbeddedPiAgent", () => {
     "preserves existing transcript entries across an additional turn",
     { timeout: 7_000 },
     async () => {
-      const transcriptLocator = nextTranscriptLocator();
+      const sessionId = nextSessionId();
       const sessionKey = nextSessionKey();
 
-      await appendTestSessionMessage(transcriptLocator, {
+      await appendTestSessionMessage(sessionId, {
         role: "user",
         content: [{ type: "text", text: "seed user" }],
         timestamp: Date.now(),
       });
-      await appendTestSessionMessage(transcriptLocator, {
+      await appendTestSessionMessage(sessionId, {
         role: "assistant",
         content: [{ type: "text", text: "seed assistant" }],
         stopReason: "stop",
@@ -708,9 +698,9 @@ describe("runEmbeddedPiAgent", () => {
         usage: createMockUsage(1, 1),
         timestamp: Date.now(),
       });
-      await runDefaultEmbeddedTurn(transcriptLocator, "hello", sessionKey);
+      await runDefaultEmbeddedTurn(sessionId, "hello", sessionKey);
 
-      const messages = await readSessionMessages(transcriptLocator);
+      const messages = await readSessionMessages(sessionId);
       const seedUserIndex = messages.findIndex(
         (message) => message?.role === "user" && textFromContent(message.content) === "seed user",
       );

@@ -65,7 +65,6 @@ describe("gateway chat.inject transcript writes", () => {
       appendSqliteSessionTranscriptEvent({
         agentId: "main",
         sessionId,
-        transcriptPath: transcriptLocator,
         event: {
           type: "message",
           id: "legacy-large-message",

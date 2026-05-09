@@ -42,20 +42,19 @@ describe("ensureSessionHeader", () => {
   it("creates the transcript header in SQLite without writing a JSONL file", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-header-"));
     try {
-      const sessionFile = path.join(tempDir, "nested", "session.jsonl");
+      const transcriptLocator = path.join(tempDir, "nested", "session.jsonl");
       const env = {
         ...process.env,
         OPENCLAW_STATE_DIR: path.join(tempDir, "state"),
       };
       await ensureSessionHeader({
-        sessionFile,
+        agentId: "main",
         sessionId: "session-1",
         cwd: tempDir,
-        agentId: "main",
         env,
       });
 
-      await expect(fs.access(sessionFile)).rejects.toThrow();
+      await expect(fs.access(transcriptLocator)).rejects.toThrow();
       const events = loadSqliteSessionTranscriptEvents({
         agentId: "main",
         sessionId: "session-1",
@@ -87,7 +86,7 @@ describe("buildBootstrapContextFiles", () => {
   });
   it("skips empty or whitespace-only content", () => {
     const files = [makeFile({ content: "   \n  " })];
-    expect(buildBootstrapContextFiles(files)).toStrictEqual([]);
+    expect(buildBootstrapContextFiles(files)).toEqual([]);
   });
   it("truncates large bootstrap content", () => {
     const head = `HEAD-${"a".repeat(600)}`;
@@ -101,11 +100,11 @@ describe("buildBootstrapContextFiles", () => {
       warn: (message) => warnings.push(message),
     });
     const kept = result?.content.match(/kept (\d+)\+(\d+) chars/);
+    expect(kept?.[1]).toEqual(expect.any(String));
+    expect(kept?.[2]).toEqual(expect.any(String));
     if (!kept) {
       throw new Error("missing truncation kept-count marker");
     }
-    expect(kept[1].length).toBeGreaterThan(0);
-    expect(kept[2].length).toBeGreaterThan(0);
     const headChars = Number(kept[1]);
     const tailChars = Number(kept[2]);
     expect(result?.content).toContain("[...truncated, read TOOLS.md for full content...]");
@@ -208,7 +207,7 @@ describe("buildBootstrapContextFiles", () => {
       maxChars: 200,
       totalMaxChars: 40,
     });
-    expect(result).toStrictEqual([]);
+    expect(result).toEqual([]);
   });
 
   it("keeps missing markers under small total budgets", () => {
@@ -252,7 +251,7 @@ describe("buildBootstrapContextFiles", () => {
     expect(warnings).toHaveLength(3);
     expect(
       warnings.filter((warning) => !warning.includes('missing or invalid "path" field')),
-    ).toStrictEqual([]);
+    ).toEqual([]);
   });
 });
 

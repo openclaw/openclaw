@@ -54,7 +54,6 @@ export function buildSessionEndHookPayload(params: {
   messageCount?: number;
   durationMs?: number;
   reason?: PluginHookSessionEndReason;
-  sessionFile?: string;
   nextSessionId?: string;
   nextSessionKey?: string;
 }): {
@@ -68,7 +67,6 @@ export function buildSessionEndHookPayload(params: {
       messageCount: params.messageCount ?? 0,
       durationMs: params.durationMs,
       reason: params.reason,
-      sessionFile: params.sessionFile,
       nextSessionId: params.nextSessionId,
       nextSessionKey: params.nextSessionKey,
     },

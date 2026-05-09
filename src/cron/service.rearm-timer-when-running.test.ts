@@ -62,7 +62,6 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     const now = Date.parse("2026-02-06T10:05:00.000Z");
 
     const state = createRunningCronServiceState({
-      storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
       jobs: [
@@ -113,7 +112,6 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     });
 
     const state = createCronServiceState({
-      storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
       nowMs: () => now,

@@ -47,7 +47,7 @@ import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../confi
 import { isTruthyEnvValue } from "../infra/env.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
@@ -1406,10 +1406,16 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
   if (!entry?.sessionId) {
     return [];
   }
-  const messages = await readSessionMessagesAsync(entry.sessionId, entry.sessionFile, {
-    mode: "full",
-    reason: "live model assistant text verification",
-  });
+  const messages = await readSessionMessagesAsync(
+    {
+      agentId: resolveAgentIdFromSessionKey(sessionKey),
+      sessionId: entry.sessionId,
+    },
+    {
+      mode: "full",
+      reason: "live model assistant text verification",
+    },
+  );
   const assistantTexts: string[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") {

@@ -77,8 +77,8 @@ describe("Cron issue regressions", () => {
     ]);
 
     const cron = new CronService({
+      storeKey: store.storePath,
       cronEnabled: true,
-      storePath: store.storePath,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),

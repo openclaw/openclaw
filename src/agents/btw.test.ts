@@ -138,7 +138,6 @@ function makeAsyncEvents(events: unknown[]) {
 function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     sessionId: "session-1",
-    sessionFile: "session-1.jsonl",
     updatedAt: Date.now(),
     ...overrides,
   };

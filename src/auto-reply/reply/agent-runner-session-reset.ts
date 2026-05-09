@@ -1,6 +1,5 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import {
-  createSqliteSessionTranscriptLocator,
   getSessionEntry,
   mergeSessionEntry,
   resolveAgentIdFromSessionKey,
@@ -44,7 +43,7 @@ export async function resetReplyRunSession(params: {
   messageThreadId?: string;
   followupRun: FollowupRun;
   onActiveSessionEntry: (entry: SessionEntry) => void;
-  onNewSession: (newSessionId: string, nextTranscriptLocator: string) => void;
+  onNewSession: (newSessionId: string) => void;
 }): Promise<boolean> {
   if (!params.sessionKey) {
     return false;
@@ -86,10 +85,6 @@ export async function resetReplyRunSession(params: {
     fallbackNoticeActiveModel: undefined,
     fallbackNoticeReason: undefined,
   };
-  const nextTranscriptLocator = createSqliteSessionTranscriptLocator({
-    sessionId: nextSessionId,
-    agentId,
-  });
   if (params.activeSessionStore) {
     params.activeSessionStore[params.sessionKey] = nextEntry;
   }
@@ -112,19 +107,16 @@ export async function resetReplyRunSession(params: {
     sourceAgentId: agentId,
     sourceSessionId: prevEntry.sessionId,
     targetAgentId: agentId,
-    targetTranscript: nextTranscriptLocator,
     newSessionId: nextSessionId,
   });
   params.followupRun.run.sessionId = nextSessionId;
-  params.followupRun.run.transcriptLocator = nextTranscriptLocator;
   deps.refreshQueuedFollowupSession({
     key: params.queueKey,
     previousSessionId: prevEntry.sessionId,
     nextSessionId,
-    nextTranscriptLocator,
   });
   params.onActiveSessionEntry(nextEntry);
-  params.onNewSession(nextSessionId, nextTranscriptLocator);
+  params.onNewSession(nextSessionId);
   deps.error(params.options.buildLogMessage(nextSessionId));
   return true;
 }

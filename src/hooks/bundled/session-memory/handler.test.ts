@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { createSqliteSessionTranscriptLocator } from "../../../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -88,29 +87,20 @@ function parseMockSessionContent(content: string): unknown[] {
 
 function seedSessionTranscript(params: {
   sessionId: string;
-  transcriptLocator?: string;
   content: string;
   agentId?: string;
-}): string {
-  const transcriptLocator =
-    params.transcriptLocator ??
-    createSqliteSessionTranscriptLocator({
-      agentId: params.agentId ?? "main",
-      sessionId: params.sessionId,
-    });
+}): void {
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId ?? "main",
     sessionId: params.sessionId,
-    transcriptPath: transcriptLocator,
     events: parseMockSessionContent(params.content),
     now: () => 1_770_000_000_000,
   });
-  return transcriptLocator;
 }
 
 async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
-  previousSessionEntry: { sessionId: string; transcriptLocator?: string };
+  previousSessionEntry: { sessionId: string };
   cfg?: OpenClawConfig;
   action?: "new" | "reset";
   sessionKey?: string;
@@ -152,7 +142,7 @@ async function runNewWithPreviousSession(params: {
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await createCaseWorkspace("workspace");
 
-  const transcriptLocator = seedSessionTranscript({
+  seedSessionTranscript({
     sessionId: "test-123",
     content: params.sessionContent,
   });
@@ -169,51 +159,37 @@ async function runNewWithPreviousSession(params: {
     action: params.action,
     previousSessionEntry: {
       sessionId: "test-123",
-      transcriptLocator,
     },
   });
   return { tempDir, files, memoryContent };
 }
 
-async function createSessionMemoryWorkspace(params?: {
-  activeSession?: { name: string; content: string };
-}): Promise<{ tempDir: string; transcriptDir: string; activeTranscriptLocator?: string }> {
+async function createSessionMemoryWorkspace(): Promise<{ tempDir: string }> {
   const tempDir = await createCaseWorkspace("workspace");
-  const transcriptDir = path.join(tempDir, "transcript-fixtures");
-
-  if (!params?.activeSession) {
-    return { tempDir, transcriptDir };
-  }
-
-  const activeTranscriptLocator = seedSessionTranscript({
-    sessionId: path.basename(params.activeSession.name, ".jsonl"),
-    content: params.activeSession.content,
-  });
-  return { tempDir, transcriptDir, activeTranscriptLocator };
+  return { tempDir };
 }
 
 async function writeSessionTranscript(params: {
   sessionId?: string;
-  name: string;
   content: string;
-}): Promise<{ tempDir: string; transcriptDir: string; transcriptLocator: string }> {
-  const { tempDir, transcriptDir } = await createSessionMemoryWorkspace();
-  const transcriptLocator = seedSessionTranscript({
-    sessionId: params.sessionId ?? path.basename(params.name, ".jsonl"),
+}): Promise<{ tempDir: string; sessionId: string }> {
+  const { tempDir } = await createSessionMemoryWorkspace();
+  const sessionId = params.sessionId ?? "test-session";
+  seedSessionTranscript({
+    sessionId,
     content: params.content,
   });
-  return { tempDir, transcriptDir, transcriptLocator };
+  return { tempDir, sessionId };
 }
 
 async function readSessionTranscript(params: {
   sessionContent: string;
   messageCount?: number;
 }): Promise<string | null> {
-  const { transcriptLocator } = await writeSessionTranscript({
-    name: "test-session.jsonl",
+  const { sessionId } = await writeSessionTranscript({
     content: params.sessionContent,
   });
-  return getRecentTranscriptContent(transcriptLocator, params.messageCount);
+  return getRecentTranscriptContent({ agentId: "main", sessionId }, params.messageCount);
 }
 
 function expectMemoryConversation(params: {
@@ -358,7 +334,7 @@ describe("session-memory hook", () => {
   it("does not block reset command handling on opt-in model slug generation", async () => {
     const tempDir = await createCaseWorkspace("workspace");
 
-    const transcriptLocator = seedSessionTranscript({
+    seedSessionTranscript({
       sessionId: "test-123",
       content: createMockSessionContent([
         { role: "user", content: "Investigate slow WhatsApp reset" },
@@ -399,7 +375,6 @@ describe("session-memory hook", () => {
           } satisfies OpenClawConfig,
           previousSessionEntry: {
             sessionId: "test-123",
-            transcriptLocator,
           },
         });
 
@@ -489,7 +464,7 @@ describe("session-memory hook", () => {
     const mainWorkspace = await createCaseWorkspace("workspace-main");
     const naviWorkspace = await createCaseWorkspace("workspace-navi");
 
-    const transcriptLocator = seedSessionTranscript({
+    seedSessionTranscript({
       sessionId: "navi-session",
       content: createMockSessionContent([
         { role: "user", content: "Remember this under Navi" },
@@ -509,7 +484,6 @@ describe("session-memory hook", () => {
       workspaceDirOverride: naviWorkspace,
       previousSessionEntry: {
         sessionId: "navi-session",
-        transcriptLocator,
       },
     });
 
@@ -622,20 +596,20 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Fourth message");
   });
 
-  it("recovers canonical transcript when previousSessionEntry.transcriptLocator is missing", async () => {
+  it("reads the canonical SQLite transcript by session identity", async () => {
     const { tempDir } = await createSessionMemoryWorkspace();
 
     const sessionId = "missing-session-file";
     seedSessionTranscript({
       sessionId,
       content: createMockSessionContent([
-        { role: "user", content: "Recovered with missing transcriptLocator pointer" },
+        { role: "user", content: "Recovered from SQLite session identity" },
         { role: "assistant", content: "Recovered by sessionId fallback" },
       ]),
     });
 
     const memoryContent = await getRecentTranscriptContent({ agentId: "main", sessionId });
-    expect(memoryContent).toContain("user: Recovered with missing transcriptLocator pointer");
+    expect(memoryContent).toContain("user: Recovered from SQLite session identity");
     expect(memoryContent).toContain("assistant: Recovered by sessionId fallback");
   });
 
@@ -649,7 +623,7 @@ describe("session-memory hook", () => {
     const defaultWorkspace = await createCaseWorkspace("workspace-default");
     const customAgentWorkspace = await createCaseWorkspace("workspace-custom-agent");
 
-    const transcriptLocator = seedSessionTranscript({
+    seedSessionTranscript({
       sessionId: "custom-agent-session",
       content: createMockSessionContent([
         { role: "user", content: "Custom agent conversation" },
@@ -674,7 +648,6 @@ describe("session-memory hook", () => {
       workspaceDirOverride: customAgentWorkspace,
       previousSessionEntry: {
         sessionId: "custom-agent-session",
-        transcriptLocator,
       },
     });
 

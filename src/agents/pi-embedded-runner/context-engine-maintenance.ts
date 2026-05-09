@@ -9,6 +9,7 @@ import type {
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { enqueueCommandInLane, getQueueSize } from "../../process/command-queue.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
@@ -304,15 +305,23 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
           replacements: request.replacements,
         });
       }
+      const rewriteAgentId =
+        params.sessionAgentId ?? params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
       const rewriteTranscriptEntriesInFile = async () =>
-        await rewriteTranscriptEntriesInSqliteTranscript({
-          transcriptLocator: params.transcriptLocator,
-          agentId: params.sessionAgentId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          config: params.config,
-          request,
-        });
+        rewriteAgentId
+          ? await rewriteTranscriptEntriesInSqliteTranscript({
+              agentId: rewriteAgentId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              config: params.config,
+              request,
+            })
+          : {
+              changed: false,
+              bytesFreed: 0,
+              rewrittenEntries: 0,
+              reason: "missing agent id",
+            };
       const rewriteSessionKey = normalizeSessionKey(params.sessionKey ?? params.sessionId);
       if (params.deferTranscriptRewriteToSessionLane && rewriteSessionKey) {
         return await enqueueCommandInLane(

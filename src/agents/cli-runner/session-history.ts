@@ -1,4 +1,3 @@
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
@@ -119,37 +118,29 @@ export function buildCliSessionHistoryPrompt(params: {
 
 function resolveSafeCliTranscriptLocator(params: {
   sessionId: string;
-  transcriptLocator: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
-}): { transcriptLocator: string } {
+}): { agentId: string; sessionId: string } {
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,
   });
-  const transcriptLocator = createSqliteSessionTranscriptLocator({
+  return {
     agentId: sessionAgentId ?? defaultAgentId,
     sessionId: params.sessionId,
-  });
-  return { transcriptLocator };
+  };
 }
 
 async function loadCliSessionEntries(params: {
   sessionId: string;
-  transcriptLocator: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
 }): Promise<unknown[]> {
   try {
-    const { transcriptLocator } = resolveSafeCliTranscriptLocator(params);
-    const scope = resolveSqliteSessionTranscriptScope({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      transcriptLocator: transcriptLocator,
-    });
+    const scope = resolveSqliteSessionTranscriptScope(resolveSafeCliTranscriptLocator(params));
     if (!scope) {
       return [];
     }
@@ -168,7 +159,6 @@ async function loadCliSessionEntries(params: {
 
 export async function loadCliSessionHistoryMessages(params: {
   sessionId: string;
-  transcriptLocator: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
@@ -182,7 +172,6 @@ export async function loadCliSessionHistoryMessages(params: {
 
 export async function loadCliSessionReseedMessages(params: {
   sessionId: string;
-  transcriptLocator: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;

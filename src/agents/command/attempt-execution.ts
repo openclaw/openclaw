@@ -1,5 +1,6 @@
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import {
   readTailAssistantTextFromSessionTranscript,
@@ -202,7 +203,6 @@ async function persistTextTurnTranscript(
   });
   if (promptText) {
     await appendSessionTranscriptMessage({
-      transcriptLocator: transcriptLocator,
       agentId: params.sessionAgentId,
       sessionId: params.sessionId,
       cwd: params.sessionCwd,
@@ -218,7 +218,7 @@ async function persistTextTurnTranscript(
   if (replyText) {
     let appendAssistant = true;
     if (params.embeddedAssistantGapFill) {
-      const latest = await readTailAssistantTextFromSessionTranscript(transcriptLocator, {
+      const latest = await readTailAssistantTextFromSessionTranscript({
         agentId: params.sessionAgentId,
         sessionId: params.sessionId,
       });
@@ -230,7 +230,6 @@ async function persistTextTurnTranscript(
     }
     if (appendAssistant) {
       await appendSessionTranscriptMessage({
-        transcriptLocator: transcriptLocator,
         agentId: params.sessionAgentId,
         sessionId: params.sessionId,
         cwd: params.sessionCwd,
@@ -348,7 +347,6 @@ export function runAgentAttempt(params: {
   sessionId: string;
   sessionKey: string | undefined;
   sessionAgentId: string;
-  transcriptLocator: string;
   workspaceDir: string;
   body: string;
   isFallbackRetry: boolean;
@@ -485,7 +483,6 @@ export function runAgentAttempt(params: {
         sessionKey: params.sessionKey,
         agentId: params.sessionAgentId,
         trigger: "user",
-        transcriptLocator: params.transcriptLocator,
         workspaceDir: params.workspaceDir,
         config: params.cfg,
         prompt: effectivePrompt,

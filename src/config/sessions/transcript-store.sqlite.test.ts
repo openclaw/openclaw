@@ -38,7 +38,6 @@ describe("SQLite session transcript store", () => {
         env: { OPENCLAW_STATE_DIR: stateDir },
         agentId: "Main",
         sessionId: "session-1",
-        transcriptPath,
         event: { type: "session", id: "session-1" },
         now: () => 100,
       }),
@@ -179,7 +178,6 @@ describe("SQLite session transcript store", () => {
       env,
       agentId: "main",
       sessionId: "session-1",
-      transcriptPath: olderPath,
       event: { type: "message", id: "older" },
       now: () => 100,
     });
@@ -187,7 +185,6 @@ describe("SQLite session transcript store", () => {
       env,
       agentId: "main",
       sessionId: "session-1",
-      transcriptPath: newerPath,
       event: { type: "message", id: "newer" },
       now: () => 200,
     });
@@ -215,7 +212,6 @@ describe("SQLite session transcript store", () => {
       env,
       agentId: "main",
       sessionId: "session-1",
-      transcriptPath,
       event: { type: "session", id: "session-1" },
     });
     recordSqliteSessionTranscriptSnapshot({
@@ -245,7 +241,6 @@ describe("SQLite session transcript store", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
       agentId: "main",
       sessionId: "session-1",
-      transcriptPath: sourcePath,
       events: [
         { type: "session", id: "session-1" },
         { type: "message", id: "m1", message: { role: "user", content: "hi" } },

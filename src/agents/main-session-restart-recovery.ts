@@ -212,12 +212,17 @@ async function recoverStore(params: {
 
     let messages: unknown[];
     try {
-      messages = await readSessionMessagesAsync(entry.sessionId, undefined, {
-        agentId: resolveAgentIdFromSessionKey(sessionKey),
-        mode: "recent",
-        maxMessages: 20,
-        maxBytes: 256 * 1024,
-      });
+      messages = await readSessionMessagesAsync(
+        {
+          agentId: resolveAgentIdFromSessionKey(sessionKey),
+          sessionId: entry.sessionId,
+        },
+        {
+          mode: "recent",
+          maxMessages: 20,
+          maxBytes: 256 * 1024,
+        },
+      );
     } catch (err) {
       log.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
       result.failed++;

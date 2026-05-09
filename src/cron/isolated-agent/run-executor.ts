@@ -20,7 +20,6 @@ import {
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
   resolveCronAgentLane,
-  createSqliteSessionTranscriptLocator,
   runCliAgent,
   runWithModelFallback,
 } from "./run-execution.runtime.js";
@@ -102,10 +101,6 @@ export function createCronPromptExecutor(params: {
   abortReason: () => string;
   onExecutionStarted?: () => void;
 }) {
-  const transcriptLocator = createSqliteSessionTranscriptLocator({
-    sessionId: params.cronSession.sessionEntry.sessionId,
-    agentId: params.agentId,
-  });
   const cronFallbacksOverride = resolveCronFallbacksOverride({
     cfg: params.cfg,
     job: params.job,
@@ -152,7 +147,6 @@ export function createCronPromptExecutor(params: {
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
-            transcriptLocator,
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,

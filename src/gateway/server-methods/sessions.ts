@@ -94,7 +94,6 @@ import {
   resolveGatewaySessionDatabaseTarget,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
-  resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -608,14 +607,10 @@ async function handleSessionSend(params: {
   }
 
   const messageSeq =
-    (await readSessionMessageCountAsync(
-      entry.sessionId,
-      createSqliteSessionTranscriptLocator({
-        agentId: resolveAgentIdFromSessionKey(canonicalKey),
-        sessionId: entry.sessionId,
-      }),
-      resolveAgentIdFromSessionKey(canonicalKey),
-    )) + 1;
+    (await readSessionMessageCountAsync({
+      agentId: resolveAgentIdFromSessionKey(canonicalKey),
+      sessionId: entry.sessionId,
+    })) + 1;
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;
@@ -815,14 +810,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           previews.push({ key, status: "missing", items: [] });
           continue;
         }
-        const transcriptLocator = createSqliteSessionTranscriptLocator({
-          agentId: target.agentId,
-          sessionId: entry.sessionId,
-        });
         const items = readSessionPreviewItemsFromTranscript(
-          entry.sessionId,
-          transcriptLocator,
-          target.agentId,
+          { agentId: target.agentId, sessionId: entry.sessionId },
           limit,
           maxChars,
         );
@@ -1116,18 +1105,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const createdEntry = created.entry;
-    const createdTranscriptLocator = ensured.transcriptLocator;
 
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     let runPayload: Record<string, unknown> | undefined;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? (await readSessionMessageCountAsync(
-          createdEntry.sessionId,
-          createdTranscriptLocator,
-          target.agentId,
-        )) + 1
+      ? (await readSessionMessageCountAsync({
+          agentId: target.agentId,
+          sessionId: createdEntry.sessionId,
+        })) + 1
       : undefined;
 
     if (initialMessage) {
@@ -1195,12 +1182,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         cfg,
         sessionKey: canonicalParentSessionKey,
         sessionId: parentEntry?.sessionId,
-        transcriptLocator: parentEntry?.sessionId
-          ? createSqliteSessionTranscriptLocator({
-              agentId: parentTarget.agentId,
-              sessionId: parentEntry.sessionId,
-            })
-          : undefined,
         agentId: parentTarget.agentId,
         reason: "new",
         nextSessionId: createdEntry.sessionId,
@@ -1258,7 +1239,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const branchedSession = await forkCompactionCheckpointTranscriptAsync({
       agentId: target.agentId,
-      sourceTranscriptLocator: checkpoint.preCompaction.transcriptLocator,
+      parentTranscriptLocator: checkpoint.preCompaction.transcriptLocator,
       sourceSessionId: checkpoint.preCompaction.sessionId,
     });
     if (!branchedSession?.transcriptLocator) {
@@ -1374,7 +1355,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const target = resolveGatewaySessionDatabaseTarget({ cfg: loaded.cfg, key: canonicalKey });
     const restoredSession = await forkCompactionCheckpointTranscriptAsync({
       agentId: target.agentId,
-      sourceTranscriptLocator: checkpoint.preCompaction.transcriptLocator,
+      parentTranscriptLocator: checkpoint.preCompaction.transcriptLocator,
       sourceSessionId: checkpoint.preCompaction.sessionId,
     });
     if (!restoredSession?.transcriptLocator) {
@@ -1793,12 +1774,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         cfg,
         sessionKey: target.canonicalKey ?? key,
         sessionId,
-        transcriptLocator: sessionId
-          ? createSqliteSessionTranscriptLocator({
-              agentId: target.agentId,
-              sessionId,
-            })
-          : undefined,
         agentId: target.agentId,
         reason: "deleted",
       });
@@ -1835,15 +1810,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(true, { messages: [] }, undefined);
       return;
     }
-    const transcriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: target.agentId,
-      sessionId: entry.sessionId,
-    });
     const { messages } = await readRecentSessionMessagesWithStatsAsync(
-      entry.sessionId,
-      transcriptLocator,
+      { agentId: target.agentId, sessionId: entry.sessionId },
       {
-        agentId: target.agentId,
         maxMessages: limit,
         maxLines: limit * 20 + 20,
       },
@@ -1886,11 +1855,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const transcriptLocator = resolveSessionTranscriptCandidates(
+    const transcriptLocator = createSqliteSessionTranscriptLocator({
+      agentId: target.agentId,
       sessionId,
-      undefined,
-      target.agentId,
-    )[0];
+    });
     if (
       !transcriptLocator ||
       !hasSqliteSessionTranscriptEvents({
@@ -1932,9 +1900,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         resolveAgentWorkspaceDir(cfg, target.agentId);
       const result = await compactEmbeddedPiSession({
         sessionId,
+        agentId: target.agentId,
         sessionKey: target.canonicalKey,
         allowGatewaySubagentBinding: true,
-        transcriptLocator,
         workspaceDir,
         config: cfg,
         provider: resolvedModel.provider,
@@ -2001,10 +1969,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const tail = readRecentSessionTranscriptLines({
       sessionId,
-      transcriptLocator: createSqliteSessionTranscriptLocator({
-        agentId: target.agentId,
-        sessionId,
-      }),
       agentId: target.agentId,
       maxLines,
     });

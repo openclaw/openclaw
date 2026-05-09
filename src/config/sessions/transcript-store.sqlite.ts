@@ -237,7 +237,6 @@ export function resolveSqliteSessionTranscriptScope(
   options: OpenClawStateDatabaseOptions & {
     agentId?: string;
     sessionId: string;
-    transcriptLocator?: string;
   },
 ): SqliteSessionTranscriptScope | undefined {
   const sessionId = normalizeSessionId(options.sessionId);
@@ -247,25 +246,7 @@ export function resolveSqliteSessionTranscriptScope(
       sessionId,
     };
   }
-  if (options.transcriptLocator?.trim()) {
-    const byLocator = resolveSqliteSessionTranscriptScopeForLocator({
-      ...options,
-      transcriptLocator: options.transcriptLocator,
-    });
-    if (byLocator?.sessionId === sessionId) {
-      return byLocator;
-    }
-  }
-  const latest = listSqliteSessionTranscripts(options).find(
-    (transcript) => transcript.sessionId === sessionId,
-  );
-  if (!latest) {
-    return undefined;
-  }
-  return {
-    agentId: latest.agentId,
-    sessionId: latest.sessionId,
-  };
+  return undefined;
 }
 
 export function listSqliteSessionTranscriptLocators(

@@ -18,7 +18,7 @@ async function writeJobsStore(storePath: string, jobs: unknown[]) {
 
 function createCronFromStorePath(storePath: string) {
   return new CronService({
-    storePath,
+    storeKey: storePath,
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
@@ -31,7 +31,6 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
   it("does not skip a cron job when list() is called while the job is past-due", async () => {
     const store = await makeStorePath();
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
       logger: noopLogger,
     });
 
@@ -87,7 +86,6 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
   it("does not skip a cron job when status() is called while the job is past-due", async () => {
     const store = await makeStorePath();
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
       logger: noopLogger,
     });
 

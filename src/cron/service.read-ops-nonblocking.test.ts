@@ -232,7 +232,6 @@ describe("CronService read ops while job is running", () => {
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
     await writeCronStoreSnapshot({
-      storePath: store.storePath,
       jobs: [
         {
           id: "startup-catchup",

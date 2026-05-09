@@ -21,7 +21,6 @@ describe("CronService", () => {
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
 
     const cronA = new CronService({
-      storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
@@ -41,7 +40,6 @@ describe("CronService", () => {
     });
 
     const cronB = new CronService({
-      storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,

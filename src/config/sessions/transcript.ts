@@ -16,12 +16,11 @@ import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import {
   hasSqliteSessionTranscriptEvents,
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForLocator,
 } from "./transcript-store.sqlite.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionTranscriptAppendResult =
-  | { ok: true; transcriptLocator: string; messageId: string }
+  | { ok: true; messageId: string }
   | { ok: false; reason: string };
 
 export type SessionTranscriptUpdateMode = "inline" | "signal-only" | "none";
@@ -51,23 +50,15 @@ function hasTranscriptQueryScope(scope?: TranscriptQueryScope): scope is {
   return Boolean(scope?.agentId?.trim() && scope.sessionId?.trim());
 }
 
-function loadScopedSqliteTranscriptEvents(
-  scope?: TranscriptQueryScope,
-  transcriptLocator?: string,
-): unknown[] | undefined {
-  const resolvedScope = hasTranscriptQueryScope(scope)
-    ? scope
-    : transcriptLocator?.trim()
-      ? resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator })
-      : undefined;
-  if (!resolvedScope) {
+function loadScopedSqliteTranscriptEvents(scope?: TranscriptQueryScope): unknown[] | undefined {
+  if (!hasTranscriptQueryScope(scope)) {
     return undefined;
   }
   try {
-    if (!hasSqliteSessionTranscriptEvents(resolvedScope)) {
+    if (!hasSqliteSessionTranscriptEvents(scope)) {
       return undefined;
     }
-    return loadSqliteSessionTranscriptEvents(resolvedScope).map((entry) => entry.event);
+    return loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
   } catch {
     return undefined;
   }
@@ -129,10 +120,9 @@ export async function resolveSessionTranscriptTarget(params: {
 }
 
 export async function readLatestAssistantTextFromSessionTranscript(
-  transcriptLocator: string | undefined,
-  scope?: TranscriptQueryScope,
+  scope: TranscriptQueryScope,
 ): Promise<LatestAssistantTranscriptText | undefined> {
-  const scopedEvents = loadScopedSqliteTranscriptEvents(scope, transcriptLocator);
+  const scopedEvents = loadScopedSqliteTranscriptEvents(scope);
   if (scopedEvents) {
     for (const event of scopedEvents.toReversed()) {
       const assistantText = parseAssistantTranscriptEventText(event);
@@ -147,10 +137,9 @@ export async function readLatestAssistantTextFromSessionTranscript(
 }
 
 export async function readTailAssistantTextFromSessionTranscript(
-  transcriptLocator: string | undefined,
-  scope?: TranscriptQueryScope,
+  scope: TranscriptQueryScope,
 ): Promise<TailAssistantTranscriptText | undefined> {
-  const scopedEvents = loadScopedSqliteTranscriptEvents(scope, transcriptLocator);
+  const scopedEvents = loadScopedSqliteTranscriptEvents(scope);
   if (scopedEvents) {
     const tail = scopedEvents.at(-1);
     return tail === undefined ? undefined : parseAssistantTranscriptEventText(tail);
@@ -263,14 +252,10 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   };
 
   const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
-    ? await findLatestEquivalentAssistantMessageId(
-        transcriptLocator,
-        params.message,
-        transcriptScope,
-      )
+    ? await findLatestEquivalentAssistantMessageId(params.message, transcriptScope)
     : undefined;
   if (latestEquivalentAssistantId) {
-    return { ok: true, transcriptLocator, messageId: latestEquivalentAssistantId };
+    return { ok: true, messageId: latestEquivalentAssistantId };
   }
 
   const message = {
@@ -278,7 +263,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   };
   const { messageId } = await appendSessionTranscriptMessage({
-    transcriptLocator: transcriptLocator,
     agentId,
     message,
     sessionId: entry.sessionId,
@@ -307,7 +291,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     case "none":
       break;
   }
-  return { ok: true, transcriptLocator, messageId };
+  return { ok: true, messageId };
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
@@ -334,7 +318,6 @@ function extractAssistantMessageText(message: SessionTranscriptAssistantMessage)
 }
 
 async function findLatestEquivalentAssistantMessageId(
-  transcriptLocator: string,
   message: SessionTranscriptAssistantMessage,
   scope?: TranscriptQueryScope,
 ): Promise<string | undefined> {
@@ -343,7 +326,7 @@ async function findLatestEquivalentAssistantMessageId(
     return undefined;
   }
 
-  const scopedEvents = loadScopedSqliteTranscriptEvents(scope, transcriptLocator);
+  const scopedEvents = loadScopedSqliteTranscriptEvents(scope);
   if (scopedEvents) {
     return findLatestEquivalentAssistantMessageIdInEvents(scopedEvents, expectedText);
   }

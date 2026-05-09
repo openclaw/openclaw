@@ -153,7 +153,6 @@ describe("abort detection", () => {
         sessionKey: params.sessionKey,
         messageProvider: "telegram",
         agentAccountId: "acct",
-        sessionFile: path.join(params.root, "session.jsonl"),
         workspaceDir: path.join(params.root, "workspace"),
         config: params.cfg,
         provider: "anthropic",
@@ -369,8 +368,8 @@ describe("abort detection", () => {
       entry: store["session-1"],
       key: "session-1",
     });
-    expect(resolveSessionEntryForKey(store, "session-2")).toStrictEqual({});
-    expect(resolveSessionEntryForKey(undefined, "session-1")).toStrictEqual({});
+    expect(resolveSessionEntryForKey(store, "session-2")).toEqual({});
+    expect(resolveSessionEntryForKey(undefined, "session-1")).toEqual({});
   });
 
   it("resolves Telegram forum topic session when lookup key has different casing than store", () => {

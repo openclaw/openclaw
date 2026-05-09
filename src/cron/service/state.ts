@@ -46,7 +46,7 @@ export type Logger = {
 export type CronServiceDeps = {
   nowMs?: () => number;
   log: Logger;
-  storeKey: string;
+  storeKey?: string;
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
@@ -132,7 +132,8 @@ export type CronServiceDeps = {
   onEvent?: (evt: CronEvent) => void;
 };
 
-export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
+export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs" | "storeKey"> & {
+  storeKey: string;
   nowMs: () => number;
 };
 
@@ -154,7 +155,11 @@ export type CronServiceState = {
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   return {
-    deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
+    deps: {
+      ...deps,
+      storeKey: deps.storeKey ?? "default",
+      nowMs: deps.nowMs ?? (() => Date.now()),
+    },
     store: null,
     timer: null,
     running: false,

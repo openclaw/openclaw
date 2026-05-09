@@ -12,7 +12,7 @@ import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
   _resetBootstrapWarningCacheForTest,
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-  hasCompletedBootstrapTranscriptTurn,
+  hasCompletedBootstrapSessionTurn,
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
@@ -284,7 +284,7 @@ describe("hasCompletedBootstrapTranscriptTurn", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  function writeTranscript(transcriptPath: string, events: unknown[]): void {
+  function writeTranscript(defaultSessionId: string, events: unknown[]): void {
     const sessionId =
       events.find((event): event is { type: "session"; id: string } =>
         Boolean(
@@ -293,55 +293,54 @@ describe("hasCompletedBootstrapTranscriptTurn", () => {
           (event as { type?: unknown }).type === "session" &&
           typeof (event as { id?: unknown }).id === "string",
         ),
-      )?.id ?? path.basename(transcriptPath, ".jsonl");
+      )?.id ?? defaultSessionId;
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId,
-      transcriptPath,
       events,
     });
   }
 
-  it("returns false when transcript locator has no SQLite rows", async () => {
-    expect(await hasCompletedBootstrapTranscriptTurn(path.join(tmpDir, "missing.jsonl"))).toBe(
-      false,
-    );
+  function hasCompletedBootstrapTurn(sessionId: string): Promise<boolean> {
+    return hasCompletedBootstrapSessionTurn({ agentId: "main", sessionId });
+  }
+
+  it("returns false when transcript scope has no SQLite rows", async () => {
+    expect(await hasCompletedBootstrapTurn("missing")).toBe(false);
   });
 
-  it("returns false for empty transcript locators", async () => {
-    const transcriptPath = path.join(tmpDir, "empty.jsonl");
-    expect(await hasCompletedBootstrapTranscriptTurn(transcriptPath)).toBe(false);
+  it("returns false for empty transcript scopes", async () => {
+    expect(await hasCompletedBootstrapTurn("empty")).toBe(false);
   });
 
   it("returns false for header-only transcript rows", async () => {
-    const transcriptPath = path.join(tmpDir, "header-only.jsonl");
-    writeTranscript(transcriptPath, [{ type: "session", id: "s1" }]);
-    expect(await hasCompletedBootstrapTranscriptTurn(transcriptPath)).toBe(false);
+    writeTranscript("s1", [{ type: "session", id: "s1" }]);
+    expect(await hasCompletedBootstrapTurn("s1")).toBe(false);
   });
 
   it("returns false when no assistant turn has been flushed yet", async () => {
-    const transcriptPath = path.join(tmpDir, "user-only.jsonl");
-    writeTranscript(transcriptPath, [
-      { type: "session", id: "s1" },
+    const sessionId = "user-only";
+    writeTranscript(sessionId, [
+      { type: "session", id: sessionId },
       { type: "message", message: { role: "user", content: "hello" } },
     ]);
-    expect(await hasCompletedBootstrapTranscriptTurn(transcriptPath)).toBe(false);
+    expect(await hasCompletedBootstrapTurn(sessionId)).toBe(false);
   });
 
   it("returns false for assistant turns without a recorded full bootstrap marker", async () => {
-    const transcriptPath = path.join(tmpDir, "assistant-no-marker.jsonl");
-    writeTranscript(transcriptPath, [
-      { type: "session", id: "s1" },
+    const sessionId = "assistant-no-marker";
+    writeTranscript(sessionId, [
+      { type: "session", id: sessionId },
       { type: "message", message: { role: "user", content: "hello" } },
       { type: "message", message: { role: "assistant", content: "hi" } },
     ]);
-    expect(await hasCompletedBootstrapTranscriptTurn(transcriptPath)).toBe(false);
+    expect(await hasCompletedBootstrapTurn(sessionId)).toBe(false);
   });
 
   it("returns true when a full bootstrap completion marker exists", async () => {
-    const transcriptPath = path.join(tmpDir, "full-bootstrap.jsonl");
-    writeTranscript(transcriptPath, [
-      { type: "session", id: "s1" },
+    const sessionId = "full-bootstrap";
+    writeTranscript(sessionId, [
+      { type: "session", id: sessionId },
       { type: "message", message: { role: "assistant", content: "hi" } },
       {
         type: "custom",
@@ -349,13 +348,13 @@ describe("hasCompletedBootstrapTranscriptTurn", () => {
         data: { timestamp: 1 },
       },
     ]);
-    expect(await hasCompletedBootstrapTranscriptTurn(transcriptPath)).toBe(true);
+    expect(await hasCompletedBootstrapTurn(sessionId)).toBe(true);
   });
 
   it("returns false when compaction happened after the last assistant turn", async () => {
-    const transcriptPath = path.join(tmpDir, "post-compaction.jsonl");
-    writeTranscript(transcriptPath, [
-      { type: "session", id: "s1" },
+    const sessionId = "post-compaction";
+    writeTranscript(sessionId, [
+      { type: "session", id: sessionId },
       {
         type: "custom",
         customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
@@ -363,13 +362,13 @@ describe("hasCompletedBootstrapTranscriptTurn", () => {
       },
       { type: "compaction", summary: "trimmed" },
     ]);
-    expect(await hasCompletedBootstrapTranscriptTurn(transcriptPath)).toBe(false);
+    expect(await hasCompletedBootstrapTurn(sessionId)).toBe(false);
   });
 
   it("returns true when a later full bootstrap marker happens after compaction", async () => {
-    const transcriptPath = path.join(tmpDir, "assistant-after-compaction.jsonl");
-    writeTranscript(transcriptPath, [
-      { type: "session", id: "s1" },
+    const sessionId = "assistant-after-compaction";
+    writeTranscript(sessionId, [
+      { type: "session", id: sessionId },
       {
         type: "custom",
         customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
@@ -384,14 +383,14 @@ describe("hasCompletedBootstrapTranscriptTurn", () => {
         data: { timestamp: 2 },
       },
     ]);
-    expect(await hasCompletedBootstrapTranscriptTurn(transcriptPath)).toBe(true);
+    expect(await hasCompletedBootstrapTurn(sessionId)).toBe(true);
   });
 
   it("finds a recent full bootstrap marker after large earlier content", async () => {
-    const transcriptPath = path.join(tmpDir, "large-prefix.jsonl");
+    const sessionId = "large-prefix";
     const hugePrefix = "x".repeat(300 * 1024);
-    writeTranscript(transcriptPath, [
-      { type: "session", id: "s1" },
+    writeTranscript(sessionId, [
+      { type: "session", id: sessionId },
       { type: "message", message: { role: "user", content: hugePrefix } },
       {
         type: "custom",
@@ -399,15 +398,7 @@ describe("hasCompletedBootstrapTranscriptTurn", () => {
         data: { timestamp: 1 },
       },
     ]);
-    expect(await hasCompletedBootstrapTranscriptTurn(transcriptPath)).toBe(true);
-  });
-
-  it("returns false for unimported symbolic-link locators", async () => {
-    const realFile = path.join(tmpDir, "real.jsonl");
-    const linkFile = path.join(tmpDir, "link.jsonl");
-    await fs.writeFile(realFile, "", "utf8");
-    await fs.symlink(realFile, linkFile);
-    expect(await hasCompletedBootstrapTranscriptTurn(linkFile)).toBe(false);
+    expect(await hasCompletedBootstrapTurn(sessionId)).toBe(true);
   });
 });
 

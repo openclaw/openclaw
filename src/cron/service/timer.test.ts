@@ -40,12 +40,12 @@ describe("cron service timer seam coverage", () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
     await writeCronStoreSnapshot({
-      storePath,
+      storePath: storePath,
       jobs: [createDueMainJob({ now, wakeMode: "next-heartbeat" })],
     });
 
     const state = createCronServiceState({
-      storePath,
+      storeKey: storePath,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
@@ -102,7 +102,7 @@ describe("cron service timer seam coverage", () => {
     const requestHeartbeat = vi.fn();
 
     await writeCronStoreSnapshot({
-      storePath,
+      storePath: storePath,
       jobs: [createDueMainJob({ now, wakeMode: "next-heartbeat" })],
     });
 
@@ -113,7 +113,7 @@ describe("cron service timer seam coverage", () => {
       });
 
     const state = createCronServiceState({
-      storePath,
+      storeKey: storePath,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
@@ -181,7 +181,7 @@ describe("cron service timer seam coverage", () => {
     });
 
     const state = createCronServiceState({
-      storePath,
+      storeKey: storePath,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,

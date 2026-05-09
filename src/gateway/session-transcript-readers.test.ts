@@ -68,7 +68,6 @@ function seedTranscript(params: {
   replaceSqliteSessionTranscriptEvents({
     agentId,
     sessionId: params.sessionId,
-    transcriptPath: filePath,
     events: params.events,
     now: () => 1_778_100_000_000,
   });
@@ -97,6 +96,7 @@ describe("SQLite transcript readers", () => {
   test("extracts first and last message previews from SQLite transcripts", async () => {
     setupState();
     const sessionId = "preview-session";
+    const scope = { agentId: "main", sessionId };
     seedTranscript({
       sessionId,
       events: [
@@ -107,16 +107,17 @@ describe("SQLite transcript readers", () => {
       ],
     });
 
-    expect(readFirstUserMessageFromTranscript(sessionId)).toBe("First user question");
-    expect(readLastMessagePreviewFromTranscript(sessionId)).toBe("Final assistant reply");
-    await expect(readSessionTitleFieldsFromTranscriptAsync(sessionId)).resolves.toEqual(
-      readSessionTitleFieldsFromTranscript(sessionId),
+    expect(readFirstUserMessageFromTranscript(scope)).toBe("First user question");
+    expect(readLastMessagePreviewFromTranscript(scope)).toBe("Final assistant reply");
+    await expect(readSessionTitleFieldsFromTranscriptAsync(scope)).resolves.toEqual(
+      readSessionTitleFieldsFromTranscript(scope),
     );
   });
 
   test("skips inter-session user messages by default", () => {
     setupState();
     const sessionId = "inter-session";
+    const scope = { agentId: "main", sessionId };
     seedTranscript({
       sessionId,
       events: [
@@ -127,12 +128,13 @@ describe("SQLite transcript readers", () => {
       ],
     });
 
-    expect(readFirstUserMessageFromTranscript(sessionId)).toBe("Real user message");
+    expect(readFirstUserMessageFromTranscript(scope)).toBe("Real user message");
   });
 
   test("reads active branches, compaction markers, counts, and bounded recent messages", async () => {
     setupState();
     const sessionId = "branch-session";
+    const scope = { agentId: "main", sessionId };
     seedTranscript({
       sessionId,
       events: [
@@ -169,17 +171,17 @@ describe("SQLite transcript readers", () => {
     });
 
     expect(
-      readSessionMessages(sessionId).map((entry) => (entry as { content?: unknown }).content),
+      readSessionMessages(scope).map((entry) => (entry as { content?: unknown }).content),
     ).toEqual(["root", "active branch", [{ type: "text", text: "Compaction" }], "tail"]);
-    expect(readSessionMessageCount(sessionId)).toBe(4);
-    await expect(readSessionMessageCountAsync(sessionId)).resolves.toBe(4);
+    expect(readSessionMessageCount(scope)).toBe(4);
+    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(4);
     expect(
-      readRecentSessionMessages(sessionId, undefined, { maxMessages: 2 }).map(
+      readRecentSessionMessages(scope, { maxMessages: 2 }).map(
         (entry) => (entry as { content?: unknown }).content,
       ),
     ).toEqual([[{ type: "text", text: "Compaction" }], "tail"]);
     await expect(
-      readSessionMessagesAsync(sessionId, undefined, {
+      readSessionMessagesAsync(scope, {
         mode: "recent",
         maxMessages: 1,
       }),
@@ -189,6 +191,7 @@ describe("SQLite transcript readers", () => {
   test("adds sequence metadata to recent message windows", async () => {
     setupState();
     const sessionId = "stats-session";
+    const scope = { agentId: "main", sessionId };
     seedTranscript({
       sessionId,
       events: [
@@ -200,9 +203,7 @@ describe("SQLite transcript readers", () => {
       ],
     });
 
-    expect(
-      readRecentSessionMessagesWithStats(sessionId, undefined, { maxMessages: 2 }),
-    ).toMatchObject({
+    expect(readRecentSessionMessagesWithStats(scope, { maxMessages: 2 })).toMatchObject({
       totalMessages: 4,
       messages: [
         { __openclaw: { seq: 3 }, content: "three" },
@@ -210,7 +211,7 @@ describe("SQLite transcript readers", () => {
       ],
     });
     await expect(
-      readRecentSessionMessagesWithStatsAsync(sessionId, undefined, {
+      readRecentSessionMessagesWithStatsAsync(scope, {
         maxMessages: 1,
       }),
     ).resolves.toMatchObject({
@@ -231,6 +232,7 @@ describe("SQLite transcript readers", () => {
     });
 
     const result = readRecentSessionTranscriptLines({
+      agentId: "main",
       sessionId,
       maxLines: 3,
     });
@@ -245,6 +247,7 @@ describe("SQLite transcript readers", () => {
   test("aggregates and reads latest usage snapshots from SQLite", async () => {
     setupState();
     const sessionId = "usage-session";
+    const scope = { agentId: "main", sessionId };
     seedTranscript({
       sessionId,
       events: [
@@ -262,7 +265,7 @@ describe("SQLite transcript readers", () => {
       ],
     });
 
-    expect(readLatestSessionUsageFromTranscript(sessionId)).toMatchObject({
+    expect(readLatestSessionUsageFromTranscript(scope)).toMatchObject({
       modelProvider: "openai",
       model: "gpt-5.4",
       inputTokens: 30,
@@ -270,24 +273,27 @@ describe("SQLite transcript readers", () => {
       cacheRead: 8,
       costUsd: 0.30000000000000004,
     });
-    await expect(readLatestSessionUsageFromTranscriptAsync(sessionId)).resolves.toMatchObject({
+    await expect(readLatestSessionUsageFromTranscriptAsync(scope)).resolves.toMatchObject({
       inputTokens: 30,
       outputTokens: 6,
     });
     await expect(
-      readLatestRecentSessionUsageFromTranscriptAsync(sessionId, undefined, undefined, 1024),
+      readLatestRecentSessionUsageFromTranscriptAsync(scope, 1024),
     ).resolves.toMatchObject({ inputTokens: 20, outputTokens: 4 });
-    await expect(
-      readRecentSessionUsageFromTranscriptAsync(sessionId, undefined, undefined, 1024),
-    ).resolves.toMatchObject({ inputTokens: 20, outputTokens: 4 });
-    expect(
-      readRecentSessionUsageFromTranscript(sessionId, undefined, undefined, 1024),
-    ).toMatchObject({ inputTokens: 30, outputTokens: 6 });
+    await expect(readRecentSessionUsageFromTranscriptAsync(scope, 1024)).resolves.toMatchObject({
+      inputTokens: 20,
+      outputTokens: 4,
+    });
+    expect(readRecentSessionUsageFromTranscript(scope, 1024)).toMatchObject({
+      inputTokens: 30,
+      outputTokens: 6,
+    });
   });
 
   test("builds preview items from SQLite transcripts", () => {
     setupState();
     const sessionId = "preview-items";
+    const scope = { agentId: "main", sessionId };
     seedTranscript({
       sessionId,
       events: createToolSummaryPreviewTranscriptLines(sessionId).map(
@@ -295,12 +301,12 @@ describe("SQLite transcript readers", () => {
       ),
     });
 
-    const result = readSessionPreviewItemsFromTranscript(sessionId, undefined, undefined, 3, 120);
+    const result = readSessionPreviewItemsFromTranscript(scope, 3, 120);
     expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
     expect(result[1]?.text).toContain("call weather");
   });
 
-  test("resolves stored transcript scope from sessionFile metadata", () => {
+  test("requires explicit SQLite transcript scope", () => {
     setupState();
     const sessionId = "cross-agent";
     const filePath = transcriptPath(sessionId, "ops");
@@ -311,7 +317,9 @@ describe("SQLite transcript readers", () => {
       events: [header(sessionId), message("user", "from ops")],
     });
 
-    expect(readSessionMessages(sessionId, filePath)).toEqual([
+    expect(filePath).toBe("sqlite-transcript://ops/cross-agent");
+    expect(readSessionMessages({ sessionId })).toEqual([]);
+    expect(readSessionMessages({ agentId: "ops", sessionId })).toEqual([
       expect.objectContaining({ content: "from ops" }),
     ]);
   });

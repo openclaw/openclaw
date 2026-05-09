@@ -36,7 +36,6 @@ import {
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-paths.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { closeTrackedBrowserTabsForSessions } from "../../plugin-sdk/browser-maintenance.js";
@@ -752,15 +751,7 @@ export async function initSessionState(params: {
     },
   });
 
-  // Resolve the previous transcript before rotating session metadata.
-  let previousSessionTranscript: {
-    transcriptLocator?: string;
-  } = {};
   if (previousSessionEntry?.sessionId) {
-    previousSessionTranscript = resolveStableSessionEndTranscript({
-      sessionId: previousSessionEntry.sessionId,
-      agentId,
-    });
     await retireSessionMcpRuntime({
       sessionId: previousSessionEntry.sessionId,
       reason: "reply-session-rollover",
@@ -773,7 +764,6 @@ export async function initSessionState(params: {
     await resetRegisteredAgentHarnessSessions({
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
-      transcriptLocator: previousSessionTranscript.transcriptLocator,
       reason: previousSessionEndReason ?? "unknown",
     });
     void closeTrackedBrowserTabsForSessions({
@@ -814,7 +804,6 @@ export async function initSessionState(params: {
           sessionKey,
           cfg,
           reason: previousSessionEndReason,
-          transcriptLocator: previousSessionTranscript.transcriptLocator,
           nextSessionId: effectiveSessionId,
         });
         void hookRunner.runSessionEnd(payload.event, payload.context).catch(() => {});

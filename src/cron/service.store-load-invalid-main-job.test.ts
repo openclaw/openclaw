@@ -65,7 +65,7 @@ describe("CronService store load", () => {
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
 
     const cron = new CronService({
-      storePath,
+      storeKey: storePath,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,

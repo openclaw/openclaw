@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createSqliteSessionTranscriptLocator, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntry } from "../../config/sessions/store.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { HookRunner } from "../../plugins/hooks.js";
@@ -45,9 +45,7 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
 async function createFixtureDir(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  const transcriptDir = path.join(root, "transcripts");
-  await fs.mkdir(transcriptDir, { recursive: true });
-  return transcriptDir;
+  return root;
 }
 
 async function writeSessionRows(
@@ -58,16 +56,10 @@ async function writeSessionRows(
   }
 }
 
-async function writeTranscript(
-  transcriptDir: string,
-  sessionId: string,
-  text = "hello",
-): Promise<string> {
-  const transcriptPath = path.join(transcriptDir, `${sessionId}.jsonl`);
+async function writeTranscript(sessionId: string, text = "hello"): Promise<void> {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
-    transcriptPath,
     events: [
       {
         type: "message",
@@ -76,7 +68,6 @@ async function writeTranscript(
       },
     ],
   });
-  return transcriptPath;
 }
 
 async function createStoredSession(params: {
@@ -85,17 +76,15 @@ async function createStoredSession(params: {
   sessionId: string;
   text?: string;
   updatedAt?: number;
-}): Promise<{ transcriptPath: string }> {
-  const transcriptDir = await createFixtureDir(params.prefix);
-  const transcriptPath = await writeTranscript(transcriptDir, params.sessionId, params.text);
+}): Promise<void> {
+  await createFixtureDir(params.prefix);
+  await writeTranscript(params.sessionId, params.text);
   await writeSessionRows({
     [params.sessionKey]: {
       sessionId: params.sessionId,
-      sessionFile: transcriptPath,
       updatedAt: params.updatedAt ?? Date.now(),
     },
   });
-  return { transcriptPath };
 }
 
 type SessionResetConfig = NonNullable<NonNullable<OpenClawConfig["session"]>["reset"]>;
@@ -184,9 +173,7 @@ describe("session hook context wiring", () => {
     });
     expect(context).toMatchObject({ sessionKey, agentId: "main" });
     expect(context).toMatchObject({ sessionId: event?.sessionId });
-    expect(event?.sessionFile).toBe(
-      createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "old-session" }),
-    );
+    expect(event).not.toHaveProperty("transcriptLocator");
 
     const [startEvent, startContext] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
     expect(startEvent).toMatchObject({ resumedFrom: "old-session" });
@@ -238,7 +225,7 @@ describe("session hook context wiring", () => {
     expect(event).toMatchObject({ reason: "new" });
   });
 
-  it("marks daily stale rollovers and exposes the stable transcript path", async () => {
+  it("marks daily stale rollovers without exposing a transcript locator", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
@@ -256,7 +243,7 @@ describe("session hook context wiring", () => {
       expect(event).toMatchObject({
         reason: "daily",
       });
-      expect(event?.sessionFile).toContain("daily-session.jsonl");
+      expect(event).not.toHaveProperty("transcriptLocator");
       expect(event?.nextSessionId).toBe(startEvent?.sessionId);
     } finally {
       vi.useRealTimers();

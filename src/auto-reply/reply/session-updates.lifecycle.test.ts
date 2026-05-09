@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntry } from "../../config/sessions/store.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
@@ -30,11 +29,9 @@ async function createFixture() {
   }
   process.env.OPENCLAW_STATE_DIR = root;
   const sessionKey = "agent:main:forum:direct:compaction";
-  const transcriptPath = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "s1" });
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "s1",
-    transcriptPath,
     events: [{ type: "message" }],
   });
   const entry = {
@@ -46,7 +43,7 @@ async function createFixture() {
     [sessionKey]: entry,
   };
   upsertSessionEntry({ agentId: "main", sessionKey, entry });
-  return { sessionKey, sessionStore, entry, transcriptPath };
+  return { sessionKey, sessionStore, entry };
 }
 
 describe("session-updates lifecycle hooks", () => {
@@ -109,9 +106,7 @@ describe("session-updates lifecycle hooks", () => {
       sessionKey,
       reason: "compaction",
     });
-    expect(endEvent?.transcriptLocator).toBe(
-      createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "s1" }),
-    );
+    expect(endEvent).not.toHaveProperty("transcriptLocator");
     expect(endContext).toMatchObject({
       sessionId: "s1",
       sessionKey,
@@ -139,15 +134,9 @@ describe("session-updates lifecycle hooks", () => {
     }
     process.env.OPENCLAW_STATE_DIR = root;
     const sessionKey = "agent:main:forum:direct:compaction:topic:456";
-    const transcriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: "s1",
-      topicId: 456,
-    });
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "s1",
-      transcriptPath: transcriptLocator,
       events: [{ type: "message" }],
     });
     const entry = {
@@ -170,8 +159,8 @@ describe("session-updates lifecycle hooks", () => {
     });
 
     expect(sessionStore[sessionKey]?.sessionId).toBe("s2");
-    expect(sessionStore[sessionKey]?.transcriptLocator).toBeUndefined();
+    expect(sessionStore[sessionKey]).not.toHaveProperty("transcriptLocator");
     const [endEvent] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-    expect(endEvent?.transcriptLocator).toBe(transcriptLocator);
+    expect(endEvent).not.toHaveProperty("transcriptLocator");
   });
 });

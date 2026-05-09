@@ -1663,7 +1663,6 @@ export async function runReplyAgent(params: {
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         contextTokensUsed,
         newSessionId: runResult.meta?.agentMeta?.sessionId,
-        newTranscriptLocator: runResult.meta?.agentMeta?.transcriptLocator,
       });
       const refreshedSessionEntry =
         sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
@@ -1673,7 +1672,6 @@ export async function runReplyAgent(params: {
           key: queueKey,
           previousSessionId,
           nextSessionId: refreshedSessionEntry.sessionId,
-          nextTranscriptLocator: runResult.meta?.agentMeta?.transcriptLocator,
         });
       }
 

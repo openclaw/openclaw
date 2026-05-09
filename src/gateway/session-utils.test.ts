@@ -892,7 +892,6 @@ describe("listSessionsFromStore selected model display", () => {
         replaceSqliteSessionTranscriptEvents({
           agentId: "main",
           sessionId,
-          transcriptPath: sqliteTranscript(sessionId),
           events: [
             { type: "session", version: 1, id: sessionId },
             { message: { role: "user", content: `title ${i}` } },
@@ -964,7 +963,6 @@ describe("listSessionsFromStore selected model display", () => {
         replaceSqliteSessionTranscriptEvents({
           agentId: "main",
           sessionId,
-          transcriptPath: sqliteTranscript(sessionId),
           events: [
             { type: "session", version: 1, id: sessionId },
             { message: { role: "user", content: `title ${i}` } },

@@ -10,7 +10,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn(() => "main"));
 const loadSessionCostSummaryMock = vi.hoisted(() =>
-  vi.fn<() => Promise<SessionCostSummary | null>>(async () => null),
+  vi.fn<(params: unknown) => Promise<SessionCostSummary | null>>(async () => null),
 );
 const loadCostUsageSummaryMock = vi.hoisted(() =>
   vi.fn<() => Promise<CostUsageSummary>>(async () => ({
@@ -160,9 +160,10 @@ describe("handleUsageCommand", () => {
       }),
     );
     expect(loadSessionCostSummaryMock.mock.calls[0]?.[0]).not.toHaveProperty("transcriptLocator");
-    expect(loadSessionCostSummaryMock.mock.calls[0]?.[0]?.sessionEntry).not.toHaveProperty(
-      "transcriptLocator",
-    );
+    expect(
+      (loadSessionCostSummaryMock.mock.calls[0]?.[0] as { sessionEntry?: unknown } | undefined)
+        ?.sessionEntry,
+    ).not.toHaveProperty("transcriptLocator");
   });
 
   it("prefers the target session entry from sessionStore for /usage footer mode", async () => {

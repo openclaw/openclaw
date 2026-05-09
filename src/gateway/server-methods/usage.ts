@@ -72,7 +72,6 @@ function readSessionTranscriptUpdatedAt(params: {
   const scope = resolveSqliteSessionTranscriptScope({
     agentId: params.agentId,
     sessionId: params.sessionId,
-    transcriptLocator: params.transcriptLocator,
   });
   if (!scope) {
     return undefined;

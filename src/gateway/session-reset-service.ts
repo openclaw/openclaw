@@ -21,7 +21,6 @@ import {
   type SessionEntry,
   upsertSessionEntry,
 } from "../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import {
   appendSqliteSessionTranscriptEvent,
@@ -44,7 +43,6 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
-import { resolveStableSessionEndTranscript } from "./session-transcript-paths.js";
 import {
   loadSessionEntry,
   readSessionMessagesAsync,
@@ -71,7 +69,6 @@ export function emitGatewaySessionEndPluginHook(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
-  transcriptLocator?: string;
   agentId?: string;
   reason: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
   nextSessionId?: string;
@@ -84,17 +81,11 @@ export function emitGatewaySessionEndPluginHook(params: {
   if (!hookRunner?.hasHooks("session_end")) {
     return;
   }
-  const transcript = resolveStableSessionEndTranscript({
-    sessionId: params.sessionId,
-    transcriptLocator: params.transcriptLocator,
-    agentId: params.agentId,
-  });
   const payload = buildSessionEndHookPayload({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     cfg: params.cfg,
     reason: params.reason,
-    transcriptLocator: transcript.transcriptLocator,
     nextSessionId: params.nextSessionId,
     nextSessionKey: params.nextSessionKey,
   });
@@ -411,16 +402,12 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   const sessionKey = params.target.canonicalKey ?? params.key;
   const sessionId = params.entry?.sessionId;
   const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
-  const transcriptLocator = sessionId
-    ? createSqliteSessionTranscriptLocator({ agentId, sessionId })
-    : undefined;
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   let messages: unknown[] = [];
   try {
     if (typeof sessionId === "string" && sessionId.trim().length > 0) {
       messages = await readGatewayBeforeResetMessages({
         agentId,
-        transcriptLocator,
         sessionId,
       });
     }
@@ -433,7 +420,6 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   void hookRunner
     .runBeforeReset(
       {
-        transcriptLocator,
         messages,
         reason: params.reason,
       },
@@ -451,17 +437,22 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 
 async function readGatewayBeforeResetMessages(params: {
   agentId: string;
-  transcriptLocator?: string;
   sessionId: string;
 }): Promise<unknown[]> {
   const scopedMessages = loadScopedGatewayBeforeResetMessages(params);
   if (scopedMessages) {
     return scopedMessages;
   }
-  return await readSessionMessagesAsync(params.sessionId, params.transcriptLocator, {
-    mode: "full",
-    reason: "before_reset hook payload",
-  });
+  return await readSessionMessagesAsync(
+    {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    },
+    {
+      mode: "full",
+      reason: "before_reset hook payload",
+    },
+  );
 }
 
 function loadScopedGatewayBeforeResetMessages(params: {
@@ -486,7 +477,7 @@ export async function performGatewaySessionReset(params: {
   reason: "new" | "reset";
   commandSource: string;
 }): Promise<
-  | { ok: true; key: string; entry: SessionEntry & { transcriptLocator: string } }
+  | { ok: true; key: string; entry: SessionEntry }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
   const { cfg, target } = (() => {
@@ -523,7 +514,6 @@ export async function performGatewaySessionReset(params: {
   }
 
   let oldSessionId: string | undefined;
-  let oldTranscriptLocator: string | undefined;
   let resetSourceEntry: SessionEntry | undefined;
   let deleteOldTranscript = false;
   const currentEntry = getSessionEntry({
@@ -550,12 +540,6 @@ export async function performGatewaySessionReset(params: {
     };
     const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
     oldSessionId = currentEntry?.sessionId;
-    oldTranscriptLocator = oldSessionId
-      ? createSqliteSessionTranscriptLocator({
-          agentId: sessionAgentId,
-          sessionId: oldSessionId,
-        })
-      : undefined;
     const now = Date.now();
     const nextSessionId = randomUUID();
     const nextEntry: SessionEntry = {
@@ -664,7 +648,6 @@ export async function performGatewaySessionReset(params: {
     cfg,
     sessionKey: target.canonicalKey ?? params.key,
     sessionId: oldSessionId,
-    transcriptLocator: oldTranscriptLocator,
     agentId: target.agentId,
     reason: params.reason,
     nextSessionId: next.sessionId,
@@ -690,12 +673,6 @@ export async function performGatewaySessionReset(params: {
   return {
     ok: true,
     key: target.canonicalKey,
-    entry: {
-      ...next,
-      transcriptLocator: createSqliteSessionTranscriptLocator({
-        agentId: target.agentId,
-        sessionId: next.sessionId,
-      }),
-    },
+    entry: next,
   };
 }

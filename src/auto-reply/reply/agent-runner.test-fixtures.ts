@@ -4,13 +4,7 @@ import {
   type SessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import type { FollowupRun } from "./queue.js";
-
-const TEST_FOLLOWUP_SESSION_FILE = createSqliteSessionTranscriptLocator({
-  agentId: "main",
-  sessionId: "session",
-});
 
 export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
   return {
@@ -23,7 +17,6 @@ export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {
       sessionId: "session",
       sessionKey: "main",
       messageProvider: "whatsapp",
-      sessionFile: TEST_FOLLOWUP_SESSION_FILE,
       workspaceDir: "/tmp",
       config: {},
       skillsSnapshot: {},

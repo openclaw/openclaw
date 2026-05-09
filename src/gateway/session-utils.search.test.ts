@@ -69,7 +69,6 @@ function withTranscriptStoreFixture<T>(params: {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: params.transcriptId,
-    transcriptPath: sqliteTranscript(params.transcriptId),
     events: [
       { type: "session", version: 1, id: params.transcriptId },
       {

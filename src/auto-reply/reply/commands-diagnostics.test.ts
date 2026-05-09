@@ -338,7 +338,6 @@ describe("diagnostics command", () => {
       buildDiagnosticsParams("/diagnostics flaky tool call", {
         sessionEntry: {
           sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
           updatedAt: 1,
           agentHarnessId: "codex",
         },
@@ -352,12 +351,11 @@ describe("diagnostics command", () => {
     expect(calls[0]?.args).toBe("diagnostics flaky tool call");
     expect(calls[0]?.diagnosticsPreviewOnly).toBe(true);
     expect(calls[0]?.senderIsOwner).toBe(true);
-    expect(calls[0]?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(calls[0]?.transcriptLocator).toBe("sqlite-transcript://main/session-1");
     expect(calls[0]?.diagnosticsSessions).toEqual([
       expect.objectContaining({
         agentHarnessId: "codex",
         sessionId: "session-1",
-        sessionFile: "/tmp/session.jsonl",
         channel: "whatsapp",
         accountId: "account-1",
       }),
@@ -382,7 +380,7 @@ describe("diagnostics command", () => {
     expect(calls[1]?.diagnosticsUploadApproved).toBe(true);
   });
 
-  it("passes sidecar-bound session files to Codex diagnostics even when harness metadata is stale", async () => {
+  it("passes sidecar-bound transcript locators to Codex diagnostics even when harness metadata is stale", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
@@ -390,18 +388,15 @@ describe("diagnostics command", () => {
         sessionKey: "agent:main:telegram:direct:user-1",
         sessionEntry: {
           sessionId: "telegram-session",
-          sessionFile: "/tmp/telegram.jsonl",
           updatedAt: 1,
         },
         sessionStore: {
           "agent:main:telegram:direct:user-1": {
             sessionId: "telegram-session",
-            sessionFile: "/tmp/telegram.jsonl",
             updatedAt: 1,
           },
           "agent:main:discord:channel:123": {
             sessionId: "discord-session",
-            sessionFile: "/tmp/discord.jsonl",
             updatedAt: 2,
             channel: "discord",
           },
@@ -417,13 +412,11 @@ describe("diagnostics command", () => {
       expect.objectContaining({
         sessionKey: "agent:main:telegram:direct:user-1",
         sessionId: "telegram-session",
-        sessionFile: "/tmp/telegram.jsonl",
         channel: "whatsapp",
       }),
       expect.objectContaining({
         sessionKey: "agent:main:discord:channel:123",
         sessionId: "discord-session",
-        sessionFile: "/tmp/discord.jsonl",
         channel: "discord",
       }),
     ]);
@@ -451,7 +444,6 @@ describe("diagnostics command", () => {
       buildDiagnosticsParams("/diagnostics", {
         sessionEntry: {
           sessionId: "ordinary-session",
-          sessionFile: "/tmp/ordinary.jsonl",
           updatedAt: 1,
         },
       }),
@@ -479,7 +471,6 @@ describe("diagnostics command", () => {
         isGroup: true,
         sessionEntry: {
           sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
           updatedAt: 1,
           agentHarnessId: "codex",
         },
@@ -518,7 +509,6 @@ describe("diagnostics command", () => {
         isGroup: true,
         sessionEntry: {
           sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
           updatedAt: 1,
           agentHarnessId: "codex",
         },

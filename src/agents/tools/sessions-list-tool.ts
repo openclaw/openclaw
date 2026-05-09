@@ -336,11 +336,10 @@ export function createSessionsListTool(opts?: {
               return;
             }
             const target = titleTargets[next];
-            const fields = await readSessionTitleFieldsFromTranscriptAsync(
-              target.sessionId,
-              undefined,
-              target.agentId,
-            );
+            const fields = await readSessionTitleFieldsFromTranscriptAsync({
+              agentId: target.agentId,
+              sessionId: target.sessionId,
+            });
             if (includeDerivedTitles && !target.row.derivedTitle) {
               target.row.derivedTitle = deriveSessionTitle(
                 target.titleEntry,

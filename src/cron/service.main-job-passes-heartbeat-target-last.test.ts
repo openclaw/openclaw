@@ -35,7 +35,6 @@ describe("cron main job passes heartbeat target=last", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const cron = new CronService({
-      storePath: params.storePath,
       cronEnabled: true,
       log: logger,
       enqueueSystemEvent,

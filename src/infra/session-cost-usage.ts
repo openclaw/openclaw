@@ -6,7 +6,6 @@ import {
   listSqliteSessionTranscriptLocators,
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForLocator,
   type SqliteSessionTranscriptEvent,
 } from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -307,20 +306,6 @@ function resolveUsageSessionScope(params: {
       }),
     };
   }
-  if (params.transcriptLocator) {
-    const scope = resolveSqliteSessionTranscriptScopeForLocator({
-      transcriptLocator: params.transcriptLocator,
-    });
-    if (scope) {
-      return {
-        ...scope,
-        transcriptLocator: resolveSyntheticTranscriptLocator({
-          ...scope,
-          transcriptLocator: params.transcriptLocator,
-        }),
-      };
-    }
-  }
   return undefined;
 }
 
@@ -503,7 +488,7 @@ export async function loadCostUsageSummaryFromCache(params: {
 export async function loadSessionCostSummaryFromCache(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  transcriptLocator: string;
+  transcriptLocator?: string;
   config?: OpenClawConfig;
   agentId?: string;
   startMs?: number;

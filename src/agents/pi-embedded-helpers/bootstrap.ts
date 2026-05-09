@@ -1,13 +1,9 @@
-import { isSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import {
   appendSqliteSessionTranscriptEvent,
   hasSqliteSessionTranscriptEvents,
-  loadSqliteSessionTranscriptEvents,
-  replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
@@ -250,36 +246,22 @@ function clampToBudget(content: string, budget: number): string {
 }
 
 export async function ensureSessionHeader(params: {
-  transcriptLocator: string;
+  agentId: string;
   sessionId: string;
   cwd: string;
-  agentId?: string;
   env?: OpenClawStateDatabaseOptions["env"];
 }) {
-  const trimmedTranscriptLocator = params.transcriptLocator.trim();
-  if (!isSqliteSessionTranscriptLocator(trimmedTranscriptLocator)) {
-    throw new Error(
-      `Transcript locator must be SQLite-backed: ${trimmedTranscriptLocator}. Run "openclaw doctor --fix" to import legacy transcript files.`,
-    );
+  const agentId = normalizeAgentId(params.agentId);
+  const sessionId = params.sessionId.trim();
+  if (!sessionId) {
+    throw new Error("SQLite session header requires a session id.");
   }
-  const existingScope = resolveSqliteSessionTranscriptScopeForLocator({
-    transcriptLocator: trimmedTranscriptLocator,
-    env: params.env,
-  });
-  const agentId = normalizeAgentId(params.agentId ?? existingScope?.agentId ?? DEFAULT_AGENT_ID);
-  const sessionId = existingScope?.sessionId ?? params.sessionId;
   const existingEventsScope = {
     agentId,
     sessionId,
     env: params.env,
   };
   if (hasSqliteSessionTranscriptEvents(existingEventsScope)) {
-    if (!existingScope) {
-      replaceSqliteSessionTranscriptEvents({
-        ...existingEventsScope,
-        events: loadSqliteSessionTranscriptEvents(existingEventsScope).map((entry) => entry.event),
-      });
-    }
     return;
   }
   const sessionVersion = 2;

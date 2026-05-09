@@ -39,16 +39,10 @@ function useStateRoot(root: string): void {
   process.env.OPENCLAW_STATE_DIR = root;
 }
 
-function seedTranscript(params: {
-  agentId?: string;
-  sessionId: string;
-  transcriptPath: string;
-  events: unknown[];
-}): void {
+function seedTranscript(params: { agentId?: string; sessionId: string; events: unknown[] }): void {
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId ?? "main",
     sessionId: params.sessionId,
-    transcriptPath: params.transcriptPath,
     events: params.events,
     now: () => 1_770_000_000_000,
   });
@@ -97,11 +91,10 @@ describe("resolveParentForkTokenCountRuntime", () => {
         },
       );
     }
-    seedTranscript({ sessionId, transcriptPath: transcriptLocator, events });
+    seedTranscript({ sessionId, events });
 
     const entry: SessionEntry = {
       sessionId,
-      sessionFile: transcriptLocator,
       updatedAt: Date.now(),
       totalTokens: 1,
       totalTokensFresh: false,
@@ -139,11 +132,10 @@ describe("resolveParentForkTokenCountRuntime", () => {
         message: { role: "user", content: `turn-${index} ${"x".repeat(24_000)}` },
       });
     }
-    seedTranscript({ sessionId, transcriptPath: transcriptLocator, events });
+    seedTranscript({ sessionId, events });
 
     const entry: SessionEntry = {
       sessionId,
-      sessionFile: transcriptLocator,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -164,7 +156,6 @@ describe("resolveParentForkTokenCountRuntime", () => {
     const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
     seedTranscript({
       sessionId,
-      transcriptPath: transcriptLocator,
       events: [
         {
           type: "session",
@@ -192,7 +183,6 @@ describe("resolveParentForkTokenCountRuntime", () => {
 
     const entry: SessionEntry = {
       sessionId,
-      sessionFile: transcriptLocator,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -213,7 +203,6 @@ describe("resolveParentForkTokenCountRuntime", () => {
     const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
     seedTranscript({
       sessionId,
-      transcriptPath: transcriptLocator,
       events: [
         {
           type: "session",
@@ -240,7 +229,6 @@ describe("resolveParentForkTokenCountRuntime", () => {
 
     const entry: SessionEntry = {
       sessionId,
-      sessionFile: transcriptLocator,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -304,12 +292,11 @@ describe("forkSessionFromParentRuntime", () => {
         label: "start",
       },
     ];
-    seedTranscript({ sessionId: parentSessionId, transcriptPath: parentTranscriptLocator, events });
+    seedTranscript({ sessionId: parentSessionId, events });
 
     const fork = await forkSessionFromParentRuntime({
       parentEntry: {
         sessionId: parentSessionId,
-        sessionFile: parentTranscriptLocator,
         updatedAt: Date.now(),
       },
       agentId: "main",
@@ -318,9 +305,6 @@ describe("forkSessionFromParentRuntime", () => {
     if (fork === null) {
       throw new Error("Expected forked session");
     }
-    expect(fork.sessionFile).toBe(
-      createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: fork.sessionId }),
-    );
     expect(fork.sessionId).not.toBe(parentSessionId);
     const forkedEntries = readTranscript("main", fork.sessionId) as Array<Record<string, unknown>>;
     expect(forkedEntries[0]).toMatchObject({
@@ -352,7 +336,6 @@ describe("forkSessionFromParentRuntime", () => {
     });
     seedTranscript({
       sessionId: parentSessionId,
-      transcriptPath: parentTranscriptLocator,
       events: [
         {
           type: "session",
@@ -367,7 +350,6 @@ describe("forkSessionFromParentRuntime", () => {
     const fork = await forkSessionFromParentRuntime({
       parentEntry: {
         sessionId: parentSessionId,
-        sessionFile: parentTranscriptLocator,
         updatedAt: Date.now(),
       },
       agentId: "main",

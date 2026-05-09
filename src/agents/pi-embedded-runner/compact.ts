@@ -3,6 +3,7 @@ import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
@@ -98,9 +99,9 @@ import {
   resolveSkillsPromptForRun,
 } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
-import { repairTranscriptStateIfNeeded } from "../transcript-state-repair.js";
+import { repairTranscriptSessionStateIfNeeded } from "../transcript-state-repair.js";
 import type { SessionManager as TranscriptSessionManager } from "../transcript/session-manager-contract.js";
-import { openTranscriptSessionManager } from "../transcript/session-manager.js";
+import { openTranscriptSessionManagerForSession } from "../transcript/session-manager.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
@@ -511,10 +512,15 @@ async function compactEmbeddedPiSessionDirectOnce(
   };
   const earlyAgentIds = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     config: params.config,
   });
-  const agentDir =
-    params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
+  const sessionAgentId = earlyAgentIds.sessionAgentId;
+  const transcriptLocator = createSqliteSessionTranscriptLocator({
+    agentId: sessionAgentId,
+    sessionId: params.sessionId,
+  });
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   await ensureOpenClawModelsJson(params.config, agentDir, {
     workspaceDir: resolvedWorkspace,
   });
@@ -595,13 +601,13 @@ async function compactEmbeddedPiSessionDirectOnce(
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
   await ensureSessionHeader({
-    transcriptLocator: params.transcriptLocator,
+    agentId: sessionAgentId,
     sessionId: params.sessionId,
     cwd: effectiveWorkspace,
-    agentId: earlyAgentIds.sessionAgentId,
   });
   const { sessionAgentId: effectiveSkillAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     config: params.config,
   });
 
@@ -802,10 +808,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             accountId: params.agentAccountId,
           })
         : undefined;
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-    });
+    const defaultAgentId = earlyAgentIds.defaultAgentId;
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
       ? listChannelSupportedActions(
@@ -942,15 +945,16 @@ async function compactEmbeddedPiSessionDirectOnce(
     };
 
     try {
-      await repairTranscriptStateIfNeeded({
-        transcriptLocator: params.transcriptLocator,
+      await repairTranscriptSessionStateIfNeeded({
+        agentId: sessionAgentId,
+        sessionId: params.sessionId,
         debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });
       const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
       const sessionManager = guardSessionManager(
-        openTranscriptSessionManager({
-          transcriptLocator: params.transcriptLocator,
+        openTranscriptSessionManagerForSession({
+          agentId: sessionAgentId,
           sessionId: params.sessionId,
           cwd: effectiveWorkspace,
         }),
@@ -972,8 +976,9 @@ async function compactEmbeddedPiSessionDirectOnce(
       );
       checkpointSnapshot = await captureCompactionCheckpointSnapshotAsync({
         agentId: sessionAgentId,
+        sessionId: params.sessionId,
         sessionManager,
-        transcriptLocator: params.transcriptLocator,
+        transcriptLocator: transcriptLocator,
       });
       compactionSessionManager = sessionManager;
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
@@ -1241,7 +1246,8 @@ async function compactEmbeddedPiSessionDirectOnce(
           if (params.trigger === "manual") {
             try {
               const hardenedBoundary = await hardenManualCompactionBoundary({
-                transcriptLocator: params.transcriptLocator,
+                agentId: sessionAgentId,
+                sessionId: params.sessionId,
                 preserveRecentTail:
                   typeof params.config?.agents?.defaults?.compaction?.keepRecentTokens === "number",
               });
@@ -1274,7 +1280,7 @@ async function compactEmbeddedPiSessionDirectOnce(
               transcriptRotation = await rotateTranscriptAfterCompaction({
                 sessionManager: transcriptRotationSessionManager,
                 agentId: sessionAgentId,
-                transcriptLocator: params.transcriptLocator,
+                sessionId: params.sessionId,
               });
             } catch (err) {
               log.warn("[compaction] post-compaction transcript rotation failed", {
@@ -1284,8 +1290,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             }
           }
           const activeSessionId = transcriptRotation.sessionId ?? params.sessionId;
-          const activeTranscriptLocator =
-            transcriptRotation.transcriptLocator ?? params.transcriptLocator;
+          const activeTranscriptLocator = transcriptRotation.transcriptLocator ?? transcriptLocator;
           const activePostLeafId = transcriptRotation.leafId ?? postCompactionLeafId;
           if (transcriptRotation.rotated) {
             log.info(
@@ -1354,7 +1359,6 @@ async function compactEmbeddedPiSessionDirectOnce(
             messageCountAfter,
             tokensAfter,
             compactedCount,
-            transcriptLocator: activeTranscriptLocator,
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
@@ -1370,7 +1374,6 @@ async function compactEmbeddedPiSessionDirectOnce(
               tokensAfter,
               details: result.details,
               sessionId: transcriptRotation.sessionId,
-              transcriptLocator: transcriptRotation.transcriptLocator,
             },
           };
         } catch (err) {

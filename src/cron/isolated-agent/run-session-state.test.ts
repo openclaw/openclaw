@@ -47,7 +47,6 @@ describe("createPersistCronSessionEntry", () => {
   it("persists isolated cron state only under the stable cron session key", async () => {
     const cronSession = makeCronSession(
       makeSessionEntry({
-        sessionFile: seedCronTranscript(),
         status: "running",
         startedAt: 900,
         skillsSnapshot: {
@@ -81,7 +80,6 @@ describe("createPersistCronSessionEntry", () => {
     );
     const cronSession = makeCronSession(
       makeSessionEntry({
-        sessionFile: missingTranscriptPath,
         label: "Cron: shell-only",
         status: "running",
       }),
@@ -96,7 +94,7 @@ describe("createPersistCronSessionEntry", () => {
         }),
       );
       expect(entry.sessionId).toBeUndefined();
-      expect(entry.sessionFile).toBeUndefined();
+      expect(entry).not.toHaveProperty("transcriptLocator");
     });
 
     const persist = createPersistCronSessionEntry({
@@ -109,14 +107,13 @@ describe("createPersistCronSessionEntry", () => {
     await persist();
 
     expect(cronSession.store["agent:main:cron:shell-only"]?.sessionId).toBeUndefined();
-    expect(cronSession.store["agent:main:cron:shell-only"]?.sessionFile).toBeUndefined();
+    expect(cronSession.store["agent:main:cron:shell-only"]).not.toHaveProperty("transcriptLocator");
   });
 
   it("restores resumable cron fields once the transcript exists", async () => {
     const transcriptPath = seedCronTranscript();
     const cronSession = makeCronSession(
       makeSessionEntry({
-        sessionFile: transcriptPath,
         label: "Cron: completed",
       }),
     );
@@ -129,7 +126,6 @@ describe("createPersistCronSessionEntry", () => {
         expect(sessionKey).toBe("agent:main:cron:completed");
         expect(entry).toMatchObject({
           sessionId: "run-session-id",
-          sessionFile: transcriptPath,
           label: "Cron: completed",
         });
       }),
@@ -139,7 +135,6 @@ describe("createPersistCronSessionEntry", () => {
 
     expect(cronSession.store["agent:main:cron:completed"]).toMatchObject({
       sessionId: "run-session-id",
-      sessionFile: transcriptPath,
     });
   });
 
@@ -171,7 +166,6 @@ function seedCronTranscript(): string {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "run-session-id",
-    transcriptPath: transcriptLocator,
     events: [
       {
         type: "session",

@@ -114,7 +114,6 @@ export {
   readSessionPreviewItemsFromTranscript,
   readSessionMessagesAsync,
   visitSessionMessagesAsync,
-  resolveSessionTranscriptCandidates,
 } from "./session-transcript-readers.js";
 export type { ReadSessionMessagesAsyncOptions } from "./session-transcript-readers.js";
 export { canonicalizeSpawnedByForAgent, resolveSessionRowKey } from "./session-row-key.js";
@@ -634,9 +633,7 @@ function resolveTranscriptUsageFallback(params: {
     ? normalizeAgentId(parsed.agentId)
     : resolveDefaultAgentId(params.cfg);
   const snapshot = readRecentSessionUsageFromTranscript(
-    entry.sessionId,
-    undefined,
-    agentId,
+    { agentId, sessionId: entry.sessionId },
     typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
   );
   if (!snapshot) {
@@ -1396,7 +1393,10 @@ export function buildGatewaySessionRow(params: {
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
-    const fields = readSessionTitleFieldsFromTranscript(entry.sessionId, undefined, sessionAgentId);
+    const fields = readSessionTitleFieldsFromTranscript({
+      agentId: sessionAgentId,
+      sessionId: entry.sessionId,
+    });
     if (params.includeDerivedTitles) {
       derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
     }
@@ -1844,11 +1844,10 @@ export async function listSessionsFromStoreAsync(params: {
       const sessionAgentId = parsed?.agentId
         ? normalizeAgentId(parsed.agentId)
         : resolveDefaultAgentId(cfg);
-      const fields = await readSessionTitleFieldsFromTranscriptAsync(
-        entry.sessionId,
-        undefined,
-        sessionAgentId,
-      );
+      const fields = await readSessionTitleFieldsFromTranscriptAsync({
+        agentId: sessionAgentId,
+        sessionId: entry.sessionId,
+      });
       if (includeDerivedTitles) {
         row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
       }

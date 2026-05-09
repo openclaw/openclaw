@@ -29,7 +29,6 @@ describe("cron SQLite edit persistence", () => {
     ]);
 
     const service = new CronService({
-      storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
@@ -53,7 +52,6 @@ describe("cron SQLite edit persistence", () => {
 
     service.stop();
     const service2 = new CronService({
-      storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),

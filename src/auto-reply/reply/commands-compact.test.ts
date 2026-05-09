@@ -11,7 +11,7 @@ vi.mock("./commands-compact.runtime.js", () => ({
   compactEmbeddedPiSession: vi.fn(),
   createSqliteSessionTranscriptLocator: vi.fn(
     ({ agentId, sessionId }: { agentId: string; sessionId: string }) =>
-      `sqlite-transcript://${agentId}/${sessionId}.jsonl`,
+      `sqlite-transcript://${agentId}/${sessionId}`,
   ),
   enqueueSystemEvent: vi.fn(),
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
@@ -157,7 +157,7 @@ describe("handleCompactCommand", () => {
     );
   });
 
-  it("uses the canonical session agent when resolving the compaction session file", async () => {
+  it("uses the canonical session agent when compacting the SQLite session", async () => {
     vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
       ok: true,
       compacted: false,
@@ -187,7 +187,8 @@ describe("handleCompactCommand", () => {
     });
     expect(vi.mocked(compactEmbeddedPiSession)).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionFile: "sqlite-transcript://target/session-1.jsonl",
+        agentId: "target",
+        sessionId: "session-1",
       }),
     );
   });

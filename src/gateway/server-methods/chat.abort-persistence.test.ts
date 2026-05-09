@@ -20,8 +20,8 @@ type TranscriptLine = {
 };
 
 const sessionEntryState = vi.hoisted(() => ({
-  transcriptPath: "",
   sessionId: "",
+  transcriptPath: "",
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -33,7 +33,6 @@ vi.mock("../session-utils.js", async () => {
       cfg: {},
       entry: {
         sessionId: sessionEntryState.sessionId,
-        sessionFile: sessionEntryState.transcriptPath,
       },
       canonicalKey: "main",
     }),
@@ -53,7 +52,6 @@ async function writeTranscriptHeader(transcriptPath: string, sessionId: string) 
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
-    transcriptPath,
     events: [header],
   });
 }

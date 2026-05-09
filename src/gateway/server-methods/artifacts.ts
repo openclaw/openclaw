@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
@@ -316,11 +315,10 @@ async function loadArtifacts(
   }
   const artifacts: ArtifactRecord[] = [];
   await visitSessionMessagesAsync(
-    sessionId,
-    createSqliteSessionTranscriptLocator({
+    {
       agentId: resolveAgentIdFromSessionKey(sessionKey),
       sessionId,
-    }),
+    },
     (message, seq) => {
       collectArtifactsFromMessage({
         message,
@@ -332,7 +330,6 @@ async function loadArtifacts(
       });
     },
     {
-      agentId: resolveAgentIdFromSessionKey(sessionKey),
       mode: "full",
       reason: "artifact query transcript scan",
     },

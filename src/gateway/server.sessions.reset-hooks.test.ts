@@ -1,9 +1,5 @@
 import { expect, test } from "vitest";
-import {
-  createSqliteSessionTranscriptLocator,
-  getSessionEntry,
-  upsertSessionEntry,
-} from "../config/sessions.js";
+import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { embeddedRunMock, seedGatewaySessionEntries, testState } from "./test-helpers.js";
 import {
@@ -21,10 +17,6 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
-
-function sqliteTranscript(sessionId: string): string {
-  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
-}
 
 test("sessions.reset emits internal command hook with reason", async () => {
   const { dir } = await createSessionStoreDir();
@@ -76,11 +68,9 @@ test("sessions.reset emits internal command hook with reason", async () => {
 
 test("sessions.reset emits before_reset hook with transcript context", async () => {
   await createSessionStoreDir();
-  const transcriptPath = sqliteTranscript("sess-main");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath,
     events: [
       {
         type: "message",
@@ -94,7 +84,6 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
     entries: {
       main: {
         sessionId: "sess-main",
-        sessionFile: transcriptPath,
         updatedAt: Date.now(),
       },
     },
@@ -112,7 +101,6 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
     beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
   )[0] ?? [undefined, undefined];
   expect(event).toMatchObject({
-    sessionFile: transcriptPath,
     reason: "new",
     messages: [
       {
@@ -130,11 +118,9 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
 
 test("sessions.reset emits before_reset hook with scoped SQLite transcript context", async () => {
   await createSessionStoreDir();
-  const transcriptPath = sqliteTranscript("sess-main-sqlite");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main-sqlite",
-    transcriptPath,
     events: [
       {
         type: "message",
@@ -148,7 +134,6 @@ test("sessions.reset emits before_reset hook with scoped SQLite transcript conte
     entries: {
       main: {
         sessionId: "sess-main-sqlite",
-        sessionFile: transcriptPath,
         updatedAt: Date.now(),
       },
     },
@@ -166,7 +151,6 @@ test("sessions.reset emits before_reset hook with scoped SQLite transcript conte
     beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
   )[0] ?? [undefined, undefined];
   expect(event).toMatchObject({
-    sessionFile: transcriptPath,
     reason: "new",
     messages: [
       {
@@ -184,11 +168,9 @@ test("sessions.reset emits before_reset hook with scoped SQLite transcript conte
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
   await createSessionStoreDir();
-  const transcriptPath = sqliteTranscript("sess-main");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath,
     events: [
       {
         type: "message",
@@ -202,7 +184,6 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
     entries: {
       main: {
         sessionId: "sess-main",
-        sessionFile: transcriptPath,
         updatedAt: Date.now(),
       },
     },
@@ -228,9 +209,7 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
     sessionKey: "agent:main:main",
     reason: "new",
   });
-  expect((endEvent as { sessionFile?: string } | undefined)?.sessionFile).toBe(
-    createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "sess-main" }),
-  );
+  expect(endEvent).not.toHaveProperty("transcriptLocator");
   expect((endEvent as { nextSessionId?: string } | undefined)?.nextSessionId).toBe(
     (startEvent as { sessionId?: string } | undefined)?.sessionId,
   );
@@ -279,12 +258,9 @@ test("sessions.reset returns unavailable when active run does not stop", async (
 
 test("sessions.reset emits before_reset for the entry actually reset in the SQLite patch", async () => {
   await createSessionStoreDir();
-  const oldTranscriptPath = sqliteTranscript("sess-old");
-  const newTranscriptPath = sqliteTranscript("sess-new");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-old",
-    transcriptPath: oldTranscriptPath,
     events: [
       {
         type: "message",
@@ -296,7 +272,6 @@ test("sessions.reset emits before_reset for the entry actually reset in the SQLi
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-new",
-    transcriptPath: newTranscriptPath,
     events: [
       {
         type: "message",
@@ -310,7 +285,6 @@ test("sessions.reset emits before_reset for the entry actually reset in the SQLi
     entries: {
       main: {
         sessionId: "sess-old",
-        sessionFile: oldTranscriptPath,
         updatedAt: Date.now(),
       },
     },
@@ -321,9 +295,7 @@ test("sessions.reset emits before_reset for the entry actually reset in the SQLi
   upsertSessionEntry({
     agentId: "main",
     sessionKey: "agent:main:main",
-    entry: sessionStoreEntry("sess-new", {
-      sessionFile: newTranscriptPath,
-    }),
+    entry: sessionStoreEntry("sess-new", {}),
   });
 
   const reset = await performGatewaySessionReset({
@@ -341,7 +313,6 @@ test("sessions.reset emits before_reset for the entry actually reset in the SQLi
     beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
   )[0] ?? [undefined, undefined];
   expect(event).toMatchObject({
-    sessionFile: newTranscriptPath,
     reason: "new",
     messages: [
       {
@@ -394,11 +365,9 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
   await createSessionStoreDir();
-  const transcriptPath = sqliteTranscript("sess-parent-hooks");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-parent-hooks",
-    transcriptPath,
     events: [
       {
         type: "message",
@@ -412,7 +381,6 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
     entries: {
       main: {
         sessionId: "sess-parent-hooks",
-        sessionFile: transcriptPath,
         updatedAt: Date.now(),
       },
     },
@@ -431,7 +399,6 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
     beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
   )[0] ?? [undefined, undefined];
   expect(beforeResetEvent).toMatchObject({
-    sessionFile: transcriptPath,
     reason: "new",
     messages: [
       {
@@ -473,11 +440,9 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
 
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
   await createSessionStoreDir();
-  const transcriptPath = sqliteTranscript("sess-parent-dms");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-parent-dms",
-    transcriptPath,
     events: [
       {
         type: "message",
@@ -493,7 +458,6 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
       entries: {
         main: {
           sessionId: "sess-parent-dms",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
       },

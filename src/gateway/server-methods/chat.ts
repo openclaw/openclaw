@@ -5,7 +5,7 @@ import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/ag
 import { rewriteTranscriptEntriesInSqliteTranscript } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { readTranscriptState } from "../../agents/transcript/transcript-state.js";
+import { readTranscriptStateForSession } from "../../agents/transcript/transcript-state.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -1027,7 +1027,10 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   if (!("MediaPath" in mediaFields)) {
     return;
   }
-  const transcriptState = await readTranscriptState(params.transcriptLocator);
+  const transcriptState = await readTranscriptStateForSession({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+  });
   const target = transcriptState
     .getBranch()
     .toReversed()
@@ -1063,7 +1066,6 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
     ...mediaFields,
   };
   await rewriteTranscriptEntriesInSqliteTranscript({
-    transcriptLocator: params.transcriptLocator,
     agentId: params.agentId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -1685,13 +1687,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages = sessionId
       ? await readRecentSessionMessagesAsync(
-          sessionId,
-          createSqliteSessionTranscriptLocator({
-            agentId: sessionAgentId,
-            sessionId,
-          }),
           {
             agentId: sessionAgentId,
+            sessionId,
+          },
+          {
             maxMessages: max,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
           },

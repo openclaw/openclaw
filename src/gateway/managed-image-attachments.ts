@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { getSqliteSessionTranscriptStats } from "../config/sessions/transcript-store.sqlite.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
@@ -694,10 +693,8 @@ async function getSessionManagedOutgoingAttachmentIndex(
   }
 
   const messages = await readSessionMessagesAsync(
-    sessionId,
-    createSqliteSessionTranscriptLocator({ agentId, sessionId }),
+    { agentId, sessionId },
     {
-      agentId,
       mode: "full",
       reason: "managed outgoing attachment index",
     },

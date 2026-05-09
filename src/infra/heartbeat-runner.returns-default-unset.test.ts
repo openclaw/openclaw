@@ -172,14 +172,10 @@ const createCaseDir = async (prefix: string) => {
 
 type TestSessionRowsTarget = {
   agentId: string;
-  transcriptDir: string;
 };
 
 function sessionRowsTarget(root: string, agentId = "main"): TestSessionRowsTarget {
-  return {
-    agentId,
-    transcriptDir: path.join(root, "transcript-fixtures", agentId),
-  };
+  return { agentId };
 }
 
 async function replaceTestSessionRows(
@@ -828,7 +824,7 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it("reuses non-default agent sessionFile from templated stores", async () => {
+  it("reuses non-default agent session rows from templated stores", async () => {
     const tmpDir = await createCaseDir("hb-templated-store");
     const replySpy = vi.fn();
     const agentId = "ops";
@@ -852,14 +848,11 @@ describe("runHeartbeatOnce", () => {
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       const target = sessionRowsTarget(tmpDir, agentId);
-      const { transcriptDir } = target;
       const sessionId = "sid-ops";
-      const sessionFile = path.join(transcriptDir, `${sessionId}.jsonl`);
 
       await replaceTestSessionRows(target, {
         [sessionKey]: {
           sessionId,
-          sessionFile,
           updatedAt: Date.now(),
           lastChannel: "whatsapp",
           lastTo: "120363401234567890@g.us",

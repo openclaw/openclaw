@@ -3,9 +3,7 @@ import {
   hasSqliteSessionTranscriptEvents,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../../config/sessions/transcript-store.sqlite.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 
 /** Tail kept so DM continuity survives silent session rotations. */
 export const DEFAULT_REPLAY_MAX_MESSAGES = 6;
@@ -14,19 +12,17 @@ type SessionRecord = { message?: { role?: unknown } };
 type KeptRecord = { role: "user" | "assistant"; event: unknown };
 
 /**
- * Copy the tail of user/assistant JSONL records from a prior transcript into a
- * freshly-rotated one. Tool, system, and compaction records are skipped so
+ * Copy the tail of user/assistant SQLite transcript events from a prior session
+ * into a freshly-rotated one. Tool, system, and compaction records are skipped so
  * replay cannot reshape tool/role ordering, and the tail is aligned and
  * coalesced into alternating user/assistant turns so role-ordering resets
  * cannot immediately recur. Uses async I/O so long transcripts do not block
  * the event loop. Returns 0 on any error.
  */
 export async function replayRecentUserAssistantMessages(params: {
-  sourceAgentId?: string;
-  sourceSessionId?: string;
-  sourceTranscript?: string;
+  sourceAgentId: string;
+  sourceSessionId: string;
   targetAgentId?: string;
-  targetTranscript: string;
   newSessionId: string;
   maxMessages?: number;
 }): Promise<number> {
@@ -35,7 +31,7 @@ export async function replayRecentUserAssistantMessages(params: {
     return 0;
   }
   try {
-    const sourceEvents = loadReplaySourceEvents(params);
+    const sourceEvents = loadScopedReplaySourceEvents(params);
     if (!sourceEvents) {
       return 0;
     }
@@ -59,10 +55,7 @@ export async function replayRecentUserAssistantMessages(params: {
       return 0;
     }
     const tail = coalesceAlternatingReplayTail(kept.slice(startIdx)).map((entry) => entry.event);
-    const targetAgentId =
-      params.targetAgentId ??
-      params.sourceAgentId ??
-      resolveAgentIdFromSessionPath(params.targetTranscript);
+    const targetAgentId = params.targetAgentId ?? params.sourceAgentId;
     const existingTargetEvents = loadSqliteSessionTranscriptEvents({
       agentId: targetAgentId,
       sessionId: params.newSessionId,
@@ -91,34 +84,9 @@ export async function replayRecentUserAssistantMessages(params: {
   }
 }
 
-function resolveAgentIdFromSessionPath(sessionFile: string): string {
-  void sessionFile;
-  return DEFAULT_AGENT_ID;
-}
-
-function loadReplaySourceEvents(params: {
-  sourceAgentId?: string;
-  sourceSessionId?: string;
-  sourceTranscript?: string;
-}): unknown[] | undefined {
-  const scopedEvents = loadScopedReplaySourceEvents(params);
-  if (scopedEvents !== undefined) {
-    return scopedEvents;
-  }
-  const src = params.sourceTranscript;
-  if (!src) {
-    return undefined;
-  }
-  const sourceScope = resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: src });
-  if (!sourceScope) {
-    return undefined;
-  }
-  return loadSqliteSessionTranscriptEvents(sourceScope).map((entry) => entry.event);
-}
-
 function loadScopedReplaySourceEvents(params: {
-  sourceAgentId?: string;
-  sourceSessionId?: string;
+  sourceAgentId: string;
+  sourceSessionId: string;
 }): unknown[] | undefined {
   if (!params.sourceAgentId?.trim() || !params.sourceSessionId?.trim()) {
     return undefined;

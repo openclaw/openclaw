@@ -178,7 +178,6 @@ async function runAuthContractAttempt(params: {
     sessionId: sessionEntry.sessionId,
     sessionKey: AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey,
     sessionAgentId: "main",
-    sessionFile: AUTH_PROFILE_RUNTIME_CONTRACT_SESSION_FILE,
     workspaceDir: params.tmpDir,
     body: AUTH_PROFILE_RUNTIME_CONTRACT.workspacePrompt,
     isFallbackRetry: false,

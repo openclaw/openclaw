@@ -1,6 +1,5 @@
 import type { SessionManager } from "../../agents/transcript/session-transcript-contract.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
-import { resolveSqliteSessionTranscriptScopeForLocator } from "../../config/sessions/transcript-store.sqlite.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -45,10 +44,10 @@ function resolveInjectedAssistantContent(params: {
 }
 
 export async function appendInjectedAssistantMessageToTranscript(params: {
-  transcriptLocator: string;
+  transcriptLocator?: string;
   message: string;
   agentId?: string;
-  sessionId?: string;
+  sessionId: string;
   label?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
@@ -106,13 +105,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const existingScope = resolveSqliteSessionTranscriptScopeForLocator({
-      transcriptLocator: params.transcriptLocator,
-    });
-    const agentId = params.agentId ?? existingScope?.agentId ?? DEFAULT_AGENT_ID;
-    const sessionId = params.sessionId ?? existingScope?.sessionId;
+    const agentId = params.agentId ?? DEFAULT_AGENT_ID;
+    const sessionId = params.sessionId;
     const { messageId } = await appendSessionTranscriptMessage({
-      transcriptLocator: params.transcriptLocator,
       agentId,
       sessionId,
       message: messageBody,
@@ -120,13 +115,15 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       useRawWhenLinear: true,
       config: params.config,
     });
-    emitSessionTranscriptUpdate({
-      agentId,
-      ...(sessionId ? { sessionId } : {}),
-      transcriptLocator: params.transcriptLocator,
-      message: messageBody,
-      messageId,
-    });
+    if (params.transcriptLocator) {
+      emitSessionTranscriptUpdate({
+        agentId,
+        sessionId,
+        transcriptLocator: params.transcriptLocator,
+        message: messageBody,
+        messageId,
+      });
+    }
     return { ok: true, messageId, message: messageBody };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };

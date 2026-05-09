@@ -15,7 +15,6 @@ type IncrementRunCompactionCountParams = Omit<
   lastCallUsage?: NormalizedUsage;
   contextTokensUsed?: number;
   newSessionId?: string;
-  newSessionFile?: string;
 };
 
 function resolvePositiveTokenCount(value: number | undefined): number | undefined {
@@ -47,6 +46,5 @@ export async function incrementRunCompactionCount(
     amount: params.amount,
     tokensAfter: tokensAfterCompaction,
     newSessionId: params.newSessionId,
-    newSessionFile: params.newSessionFile,
   });
 }

@@ -36,12 +36,7 @@ describe("session cost usage", () => {
   const sessionPath = (_root: string, sessionId: string, agentId = "main") =>
     createSqliteSessionTranscriptLocator({ agentId, sessionId });
 
-  const writeTranscript = (params: {
-    agentId?: string;
-    sessionId: string;
-    transcriptPath?: string;
-    events: unknown[];
-  }) => {
+  const writeTranscript = (params: { agentId?: string; sessionId: string; events: unknown[] }) => {
     const eventTimestamp = params.events
       .map((event) =>
         event && typeof event === "object"
@@ -52,8 +47,6 @@ describe("session cost usage", () => {
     replaceSqliteSessionTranscriptEvents({
       agentId: params.agentId ?? "main",
       sessionId: params.sessionId,
-      transcriptPath:
-        params.transcriptPath ?? sessionPath("", params.sessionId, params.agentId ?? "main"),
       events: [{ type: "session", version: 1, id: params.sessionId }, ...params.events],
       ...(eventTimestamp !== undefined ? { now: () => eventTimestamp } : {}),
     });
@@ -107,7 +100,6 @@ describe("session cost usage", () => {
     await withStateDir(root, async () => {
       writeTranscript({
         sessionId: "sess-discover",
-        transcriptPath: sessionPath(root, "sess-discover"),
         events: [
           {
             type: "message",
@@ -190,7 +182,6 @@ describe("session cost usage", () => {
       const transcriptPath = sessionPath(root, "sess-summary");
       writeTranscript({
         sessionId: "sess-summary",
-        transcriptPath,
         events: [
           {
             type: "message",
@@ -220,7 +211,11 @@ describe("session cost usage", () => {
         ],
       });
 
-      const summary = await loadSessionCostSummary({ transcriptLocator: transcriptPath });
+      const summary = await loadSessionCostSummary({
+        agentId: "main",
+        sessionId: "sess-summary",
+        transcriptLocator: transcriptPath,
+      });
       expect(summary).toMatchObject({
         sessionId: "sess-summary",
         totalTokens: 30,
@@ -230,15 +225,27 @@ describe("session cost usage", () => {
       expect(summary?.latency?.avgMs).toBe(2000);
       expect(summary?.modelUsage?.[0]).toMatchObject({ provider: "openai", model: "gpt-5.4" });
 
-      const cached = await loadSessionCostSummaryFromCache({ transcriptLocator: transcriptPath });
+      const cached = await loadSessionCostSummaryFromCache({
+        agentId: "main",
+        sessionId: "sess-summary",
+        transcriptLocator: transcriptPath,
+      });
       expect(cached.cacheStatus.status).toBe("fresh");
       expect(cached.summary?.totalTokens).toBe(30);
 
-      const timeseries = await loadSessionUsageTimeSeries({ transcriptLocator: transcriptPath });
+      const timeseries = await loadSessionUsageTimeSeries({
+        agentId: "main",
+        sessionId: "sess-summary",
+        transcriptLocator: transcriptPath,
+      });
       expect(timeseries?.points).toHaveLength(1);
       expect(timeseries?.points[0]).toMatchObject({ totalTokens: 30, cumulativeTokens: 30 });
 
-      const logs = await loadSessionLogs({ transcriptLocator: transcriptPath });
+      const logs = await loadSessionLogs({
+        agentId: "main",
+        sessionId: "sess-summary",
+        transcriptLocator: transcriptPath,
+      });
       expect(logs?.map((entry) => entry.role)).toEqual(["user", "assistant"]);
       expect(logs?.[0]?.content).toContain("hello");
       expect(logs?.[1]?.content).toContain("[Tool: shell]");
@@ -251,7 +258,6 @@ describe("session cost usage", () => {
       writeTranscript({
         agentId: "worker",
         sessionId: "sess-worker",
-        transcriptPath: sessionPath(root, "sess-worker", "worker"),
         events: [
           assistantUsage({
             timestamp: "2026-02-05T12:00:00.000Z",
@@ -276,17 +282,13 @@ describe("session cost usage", () => {
     await withStateDir(root, async () => {
       expect(
         await loadSessionCostSummary({
-          transcriptLocator: createSqliteSessionTranscriptLocator({
-            agentId: "main",
-            sessionId: "missing",
-          }),
-        }),
-      ).toBeNull();
-      const cached = await loadSessionCostSummaryFromCache({
-        transcriptLocator: createSqliteSessionTranscriptLocator({
           agentId: "main",
           sessionId: "missing",
         }),
+      ).toBeNull();
+      const cached = await loadSessionCostSummaryFromCache({
+        agentId: "main",
+        sessionId: "missing",
       });
       expect(cached.summary).toBeNull();
       expect(cached.cacheStatus.status).toBe("stale");

@@ -68,7 +68,6 @@ function writeTranscriptEvents(file: string, events: unknown[]) {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
-    transcriptLocator: file,
     events,
   });
 }

@@ -49,7 +49,6 @@ const mocks = vi.hoisted(() => {
         store: {},
         agentId: "main",
         canonicalKey: "agent:main:main",
-        legacyKey: undefined,
       }),
     ),
     deliveryContextFromSession: vi.fn(
@@ -321,7 +320,6 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       agentId: "main",
       canonicalKey: "agent:main:main",
-      legacyKey: undefined,
     });
     mocks.deliveryContextFromSession.mockReset();
     mocks.deliveryContextFromSession.mockReturnValue(undefined);
@@ -608,7 +606,6 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       agentId: "main",
       canonicalKey: "agent:main:group",
-      legacyKey: undefined,
     });
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "telegram:-1001" });
 
@@ -1297,7 +1294,6 @@ describe("scheduleRestartSentinelWake", () => {
         store: {},
         agentId: "main",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
-        legacyKey: undefined,
       })
       .mockReturnValueOnce({
         cfg: {},
@@ -1310,7 +1306,6 @@ describe("scheduleRestartSentinelWake", () => {
         store: {},
         agentId: "main",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org",
-        legacyKey: undefined,
       });
     mocks.deliveryContextFromSession
       .mockReturnValueOnce({

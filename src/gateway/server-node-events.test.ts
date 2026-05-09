@@ -35,7 +35,6 @@ const buildSessionLookup = (
     parentSessionKey: entry.parentSessionKey,
   },
   canonicalKey: sessionKey,
-  legacyKey: undefined,
 });
 
 const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));

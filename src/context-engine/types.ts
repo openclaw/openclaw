@@ -38,8 +38,6 @@ export type CompactResult = {
     details?: unknown;
     /** Session id after compaction, when the runtime rotated transcripts. */
     sessionId?: string;
-    /** Session file after compaction, when the runtime rotated transcripts. */
-    sessionFile?: string;
   };
 };
 
@@ -153,6 +151,8 @@ export type ContextEnginePromptCacheInfo = {
 };
 
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
+  /** Runtime-resolved agent id for the active session. */
+  agentId?: string;
   /**
    * True when the host has explicitly opted this maintenance run into
    * consuming deferred compaction debt.
@@ -197,7 +197,7 @@ export interface ContextEngine {
   bootstrap?(params: {
     sessionId: string;
     sessionKey?: string;
-    sessionFile: string;
+    transcriptLocator: string;
   }): Promise<BootstrapResult>;
 
   /**
@@ -209,7 +209,7 @@ export interface ContextEngine {
   maintain?(params: {
     sessionId: string;
     sessionKey?: string;
-    sessionFile: string;
+    transcriptLocator: string;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<ContextEngineMaintenanceResult>;
 
@@ -243,7 +243,7 @@ export interface ContextEngine {
   afterTurn?(params: {
     sessionId: string;
     sessionKey?: string;
-    sessionFile: string;
+    transcriptLocator: string;
     messages: AgentMessage[];
     /** Number of messages that existed before the prompt was sent. */
     prePromptMessageCount: number;
@@ -284,7 +284,7 @@ export interface ContextEngine {
   compact(params: {
     sessionId: string;
     sessionKey?: string;
-    sessionFile: string;
+    transcriptLocator: string;
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */
     force?: boolean;
@@ -308,9 +308,9 @@ export interface ContextEngine {
     childSessionKey: string;
     contextMode?: "isolated" | "fork";
     parentSessionId?: string;
-    parentSessionFile?: string;
+    parentTranscriptLocator?: string;
     childSessionId?: string;
-    childSessionFile?: string;
+    childTranscriptLocator?: string;
     ttlMs?: number;
   }): Promise<SubagentSpawnPreparation | undefined>;
 

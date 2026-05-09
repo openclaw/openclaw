@@ -263,9 +263,7 @@ const readUsageFromSessionLog = (
     const resolvedAgentId =
       agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
     const snapshot = readRecentSessionUsageFromTranscript(
-      sessionId,
-      undefined,
-      resolvedAgentId,
+      { agentId: resolvedAgentId, sessionId },
       256 * 1024,
     );
     if (!snapshot) {

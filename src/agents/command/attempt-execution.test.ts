@@ -295,67 +295,67 @@ describe("sessionTranscriptHasContent", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  function writeTranscript(file: string, events: unknown[]): void {
+  function scope(sessionId: string): { agentId: string; sessionId: string } {
+    return { agentId: "main", sessionId };
+  }
+
+  function writeTranscript(sessionId: string, events: unknown[]): void {
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
-      sessionId: path.basename(file, ".jsonl"),
-      transcriptPath: file,
-      events: [{ type: "session", id: path.basename(file, ".jsonl") }, ...events],
+      sessionId,
+      events: [{ type: "session", id: sessionId }, ...events],
     });
   }
 
-  it("returns false for undefined transcript locator", async () => {
+  it("returns false for undefined transcript scope", async () => {
     expect(await sessionTranscriptHasContent(undefined)).toBe(false);
   });
 
-  it("returns false when transcript locator has no SQLite rows", async () => {
-    expect(await sessionTranscriptHasContent(path.join(tmpDir, "nonexistent.jsonl"))).toBe(false);
+  it("returns false when transcript scope has no SQLite rows", async () => {
+    expect(await sessionTranscriptHasContent(scope("nonexistent"))).toBe(false);
   });
 
   it("returns false when transcript has no SQLite rows", async () => {
-    const file = path.join(tmpDir, "empty.jsonl");
-    expect(await sessionTranscriptHasContent(file)).toBe(false);
+    expect(await sessionTranscriptHasContent(scope("empty"))).toBe(false);
   });
 
   it("returns false when transcript has only user message (no assistant flush)", async () => {
-    const file = path.join(tmpDir, "user-only.jsonl");
-    writeTranscript(file, [{ type: "message", message: { role: "user", content: "hello" } }]);
-    expect(await sessionTranscriptHasContent(file)).toBe(false);
+    const sessionId = "user-only";
+    writeTranscript(sessionId, [{ type: "message", message: { role: "user", content: "hello" } }]);
+    expect(await sessionTranscriptHasContent(scope(sessionId))).toBe(false);
   });
 
   it("returns true when transcript has assistant message (flushed)", async () => {
-    const file = path.join(tmpDir, "with-assistant.jsonl");
-    writeTranscript(file, [
+    const sessionId = "with-assistant";
+    writeTranscript(sessionId, [
       { type: "message", message: { role: "user", content: "hello" } },
       { type: "message", message: { role: "assistant", content: "hi" } },
     ]);
-    expect(await sessionTranscriptHasContent(file)).toBe(true);
+    expect(await sessionTranscriptHasContent(scope(sessionId))).toBe(true);
   });
 
   it("returns true when transcript has assistant message metadata", async () => {
-    const file = path.join(tmpDir, "spaced.jsonl");
-    writeTranscript(file, [{ type: "message", message: { role: "assistant", content: "hi" } }]);
-    expect(await sessionTranscriptHasContent(file)).toBe(true);
+    const sessionId = "spaced";
+    writeTranscript(sessionId, [
+      { type: "message", message: { role: "assistant", content: "hi" } },
+    ]);
+    expect(await sessionTranscriptHasContent(scope(sessionId))).toBe(true);
   });
 
   it("returns true when assistant message appears after large user content", async () => {
-    const file = path.join(tmpDir, "large-user.jsonl");
+    const sessionId = "large-user";
     // Create a user message whose JSON line exceeds 256KB to ensure the
     // transcript parser finds the assistant record after large earlier content.
     const bigContent = "x".repeat(300 * 1024);
-    writeTranscript(file, [
+    writeTranscript(sessionId, [
       { type: "message", message: { role: "user", content: bigContent } },
       { type: "message", message: { role: "assistant", content: "done" } },
     ]);
-    expect(await sessionTranscriptHasContent(file)).toBe(true);
+    expect(await sessionTranscriptHasContent(scope(sessionId))).toBe(true);
   });
 
-  it("returns false when transcript locator is an unimported symbolic link", async () => {
-    const realFile = path.join(tmpDir, "real.jsonl");
-    await fs.writeFile(realFile, "", "utf-8");
-    const link = path.join(tmpDir, "link.jsonl");
-    await fs.symlink(realFile, link);
-    expect(await sessionTranscriptHasContent(link)).toBe(false);
+  it("returns false when transcript scope is incomplete", async () => {
+    expect(await sessionTranscriptHasContent({ sessionId: "missing-agent" })).toBe(false);
   });
 });
 

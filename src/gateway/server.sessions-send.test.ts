@@ -51,7 +51,7 @@ async function emitLifecycleAssistantReply(params: {
   };
   const sessionId = commandParams.sessionId ?? params.defaultSessionId;
   const runId = commandParams.runId ?? sessionId;
-  const sessionFile = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
+  const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
 
   const startedAt = Date.now();
   emitAgentEvent({
@@ -69,7 +69,6 @@ async function emitLifecycleAssistantReply(params: {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
-    transcriptPath: sessionFile,
     events: [
       { type: "session", version: 3, id: sessionId },
       {

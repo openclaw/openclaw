@@ -18,7 +18,6 @@ describe("CronService restart catch-up", () => {
   }
 
   function createRestartCronService(params: {
-    storePath: string;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
     requestHeartbeat: ReturnType<typeof vi.fn>;
     onEvent?: ReturnType<typeof vi.fn>;
@@ -27,7 +26,6 @@ describe("CronService restart catch-up", () => {
     startupDeferredMissedAgentJobDelayMs?: number;
   }) {
     return new CronService({
-      storePath: params.storePath,
       cronEnabled: true,
       log: noopLogger,
       ...(params.nowMs ? { nowMs: params.nowMs } : {}),
@@ -90,7 +88,6 @@ describe("CronService restart catch-up", () => {
     await writeStoreJobs(store.storePath, jobs);
 
     const cron = createRestartCronService({
-      storePath: store.storePath,
       enqueueSystemEvent,
       requestHeartbeat,
       onEvent,
@@ -167,7 +164,6 @@ describe("CronService restart catch-up", () => {
     ]);
 
     const cron = createRestartCronService({
-      storePath: store.storePath,
       enqueueSystemEvent,
       requestHeartbeat,
       runIsolatedAgentJob,
@@ -434,7 +430,6 @@ describe("CronService restart catch-up", () => {
 
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
@@ -478,7 +473,6 @@ describe("CronService restart catch-up", () => {
 
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),

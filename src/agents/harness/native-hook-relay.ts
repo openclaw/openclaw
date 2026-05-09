@@ -52,7 +52,6 @@ export type NativeHookRelayInvocation = {
   cwd?: string;
   model?: string;
   turnId?: string;
-  transcriptPath?: string;
   permissionMode?: string;
   stopHookActive?: boolean;
   lastAssistantMessage?: string;
@@ -125,7 +124,6 @@ type NativeHookRelayInvocationMetadata = Partial<
     | "cwd"
     | "model"
     | "turnId"
-    | "transcriptPath"
     | "permissionMode"
     | "stopHookActive"
     | "lastAssistantMessage"
@@ -978,9 +976,6 @@ async function runNativeHookRelayBeforeAgentFinalize(params: {
       provider: params.registration.provider,
       ...(params.invocation.model ? { model: params.invocation.model } : {}),
       ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
-      ...(params.invocation.transcriptPath
-        ? { transcriptPath: params.invocation.transcriptPath }
-        : {}),
       stopHookActive: params.invocation.stopHookActive === true,
       ...(params.invocation.lastAssistantMessage
         ? { lastAssistantMessage: params.invocation.lastAssistantMessage }
@@ -1318,10 +1313,6 @@ function normalizeCodexHookMetadata(rawPayload: JsonValue): NativeHookRelayInvoc
   const turnId = readOptionalString(payload.turn_id);
   if (turnId) {
     metadata.turnId = turnId;
-  }
-  const transcriptPath = readOptionalString(payload.transcript_path);
-  if (transcriptPath) {
-    metadata.transcriptPath = transcriptPath;
   }
   const permissionMode = readOptionalString(payload.permission_mode);
   if (permissionMode) {

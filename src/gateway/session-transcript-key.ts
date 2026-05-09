@@ -1,145 +1,36 @@
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   loadCombinedSessionEntriesForGateway,
   resolveGatewaySessionDatabaseTarget,
-  resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
-const TRANSCRIPT_SESSION_KEY_CACHE = new Map<string, string>();
-const TRANSCRIPT_SESSION_KEY_CACHE_MAX = 256;
-
-function resolveTranscriptIdentityForComparison(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed;
-}
-
-function sessionKeyMatchesTranscriptLocator(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  key: string;
-  targetLocator: string;
-}): boolean {
-  const entry = params.store[params.key];
-  if (!entry?.sessionId) {
-    return false;
-  }
-  const target = resolveGatewaySessionDatabaseTarget({
-    cfg: params.cfg,
-    key: params.key,
-  });
-  const sessionAgentId = normalizeAgentId(target.agentId);
-  return resolveSessionTranscriptCandidates(entry.sessionId, undefined, sessionAgentId).some(
-    (candidate) => resolveTranscriptIdentityForComparison(candidate) === params.targetLocator,
-  );
-}
-
-export function clearSessionTranscriptKeyCacheForTests(): void {
-  TRANSCRIPT_SESSION_KEY_CACHE.clear();
-}
-
-export function resolveSessionKeyForTranscriptLocator(locator: string): string | undefined {
-  const targetLocator = resolveTranscriptIdentityForComparison(locator);
-  if (!targetLocator) {
+export function resolveSessionKeyForSessionScope(params: {
+  agentId?: string;
+  sessionId: string;
+}): string | undefined {
+  const sessionId = normalizeOptionalString(params.sessionId);
+  if (!sessionId) {
     return undefined;
   }
   const cfg = getRuntimeConfig();
   const { entries: store } = loadCombinedSessionEntriesForGateway(cfg);
-
-  const cachedKey = TRANSCRIPT_SESSION_KEY_CACHE.get(targetLocator);
-  if (
-    cachedKey &&
-    sessionKeyMatchesTranscriptLocator({
+  const matches = Object.entries(store).filter(([key, entry]) => {
+    if (entry?.sessionId !== sessionId) {
+      return false;
+    }
+    const agentId = normalizeOptionalString(params.agentId);
+    if (!agentId) {
+      return true;
+    }
+    const target = resolveGatewaySessionDatabaseTarget({
       cfg,
-      store,
-      key: cachedKey,
-      targetLocator,
-    })
-  ) {
-    return cachedKey;
-  }
-
-  const matchingEntries: Array<[string, SessionEntry]> = [];
-  for (const [key, entry] of Object.entries(store)) {
-    if (!entry?.sessionId || key === cachedKey) {
-      continue;
-    }
-    if (
-      sessionKeyMatchesTranscriptLocator({
-        cfg,
-        store,
-        key,
-        targetLocator,
-      })
-    ) {
-      matchingEntries.push([key, entry]);
-    }
-  }
-
-  if (matchingEntries.length > 0) {
-    const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
-    for (const entry of matchingEntries) {
-      const sessionId = entry[1].sessionId;
-      if (!sessionId) {
-        continue;
-      }
-      const group = matchesBySessionId.get(sessionId);
-      if (group) {
-        group.push(entry);
-      } else {
-        matchesBySessionId.set(sessionId, [entry]);
-      }
-    }
-
-    const resolvedMatches = Array.from(matchesBySessionId.entries())
-      .map(([sessionId, matches]) => {
-        const resolvedKey =
-          resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId) ?? matches[0]?.[0];
-        const resolvedEntry = resolvedKey
-          ? matches.find(([key]) => key === resolvedKey)?.[1]
-          : undefined;
-        return resolvedKey && resolvedEntry
-          ? {
-              key: resolvedKey,
-              updatedAt: resolvedEntry.updatedAt ?? 0,
-            }
-          : undefined;
-      })
-      .filter((match): match is { key: string; updatedAt: number } => match !== undefined);
-
-    const sortedResolvedMatches = [...resolvedMatches].toSorted(
-      (a, b) => b.updatedAt - a.updatedAt,
-    );
-    const [freshestMatch, secondFreshestMatch] = sortedResolvedMatches;
-    const resolvedKey =
-      resolvedMatches.length === 1
-        ? freshestMatch?.key
-        : (freshestMatch?.updatedAt ?? 0) > (secondFreshestMatch?.updatedAt ?? 0)
-          ? freshestMatch?.key
-          : undefined;
-    if (resolvedKey) {
-      // Evict oldest-inserted entry when cache exceeds size cap (FIFO bound).
-      if (
-        !TRANSCRIPT_SESSION_KEY_CACHE.has(targetLocator) &&
-        TRANSCRIPT_SESSION_KEY_CACHE.size >= TRANSCRIPT_SESSION_KEY_CACHE_MAX
-      ) {
-        const oldest = TRANSCRIPT_SESSION_KEY_CACHE.keys().next().value;
-        if (oldest !== undefined) {
-          TRANSCRIPT_SESSION_KEY_CACHE.delete(oldest);
-        }
-      }
-      TRANSCRIPT_SESSION_KEY_CACHE.set(targetLocator, resolvedKey);
-      return resolvedKey;
-    }
-  }
-
-  TRANSCRIPT_SESSION_KEY_CACHE.delete(targetLocator);
-  return undefined;
+      key,
+    });
+    return normalizeAgentId(target.agentId) === normalizeAgentId(agentId);
+  });
+  return resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId) ?? matches[0]?.[0];
 }
