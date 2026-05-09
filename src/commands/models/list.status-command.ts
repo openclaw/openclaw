@@ -618,7 +618,7 @@ export async function modelsStatusCommand(
       aliases,
       allowed,
       auth: {
-        storePath: resolveAuthProfileStoreLocationForDisplay(agentDir),
+        storeLocation: resolveAuthProfileStoreLocationForDisplay(agentDir),
         shellEnvFallback: {
           enabled: shellFallbackEnabled,
           appliedKeys: applied,

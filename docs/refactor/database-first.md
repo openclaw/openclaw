@@ -115,9 +115,9 @@ The remaining work is not choosing SQLite; it is keeping the new boundary clean
 and deleting any compatibility-shaped interfaces that still look like the old
 file world:
 
-- Session `storePath` is no longer a runtime identity or test fixture shape.
-  Explicit `storePath` names that remain are unrelated auth-profile display
-  fields or doctor/migration inputs.
+- Session `storePath` is no longer a runtime identity, test fixture shape, or
+  status payload field. Remaining `storePath` names are doctor/migration inputs
+  or legacy negative assertions.
 - Session writes no longer pass through the old in-process `store-writer.ts`
   queue. SQLite patch writes use conflict detection and bounded retry instead.
 - Legacy path discovery still has valid migration uses, but runtime code should
@@ -1182,7 +1182,7 @@ keeps only the version-1 schema plus doctor file-to-database import.
      `/status`, chat-driven trajectory export, and CLI dependency proxies no
      longer propagate legacy store paths; transcript usage fallback reads
      SQLite by agent/session identity. Remaining `storePath` references are
-     unrelated auth-profile display fields or doctor/migration inputs.
+     doctor/migration inputs.
      Gateway combined-session loading no longer has a special runtime branch for
      non-templated `session.store` values; it aggregates per-agent SQLite rows.
      The legacy session-lock doctor lane and its `.jsonl.lock` cleanup helper

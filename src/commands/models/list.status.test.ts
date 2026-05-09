@@ -369,7 +369,7 @@ describe("modelsStatusCommand auth overview", () => {
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
     expect(payload.configPath).toBe("/tmp/openclaw-dev/openclaw.json");
-    expect(payload.auth.storePath).toBe(
+    expect(payload.auth.storeLocation).toBe(
       "/tmp/openclaw.sqlite#kv/auth-profiles//tmp/openclaw-agent",
     );
     expect(payload.auth.shellEnvFallback.enabled).toBe(true);
@@ -434,7 +434,7 @@ describe("modelsStatusCommand auth overview", () => {
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-isolated-agent");
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-isolated-agent");
-    expect(payload.auth.storePath).toBe(
+    expect(payload.auth.storeLocation).toBe(
       "/tmp/openclaw.sqlite#kv/auth-profiles//tmp/openclaw-isolated-agent",
     );
   });
