@@ -428,7 +428,7 @@ describe("memory index", () => {
     const available = await manager.probeVectorStoreAvailability?.();
     const status = manager.status();
 
-    expect(providerCalls).toEqual([]);
+    expect(providerCalls).toStrictEqual([]);
     expect(typeof status.vector?.storeAvailable).toBe("boolean");
     expect(status.vector?.storeAvailable).toBe(available);
     expect(status.vector?.semanticAvailable).toBeUndefined();
