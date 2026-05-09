@@ -13,7 +13,7 @@ import {
 } from "./node-pairing.js";
 import { readPairingStateRecord } from "./pairing-files.js";
 
-function resolveLegacyPairingFixturePaths(baseDir: string, subdir: string) {
+function resolveObsoletePairingFixturePaths(baseDir: string, subdir: string) {
   const dir = path.join(baseDir, subdir);
   return {
     dir,
@@ -164,7 +164,7 @@ describe("node pairing tokens", () => {
 
   test("ignores legacy pairing state files at runtime", async () => {
     await withNodePairingDir(async (baseDir) => {
-      const paths = resolveLegacyPairingFixturePaths(baseDir, "nodes");
+      const paths = resolveObsoletePairingFixturePaths(baseDir, "nodes");
       await fs.mkdir(paths.dir, { recursive: true });
       await fs.writeFile(paths.pendingPath, "[]", "utf8");
       await fs.writeFile(paths.pairedPath, "[]", "utf8");
@@ -294,7 +294,7 @@ describe("node pairing tokens", () => {
 
   test("ignores corrupt legacy paired node state when requesting pairing", async () => {
     await withNodePairingDir(async (baseDir) => {
-      const { dir, pairedPath } = resolveLegacyPairingFixturePaths(baseDir, "nodes");
+      const { dir, pairedPath } = resolveObsoletePairingFixturePaths(baseDir, "nodes");
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(pairedPath, "{not-json}", "utf8");
 

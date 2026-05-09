@@ -9,7 +9,6 @@ import {
   resolveAuthStatePathForDisplay,
   resolveAuthStorePath,
   resolveAuthStorePathForDisplay,
-  resolveLegacyAuthStorePath,
 } from "./path-resolve.js";
 import { ensureAuthStoreFile } from "./paths.js";
 
@@ -48,18 +47,6 @@ describe("path-resolve helpers (direct-import coverage attribution)", () => {
     const resolved = resolveAuthStorePath();
     expect(resolved.startsWith(stateDir)).toBe(true);
     expect(path.basename(resolved)).toMatch(/auth-profiles/);
-  });
-
-  it("resolveLegacyAuthStorePath joins agentDir with the legacy auth filename", () => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveLegacyAuthStorePath(agentDir);
-    expect(path.dirname(resolved)).toBe(agentDir);
-    expect(path.basename(resolved)).not.toMatch(/auth-profiles/);
-  });
-
-  it("resolveLegacyAuthStorePath falls back to the default agent dir", () => {
-    const resolved = resolveLegacyAuthStorePath();
-    expect(resolved.startsWith(stateDir)).toBe(true);
   });
 
   it("resolveAuthStatePath joins agentDir with the auth-state filename", () => {
