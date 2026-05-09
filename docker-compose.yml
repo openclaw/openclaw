@@ -70,6 +70,7 @@ services:
         "${OPENCLAW_GATEWAY_BIND:-lan}",
         "--port",
         "18789",
+        "--allow-unconfigured",
       ]
     healthcheck:
       test:
@@ -86,6 +87,8 @@ services:
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    profiles:
+      - cli
     network_mode: "service:openclaw-gateway"
     env_file:
       - path: .env
