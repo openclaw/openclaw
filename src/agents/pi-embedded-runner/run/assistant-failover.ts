@@ -153,7 +153,7 @@ export async function handleAssistantFailover(params: {
     }
 
     const rotated = await params.advanceAuthProfile();
-    markFailedProfile();
+    void markFailedProfile();
     if (params.timedOut && !params.isProbeSession && failedProfileId) {
       params.warn(`Profile ${failedProfileId} timed out. Trying next account...`);
     }
