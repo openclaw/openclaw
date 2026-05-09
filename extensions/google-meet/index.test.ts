@@ -2175,40 +2175,39 @@ describe("google-meet plugin", () => {
 
       expect(respond.mock.calls[0]?.[0]).toBe(true);
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
-      expect(callGatewayFromCli).toHaveBeenCalledWith(
-        "browser.request",
-        expect.any(Object),
-        expect.objectContaining({
-          method: "POST",
-          path: "/tabs/open",
-          body: { url: "https://meet.google.com/abc-defg-hij" },
-        }),
-        { progress: false },
+      const openCall = callGatewayFromCli.mock.calls.find(
+        ([, , request]) => requireRecord(request, "browser request").path === "/tabs/open",
       );
+      if (!openCall) {
+        throw new Error("Expected browser /tabs/open request");
+      }
+      expect(openCall[0]).toBe("browser.request");
+      expect(openCall[2]).toEqual({
+        method: "POST",
+        path: "/tabs/open",
+        timeoutMs: 30000,
+        body: { url: "https://meet.google.com/abc-defg-hij" },
+      });
+      expect(openCall[3]).toEqual({ progress: false });
       expect(
         callGatewayFromCli.mock.calls.some(
           ([, , request]) => (request as { path?: string }).path === "/permissions/grant",
         ),
       ).toBe(false);
-      expect(respond.mock.calls[0]?.[1]).toMatchObject({
-        session: {
-          chrome: {
-            health: {
-              captioning: true,
-              captionsEnabledAttempted: true,
-              transcriptLines: 1,
-              lastCaptionSpeaker: "Alice",
-              lastCaptionText: "Can everyone hear the agent?",
-              recentTranscript: [
-                {
-                  speaker: "Alice",
-                  text: "Can everyone hear the agent?",
-                },
-              ],
-            },
-          },
-        },
-      });
+      const payload = requireRecord(respond.mock.calls[0]?.[1], "join response payload");
+      const session = requireRecord(payload.session, "join session");
+      const chrome = requireRecord(session.chrome, "join chrome session");
+      const health = requireRecord(chrome.health, "join chrome health");
+      expect(health.captioning).toBe(true);
+      expect(health.captionsEnabledAttempted).toBe(true);
+      expect(health.transcriptLines).toBe(1);
+      expect(health.lastCaptionSpeaker).toBe("Alice");
+      expect(health.lastCaptionText).toBe("Can everyone hear the agent?");
+      const recentTranscript = health.recentTranscript as unknown[];
+      expect(recentTranscript).toHaveLength(1);
+      const transcriptLine = requireRecord(recentTranscript[0], "recent transcript line");
+      expect(transcriptLine.speaker).toBe("Alice");
+      expect(transcriptLine.text).toBe("Can everyone hear the agent?");
       const actCall = callGatewayFromCli.mock.calls.find(
         ([, , request]) => (request as { path?: string }).path === "/act",
       );
@@ -2255,20 +2254,21 @@ describe("google-meet plugin", () => {
       });
 
       expect(respond.mock.calls[0]?.[0]).toBe(true);
-      expect(callGatewayFromCli).toHaveBeenCalledWith(
-        "browser.request",
-        expect.any(Object),
-        expect.objectContaining({
-          method: "POST",
-          path: "/permissions/grant",
-          body: expect.objectContaining({
-            origin: "https://meet.google.com",
-            permissions: ["audioCapture", "videoCapture"],
-            targetId: "local-meet-tab",
-          }),
-        }),
-        { progress: false },
+      const grantCall = callGatewayFromCli.mock.calls.find(
+        ([, , request]) => requireRecord(request, "browser request").path === "/permissions/grant",
       );
+      if (!grantCall) {
+        throw new Error("Expected browser /permissions/grant request");
+      }
+      expect(grantCall[0]).toBe("browser.request");
+      const request = requireRecord(grantCall[2], "permissions request");
+      expect(request.method).toBe("POST");
+      expect(request.path).toBe("/permissions/grant");
+      const body = requireRecord(request.body, "permissions request body");
+      expect(body.origin).toBe("https://meet.google.com");
+      expect(body.permissions).toEqual(["audioCapture", "videoCapture"]);
+      expect(body.targetId).toBe("local-meet-tab");
+      expect(grantCall[3]).toEqual({ progress: false });
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
