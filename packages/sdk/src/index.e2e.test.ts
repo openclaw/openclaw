@@ -584,6 +584,11 @@ function readLiveTextDelta(data: unknown): string {
   return "";
 }
 
+function expectArrayProperty(value: unknown, property: string): void {
+  expect(value).toEqual(expect.objectContaining({ [property]: expect.arrayContaining([]) }));
+  expect(Array.isArray((value as Record<string, unknown>)[property])).toBe(true);
+}
+
 liveGatewayDescribe("OpenClaw SDK live Gateway e2e", () => {
   it("connects to a configured Gateway, streams a real run, and waits for completion", async () => {
     const oc = new OpenClaw({
@@ -594,12 +599,8 @@ liveGatewayDescribe("OpenClaw SDK live Gateway e2e", () => {
 
     try {
       await oc.connect();
-      await expect(oc.agents.list()).resolves.toEqual(
-        expect.objectContaining({ agents: expect.any(Array) }),
-      );
-      await expect(oc.models.status({ probe: false })).resolves.toEqual(
-        expect.objectContaining({ providers: expect.any(Array) }),
-      );
+      expectArrayProperty(await oc.agents.list(), "agents");
+      expectArrayProperty(await oc.models.status({ probe: false }), "providers");
 
       const agent = await oc.agents.get(process.env.OPENCLAW_SDK_LIVE_AGENT_ID ?? "main");
       const run = await agent.run({
