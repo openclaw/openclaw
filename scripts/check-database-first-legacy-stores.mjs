@@ -182,8 +182,9 @@ const allowedExactPaths = new Set([
   "extensions/imessage/src/state-migrations.ts",
   "extensions/matrix/src/state-migrations.ts",
   "extensions/matrix/src/legacy-state.ts",
-  "extensions/memory-wiki/src/digest-state.ts",
+  "extensions/memory-wiki/src/digest-state-migration.ts",
   "extensions/memory-wiki/src/source-sync-state.ts",
+  "extensions/memory-wiki/src/source-sync-state-migration.ts",
   "extensions/memory-wiki/src/source-sync-migration.ts",
   "extensions/msteams/src/state-migrations.ts",
   "extensions/nostr/src/state-migrations.ts",
@@ -194,7 +195,6 @@ const allowedExactPaths = new Set([
   "src/acp/event-ledger-legacy.ts",
   "src/agents/pi-embedded-runner/openrouter-model-capabilities-legacy.ts",
   "src/agents/subagent-registry.store-legacy.ts",
-  "src/config/io.audit.ts",
   "src/cron/store-legacy.ts",
   "src/infra/device-auth-store-legacy.ts",
   "src/infra/device-bootstrap-legacy.ts",
@@ -209,7 +209,7 @@ const allowedExactPaths = new Set([
   "src/trajectory/export.ts",
   "src/trajectory/paths.ts",
   "extensions/memory-wiki/src/chatgpt-import.ts",
-  "extensions/memory-wiki/src/log.ts",
+  "extensions/memory-wiki/src/log-migration.ts",
 ]);
 
 const allowedPrefixes = [

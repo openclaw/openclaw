@@ -6,9 +6,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   importMemoryWikiLegacyDigestFiles,
   legacyMemoryWikiDigestFilesExist,
+  resolveMemoryWikiLegacyDigestPath,
+} from "./digest-state-migration.js";
+import {
   readMemoryWikiAgentDigestSync,
   readMemoryWikiCompiledDigestBundle,
-  resolveMemoryWikiLegacyDigestPath,
   writeMemoryWikiCompiledDigests,
 } from "./digest-state.js";
 

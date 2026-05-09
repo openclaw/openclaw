@@ -5,8 +5,10 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { afterEach, describe, expect, it } from "vitest";
 import {
   importMemoryWikiLegacySourceSyncState,
-  readMemoryWikiSourceSyncState,
   resolveMemoryWikiLegacySourceSyncStatePath,
+} from "./source-sync-state-migration.js";
+import {
+  readMemoryWikiSourceSyncState,
   writeMemoryWikiSourceSyncState,
 } from "./source-sync-state.js";
 
