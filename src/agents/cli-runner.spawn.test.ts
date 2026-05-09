@@ -341,7 +341,9 @@ describe("runCliAgent spawn path", () => {
     let systemPromptPath = "";
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as { argv?: string[] };
-      systemPromptPath = requireArgAfter(input.argv, "--append-system-prompt-file");
+      const systemPromptArgIndex = input.argv?.indexOf("--append-system-prompt-file") ?? -1;
+      expect(systemPromptArgIndex).toBeGreaterThanOrEqual(0);
+      systemPromptPath = input.argv?.[systemPromptArgIndex + 1] ?? "";
       expect(systemPromptPath).toContain("openclaw-cli-system-prompt-");
       await expect(fs.readFile(systemPromptPath, "utf-8")).resolves.toBe(
         "You are a helpful assistant.",
@@ -413,8 +415,10 @@ describe("runCliAgent spawn path", () => {
     expect(resolveArgsInput.thinkingLevel).toBe("high");
     expect(resolveArgsInput.useResume).toBe(false);
     expect(resolveArgsInput.baseArgs).toEqual(["-p", "--output-format", "stream-json"]);
-    const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
-    expect(requireArgAfter(input.argv, "--effort")).toBe("high");
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    const effortArgIndex = input.argv?.indexOf("--effort") ?? -1;
+    expect(effortArgIndex).toBeGreaterThanOrEqual(0);
+    expect(input.argv?.[effortArgIndex + 1]).toBe("high");
   });
 
   it("passes OpenClaw skills to Claude as a session plugin", async () => {
@@ -437,7 +441,9 @@ describe("runCliAgent spawn path", () => {
     let pluginDir = "";
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as { argv?: string[] };
-      pluginDir = requireArgAfter(input.argv, "--plugin-dir");
+      const pluginArgIndex = input.argv?.indexOf("--plugin-dir") ?? -1;
+      expect(pluginArgIndex).toBeGreaterThanOrEqual(0);
+      pluginDir = input.argv?.[pluginArgIndex + 1] ?? "";
       const manifest = JSON.parse(
         await fs.readFile(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf-8"),
       ) as { name?: string; skills?: string };
@@ -671,7 +677,9 @@ describe("runCliAgent spawn path", () => {
     let promptFileText = "";
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as { argv?: string[] };
-      const configArg = requireArgAfter(input.argv, "-c");
+      const configArgIndex = input.argv?.indexOf("-c") ?? -1;
+      expect(configArgIndex).toBeGreaterThanOrEqual(0);
+      const configArg = input.argv?.[configArgIndex + 1] ?? "";
       const match = requireRegexMatch(configArg, /^model_instructions_file="(.+)"$/);
       promptFileText = await fs.readFile(match[1], "utf-8");
       return createManagedRun({
