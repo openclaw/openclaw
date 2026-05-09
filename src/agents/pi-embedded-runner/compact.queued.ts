@@ -29,7 +29,7 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 import {
-  rotateTranscriptFileAfterCompaction,
+  rotateSqliteTranscriptAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
@@ -185,7 +185,7 @@ export async function compactEmbeddedPiSession(
         if (result.ok && result.compacted) {
           if (shouldRotateCompactionTranscript(params.config) && !delegatedRotatedTranscript) {
             try {
-              const rotation = await rotateTranscriptFileAfterCompaction({
+              const rotation = await rotateSqliteTranscriptAfterCompaction({
                 agentId: agentIds.sessionAgentId,
                 sessionFile: params.sessionFile,
               });

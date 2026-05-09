@@ -69,7 +69,7 @@ export async function rotateTranscriptAfterCompaction(params: {
   if (!sourceScope) {
     return { rotated: false, reason: "transcript not in SQLite" };
   }
-  const successorTranscriptPath = resolveSuccessorTranscriptPath({
+  const successorTranscriptLocator = resolveSuccessorTranscriptLocator({
     sessionId,
     agentId: sourceScope.agentId,
   });
@@ -99,14 +99,14 @@ export async function rotateTranscriptAfterCompaction(params: {
   return {
     rotated: true,
     sessionId,
-    transcriptLocator: successorTranscriptPath,
+    transcriptLocator: successorTranscriptLocator,
     compactionEntryId: compaction.id,
     leafId: successorEntries[successorEntries.length - 1]?.id,
     entriesWritten: successorEntries.length,
   };
 }
 
-export async function rotateTranscriptFileAfterCompaction(params: {
+export async function rotateSqliteTranscriptAfterCompaction(params: {
   agentId?: string;
   transcriptLocator: string;
   now?: () => Date;
@@ -351,7 +351,7 @@ function buildSuccessorHeader(params: {
   };
 }
 
-function resolveSuccessorTranscriptPath(params: { sessionId: string; agentId: string }): string {
+function resolveSuccessorTranscriptLocator(params: { sessionId: string; agentId: string }): string {
   return createSqliteSessionTranscriptLocator({
     agentId: params.agentId,
     sessionId: params.sessionId,

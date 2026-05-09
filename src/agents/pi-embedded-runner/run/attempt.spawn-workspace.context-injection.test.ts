@@ -11,6 +11,8 @@ import {
 } from "./attempt.context-engine-helpers.js";
 import { resetEmbeddedAttemptHarness } from "./attempt.spawn-workspace.test-support.js";
 
+const TEST_TRANSCRIPT_LOCATOR = "sqlite-transcript://main/session-context-injection";
+
 async function resolveBootstrapContext(params: {
   contextInjectionMode?: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
@@ -32,7 +34,7 @@ async function resolveBootstrapContext(params: {
     bootstrapContextMode: params.bootstrapContextMode ?? "full",
     bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
     bootstrapMode: params.bootstrapMode ?? "none",
-    sessionFile: "/tmp/session.jsonl",
+    transcriptLocator: TEST_TRANSCRIPT_LOCATOR,
     hasCompletedBootstrapTranscriptTurn,
     resolveBootstrapContextForRun,
   });
@@ -53,9 +55,9 @@ describe("embedded attempt context injection", () => {
       });
 
     expect(result.isContinuationTurn).toBe(true);
-    expect(result.bootstrapFiles).toStrictEqual([]);
-    expect(result.contextFiles).toStrictEqual([]);
-    expect(hasCompletedBootstrapTranscriptTurn).toHaveBeenCalledWith("/tmp/session.jsonl");
+    expect(result.bootstrapFiles).toEqual([]);
+    expect(result.contextFiles).toEqual([]);
+    expect(hasCompletedBootstrapTranscriptTurn).toHaveBeenCalledWith(TEST_TRANSCRIPT_LOCATOR);
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
 
@@ -87,8 +89,8 @@ describe("embedded attempt context injection", () => {
 
     expect(result.isContinuationTurn).toBe(false);
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
-    expect(result.bootstrapFiles).toStrictEqual([]);
-    expect(result.contextFiles).toStrictEqual([]);
+    expect(result.bootstrapFiles).toEqual([]);
+    expect(result.contextFiles).toEqual([]);
     expect(hasCompletedBootstrapTranscriptTurn).not.toHaveBeenCalled();
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
@@ -191,7 +193,7 @@ describe("embedded attempt context injection", () => {
       });
 
     expect(result.isContinuationTurn).toBe(true);
-    expect(hasCompletedBootstrapTranscriptTurn).toHaveBeenCalledWith("/tmp/session.jsonl");
+    expect(hasCompletedBootstrapTranscriptTurn).toHaveBeenCalledWith(TEST_TRANSCRIPT_LOCATOR);
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
   });
