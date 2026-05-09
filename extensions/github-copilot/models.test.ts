@@ -103,6 +103,19 @@ describe("github-copilot model defaults", () => {
       expect(def.api).toBe("anthropic-messages");
     });
 
+    it("uses static metadata overrides for gpt-5.5 fallback rows", () => {
+      const def = buildCopilotModelDefinition("gpt-5.5");
+      expect(def).toMatchObject({
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      });
+    });
+
     it("trims whitespace from model id", () => {
       const def = buildCopilotModelDefinition("  gpt-4o  ");
       expect(def.id).toBe("gpt-4o");
@@ -195,6 +208,19 @@ describe("resolveCopilotForwardCompatModel", () => {
     const ctx = createMockCtx("gpt-5.4");
     const result = requireResolvedModel(ctx);
     expect(result.id).toBe("gpt-5.4");
+  });
+
+  it("uses static metadata for gpt-5.5 when live discovery rows are unavailable", () => {
+    const result = requireResolvedModel(createMockCtx("gpt-5.5"));
+    expect(result).toMatchObject({
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
   });
 
   it("creates synthetic model for arbitrary unknown model ID", () => {
