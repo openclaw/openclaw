@@ -1,8 +1,10 @@
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { ChatType } from "../channels/chat-type.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
+import type { OpenClawPluginAuthContext } from "../plugins/tool-types.js";
 import {
   getActiveRuntimeWebToolsMetadata,
   getActiveSecretsRuntimeSnapshot,
@@ -80,6 +82,7 @@ export function createOpenClawTools(
      */
     runSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
+    agentChatType?: ChatType | null;
     agentAccountId?: string;
     /** Delivery target for topic/thread routing. */
     agentTo?: string;
@@ -144,6 +147,8 @@ export function createOpenClawTools(
     senderIsOwner?: boolean;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
+    /** Runtime-only delegated auth resolver for trusted plugin tools. */
+    pluginAuth?: OpenClawPluginAuthContext;
     /**
      * Workspace directory to pass to spawned subagents for inheritance.
      * Defaults to workspaceDir. Use this to pass the actual agent workspace when the

@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
+import "./monitor-handler/message-handler-mock-support.test-support.js";
 import {
   type MSTeamsActivityHandler,
   type MSTeamsMessageHandlerDeps,
@@ -10,19 +11,51 @@ import {
   createMSTeamsMessageHandlerDeps,
   installMSTeamsTestRuntime,
 } from "./monitor-handler.test-helpers.js";
+import { getRuntimeApiMockState } from "./monitor-handler/message-handler-mock-support.test-support.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { createMSTeamsSsoTokenStoreMemory } from "./sso-token-store.js";
 import {
   type MSTeamsSsoFetch,
+  getMSTeamsSsoUserToken,
   handleSigninTokenExchangeInvoke,
   handleSigninVerifyStateInvoke,
   parseSigninTokenExchangeValue,
   parseSigninVerifyStateValue,
 } from "./sso.js";
 
+const runtimeApiMockState = getRuntimeApiMockState();
+
 function createActivityHandler() {
   const run = vi.fn(async () => undefined);
   const handler = baseCreateActivityHandler(run);
+  return { handler, run };
+}
+
+function createDispatchingActivityHandler() {
+  type Handler = Parameters<MSTeamsActivityHandler["onMessage"]>[0];
+  const messageHandlers: Handler[] = [];
+  let handler: MSTeamsActivityHandler & {
+    run: NonNullable<MSTeamsActivityHandler["run"]>;
+  };
+  const run = vi.fn(async (context: unknown) => {
+    const ctx = context as { activity?: { type?: string } };
+    if (ctx.activity?.type !== "message") {
+      return;
+    }
+    for (const messageHandler of messageHandlers) {
+      await messageHandler(context, async () => {});
+    }
+  });
+  handler = {
+    onMessage: (messageHandler) => {
+      messageHandlers.push(messageHandler);
+      return handler;
+    },
+    onMembersAdded: () => handler,
+    onReactionsAdded: () => handler,
+    onReactionsRemoved: () => handler,
+    run,
+  };
   return { handler, run };
 }
 
@@ -60,7 +93,7 @@ function createRegisteredSsoHandler(sso: MSTeamsMessageHandlerDeps["sso"]) {
 }
 
 function createSigninInvokeContext(params: {
-  name: "signin/tokenExchange" | "signin/verifyState";
+  name: "signin/tokenExchange" | "signin/verifyState" | "signin/failure";
   value: unknown;
   userAadId?: string;
   userBfId?: string;
@@ -106,6 +139,40 @@ function createSigninInvokeContext(params: {
       value: params.value,
     },
     sendActivity: vi.fn(async () => ({ id: "ack-id" })),
+    sendActivities: vi.fn(async () => []),
+    updateActivity: vi.fn(async () => ({ id: "update" })),
+    deleteActivity: vi.fn(async () => {}),
+  } as unknown as MSTeamsTurnContext & {
+    sendActivity: ReturnType<typeof vi.fn>;
+  };
+}
+
+function createSigninCodeMessageContext(params: {
+  text: string;
+  userAadId?: string;
+  userBfId?: string;
+}): MSTeamsTurnContext & { sendActivity: ReturnType<typeof vi.fn> } {
+  return {
+    activity: {
+      id: "message-1",
+      type: "message",
+      text: params.text,
+      channelId: "msteams",
+      serviceUrl: "https://service.example.test",
+      from: {
+        id: params.userBfId ?? "bf-user",
+        aadObjectId: params.userAadId ?? "aad-user-guid",
+        name: "Test User",
+      },
+      recipient: { id: "bot-id", name: "Bot" },
+      conversation: {
+        id: "19:personal-chat",
+        conversationType: "personal",
+      },
+      attachments: [],
+      entities: [],
+    },
+    sendActivity: vi.fn(async () => ({ id: "message-id" })),
     sendActivities: vi.fn(async () => []),
     updateActivity: vi.fn(async () => ({ id: "update" })),
     deleteActivity: vi.fn(async () => {}),
@@ -224,6 +291,80 @@ describe("msteams signin invoke value parsers", () => {
   });
 });
 
+describe("getMSTeamsSsoUserToken", () => {
+  it("returns service_error when Bot Framework token acquisition throws", async () => {
+    const { fetchImpl, calls } = createFakeFetch([]);
+    const { sso, tokenProvider } = createSsoDeps({ fetchImpl });
+    tokenProvider.getAccessToken.mockRejectedValueOnce(new Error("auth sdk unavailable"));
+
+    const result = await getMSTeamsSsoUserToken({
+      user: { userId: "aad-user-guid", channelId: "msteams" },
+      connectionName: "GraphConnection",
+      deps: sso,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("service_error");
+      expect(result.message).toBe("Bot Framework token acquisition failed");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns service_error when the User Token service request throws", async () => {
+    const { fetchImpl, calls } = createFakeFetch([
+      () => {
+        throw new Error("network unavailable");
+      },
+    ]);
+    const { sso } = createSsoDeps({ fetchImpl });
+
+    const result = await getMSTeamsSsoUserToken({
+      user: { userId: "aad-user-guid", channelId: "msteams" },
+      connectionName: "GraphConnection",
+      deps: sso,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("service_error");
+      expect(result.status).toBe(503);
+      expect(result.message).toBe("User Token service request failed");
+    }
+    expect(calls).toHaveLength(1);
+  });
+
+  it("rejects tokens returned for a different OAuth connection", async () => {
+    const { fetchImpl } = createFakeFetch([
+      () => ({
+        ok: true,
+        status: 200,
+        body: {
+          channelId: "msteams",
+          connectionName: "OtherConnection",
+          token: "delegated-graph-token",
+        },
+      }),
+    ]);
+    const { sso } = createSsoDeps({ fetchImpl });
+
+    const result = await getMSTeamsSsoUserToken({
+      user: { userId: "aad-user-guid", channelId: "msteams" },
+      connectionName: "GraphConnection",
+      deps: sso,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("unexpected_response");
+      expect(result.status).toBe(502);
+      expect(result.message).toBe(
+        "User Token service returned token for an unexpected OAuth connection",
+      );
+    }
+  });
+});
+
 describe("handleSigninTokenExchangeInvoke", () => {
   it("exchanges the Teams token and persists the result", async () => {
     const { fetchImpl, calls } = createFakeFetch([
@@ -314,6 +455,61 @@ describe("handleSigninTokenExchangeInvoke", () => {
     }
     expect(calls).toHaveLength(0);
   });
+
+  it("rejects token exchanges for a different OAuth connection", async () => {
+    const { fetchImpl, calls } = createFakeFetch([]);
+    const { sso, tokenProvider } = createSsoDeps({ fetchImpl });
+
+    const result = await handleSigninTokenExchangeInvoke({
+      value: { id: "flow-1", connectionName: "OtherConnection", token: "exchangeable-token" },
+      user: { userId: "aad-user-guid", channelId: "msteams" },
+      deps: sso,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("unexpected_response");
+      expect(result.message).toBe("signin/tokenExchange OAuth connection mismatch");
+    }
+    expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects token exchange responses for a different OAuth connection", async () => {
+    const { fetchImpl } = createFakeFetch([
+      () => ({
+        ok: true,
+        status: 200,
+        body: {
+          channelId: "msteams",
+          connectionName: "OtherConnection",
+          token: "delegated-graph-token",
+          expiration: "2030-01-01T00:00:00Z",
+        },
+      }),
+    ]);
+    const { sso, tokenStore } = createSsoDeps({ fetchImpl });
+
+    const result = await handleSigninTokenExchangeInvoke({
+      value: { id: "flow-1", connectionName: "GraphConnection", token: "exchangeable-token" },
+      user: { userId: "aad-user-guid", channelId: "msteams" },
+      deps: sso,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("unexpected_response");
+      expect(result.status).toBe(502);
+      expect(result.message).toBe(
+        "User Token service returned token for an unexpected OAuth connection",
+      );
+    }
+    const stored = await tokenStore.get({
+      connectionName: "GraphConnection",
+      userId: "aad-user-guid",
+    });
+    expect(stored).toBeNull();
+  });
 });
 
 describe("handleSigninVerifyStateInvoke", () => {
@@ -381,6 +577,10 @@ describe("msteams signin invoke handler registration", () => {
     {
       name: "signin/verifyState" as const,
       value: { state: "112233" },
+    },
+    {
+      name: "signin/failure" as const,
+      value: { code: "resourcematchfailed", message: "Resource match failed" },
     },
   ];
 
@@ -501,8 +701,47 @@ describe("msteams signin invoke handler registration", () => {
     expect(stored?.token).toBe("delegated-graph-token");
   });
 
+  it("falls back to the Teams channel user id for tokenExchange invokes", async () => {
+    const { fetchImpl, calls } = createFakeFetch([
+      () => ({ ok: false, status: 404, body: "aad user not found" }),
+      () => ({
+        ok: true,
+        status: 200,
+        body: {
+          channelId: "msteams",
+          connectionName: "GraphConnection",
+          token: "delegated-graph-token",
+          expiration: "2030-01-01T00:00:00Z",
+        },
+      }),
+    ]);
+    const { sso, tokenStore } = createSsoDeps({ fetchImpl });
+    const { deps, registered } = createRegisteredSsoHandler(sso);
+
+    const ctx = createSigninInvokeContext({
+      name: "signin/tokenExchange",
+      value: { id: "x", connectionName: "GraphConnection", token: "exchangeable" },
+    });
+
+    await registered.run(ctx);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.url).toContain("userId=aad-user-guid");
+    expect(calls[1]?.url).toContain("userId=bf-user");
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "msteams sso token exchanged",
+      expect.objectContaining({ userId: "bf-user", hasExpiry: true }),
+    );
+    const stored = await tokenStore.get({
+      connectionName: "GraphConnection",
+      userId: "bf-user",
+    });
+    expect(stored?.token).toBe("delegated-graph-token");
+  });
+
   it("logs an error when the token exchange fails", async () => {
     const { fetchImpl } = createFakeFetch([
+      () => ({ ok: false, status: 400, body: "bad request" }),
       () => ({ ok: false, status: 400, body: "bad request" }),
     ]);
     const { sso } = createSsoDeps({ fetchImpl });
@@ -522,6 +761,76 @@ describe("msteams signin invoke handler registration", () => {
       "msteams sso token exchange failed",
       expect.objectContaining({ code: "unexpected_response", status: 400 }),
     );
+  });
+
+  it("does not clear sign-in challenges for tokenExchange connection mismatches", async () => {
+    const { fetchImpl, calls } = createFakeFetch([]);
+    const { sso, tokenStore } = createSsoDeps({ fetchImpl });
+    const clearSsoSignInChallenge = vi.fn();
+    const deps = createDepsWithoutSso({ sso, clearSsoSignInChallenge });
+    const { handler } = createActivityHandler();
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    const ctx = createSigninInvokeContext({
+      name: "signin/tokenExchange",
+      value: { id: "x", connectionName: "OtherConnection", token: "exchangeable" },
+    });
+
+    await registered.run(ctx);
+
+    expect(ctx.sendActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "invokeResponse" }),
+    );
+    expect(calls).toHaveLength(0);
+    expect(clearSsoSignInChallenge).not.toHaveBeenCalled();
+    expect(deps.log.error).toHaveBeenCalledWith(
+      "msteams sso token exchange failed",
+      expect.objectContaining({
+        code: "unexpected_response",
+        message: "signin/tokenExchange OAuth connection mismatch",
+      }),
+    );
+    const stored = await tokenStore.get({
+      connectionName: "GraphConnection",
+      userId: "aad-user-guid",
+    });
+    expect(stored).toBeNull();
+  });
+
+  it("logs signin/failure invokes from Teams", async () => {
+    const { fetchImpl, calls } = createFakeFetch([]);
+    const { sso } = createSsoDeps({ fetchImpl });
+    const clearSsoSignInChallenge = vi.fn();
+    const deps = createDepsWithoutSso({ sso, clearSsoSignInChallenge });
+    const { handler } = createActivityHandler();
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    const ctx = createSigninInvokeContext({
+      name: "signin/failure",
+      value: {
+        code: "resourcematchfailed",
+        message: "Resource match failed",
+        connectionName: "GraphConnection",
+        token: "not logged",
+      },
+    });
+
+    await registered.run(ctx);
+
+    expect(calls).toHaveLength(0);
+    expect(ctx.sendActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "invokeResponse" }),
+    );
+    expect(deps.log.warn).toHaveBeenCalledWith("msteams sso signin failure", {
+      code: "resourcematchfailed",
+      message: "Resource match failed",
+      connectionName: "GraphConnection",
+    });
+    expect(clearSsoSignInChallenge).not.toHaveBeenCalled();
   });
 
   it("handles signin/verifyState via the magic-code flow", async () => {
@@ -559,5 +868,243 @@ describe("msteams signin invoke handler registration", () => {
       userId: "aad-user-guid",
     });
     expect(stored?.token).toBe("delegated-token-3");
+  });
+
+  it("falls back to the Teams channel user id for verifyState invokes", async () => {
+    const { fetchImpl, calls } = createFakeFetch([
+      () => ({ ok: false, status: 404, body: "aad user not found" }),
+      () => ({
+        ok: true,
+        status: 200,
+        body: {
+          channelId: "msteams",
+          connectionName: "GraphConnection",
+          token: "delegated-token-4",
+        },
+      }),
+    ]);
+    const { sso, tokenStore } = createSsoDeps({ fetchImpl });
+    const deps = createDepsWithoutSso({ sso });
+    const { handler } = createActivityHandler();
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    const ctx = createSigninInvokeContext({
+      name: "signin/verifyState",
+      value: { state: "112233" },
+    });
+
+    await registered.run(ctx);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.url).toContain("userId=aad-user-guid");
+    expect(calls[0]?.url).toContain("code=112233");
+    expect(calls[1]?.url).toContain("userId=bf-user");
+    expect(calls[1]?.url).toContain("code=112233");
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "msteams sso verifyState succeeded",
+      expect.objectContaining({ userId: "bf-user" }),
+    );
+    const stored = await tokenStore.get({
+      connectionName: "GraphConnection",
+      userId: "bf-user",
+    });
+    expect(stored?.token).toBe("delegated-token-4");
+  });
+
+  it("handles browser fallback magic codes sent as normal messages", async () => {
+    const { fetchImpl, calls } = createFakeFetch([
+      () => ({ ok: false, status: 404, body: "not found for aad id" }),
+      () => ({
+        ok: true,
+        status: 200,
+        body: {
+          channelId: "msteams",
+          connectionName: "GraphConnection",
+          token: "delegated-token-from-code",
+        },
+      }),
+    ]);
+    const { sso, tokenStore } = createSsoDeps({ fetchImpl });
+    const clearSsoSignInChallenge = vi.fn();
+    const deps = createDepsWithoutSso({
+      sso,
+      hasSsoSignInChallenge: vi.fn(() => true),
+      clearSsoSignInChallenge,
+    });
+    const { handler, run } = createActivityHandler();
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    const ctx = createSigninCodeMessageContext({ text: "<div>156372</div>" });
+
+    await registered.run(ctx);
+
+    expect(run).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.url).toContain("userId=aad-user-guid");
+    expect(calls[0]?.url).toContain("code=156372");
+    expect(calls[1]?.url).toContain("userId=bf-user");
+    expect(calls[1]?.url).toContain("code=156372");
+    expect(ctx.sendActivity).toHaveBeenCalledWith(
+      "Microsoft Teams delegated auth is connected. Retry the tool now.",
+    );
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "msteams sso magic-code verification succeeded",
+      expect.objectContaining({ userId: "bf-user" }),
+    );
+    expect(clearSsoSignInChallenge).toHaveBeenCalledWith(ctx.activity);
+
+    const stored = await tokenStore.get({
+      connectionName: "GraphConnection",
+      userId: "bf-user",
+    });
+    expect(stored?.token).toBe("delegated-token-from-code");
+  });
+
+  it("passes six-digit messages to the normal Teams handler without a pending sign-in challenge", async () => {
+    const { fetchImpl, calls } = createFakeFetch([]);
+    const { sso } = createSsoDeps({ fetchImpl });
+    const deps = createDepsWithoutSso({ sso });
+    const { handler, run } = createActivityHandler();
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+    const ctx = createSigninCodeMessageContext({ text: "156372" });
+
+    await registered.run(ctx);
+
+    expect(calls).toHaveLength(0);
+    expect(ctx.sendActivity).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes later six-digit messages after clearing a sign-in challenge via one user-id alias", async () => {
+    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher
+      .mockImplementationOnce(async (params: unknown) => {
+        const typedParams = params as {
+          ctxPayload?: unknown;
+          replyOptions?: { pluginAuth?: unknown };
+        };
+        const auth = typedParams.replyOptions?.pluginAuth as
+          | {
+              getDelegatedAccessToken?: (request: {
+                provider: string;
+                audience: string;
+                scopes: string[];
+              }) => Promise<unknown>;
+            }
+          | undefined;
+        await auth?.getDelegatedAccessToken?.({
+          provider: "msteams",
+          audience: "api://downstream-tools",
+          scopes: ["downstream.access"],
+        });
+        return { queuedFinal: false, counts: {}, capturedCtxPayload: typedParams.ctxPayload };
+      })
+      .mockImplementationOnce(async (params: unknown) => {
+        const typedParams = params as { ctxPayload?: unknown };
+        return { queuedFinal: false, counts: {}, capturedCtxPayload: typedParams.ctxPayload };
+      });
+    const { fetchImpl, calls } = createFakeFetch([
+      () => ({ ok: false, status: 404, body: "not found before consent for aad id" }),
+      () => ({ ok: false, status: 404, body: "not found before consent for channel user id" }),
+      () => ({
+        ok: true,
+        status: 200,
+        body: { signInLink: "https://signin.example.test/start" },
+      }),
+      () => ({
+        ok: true,
+        status: 200,
+        body: {
+          channelId: "msteams",
+          connectionName: "GraphConnection",
+          token: "delegated-token-from-code",
+        },
+      }),
+    ]);
+    const { sso } = createSsoDeps({ fetchImpl });
+    const deps = createDepsWithoutSso({
+      cfg: {
+        channels: {
+          msteams: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            sso: { enabled: true, connectionName: "GraphConnection" },
+          },
+        },
+      } as OpenClawConfig,
+      sso,
+    });
+    const { handler, run } = createDispatchingActivityHandler();
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    const initialMessage = createSigninCodeMessageContext({
+      text: "run delegated tool",
+      userAadId: "aad-user-guid",
+      userBfId: "bf-user",
+    });
+    await registered.run(initialMessage);
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(
+      (
+        runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0] as {
+          replyOptions?: { pluginAuth?: unknown };
+        }
+      )?.replyOptions?.pluginAuth,
+    ).toBeDefined();
+    expect(initialMessage.sendActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("https://signin.example.test/start"),
+      }),
+    );
+
+    const aadOnlyCode = createSigninInvokeContext({
+      name: "signin/verifyState",
+      value: { state: "156372" },
+      userAadId: "aad-user-guid",
+      userBfId: "",
+    });
+    await registered.run(aadOnlyCode);
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "msteams sso verifyState succeeded",
+      expect.objectContaining({ userId: "aad-user-guid" }),
+    );
+
+    const channelUserOnlyMessage = createSigninCodeMessageContext({
+      text: "238232",
+      userAadId: "",
+      userBfId: "bf-user",
+    });
+    await registered.run(channelUserOnlyMessage);
+
+    expect(calls).toHaveLength(4);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(channelUserOnlyMessage.sendActivity).not.toHaveBeenCalledWith(
+      expect.stringContaining("sign-in code could not be verified"),
+    );
+  });
+
+  it("passes non-code messages to the normal Teams handler", async () => {
+    const { fetchImpl, calls } = createFakeFetch([]);
+    const { sso } = createSsoDeps({ fetchImpl });
+    const deps = createDepsWithoutSso({ sso });
+    const { handler, run } = createActivityHandler();
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    await registered.run(createSigninCodeMessageContext({ text: "hello 156372" }));
+
+    expect(calls).toHaveLength(0);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

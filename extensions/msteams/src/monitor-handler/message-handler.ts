@@ -30,6 +30,7 @@ import {
 } from "../attachments.js";
 import { isRecord } from "../attachments/shared.js";
 import type { StoredConversationReference } from "../conversation-store.js";
+import { createMSTeamsDelegatedAuthContext } from "../delegated-auth.js";
 import { formatUnknownError } from "../errors.js";
 import {
   fetchThreadReplies,
@@ -823,6 +824,23 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       tokenProvider,
       sharePointSiteId,
     });
+    const pluginAuth = deps.sso
+      ? createMSTeamsDelegatedAuthContext({
+          activity,
+          sso: deps.sso,
+          botAppId: appId,
+          sendActivity: async (challenge) => {
+            await context.sendActivity(challenge);
+          },
+          onConsentChallengeSent: () => deps.recordSsoSignInChallenge?.(activity),
+          onDebug: (message, meta) => log.debug?.(message, meta),
+          onConsentChallengeError: (err) => {
+            log.warn?.(
+              `msteams delegated auth consent challenge failed: ${formatUnknownError(err)}`,
+            );
+          },
+        })
+      : undefined;
 
     // Use Teams clientInfo timezone if no explicit userTimezone is configured.
     // This ensures the agent knows the sender's timezone for time-aware responses
@@ -886,7 +904,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
                 ctxPayload,
                 dispatcher,
                 onSettled: () => markDispatchIdle(),
-                replyOptions,
+                replyOptions: {
+                  ...replyOptions,
+                  pluginAuth,
+                },
                 configOverride,
               }),
           }),

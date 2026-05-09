@@ -1,3 +1,4 @@
+import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -49,7 +50,7 @@ function buildThreadedChannelRoute(params: {
   channel: string;
   accountId?: string | null;
   peer: RoutePeer;
-  chatType: "direct" | "group" | "channel";
+  chatType: ChatType;
   from: string;
   to: string;
   threadId?: string | number;

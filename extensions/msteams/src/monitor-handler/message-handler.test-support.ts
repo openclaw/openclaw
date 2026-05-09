@@ -69,6 +69,7 @@ export function createMessageHandlerDeps(
     log: {
       info: vi.fn(),
       debug: vi.fn(),
+      warn: vi.fn(),
       error: vi.fn(),
     } as unknown as MSTeamsMessageHandlerDeps["log"],
   };

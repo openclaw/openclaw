@@ -154,6 +154,11 @@ function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" |
   };
 }
 
+function stripSyntheticRunDelegatedAuth(run: FollowupRun["run"]): FollowupRun["run"] {
+  const { pluginAuth: _pluginAuth, ...safeRun } = run;
+  return safeRun;
+}
+
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
   const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
   const threadId = item.originatingThreadId;
@@ -205,7 +210,7 @@ export function scheduleFollowupDrain(
             if (summaryOnlyPrompt && run) {
               await effectiveRunFollowup({
                 prompt: summaryOnlyPrompt,
-                run,
+                run: stripSyntheticRunDelegatedAuth(run),
                 enqueuedAt: Date.now(),
                 ...collectQueuedImages(queue.items),
               });
@@ -228,7 +233,7 @@ export function scheduleFollowupDrain(
             }
             await effectiveRunFollowup({
               prompt: summary,
-              run,
+              run: stripSyntheticRunDelegatedAuth(run),
               enqueuedAt: Date.now(),
             });
             clearQueueSummaryState(queue);
@@ -251,7 +256,7 @@ export function scheduleFollowupDrain(
             });
             await effectiveRunFollowup({
               prompt,
-              run,
+              run: stripSyntheticRunDelegatedAuth(run),
               enqueuedAt: Date.now(),
               ...routing,
               ...collectQueuedImages(groupItems),
@@ -275,7 +280,7 @@ export function scheduleFollowupDrain(
             !(await drainNextQueueItem(queue.items, async (item) => {
               await effectiveRunFollowup({
                 prompt: summaryPrompt,
-                run,
+                run: stripSyntheticRunDelegatedAuth(run),
                 enqueuedAt: Date.now(),
                 originatingChannel: item.originatingChannel,
                 originatingTo: item.originatingTo,

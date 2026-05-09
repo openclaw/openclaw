@@ -399,11 +399,14 @@ function createProcessContext(params: {
   getToken: () => Promise<string | undefined>;
 }): MSTeamsProcessContext {
   const serviceUrl = params.activity?.serviceUrl as string | undefined;
-  const conversationId = (params.activity?.conversation as Record<string, unknown>)?.id as
-    | string
-    | undefined;
-  const conversationType = (params.activity?.conversation as Record<string, unknown>)
-    ?.conversationType as string | undefined;
+  const conversation = params.activity?.conversation as Record<string, unknown> | undefined;
+  const channelData = params.activity?.channelData as Record<string, unknown> | undefined;
+  const channelTenant = channelData?.tenant as Record<string, unknown> | undefined;
+  const from = params.activity?.from as Record<string, unknown> | undefined;
+  const conversationId = conversation?.id as string | undefined;
+  const conversationType = conversation?.conversationType as string | undefined;
+  const tenantId =
+    (conversation?.tenantId as string | undefined) ?? (channelTenant?.id as string | undefined);
   const replyToActivityId = params.activity?.id as string | undefined;
   const bot: MSTeamsBotIdentity | undefined =
     params.activity?.recipient && typeof params.activity.recipient === "object"
@@ -421,6 +424,9 @@ function createProcessContext(params: {
     replyToActivityId,
     getToken: params.getToken,
     treatInvokeResponseAsNoop: true,
+    tenantId,
+    recipientId: from?.id as string | undefined,
+    recipientAadObjectId: from?.aadObjectId as string | undefined,
   });
 
   return {

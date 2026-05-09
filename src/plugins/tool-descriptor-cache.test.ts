@@ -136,4 +136,33 @@ describe("plugin tool descriptor cache keys", () => {
 
     expect(firstKey).toBe(secondKey);
   });
+
+  it("separates descriptor keys by factory delegated auth availability", () => {
+    const config = { id: "runtime" } as never;
+
+    const noAuthKey = buildPluginToolDescriptorCacheKey({
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["demo"],
+      ctx: {
+        config,
+        runtimeConfig: config,
+      },
+      currentRuntimeConfig: config,
+      factoryDelegatedAuth: false,
+    });
+    const authKey = buildPluginToolDescriptorCacheKey({
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["demo"],
+      ctx: {
+        config,
+        runtimeConfig: config,
+      },
+      currentRuntimeConfig: config,
+      factoryDelegatedAuth: true,
+    });
+
+    expect(authKey).not.toBe(noAuthKey);
+  });
 });

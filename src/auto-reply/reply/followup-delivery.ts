@@ -1,4 +1,5 @@
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -29,7 +30,7 @@ export function resolveFollowupDeliveryPayloads(params: {
   messageProvider?: string;
   originatingAccountId?: string;
   originatingChannel?: string;
-  originatingChatType?: string | null;
+  originatingChatType?: ChatType | null;
   originatingTo?: string;
   sentMediaUrls?: string[];
   sentTargets?: MessagingToolSend[];

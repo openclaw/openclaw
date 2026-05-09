@@ -1,0 +1,14 @@
+{
+  "name": "msteams-obo-downstream-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx server.ts"
+  },
+  "dependencies": {
+    "@azure/msal-node": "5.1.5",
+    "jose": "6.2.3",
+    "tsx": "4.21.0"
+  }
+}

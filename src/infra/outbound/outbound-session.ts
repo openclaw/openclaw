@@ -17,7 +17,7 @@ export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
   peer: RoutePeer;
-  chatType: "direct" | "group" | "channel";
+  chatType: ChatType;
   from: string;
   to: string;
   threadId?: string | number;
