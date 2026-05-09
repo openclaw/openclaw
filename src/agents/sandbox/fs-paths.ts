@@ -157,7 +157,9 @@ export function resolveSandboxFsPathWithMounts(params: {
     cwd: params.cwd,
     root: params.defaultWorkspaceRoot,
   });
-  throw new Error(`Path escapes sandbox root (${params.defaultWorkspaceRoot}): ${input}`);
+  throw new Error(
+    `Path escapes sandbox root (${params.defaultWorkspaceRoot}): ${input}. Use a path under ${params.defaultContainerRoot}/ instead.`,
+  );
 }
 
 function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): number {

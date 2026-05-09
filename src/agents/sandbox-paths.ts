@@ -69,7 +69,9 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
     return { resolved, relative: "" };
   }
   if (relative.startsWith("..") || path.isAbsolute(relative) || isWindowsDrivePath(relative)) {
-    throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
+    throw new Error(
+      `Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}. Use a path under ${SANDBOX_CONTAINER_WORKDIR}/ instead.`,
+    );
   }
   return { resolved, relative };
 }

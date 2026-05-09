@@ -297,7 +297,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
       };
     }
 
-    throw new Error(`Path escapes sandbox root (${workspaceRoot}): ${params.filePath}`);
+    throw new Error(
+      `Path escapes sandbox root (${workspaceRoot}): ${params.filePath}. Use a path under ${workspaceContainerRoot}/ instead.`,
+    );
   }
 }
 

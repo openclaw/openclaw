@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sandbox: include the in-container workspace mount path in "Path escapes sandbox root" errors so LLM agents can pivot to the correct path without retry loops. Thanks @axonrelaybot.
 - Plugins/ACPX: accept an optional `args` array in `agents.<name>` config so paths and flag values containing spaces stay intact when spawning ACP agent processes. Thanks @TheArchitectit and @BunsDev.
 - Agents: inject the current provider/model identity into system prompts, including configured prompt overrides and CLI hook prompt replacements, so agents can answer model-identity questions from the actual runtime selection.
 - Plugins/CLI: add the optional bundled `oc-path` plugin, providing `openclaw path` for surgical `oc://` access to markdown, JSONC, and JSONL workspace files.
