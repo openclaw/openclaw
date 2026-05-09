@@ -14,6 +14,10 @@ vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
 }));
 
+vi.mock("../channels/message/runtime.js", () => ({
+  sendDurableMessageBatch: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+}));
+
 vi.mock("../utils/message-channel.js", () => ({
   isDeliverableMessageChannel: (channel: string) =>
     channel === "voicechat" || channel === "telegram",
@@ -33,7 +37,11 @@ function createCtx(overrides?: Partial<MsgContext>): MsgContext {
 describe("sendTranscriptEcho", () => {
   beforeEach(() => {
     mockDeliverOutboundPayloads.mockReset();
-    mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "voicechat", messageId: "echo-1" }]);
+    mockDeliverOutboundPayloads.mockResolvedValue({
+      status: "sent",
+      results: [{ channel: "voicechat", messageId: "echo-1" }],
+      receipt: { platformMessageIds: ["echo-1"], parts: [], sentAt: 1 },
+    });
   });
 
   it("sends the default formatted transcript to the resolved origin", async () => {
@@ -53,7 +61,7 @@ describe("sendTranscriptEcho", () => {
         threadId: undefined,
         payloads: [{ text: DEFAULT_ECHO_TRANSCRIPT_FORMAT.replace("{transcript}", "hello world") }],
         bestEffort: true,
-        queuePolicy: "best_effort",
+        durability: "best_effort",
       }),
     );
   });
