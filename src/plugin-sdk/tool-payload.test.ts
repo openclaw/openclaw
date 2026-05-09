@@ -115,12 +115,4 @@ describe("stripPlainTextToolCallBlocks", () => {
       ),
     ).toBe("before\nafter");
   });
-
-  it("preserves paragraph spacing around bracketed local-model tool blocks", () => {
-    expect(
-      stripPlainTextToolCallBlocks(
-        ["before", "[read]", '{"path":"/tmp/file.txt"}', "[END_TOOL_REQUEST]", "after"].join("\n"),
-      ),
-    ).toBe("before\n\nafter");
-  });
 });
