@@ -103,7 +103,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const { messageId } = await appendSessionTranscriptMessage({
+    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
       transcriptPath: params.transcriptPath,
       message: messageBody,
       now,
@@ -112,10 +112,10 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     });
     emitSessionTranscriptUpdate({
       sessionFile: params.transcriptPath,
-      message: messageBody,
+      message: appendedMessage,
       messageId,
     });
-    return { ok: true, messageId, message: messageBody };
+    return { ok: true, messageId, message: appendedMessage as unknown as Record<string, unknown> };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }

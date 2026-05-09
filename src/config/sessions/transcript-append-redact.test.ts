@@ -2,25 +2,25 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { appendExactAssistantMessageToSessionTranscript } from "./transcript.js";
 
-describe("appendSessionTranscriptMessage — redaction", () => {
+function readMessages(sessionFile: string) {
+  return fs
+    .readFileSync(sessionFile, "utf-8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { type?: string; message?: unknown })
+    .filter((r) => r.type === "message")
+    .map((r) => r.message);
+}
+
+describe("appendSessionTranscriptMessage - redaction", () => {
   const fixture = useTempSessionsFixture("transcript-redact-test-");
-
-  function readMessages(sessionFile: string) {
-    return fs
-      .readFileSync(sessionFile, "utf-8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { type?: string; message?: unknown })
-      .filter((r) => r.type === "message")
-      .map((r) => r.message);
-  }
-
   it("masks secrets in message content before writing to disk", async () => {
     const sessionFile = resolveSessionTranscriptPathInDir("redact-on", fixture.sessionsDir());
     const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
@@ -78,7 +78,7 @@ describe("appendSessionTranscriptMessage — redaction", () => {
   });
 });
 
-describe("appendExactAssistantMessageToSessionTranscript — redaction", () => {
+describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
   const fixture = useTempSessionsFixture("exact-assistant-redact-test-");
 
   it("does not redact when config.logging.redactSensitive is off", async () => {
@@ -125,5 +125,60 @@ describe("appendExactAssistantMessageToSessionTranscript — redaction", () => {
 
     const raw = fs.readFileSync(result.sessionFile, "utf-8");
     expect(raw).toContain(fakeApiKey);
+  });
+
+  it("emits the redacted assistant message for inline transcript updates", async () => {
+    const sessionsDir = fixture.sessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionId = "test-session-redact-event";
+    const sessionKey = "test-channel:test-redact-event";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [sessionKey]: { sessionId, updatedAt: Date.now() } }, null, 2),
+      { encoding: "utf-8", mode: 0o600 },
+    );
+
+    const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
+    const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
+    const updates: Array<{ message?: unknown }> = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+
+    try {
+      const result = await appendExactAssistantMessageToSessionTranscript({
+        sessionKey,
+        storePath,
+        config,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `Here is your key: ${fakeApiKey}` }],
+          api: "openai-responses",
+          provider: "openclaw",
+          model: "test-model",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: Date.now(),
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+
+      const [diskMessage] = readMessages(result.sessionFile);
+      expect(JSON.stringify(diskMessage)).not.toContain(fakeApiKey);
+      expect(updates).toHaveLength(1);
+      expect(updates[0]?.message).toEqual(diskMessage);
+      expect(JSON.stringify(updates[0]?.message)).not.toContain(fakeApiKey);
+    } finally {
+      unsubscribe();
+    }
   });
 });

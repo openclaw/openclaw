@@ -80,7 +80,7 @@ describe("redactTranscriptMessage", () => {
   it("passes through unchanged when redactSensitive is off", () => {
     const msg = textMessage("key is sk-abcdef1234567890xyz");
     const result = redactTranscriptMessage(msg, cfg("off"));
-    expect(result).toBe(msg); // same reference — nothing changed
+    expect(result).toBe(msg); // same reference; nothing changed
   });
 
   it("returns same object reference when nothing matches", () => {

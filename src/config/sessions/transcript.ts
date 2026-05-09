@@ -305,7 +305,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...params.message,
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
-  const { messageId } = await appendSessionTranscriptMessage({
+  const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
     transcriptPath: sessionFile,
     message,
     config: params.config,
@@ -313,7 +313,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 
   switch (params.updateMode ?? "inline") {
     case "inline":
-      emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });
+      emitSessionTranscriptUpdate({ sessionFile, sessionKey, message: appendedMessage, messageId });
       break;
     case "file-only":
       emitSessionTranscriptUpdate({ sessionFile, sessionKey });
