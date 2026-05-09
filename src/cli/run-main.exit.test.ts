@@ -26,7 +26,9 @@ const resolvePluginCliRootOwnerIdsMock = vi.hoisted(() => vi.fn());
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
-const runCrestodianMock = vi.hoisted(() => vi.fn(async () => {}));
+const runCrestodianMock = vi.hoisted(() =>
+  vi.fn<(options?: unknown) => Promise<void>>(async () => {}),
+);
 const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
 const addGatewayRunCommandMock = vi.hoisted(() => vi.fn((command: unknown) => command));
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
@@ -543,7 +545,11 @@ describe("runCli exit behavior", () => {
     try {
       const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
       await vi.waitFor(() => {
-        expect(processOnceSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
+        expect(
+          processOnceSpy.mock.calls.some(
+            ([event, listener]) => event === "SIGINT" && typeof listener === "function",
+          ),
+        ).toBe(true);
       });
 
       const sigintHandler = processOnceSpy.mock.calls.find(([event]) => event === "SIGINT")?.[1];
@@ -628,7 +634,10 @@ describe("runCli exit behavior", () => {
     }
 
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
-    expect(runCrestodianMock).toHaveBeenCalledWith({ onReady: expect.any(Function) });
+    expect(runCrestodianMock).toHaveBeenCalledOnce();
+    const crestodianOptions = runCrestodianMock.mock.calls[0]?.[0] as { onReady?: unknown };
+    expect(crestodianOptions).toEqual({ onReady: crestodianOptions.onReady });
+    expect(crestodianOptions.onReady).toBeTypeOf("function");
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
       runCrestodianMock.mock.invocationCallOrder[0],
     );

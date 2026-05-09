@@ -369,6 +369,12 @@ Decision rules:
 - `message_sending` with `cancel: false` is treated as no decision.
 - Rewritten `content` continues to lower-priority hooks unless a later hook
   cancels delivery.
+- `message_sending` can return `cancelReason` and bounded `metadata` with a
+  cancellation. New message lifecycle APIs expose this as a suppressed delivery
+  outcome with reason `cancelled_by_message_sending_hook`; legacy direct
+  delivery keeps returning an empty result array for compatibility.
+- `message_sent` is observation-only. Handler failures are logged and do not
+  change the delivery result.
 
 ## Install hooks
 

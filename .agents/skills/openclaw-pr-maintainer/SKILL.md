@@ -48,7 +48,7 @@ gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --
 
 ## Suppress top-maintainer items in issue triage
 
-When Peter asks for issue triage, hot issues, pressing bugs, Discord-correlated issues, or "what is still open", do not surface issues or PRs authored by top maintainers by default. He wants external/user-reported hot issues and external PRs, not maintainer-owned work queues.
+When asked for issue triage, hot issues, pressing bugs, Discord-correlated issues, or "what is still open", do not surface issues or PRs authored by top maintainers by default. Prefer external/user-reported hot issues and external PRs, not maintainer-owned work queues.
 
 Suppress by default when the opener/author is one of:
 
@@ -77,7 +77,7 @@ Also suppress lower-priority maintainer-owned noise from the broader keep/top-ma
 
 Exceptions:
 
-- Show maintainer-authored items when Peter explicitly asks for maintainer PRs/issues, PR landing candidates, release-blocking maintainer work, or a specific PR/issue number.
+- Show maintainer-authored items when the requester explicitly asks for maintainer PRs/issues, PR landing candidates, release-blocking maintainer work, or a specific PR/issue number.
 - Show a maintainer-authored item when it is the canonical fix for an external hot issue, but frame it as the fix path rather than as a user-facing issue candidate.
 - Do not close, label, or deprioritize solely because an item is maintainer-authored; this section only controls what appears in triage shortlists.
 
@@ -103,11 +103,13 @@ Exceptions:
 
 When asked for `X` issues or PRs to triage, `X` means qualified candidates, not sampled threads.
 
-Triage is read/prove/patch-local by default. Do not commit unless Peter writes
+Triage is read/prove/patch-local by default. Do not commit unless the requester writes
 `commit` in the current instruction for the exact diff being handled. Do not
 treat earlier messages, inferred intent, "next", sweep momentum, or bundled
-publish language as commit permission. If Peter asks for follow-up work without
+publish language as commit permission. If the requester asks for follow-up work without
 saying `commit`, keep the files dirty after local fixes and proof.
+
+Missing changelog is not a PR review finding or merge blocker. If landing/fixing a user-visible change, add/update changelog automatically when practical; never ask or block solely on it.
 
 Only list candidates that pass all gates:
 

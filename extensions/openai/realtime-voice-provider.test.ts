@@ -525,6 +525,38 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
   });
 
+  it("can disable realtime response interruption while keeping audio responses enabled", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      autoRespondToAudio: true,
+      interruptResponseOnInputAudio: false,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    expect(parseSent(socket)[0]?.session).toMatchObject({
+      audio: {
+        input: {
+          turn_detection: expect.objectContaining({
+            create_response: true,
+            interrupt_response: false,
+          }),
+        },
+      },
+    });
+  });
+
   it("keeps assistant playback active on server VAD when automatic audio responses are disabled", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onAudio = vi.fn();

@@ -6,6 +6,12 @@ const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/outbound/deliver-runtime.js", () => ({
   deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+  deliverOutboundPayloadsInternal: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+}));
+
+vi.mock("../infra/outbound/deliver.js", () => ({
+  deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+  deliverOutboundPayloadsInternal: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
 }));
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -38,15 +44,18 @@ describe("sendTranscriptEcho", () => {
     });
 
     expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith({
-      cfg: {},
-      channel: "voicechat",
-      to: "+10000000001",
-      accountId: "acc1",
-      threadId: undefined,
-      payloads: [{ text: DEFAULT_ECHO_TRANSCRIPT_FORMAT.replace("{transcript}", "hello world") }],
-      bestEffort: true,
-    });
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        channel: "voicechat",
+        to: "+10000000001",
+        accountId: "acc1",
+        threadId: undefined,
+        payloads: [{ text: DEFAULT_ECHO_TRANSCRIPT_FORMAT.replace("{transcript}", "hello world") }],
+        bestEffort: true,
+        queuePolicy: "best_effort",
+      }),
+    );
   });
 
   it("uses a custom format when provided", async () => {

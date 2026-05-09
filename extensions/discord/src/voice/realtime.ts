@@ -39,6 +39,7 @@ const logger = createSubsystemLogger("discord/voice");
 const DISCORD_REALTIME_TALKBACK_DEBOUNCE_MS = 350;
 const DISCORD_REALTIME_FALLBACK_TEXT = "I hit an error while checking that. Please try again.";
 const DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT = 32;
+const DISCORD_REALTIME_LOG_PREVIEW_CHARS = 500;
 
 export type DiscordVoiceMode = "stt-tts" | "talk-buffer" | "bidi";
 
@@ -52,6 +53,30 @@ type PendingSpeakerTurn = {
   closed: boolean;
 };
 
+function formatRealtimeLogPreview(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= DISCORD_REALTIME_LOG_PREVIEW_CHARS) {
+    return oneLine;
+  }
+  return `${oneLine.slice(0, DISCORD_REALTIME_LOG_PREVIEW_CHARS)}...`;
+}
+
+function readProviderConfigString(
+  config: RealtimeVoiceProviderConfig,
+  key: string,
+): string | undefined {
+  const value = config[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readProviderConfigBoolean(
+  config: RealtimeVoiceProviderConfig | undefined,
+  key: string,
+): boolean | undefined {
+  const value = config?.[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
 export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): DiscordVoiceMode {
   const mode = voice?.mode;
   return mode === "talk-buffer" || mode === "bidi" ? mode : "stt-tts";
@@ -59,6 +84,25 @@ export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): D
 
 export function isDiscordRealtimeVoiceMode(mode: DiscordVoiceMode): boolean {
   return mode === "talk-buffer" || mode === "bidi";
+}
+
+export function resolveDiscordRealtimeInterruptResponseOnInputAudio(params: {
+  realtimeConfig: DiscordRealtimeVoiceConfig;
+  providerId: string;
+}): boolean {
+  const providerConfig = params.realtimeConfig?.providers?.[params.providerId];
+  return readProviderConfigBoolean(providerConfig, "interruptResponseOnInputAudio") ?? true;
+}
+
+export function resolveDiscordRealtimeBargeIn(params: {
+  realtimeConfig: DiscordRealtimeVoiceConfig;
+  providerId: string;
+}): boolean {
+  const configured = params.realtimeConfig?.bargeIn;
+  if (typeof configured === "boolean") {
+    return configured;
+  }
+  return resolveDiscordRealtimeInterruptResponseOnInputAudio(params);
 }
 
 export function buildDiscordSpeakExactUserMessage(text: string): string {
@@ -130,6 +174,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.consultToolPolicy = toolPolicy;
     this.consultToolsAllow = resolveRealtimeVoiceAgentConsultToolsAllow(toolPolicy);
     const consultPolicy = this.realtimeConfig?.consultPolicy ?? "auto";
+    const interruptResponseOnInputAudio = resolveDiscordRealtimeInterruptResponseOnInputAudio({
+      realtimeConfig: this.realtimeConfig,
+      providerId: resolved.provider.id,
+    });
     const instructions = buildDiscordRealtimeInstructions({
       mode: this.params.mode,
       instructions: this.realtimeConfig?.instructions,
@@ -142,6 +190,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions,
       autoRespondToAudio: this.params.mode === "bidi",
+      interruptResponseOnInputAudio,
       markStrategy: "ack-immediately",
       tools: this.params.mode === "bidi" ? resolveRealtimeVoiceAgentConsultTools(toolPolicy) : [],
       audioSink: {
@@ -150,6 +199,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         clearAudio: () => this.clearOutputAudio(),
       },
       onTranscript: (role, text, isFinal) => {
+        if (isFinal && text.trim()) {
+          logger.info(
+            `discord voice: realtime ${role} transcript (${text.length} chars): ${formatRealtimeLogPreview(text)}`,
+          );
+        }
         if (!isFinal || role !== "user" || this.params.mode !== "talk-buffer") {
           return;
         }
@@ -164,12 +218,23 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         logger.warn(`discord voice: realtime error: ${formatErrorMessage(error)}`),
       onClose: (reason) => logVoiceVerbose(`realtime closed: ${reason}`),
     });
-    logVoiceVerbose(
-      `realtime voice bridge starting: mode=${this.params.mode} provider=${resolved.provider.id}`,
+    const resolvedModel =
+      readProviderConfigString(resolved.providerConfig, "model") ?? resolved.provider.defaultModel;
+    const resolvedVoice = readProviderConfigString(resolved.providerConfig, "voice");
+    logger.info(
+      `discord voice: realtime bridge starting mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"} consultPolicy=${consultPolicy} toolPolicy=${toolPolicy} autoRespond=${this.params.mode === "bidi"} interruptResponse=${interruptResponseOnInputAudio} bargeIn=${resolveDiscordRealtimeBargeIn(
+        {
+          realtimeConfig: this.realtimeConfig,
+          providerId: resolved.provider.id,
+        },
+      )}`,
     );
     const voiceSdk = loadDiscordVoiceSdk();
     this.params.entry.player.on(voiceSdk.AudioPlayerStatus.Idle, this.playerIdleHandler);
     await this.bridge.connect();
+    logger.info(
+      `discord voice: realtime bridge ready mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"}`,
+    );
   }
 
   close(): void {
@@ -213,8 +278,19 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   handleBargeIn(): void {
+    if (!this.isBargeInEnabled()) {
+      return;
+    }
     this.bridge?.handleBargeIn({ audioPlaybackActive: Boolean(this.outputStream) });
     this.clearOutputAudio();
+  }
+
+  isBargeInEnabled(): boolean {
+    const providerId = this.realtimeConfig?.provider ?? "openai";
+    return resolveDiscordRealtimeBargeIn({
+      realtimeConfig: this.realtimeConfig,
+      providerId,
+    });
   }
 
   private get realtimeConfig(): DiscordRealtimeVoiceConfig {
@@ -246,6 +322,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       inputType: voiceSdk.StreamType.Raw,
     });
     this.params.entry.player.play(resource);
+    const realtimeConfig = this.realtimeConfig;
+    logger.info(
+      `discord voice: realtime audio playback started guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} mode=${this.params.mode} model=${realtimeConfig?.model ?? "provider-default"} voice=${realtimeConfig?.voice ?? "provider-default"}`,
+    );
     return stream;
   }
 
@@ -280,6 +360,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       session.submitToolResult(callId, { error: `Tool "${event.name}" not available` });
       return;
     }
+    const consultMessage = buildRealtimeVoiceAgentConsultChatMessage(event.args);
+    logger.info(
+      `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatRealtimeLogPreview(consultMessage)}`,
+    );
     if (session.bridge.supportsToolResultContinuation) {
       session.submitToolResult(callId, buildRealtimeVoiceAgentConsultWorkingResponse("speaker"), {
         willContinue: true,
@@ -287,17 +371,26 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     }
     const context = this.consumePendingSpeakerContext();
     if (!context) {
+      logger.warn(
+        `discord voice: realtime consult has no speaker context call=${callId || "unknown"}`,
+      );
       session.submitToolResult(callId, { error: "No Discord speaker context available" });
       return;
     }
     void this.runAgentTurn({
       context,
-      message: buildRealtimeVoiceAgentConsultChatMessage(event.args),
+      message: consultMessage,
     })
       .then((text) => {
+        logger.info(
+          `discord voice: realtime consult answer (${text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}: ${formatRealtimeLogPreview(text)}`,
+        );
         session.submitToolResult(callId, { text });
       })
       .catch((error: unknown) => {
+        logger.warn(
+          `discord voice: realtime consult failed call=${callId || "unknown"}: ${formatErrorMessage(error)}`,
+        );
         session.submitToolResult(callId, { error: formatErrorMessage(error) });
       });
   }
