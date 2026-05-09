@@ -59,7 +59,7 @@ describe("commitment store delivery selection", () => {
 
   it("does not surface due commitments unless inferred commitments are enabled", async () => {
     await useTempStateDir();
-    await saveCommitmentStore(undefined, {
+    await saveCommitmentStore({
       version: 1,
       commitments: [commitment()],
     });
@@ -76,7 +76,7 @@ describe("commitment store delivery selection", () => {
 
   it("limits delivered commitments per agent session in a rolling day", async () => {
     await useTempStateDir();
-    await saveCommitmentStore(undefined, {
+    await saveCommitmentStore({
       version: 1,
       commitments: [
         commitment({ id: "cm_sent", status: "sent", sentAtMs: nowMs - 60_000 }),
@@ -99,7 +99,7 @@ describe("commitment store delivery selection", () => {
 
   it("expires stale pending commitments instead of leaving them hidden forever", async () => {
     await useTempStateDir();
-    await saveCommitmentStore(undefined, {
+    await saveCommitmentStore({
       version: 1,
       commitments: [
         commitment({
@@ -130,7 +130,7 @@ describe("commitment store delivery selection", () => {
 
   it("rewrites legacy source text fields when commitments are saved", async () => {
     await useTempStateDir();
-    await saveCommitmentStore(undefined, {
+    await saveCommitmentStore({
       version: 1,
       commitments: [commitment()],
     });
@@ -158,7 +158,7 @@ describe("commitment store delivery selection", () => {
 
   it("lists expired commitments after expiry transition", async () => {
     await useTempStateDir();
-    await saveCommitmentStore(undefined, {
+    await saveCommitmentStore({
       version: 1,
       commitments: [
         commitment({

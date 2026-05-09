@@ -94,7 +94,7 @@ export async function importLegacyCommitmentStoreFileToSqlite(
     throw err;
   }
   const store = coerceCommitmentStore(parsed);
-  await saveCommitmentStore(undefined, store, { env });
+  await saveCommitmentStore(store, { env });
   await fs.rm(filePath, { force: true }).catch(() => undefined);
   return { imported: true, commitments: store.commitments.length };
 }

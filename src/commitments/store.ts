@@ -30,8 +30,7 @@ type LoadedCommitmentStore = {
   hadLegacySourceText: boolean;
 };
 
-export function resolveCommitmentStorePath(storePath?: string): string {
-  void storePath;
+export function resolveCommitmentStorePath(): string {
   return resolveOpenClawStateSqlitePath();
 }
 
@@ -163,10 +162,8 @@ function loadCommitmentStoreInternal(): LoadedCommitmentStore {
 }
 
 export async function loadCommitmentStore(
-  storePath?: string,
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<CommitmentStoreFile> {
-  void storePath;
   return loadCommitmentStoreFromSqlite(options.env ?? process.env).store;
 }
 
@@ -197,11 +194,9 @@ function replaceCommitmentRows(
 }
 
 export async function saveCommitmentStore(
-  storePath: string | undefined,
   store: CommitmentStoreFile,
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<void> {
-  void storePath;
   replaceCommitmentRows(store, options.env ?? process.env);
 }
 
@@ -295,7 +290,7 @@ function expireStaleCommitmentsInStore(store: CommitmentStoreFile, nowMs: number
 async function loadCommitmentStoreWithExpiredMarked(nowMs: number): Promise<CommitmentStoreFile> {
   const { store, hadLegacySourceText } = loadCommitmentStoreInternal();
   if (expireStaleCommitmentsInStore(store, nowMs) || hadLegacySourceText) {
-    await saveCommitmentStore(undefined, store);
+    await saveCommitmentStore(store);
   }
   return store;
 }
@@ -377,7 +372,7 @@ export async function upsertInferredCommitments(params: {
     store.commitments.push(record);
     created.push(record);
   }
-  await saveCommitmentStore(undefined, store);
+  await saveCommitmentStore(store);
   return created;
 }
 
@@ -505,7 +500,7 @@ export async function markCommitmentsAttempted(params: {
     };
   });
   if (changed) {
-    await saveCommitmentStore(undefined, store);
+    await saveCommitmentStore(store);
   }
 }
 
@@ -537,7 +532,7 @@ export async function markCommitmentsStatus(params: {
     };
   });
   if (changed) {
-    await saveCommitmentStore(undefined, store);
+    await saveCommitmentStore(store);
   }
 }
 
