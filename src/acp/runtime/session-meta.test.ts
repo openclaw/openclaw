@@ -63,7 +63,7 @@ describe("listAcpSessionEntries", () => {
         cfg,
         agentId: "ops",
         sessionKey: "agent:ops:acp:s1",
-        storeSessionKey: "agent:ops:acp:s1",
+        rowSessionKey: "agent:ops:acp:s1",
       }),
     ]);
   });

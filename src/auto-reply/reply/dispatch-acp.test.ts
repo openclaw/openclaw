@@ -1097,7 +1097,7 @@ describe("tryDispatchAcpReply", () => {
           ? {
               cfg: params.cfg ?? createAcpTestConfig(),
               sessionKey: canonicalSessionKey,
-              storeSessionKey: canonicalSessionKey,
+              rowSessionKey: canonicalSessionKey,
               acp: createAcpSessionMeta({
                 identity: {
                   state: "resolved",
@@ -1163,7 +1163,7 @@ describe("tryDispatchAcpReply", () => {
           ? {
               cfg: params.cfg ?? createAcpTestConfig(),
               sessionKey: canonicalSessionKey,
-              storeSessionKey: canonicalSessionKey,
+              rowSessionKey: canonicalSessionKey,
               acp: createAcpSessionMeta({
                 identity: {
                   state: "resolved",

@@ -234,7 +234,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     } satisfies AcpRuntime;
     acpMocks.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
+      rowSessionKey: "agent:codex-acp:session-1",
       cfg: {},
       entry: {},
       acp: {

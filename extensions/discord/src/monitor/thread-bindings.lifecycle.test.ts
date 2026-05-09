@@ -1411,7 +1411,7 @@ describe("thread binding lifecycle", () => {
       if (sessionKey === "agent:codex:acp:healthy") {
         return {
           sessionKey,
-          storeSessionKey: sessionKey,
+          rowSessionKey: sessionKey,
           acp: {
             backend: "acpx",
             agent: "codex",
@@ -1424,7 +1424,7 @@ describe("thread binding lifecycle", () => {
       }
       return {
         sessionKey,
-        storeSessionKey: sessionKey,
+        rowSessionKey: sessionKey,
         acp: undefined,
       };
     });
@@ -1473,7 +1473,7 @@ describe("thread binding lifecycle", () => {
 
     hoisted.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex:acp:uncertain",
-      storeSessionKey: "agent:codex:acp:uncertain",
+      rowSessionKey: "agent:codex:acp:uncertain",
       cfg: EMPTY_DISCORD_TEST_CONFIG,
       readFailed: true,
       entry: undefined,
@@ -1561,7 +1561,7 @@ describe("thread binding lifecycle", () => {
 
     hoisted.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex:acp:running",
-      storeSessionKey: "agent:codex:acp:running",
+      rowSessionKey: "agent:codex:acp:running",
       acp: {
         backend: "acpx",
         agent: "codex",
@@ -1605,7 +1605,7 @@ describe("thread binding lifecycle", () => {
 
     hoisted.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex:acp:running-uncertain",
-      storeSessionKey: "agent:codex:acp:running-uncertain",
+      rowSessionKey: "agent:codex:acp:running-uncertain",
       acp: {
         backend: "acpx",
         agent: "codex",
@@ -1657,7 +1657,7 @@ describe("thread binding lifecycle", () => {
 
     hoisted.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex:acp:error",
-      storeSessionKey: "agent:codex:acp:error",
+      rowSessionKey: "agent:codex:acp:error",
       acp: {
         backend: "acpx",
         agent: "codex",
@@ -1715,7 +1715,7 @@ describe("thread binding lifecycle", () => {
       const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
       return {
         sessionKey,
-        storeSessionKey: sessionKey,
+        rowSessionKey: sessionKey,
         acp: {
           backend: "acpx",
           agent: "codex",
@@ -1785,7 +1785,7 @@ describe("thread binding lifecycle", () => {
       const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
       return {
         sessionKey,
-        storeSessionKey: sessionKey,
+        rowSessionKey: sessionKey,
         acp: {
           backend: "acpx",
           agent: "codex",

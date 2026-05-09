@@ -18,13 +18,13 @@ export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
   agentId?: string;
   sessionKey: string;
-  storeSessionKey: string;
+  rowSessionKey: string;
   entry?: SessionEntry;
   acp?: SessionAcpMeta;
   readFailed?: boolean;
 };
 
-function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey: string): string {
+function resolveRowSessionKey(store: Record<string, SessionEntry>, sessionKey: string): string {
   const normalized = sessionKey.trim();
   if (!normalized) {
     return "";
@@ -45,26 +45,26 @@ function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey:
 }
 
 function readSessionEntryWithAlias(params: { agentId: string; sessionKey: string }): {
-  storeSessionKey: string;
+  rowSessionKey: string;
   entry?: SessionEntry;
   readFailed?: boolean;
 } {
   try {
     const entry = getSessionEntry(params);
     if (entry) {
-      return { storeSessionKey: params.sessionKey, entry };
+      return { rowSessionKey: params.sessionKey, entry };
     }
     const store: Record<string, SessionEntry> = {};
     for (const row of listSessionEntries({ agentId: params.agentId })) {
       store[row.sessionKey] = row.entry;
     }
-    const storeSessionKey = resolveStoreSessionKey(store, params.sessionKey);
+    const rowSessionKey = resolveRowSessionKey(store, params.sessionKey);
     return {
-      storeSessionKey,
-      entry: store[storeSessionKey],
+      rowSessionKey,
+      entry: store[rowSessionKey],
     };
   } catch {
-    return { storeSessionKey: params.sessionKey, readFailed: true };
+    return { rowSessionKey: params.sessionKey, readFailed: true };
   }
 }
 
@@ -89,12 +89,12 @@ export function readAcpSessionEntry(params: {
     sessionKey,
     cfg: params.cfg,
   });
-  let storeSessionKey = sessionKey;
+  let rowSessionKey = sessionKey;
   let entry: SessionEntry | undefined;
   let readFailed = false;
   if (agentId) {
     const resolved = readSessionEntryWithAlias({ agentId, sessionKey });
-    storeSessionKey = resolved.storeSessionKey;
+    rowSessionKey = resolved.rowSessionKey;
     entry = resolved.entry;
     readFailed = resolved.readFailed === true;
   }
@@ -102,7 +102,7 @@ export function readAcpSessionEntry(params: {
     cfg,
     agentId,
     sessionKey,
-    storeSessionKey,
+    rowSessionKey,
     entry,
     acp: entry?.acp,
     readFailed,
@@ -138,7 +138,7 @@ export async function listAcpSessionEntries(params: {
         cfg,
         agentId: target.agentId,
         sessionKey,
-        storeSessionKey: sessionKey,
+        rowSessionKey: sessionKey,
         entry,
         acp: entry.acp,
       });
@@ -164,7 +164,7 @@ export async function upsertAcpSessionMeta(params: {
   if (!agentId) {
     return null;
   }
-  const { storeSessionKey, entry: currentEntry } = readSessionEntryWithAlias({
+  const { rowSessionKey, entry: currentEntry } = readSessionEntryWithAlias({
     agentId,
     sessionKey,
   });
@@ -184,7 +184,7 @@ export async function upsertAcpSessionMeta(params: {
   }
   upsertSessionEntry({
     agentId,
-    sessionKey: storeSessionKey,
+    sessionKey: rowSessionKey,
     entry: nextEntry,
   });
   return nextEntry;

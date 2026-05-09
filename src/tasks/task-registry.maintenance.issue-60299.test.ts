@@ -78,7 +78,7 @@ function createTaskRegistryMaintenanceHarness(params: {
             cfg: {} as never,
             agentId: "main",
             sessionKey: "",
-            storeSessionKey: "",
+            rowSessionKey: "",
             entry: acpEntry,
             readFailed: false,
           } satisfies AcpSessionStoreEntry)
@@ -86,7 +86,7 @@ function createTaskRegistryMaintenanceHarness(params: {
             cfg: {} as never,
             agentId: "main",
             sessionKey: "",
-            storeSessionKey: "",
+            rowSessionKey: "",
             entry: undefined,
             readFailed: false,
           } satisfies AcpSessionStoreEntry),

@@ -537,7 +537,7 @@ function createAcpSessionEntry(options?: {
   const sessionKey = options?.sessionKey ?? defaultAcpSessionKey;
   return {
     sessionKey,
-    storeSessionKey: sessionKey,
+    rowSessionKey: sessionKey,
     acp: {
       backend: "acpx",
       agent: "codex",
