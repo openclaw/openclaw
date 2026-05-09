@@ -16,15 +16,13 @@ struct DeviceIdentityStoreTests {
         try FileManager.default.createDirectory(
             at: identityURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
-        let stored = """
-            {
-              "version": 1,
-              "deviceId": "stale-device-id",
-              "publicKeyPem": "-----BEGIN PUBLIC KEY-----\\nMCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=\\n-----END PUBLIC KEY-----\\n",
-              "privateKeyPem": "-----BEGIN PRIVATE KEY-----\\nMC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f\\n-----END PRIVATE KEY-----\\n",
-              "createdAtMs": 1700000000000
-            }
-            """
+        let stored = try Self.identityJSON(
+            publicKeyPem: Self.pem(
+                label: "PUBLIC KEY",
+                body: "MCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="),
+            privateKeyPem: Self.pem(
+                label: "PRIVATE KEY",
+                body: "MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"))
         try stored.write(to: identityURL, atomically: true, encoding: .utf8)
         let before = try String(contentsOf: identityURL, encoding: .utf8)
 
@@ -77,5 +75,21 @@ struct DeviceIdentityStoreTests {
             .replacingOccurrences(of: "_", with: "/")
         let padded = normalized + String(repeating: "=", count: (4 - normalized.count % 4) % 4)
         return Data(base64Encoded: padded)
+    }
+
+    private static func identityJSON(publicKeyPem: String, privateKeyPem: String) throws -> String {
+        let object: [String: Any] = [
+            "version": 1,
+            "deviceId": "stale-device-id",
+            "publicKeyPem": publicKeyPem,
+            "privateKeyPem": privateKeyPem,
+            "createdAtMs": 1_700_000_000_000,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        return String(decoding: data, as: UTF8.self) + "\n"
+    }
+
+    private static func pem(label: String, body: String) -> String {
+        "-----BEGIN \(label)-----\n\(body)\n-----END \(label)-----\n"
     }
 }
