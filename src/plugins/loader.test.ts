@@ -2240,7 +2240,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);
     expect(event.messages).toEqual(["plugin-config-visible"]);
-    expect(event.context).toEqual({});
+    expect(event.context).toStrictEqual({});
 
     clearInternalHooks();
   });
