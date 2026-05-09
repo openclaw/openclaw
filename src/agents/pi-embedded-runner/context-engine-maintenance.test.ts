@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
@@ -36,6 +37,10 @@ let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js"
 // Keep this literal aligned with the production module; tests use dynamic
 // import reloading, so they cannot safely import the constant directly.
 const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
+
+function sqliteTranscript(sessionId: string): string {
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
+}
 
 async function flushAsyncWork(times = 4): Promise<void> {
   for (let index = 0; index < times; index += 1) {
@@ -97,7 +102,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: sqliteTranscript("session-1"),
       runtimeContext: { workspaceDir: "/tmp/workspace" },
     });
 
@@ -118,7 +123,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       rewrittenEntries: 2,
     });
     expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
-      transcriptPath: "/tmp/session.jsonl",
+      transcriptPath: sqliteTranscript("session-1"),
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       config: undefined,
@@ -137,7 +142,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: sqliteTranscript("session-1"),
       sessionManager,
     });
 
@@ -192,7 +197,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
         sessionId: "session-rewrite-handoff",
         sessionKey,
-        sessionFile: "/tmp/session-rewrite-handoff.jsonl",
+        sessionFile: sqliteTranscript("session-rewrite-handoff"),
         deferTranscriptRewriteToSessionLane: true,
       });
 
@@ -297,7 +302,7 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: sqliteTranscript("session-1"),
       reason: "turn",
       runtimeContext: { workspaceDir: "/tmp/workspace" },
     });
@@ -311,7 +316,7 @@ describe("runContextEngineMaintenance", () => {
       expect.objectContaining({
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
-        sessionFile: "/tmp/session.jsonl",
+        sessionFile: sqliteTranscript("session-1"),
         runtimeContext: expect.objectContaining({
           workspaceDir: "/tmp/workspace",
         }),
@@ -375,7 +380,7 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
-      sessionFile: "/tmp/session-background-file-rewrite.jsonl",
+      sessionFile: sqliteTranscript("session-background-file-rewrite"),
       reason: "turn",
       executionMode: "background",
       sessionManager,
@@ -383,7 +388,7 @@ describe("runContextEngineMaintenance", () => {
 
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
     expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
-      transcriptPath: "/tmp/session-background-file-rewrite.jsonl",
+      transcriptPath: sqliteTranscript("session-background-file-rewrite"),
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
       config: undefined,
@@ -461,7 +466,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-1",
           sessionKey,
-          sessionFile: "/tmp/session.jsonl",
+          sessionFile: sqliteTranscript("session-1"),
           reason: "turn",
           runtimeContext: {
             workspaceDir: "/tmp/workspace",
@@ -495,7 +500,7 @@ describe("runContextEngineMaintenance", () => {
         expect(maintain.mock.calls[0]?.[0]).toMatchObject({
           sessionId: "session-1",
           sessionKey,
-          sessionFile: "/tmp/session.jsonl",
+          sessionFile: sqliteTranscript("session-1"),
           runtimeContext: expect.objectContaining({
             workspaceDir: "/tmp/workspace",
             allowDeferredCompactionExecution: true,
@@ -504,7 +509,7 @@ describe("runContextEngineMaintenance", () => {
           }),
         });
         expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
-          transcriptPath: "/tmp/session.jsonl",
+          transcriptPath: sqliteTranscript("session-1"),
           sessionId: "session-1",
           sessionKey,
           config: undefined,
@@ -579,14 +584,14 @@ describe("runContextEngineMaintenance", () => {
             contextEngine: backgroundEngine,
             sessionId: "session-2",
             sessionKey,
-            sessionFile: "/tmp/session-2.jsonl",
+            sessionFile: sqliteTranscript("session-2"),
             reason: "turn",
           }),
           runContextEngineMaintenance({
             contextEngine: backgroundEngine,
             sessionId: "session-2",
             sessionKey,
-            sessionFile: "/tmp/session-2.jsonl",
+            sessionFile: sqliteTranscript("session-2"),
             reason: "turn",
           }),
         ]);
@@ -658,7 +663,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-rerun",
           sessionKey,
-          sessionFile: "/tmp/session-rerun.jsonl",
+          sessionFile: sqliteTranscript("session-rerun"),
           reason: "turn",
         });
 
@@ -668,7 +673,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-rerun",
           sessionKey,
-          sessionFile: "/tmp/session-rerun.jsonl",
+          sessionFile: sqliteTranscript("session-rerun"),
           reason: "turn",
         });
 
@@ -736,7 +741,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-legacy",
           sessionKey,
-          sessionFile: "/tmp/session-legacy.jsonl",
+          sessionFile: sqliteTranscript("session-legacy"),
           reason: "turn",
         });
 
@@ -796,7 +801,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-enqueue-reject",
           sessionKey,
-          sessionFile: "/tmp/session-enqueue-reject.jsonl",
+          sessionFile: sqliteTranscript("session-enqueue-reject"),
           reason: "turn",
         });
         await flushAsyncWork();
@@ -866,7 +871,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-3",
           sessionKey,
-          sessionFile: "/tmp/session-3.jsonl",
+          sessionFile: sqliteTranscript("session-3"),
           reason: "turn",
         });
 
@@ -967,7 +972,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-rewrite-priority",
           sessionKey,
-          sessionFile: "/tmp/session-rewrite-priority.jsonl",
+          sessionFile: sqliteTranscript("session-rewrite-priority"),
           reason: "turn",
         });
 
@@ -1040,7 +1045,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-fast",
           sessionKey,
-          sessionFile: "/tmp/session-fast.jsonl",
+          sessionFile: sqliteTranscript("session-fast"),
           reason: "turn",
         });
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
@@ -1095,7 +1100,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-long",
           sessionKey,
-          sessionFile: "/tmp/session-long.jsonl",
+          sessionFile: sqliteTranscript("session-long"),
           reason: "turn",
         });
 
@@ -1169,7 +1174,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-throttle",
           sessionKey,
-          sessionFile: "/tmp/session-throttle.jsonl",
+          sessionFile: sqliteTranscript("session-throttle"),
           reason: "turn",
         });
 
@@ -1238,7 +1243,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-fail",
           sessionKey,
-          sessionFile: "/tmp/session-fail.jsonl",
+          sessionFile: sqliteTranscript("session-fail"),
           reason: "turn",
         });
         await waitForAssertion(() =>
