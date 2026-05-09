@@ -283,18 +283,17 @@ describeLive("gateway live trajectory export", () => {
       if (finalText) {
         expect(finalText).toContain("Approve once");
       }
-      const bundleNames = await listDirectoryNames(bundleDir);
-      for (const expectedName of [
-        "artifacts.json",
-        "events.jsonl",
-        "manifest.json",
-        "metadata.json",
-        "prompts.json",
-        "session.jsonl",
-        "tools.json",
-      ]) {
-        expect(bundleNames).toContain(expectedName);
-      }
+      expect(await listDirectoryNames(bundleDir)).toEqual(
+        expect.arrayContaining([
+          "artifacts.json",
+          "events.jsonl",
+          "manifest.json",
+          "metadata.json",
+          "prompts.json",
+          "session-branch.json",
+          "tools.json",
+        ]),
+      );
       expect(beforeExport.has("bundle")).toBe(false);
 
       const manifest = JSON.parse(
