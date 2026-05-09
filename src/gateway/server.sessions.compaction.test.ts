@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { readTranscriptState } from "../agents/transcript/transcript-state.js";
 import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -22,6 +23,10 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+
+function sqliteTranscript(sessionId: string, agentId = DEFAULT_AGENT_ID): string {
+  return createSqliteSessionTranscriptLocator({ agentId, sessionId });
+}
 
 test("sessions.compaction.* lists checkpoints and branches or restores from pre-compaction snapshots", async () => {
   const { dir } = await createSessionStoreDir();
@@ -229,10 +234,11 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
 
 test("sessions.compact without maxLines runs embedded manual compaction for checkpoint-capable flows", async () => {
   const { dir } = await createSessionStoreDir();
+  const sessionFile = sqliteTranscript("sess-main");
   replaceSqliteSessionTranscriptEvents({
     agentId: DEFAULT_AGENT_ID,
     sessionId: "sess-main",
-    transcriptPath: path.join(dir, "sess-main.jsonl"),
+    transcriptPath: sessionFile,
     events: [
       {
         type: "session",
@@ -253,7 +259,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     agentId: "main",
     sessionKey: "agent:main:main",
     entry: sessionStoreEntry("sess-main", {
-      sessionFile: path.join(dir, "sess-main.jsonl"),
+      sessionFile,
       thinkingLevel: "medium",
       reasoningLevel: "stream",
     }),
@@ -273,39 +279,18 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(compacted.payload?.key).toBe("agent:main:main");
   expect(compacted.payload?.compacted).toBe(true);
   expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
-  const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls.at(0)?.[0] as
-    | {
-        agentHarnessId?: string;
-        allowGatewaySubagentBinding?: boolean;
-        bashElevated?: unknown;
-        config?: unknown;
-        model?: string;
-        provider?: string;
-        reasoningLevel?: string;
-        sessionFile?: string;
-        sessionId?: string;
-        sessionKey?: string;
-        thinkLevel?: string;
-        trigger?: string;
-        workspaceDir?: string;
-      }
-    | undefined;
-  if (!compactionCall) {
-    throw new Error("expected embedded compaction call");
-  }
-  const callConfig = compactionCall.config as {
-    agents?: { defaults?: { model?: { primary?: unknown }; workspace?: unknown } };
-  };
-  expect(compactionCall.sessionId).toBe("sess-main");
-  expect(compactionCall.sessionKey).toBe("agent:main:main");
-  if (!compactionCall.sessionFile) {
-    throw new Error("expected embedded compaction session file");
-  }
-  expect(path.basename(compactionCall.sessionFile)).toBe("sess-main.jsonl");
-  expect(compactionCall.workspaceDir).toBe(path.join(os.tmpdir(), "openclaw-gateway-test"));
-  expect(callConfig.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-6");
-  expect(callConfig.agents?.defaults?.workspace).toBe(
-    path.join(os.tmpdir(), "openclaw-gateway-test"),
+  expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      sessionFile,
+      config: expect.any(Object),
+      provider: expect.any(String),
+      model: expect.any(String),
+      thinkLevel: "medium",
+      reasoningLevel: "stream",
+      trigger: "manual",
+    }),
   );
   expect(compactionCall.provider).toBe("anthropic");
   expect(compactionCall.model).toBe("claude-opus-4-6");

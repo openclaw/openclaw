@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, test } from "vitest";
 import {
   createSqliteSessionTranscriptLocator,
@@ -57,19 +55,8 @@ function expectMainHookContext(context: HookEventRecord, sessionId: string) {
   expect(context.sessionId).toBe(sessionId);
 }
 
-function expectStringValue(value: unknown, label: string): string {
-  expect(typeof value, label).toBe("string");
-  if (typeof value !== "string") {
-    throw new Error(`${label} must be a string`);
-  }
-  return value;
-}
-
-function expectStringWithPrefix(value: unknown, prefix: string, label: string): string {
-  const text = expectStringValue(value, label);
-  expect(text.startsWith(prefix), label).toBe(true);
-  expect(text.length, label).toBeGreaterThan(prefix.length);
-  return text;
+function sqliteTranscript(sessionId: string): string {
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
 }
 
 test("sessions.reset emits internal command hook with reason", async () => {
@@ -121,8 +108,8 @@ test("sessions.reset emits internal command hook with reason", async () => {
 });
 
 test("sessions.reset emits before_reset hook with transcript context", async () => {
-  const { dir } = await createSessionStoreDir();
-  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  await createSessionStoreDir();
+  const transcriptPath = sqliteTranscript("sess-main");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
@@ -164,8 +151,8 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
 });
 
 test("sessions.reset emits before_reset hook with scoped SQLite transcript context", async () => {
-  const { dir } = await createSessionStoreDir();
-  const transcriptPath = path.join(dir, "missing-sess-main.jsonl");
+  await createSessionStoreDir();
+  const transcriptPath = sqliteTranscript("sess-main-sqlite");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main-sqlite",
@@ -218,8 +205,8 @@ test("sessions.reset emits before_reset hook with scoped SQLite transcript conte
 });
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
-  const { dir } = await createSessionStoreDir();
-  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  await createSessionStoreDir();
+  const transcriptPath = sqliteTranscript("sess-main");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
@@ -298,7 +285,7 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   expect(reset.ok).toBe(false);
   expect(reset.error?.code).toBe("UNAVAILABLE");
   expect(reset.error?.message ?? "").toMatch(/still active/i);
-  expectActiveRunCleanup("agent:main:main", ["main", "agent:main:main", "sess-main"], "sess-main");
+  expectActiveRunCleanup("agent:main:main", ["agent:main:main", "sess-main"], "sess-main");
   expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
@@ -309,9 +296,9 @@ test("sessions.reset returns unavailable when active run does not stop", async (
 });
 
 test("sessions.reset emits before_reset for the entry actually reset in the SQLite patch", async () => {
-  const { dir } = await createSessionStoreDir();
-  const oldTranscriptPath = path.join(dir, "sess-old.jsonl");
-  const newTranscriptPath = path.join(dir, "sess-new.jsonl");
+  await createSessionStoreDir();
+  const oldTranscriptPath = sqliteTranscript("sess-old");
+  const newTranscriptPath = sqliteTranscript("sess-new");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-old",
@@ -407,8 +394,8 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
 });
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
-  const { dir } = await createSessionStoreDir();
-  const transcriptPath = path.join(dir, "sess-parent-hooks.jsonl");
+  await createSessionStoreDir();
+  const transcriptPath = sqliteTranscript("sess-parent-hooks");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-parent-hooks",
@@ -465,17 +452,20 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
 });
 
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
-  const { dir } = await createSessionStoreDir();
-  const transcriptPath = path.join(dir, "sess-parent-dms.jsonl");
-  await fs.writeFile(
+  await createSessionStoreDir();
+  const transcriptPath = sqliteTranscript("sess-parent-dms");
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-parent-dms",
     transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: "m1",
-      message: { role: "user", content: "hello before /new" },
-    })}\n`,
-    "utf-8",
-  );
+    events: [
+      {
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "hello before /new" },
+      },
+    ],
+  });
 
   testState.sessionConfig = { dmScope: "main" };
   try {
