@@ -260,7 +260,7 @@ describe("extension runtime dependency manifests", () => {
         }
       }
 
-      expect(Object.fromEntries(missing)).toEqual({});
+      expect(Object.fromEntries(missing)).toStrictEqual({});
     });
 
     it(`${extensionDir} does not keep unused direct runtime dependencies`, () => {

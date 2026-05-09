@@ -68,7 +68,7 @@ describe("config footprint guardrails", () => {
     const pluginConfig = asRecord(asRecord(entry.properties).config);
 
     expect(pluginConfig.type).toBe("object");
-    expect(pluginConfig.additionalProperties).toEqual({});
+    expect(pluginConfig.additionalProperties).toStrictEqual({});
     expect(pluginConfig.properties).toBeUndefined();
   });
 
