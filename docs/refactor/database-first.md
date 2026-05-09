@@ -782,7 +782,9 @@ Move these into agent databases:
 - Agent transcript events. Done for runtime writes.
 - Compaction checkpoints and transcript snapshots. Done for runtime writes:
   checkpoint transcript copies are SQLite transcript rows and checkpoint
-  metadata is recorded in `transcript_snapshots`.
+  metadata is recorded in `transcript_snapshots`. Gateway checkpoint helpers
+  now name these values as transcript locators rather than source/snapshot
+  files.
 - Agent VFS scratch/workspace namespaces. Done for runtime VFS writes.
 - Tool artifacts. Done for runtime writes.
 - Run artifacts. Done for worker runtime writes through the per-agent

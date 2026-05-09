@@ -1325,7 +1325,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const branchedSession = await forkCompactionCheckpointTranscriptAsync({
       agentId: target.agentId,
-      sourceFile: checkpoint.preCompaction.transcriptLocator,
+      sourceTranscriptLocator: checkpoint.preCompaction.transcriptLocator,
       sourceSessionId: checkpoint.preCompaction.sessionId,
     });
     if (!branchedSession?.transcriptLocator) {
@@ -1441,7 +1441,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const target = resolveGatewaySessionDatabaseTarget({ cfg: loaded.cfg, key: canonicalKey });
     const restoredSession = await forkCompactionCheckpointTranscriptAsync({
       agentId: target.agentId,
-      sourceFile: checkpoint.preCompaction.transcriptLocator,
+      sourceTranscriptLocator: checkpoint.preCompaction.transcriptLocator,
       sourceSessionId: checkpoint.preCompaction.sessionId,
     });
     if (!restoredSession?.transcriptLocator) {
