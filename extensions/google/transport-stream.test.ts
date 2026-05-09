@@ -326,6 +326,52 @@ describe("google transport stream", () => {
     expect(result.content[2]).toHaveProperty("thoughtSignature", "call_sig_1");
   });
 
+  it("merges tool-call thought signatures from sibling SSE parts", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
+                  },
+                  { thoughtSignature: "call_sig_merged_1" },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel({
+          id: "gemini-3.1-pro-preview",
+          name: "Gemini 3.1 Pro Preview",
+        }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as never,
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_1",
+        name: "lookup",
+        arguments: { q: "hello" },
+        thoughtSignature: "call_sig_merged_1",
+      },
+    ]);
+  });
+
   it("builds a lean Gemini 3 first-response retry payload", () => {
     const model = buildGeminiModel({
       id: "gemini-3.1-pro-preview",
@@ -694,7 +740,7 @@ describe("google transport stream", () => {
     });
   });
 
-  it("uses Gemini skip-validator thought signatures for cross-provider tool-call replay", () => {
+  it("re-attaches replayed Gemini thought signatures when a later tool call is missing one", () => {
     const model = buildGeminiModel({
       id: "gemini-3.1-pro-preview",
       name: "Gemini 3.1 Pro Preview",
@@ -704,9 +750,9 @@ describe("google transport stream", () => {
       messages: [
         {
           role: "assistant",
-          provider: "anthropic",
-          api: "anthropic-messages",
-          model: "claude-opus-4-7",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-3.1-pro-preview",
           stopReason: "toolUse",
           timestamp: 0,
           content: [
@@ -715,21 +761,118 @@ describe("google transport stream", () => {
               id: "call_1",
               name: "lookup",
               arguments: { q: "hello" },
+              thoughtSignature: "call_sig_replay_1",
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          timestamp: 1,
+          content: [
+            {
+              type: "toolResult",
+              toolCallId: "call_1",
+              content: [{ type: "text", text: "ok" }],
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-3.1-pro-preview",
+          stopReason: "toolUse",
+          timestamp: 2,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello-again" },
             },
           ],
         },
       ],
     } as never);
 
-    expect(params.contents[0]).toEqual({
+    // Find the last model-role content; should carry the replayed signature
+    // even though the second stored toolCall block had none.
+    const modelTurns = params.contents.filter((c: { role: string }) => c.role === "model");
+    expect(modelTurns[modelTurns.length - 1]).toMatchObject({
       role: "model",
       parts: [
         {
-          thoughtSignature: "skip_thought_signature_validator",
-          functionCall: { name: "lookup", args: { q: "hello" } },
+          thoughtSignature: "call_sig_replay_1",
+          functionCall: { name: "lookup", args: { q: "hello-again" } },
         },
       ],
     });
+  });
+
+  it("drops non-base64 Gemini tool-call thought signatures like reasoning", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-3.1-pro-preview",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+              thoughtSignature: "reasoning",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    const part = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts[0];
+    expect(part).toMatchObject({ functionCall: { name: "lookup", args: { q: "hello" } } });
+    expect(part).not.toHaveProperty("thoughtSignature");
+  });
+
+  it("drops skip-validator thought signatures before Gemini replay serialization", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-3.1-pro-preview",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+              thoughtSignature: "skip_thought_signature_validator",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    const part = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts[0];
+    expect(part).toMatchObject({ functionCall: { name: "lookup", args: { q: "hello" } } });
+    expect(part).not.toHaveProperty("thoughtSignature");
   });
 
   it("does not trust cross-provider tool-call thought signatures for non-Gemini-3 models", () => {
