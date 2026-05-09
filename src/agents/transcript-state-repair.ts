@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
@@ -186,16 +185,16 @@ function buildRepairSummaryParts(params: {
 }
 
 export async function repairTranscriptStateIfNeeded(params: {
-  transcriptPath: string;
+  transcriptLocator: string;
   debug?: (message: string) => void;
   warn?: (message: string) => void;
 }): Promise<RepairReport> {
-  const transcriptPath = params.transcriptPath.trim();
-  if (!transcriptPath) {
+  const transcriptLocator = params.transcriptLocator.trim();
+  if (!transcriptLocator) {
     return { repaired: false, droppedLines: 0, reason: "missing session transcript" };
   }
 
-  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
+  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: transcriptLocator });
   if (!scope) {
     return { repaired: false, droppedLines: 0, reason: "missing SQLite transcript" };
   }
@@ -246,7 +245,7 @@ export async function repairTranscriptStateIfNeeded(params: {
 
   if (!isSessionHeader(entries[0])) {
     params.warn?.(
-      `session transcript repair skipped: invalid session header (${path.basename(transcriptPath)})`,
+      `session transcript repair skipped: invalid session header (${transcriptLocator})`,
     );
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
@@ -263,7 +262,7 @@ export async function repairTranscriptStateIfNeeded(params: {
   try {
     replaceSqliteSessionTranscriptEvents({
       ...scope,
-      transcriptPath,
+      transcriptPath: transcriptLocator,
       events: entries,
     });
   } catch (err) {
@@ -283,7 +282,7 @@ export async function repairTranscriptStateIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
-    })} (${path.basename(transcriptPath)})`,
+    })} (${transcriptLocator})`,
   );
   return {
     repaired: true,

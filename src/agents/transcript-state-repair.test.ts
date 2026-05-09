@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
   exportSqliteSessionTranscriptJsonl,
   replaceSqliteSessionTranscriptEvents,
@@ -37,12 +38,20 @@ const tempDirs: string[] = [];
 async function createTempSessionPath() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-repair-"));
   tempDirs.push(dir);
-  return { dir, file: path.join(dir, "session.jsonl") };
+  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  return {
+    dir,
+    file: createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "session-1",
+    }),
+  };
 }
 
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -55,7 +64,7 @@ function writeTranscriptEvents(file: string, events: unknown[]) {
         (event as { type?: unknown }).type === "session" &&
         typeof (event as { id?: unknown }).id === "string",
       ),
-    )?.id ?? path.basename(file, ".jsonl");
+    )?.id ?? "session-1";
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
@@ -80,7 +89,7 @@ describe("repairTranscriptStateIfNeeded", () => {
       { type: "message", id: "corrupt", message: { role: null, content: "bad" } },
     ]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
 
@@ -99,7 +108,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     writeTranscriptEvents(file, [badHeader]);
 
     const warn = vi.fn();
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file, warn });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file, warn });
 
     expect(result.repaired).toBe(false);
     expect(result.reason).toBe("invalid session header");
@@ -111,7 +120,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     const { dir } = await createTempSessionPath();
     const warn = vi.fn();
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: dir, warn });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: dir, warn });
 
     expect(result.repaired).toBe(false);
     expect(result.reason).toBe("missing SQLite transcript");
@@ -148,7 +157,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     writeTranscriptEvents(file, [header, message, poisonedAssistantEntry, followUp]);
 
     const debug = vi.fn();
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file, debug });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file, debug });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(0);
@@ -185,7 +194,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     writeTranscriptEvents(file, [header, blankUserEntry, message]);
 
     const debug = vi.fn();
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file, debug });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file, debug });
 
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
@@ -217,7 +226,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     };
     writeTranscriptEvents(file, [header, blankStringUserEntry, message]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
@@ -247,7 +256,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     };
     writeTranscriptEvents(file, [header, mediaUserEntry]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
@@ -283,7 +292,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     ]);
 
     const debug = vi.fn();
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file, debug });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file, debug });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
@@ -321,7 +330,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     };
     writeTranscriptEvents(file, [header, silentReplyEntry, followUp]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(false);
     expect(result.rewrittenAssistantMessages ?? 0).toBe(0);
@@ -346,7 +355,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     };
     writeTranscriptEvents(file, [header, message, assistantEntry]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(false);
 
@@ -382,7 +391,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     };
     writeTranscriptEvents(file, [header, message, assistantEntry1, assistantEntry2]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(false);
 
@@ -414,7 +423,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     };
     writeTranscriptEvents(file, [header, message, assistantEntry, userFollowUp]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(false);
   });
@@ -438,7 +447,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     };
     writeTranscriptEvents(file, [header, message, toolCallAssistant]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(false);
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n`;
@@ -473,7 +482,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     };
     writeTranscriptEvents(file, [header, message, toolCallAssistant, plainAssistant]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(false);
 
@@ -527,7 +536,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     };
     writeTranscriptEvents(file, [header, message, toolCallAssistant, toolResult, finalAssistant]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(false);
 
@@ -552,7 +561,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     };
     writeTranscriptEvents(file, [header, assistantEntry]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(false);
 
@@ -589,7 +598,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     };
     writeTranscriptEvents(file, [header, healedEntry, followUp]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(false);
     expect(result.rewrittenAssistantMessages ?? 0).toBe(0);
@@ -626,7 +635,7 @@ describe("repairTranscriptStateIfNeeded", () => {
 
     writeTranscriptEvents(file, [header, message, nullRoleEntry, missingRoleEntry, emptyRoleEntry]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(3);
@@ -659,7 +668,7 @@ describe("repairTranscriptStateIfNeeded", () => {
 
     writeTranscriptEvents(file, [header, message, missingMessage, stringMessage]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(2);
@@ -689,7 +698,7 @@ describe("repairTranscriptStateIfNeeded", () => {
 
     writeTranscriptEvents(file, [header, message, summary, custom]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptPath: file });
+    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
 
     expect(result.repaired).toBe(false);
     expect(result.droppedLines).toBe(0);
