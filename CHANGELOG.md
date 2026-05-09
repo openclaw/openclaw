@@ -150,6 +150,7 @@ Docs: https://docs.openclaw.ai
 - Markdown: keep blockquote spans off trailing paragraph separators. Fixes #79646.
 - Plugin SDK/LM Studio: recover Harmony plain-text tool calls from LM Studio streams. Fixes #78326.
 - Control UI: refresh the model cache after `session_status(model=...)` changes a session model. Fixes #79613.
+- Agents/context-engine: share loop-hook checkpoints with the after-turn finalizer so messages are not replayed. Fixes #79630.
 - Codex app-server: keep native hook relays alive for long-running turns so shell and file approvals stay reachable until the configured run window finishes. (#77533) Thanks @rubencu.
 - Gateway/agent: pass the session-key agent id into inline image attachment validation so the first image in a fresh per-agent session uses the agent's vision-capable model override instead of the text-only system default. Fixes #79407. Thanks @pandadev66.
 - Gateway/maintenance: prune dedupe overflow against a stable excess count and keep active agent retries from starting duplicate runs after cache eviction. (#73841) Thanks @thesomewhatyou.

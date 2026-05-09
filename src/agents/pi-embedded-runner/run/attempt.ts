@@ -1701,6 +1701,7 @@ export async function runEmbeddedAttempt(
           await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages));
       }
       let prePromptMessageCount = activeSession.messages.length;
+      let contextEngineAfterTurnCheckpoint: number | null = null;
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
         "assembled";
@@ -1758,6 +1759,9 @@ export async function runEmbeddedAttempt(
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
           getPrePromptMessageCount: () => prePromptMessageCount,
+          onAfterTurnCheckpoint: (messageCount) => {
+            contextEngineAfterTurnCheckpoint = messageCount;
+          },
           getRuntimeContext: ({ messages, prePromptMessageCount: loopPrePromptMessageCount }) =>
             buildAfterTurnRuntimeContext({
               attempt: params,
@@ -3474,7 +3478,7 @@ export async function runEmbeddedAttempt(
             sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
             messagesSnapshot,
-            prePromptMessageCount,
+            prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
             tokenBudget: params.contextTokenBudget,
             runtimeContext: afterTurnRuntimeContext,
             runMaintenance: async (contextParams) =>
