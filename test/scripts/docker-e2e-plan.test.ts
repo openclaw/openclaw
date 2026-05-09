@@ -51,6 +51,25 @@ function summarizeLane(lane: ReturnType<typeof planFor>["lanes"][number]) {
   };
 }
 
+function publishedUpgradeSurvivorLane(
+  name: string,
+  baselineSpec: string,
+  scenario?: string,
+): ReturnType<typeof summarizeLane> {
+  return {
+    command: `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}" OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='${baselineSpec}' ${
+      scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='${scenario}' ` : ""
+    }OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor`,
+    imageKind: "bare",
+    live: false,
+    name,
+    resources: ["docker", "npm"],
+    stateScenario: "upgrade-survivor",
+    timeoutMs: 1_500_000,
+    weight: 3,
+  };
+}
+
 describe("scripts/lib/docker-e2e-plan", () => {
   it("plans the full release path against package-backed e2e images", () => {
     const plan = planFor({
@@ -402,33 +421,14 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "openclaw@2026.4.29 2026.4.23 openclaw@2026.4.23 openclaw@2026.3.13-1",
     });
 
-    expect(plan.lanes.map((lane) => lane.name)).toEqual([
-      "published-upgrade-survivor-2026.4.29",
-      "published-upgrade-survivor-2026.4.23",
-      "published-upgrade-survivor-2026.3.13-1",
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      publishedUpgradeSurvivorLane("published-upgrade-survivor-2026.4.29", "openclaw@2026.4.29"),
+      publishedUpgradeSurvivorLane("published-upgrade-survivor-2026.4.23", "openclaw@2026.4.23"),
+      publishedUpgradeSurvivorLane(
+        "published-upgrade-survivor-2026.3.13-1",
+        "openclaw@2026.3.13-1",
+      ),
     ]);
-    expect(plan.lanes).toEqual([
-      expect.objectContaining({
-        command: expect.stringContaining(
-          "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='openclaw@2026.4.29'",
-        ),
-        imageKind: "bare",
-        stateScenario: "upgrade-survivor",
-      }),
-      expect.objectContaining({
-        command: expect.stringContaining(
-          "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='openclaw@2026.4.23'",
-        ),
-      }),
-      expect.objectContaining({
-        command: expect.stringContaining(
-          "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='openclaw@2026.3.13-1'",
-        ),
-      }),
-    ]);
-    expect(requireFirstLane(plan).command).toContain(
-      'OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/published-upgrade-survivor-2026.4.29"',
-    );
   });
 
   it("expands the published upgrade survivor lane across scenarios", () => {
@@ -438,30 +438,38 @@ describe("scripts/lib/docker-e2e-plan", () => {
       upgradeSurvivorScenarios: "base feishu-channel tilde-log-path",
     });
 
-    expect(plan.lanes.map((lane) => lane.name)).toEqual([
-      "published-upgrade-survivor-2026.4.29",
-      "published-upgrade-survivor-2026.4.29-feishu-channel",
-      "published-upgrade-survivor-2026.4.29-tilde-log-path",
-      "published-upgrade-survivor-2026.4.23",
-      "published-upgrade-survivor-2026.4.23-feishu-channel",
-      "published-upgrade-survivor-2026.4.23-tilde-log-path",
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      publishedUpgradeSurvivorLane(
+        "published-upgrade-survivor-2026.4.29",
+        "openclaw@2026.4.29",
+        "base",
+      ),
+      publishedUpgradeSurvivorLane(
+        "published-upgrade-survivor-2026.4.29-feishu-channel",
+        "openclaw@2026.4.29",
+        "feishu-channel",
+      ),
+      publishedUpgradeSurvivorLane(
+        "published-upgrade-survivor-2026.4.29-tilde-log-path",
+        "openclaw@2026.4.29",
+        "tilde-log-path",
+      ),
+      publishedUpgradeSurvivorLane(
+        "published-upgrade-survivor-2026.4.23",
+        "openclaw@2026.4.23",
+        "base",
+      ),
+      publishedUpgradeSurvivorLane(
+        "published-upgrade-survivor-2026.4.23-feishu-channel",
+        "openclaw@2026.4.23",
+        "feishu-channel",
+      ),
+      publishedUpgradeSurvivorLane(
+        "published-upgrade-survivor-2026.4.23-tilde-log-path",
+        "openclaw@2026.4.23",
+        "tilde-log-path",
+      ),
     ]);
-    expect(plan.lanes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          command: expect.stringContaining("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='feishu-channel'"),
-        }),
-        expect.objectContaining({
-          command: expect.stringContaining("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='tilde-log-path'"),
-        }),
-      ]),
-    );
-    expect(
-      plan.lanes.find((lane) => lane.name === "published-upgrade-survivor-2026.4.29-tilde-log-path")
-        ?.command,
-    ).toContain(
-      'OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/published-upgrade-survivor-2026.4.29-tilde-log-path"',
-    );
   });
 
   it("expands reported upgrade issue scenarios", () => {
