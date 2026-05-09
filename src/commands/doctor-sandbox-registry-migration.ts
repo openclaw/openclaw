@@ -2,10 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import {
-  SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_BROWSERS_DIR,
   SANDBOX_CONTAINERS_DIR,
-  SANDBOX_REGISTRY_PATH,
+  SANDBOX_STATE_DIR,
 } from "../agents/sandbox/constants.js";
 import {
   readBrowserRegistry,
@@ -56,6 +55,9 @@ const RegistryEntrySchema = z
 const RegistryFileSchema = z.object({
   entries: z.array(RegistryEntrySchema),
 });
+
+const LEGACY_SANDBOX_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "containers.json");
+const LEGACY_SANDBOX_BROWSER_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "browsers.json");
 
 async function readLegacyRegistryFile(registryPath: string): Promise<RegistryFile | null> {
   try {
@@ -219,12 +221,12 @@ function legacyRegistryTargets(): LegacyRegistryTarget[] {
   return [
     {
       kind: "containers",
-      registryPath: SANDBOX_REGISTRY_PATH,
+      registryPath: LEGACY_SANDBOX_REGISTRY_PATH,
       shardedDir: SANDBOX_CONTAINERS_DIR,
     },
     {
       kind: "browsers",
-      registryPath: SANDBOX_BROWSER_REGISTRY_PATH,
+      registryPath: LEGACY_SANDBOX_BROWSER_REGISTRY_PATH,
       shardedDir: SANDBOX_BROWSERS_DIR,
     },
   ];
