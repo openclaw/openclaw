@@ -20,6 +20,8 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
   sessionKey?: string;
   lastActiveSessionKey?: string;
   sessionsByGateway?: Record<string, ScopedSessionSelection>;
+  /** True when gatewayUrl was auto-derived from the page (not user-set). */
+  gatewayUrlAutoDerived?: boolean;
 };
 
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -101,6 +103,29 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
 
 function getSessionStorage(): Storage | null {
   return getSafeSessionStorage();
+}
+
+function resolveGatewayUrl(
+  stored: string,
+  pageDerivedUrl: string,
+  defaultUrl: string,
+  autoDerivedFlag: boolean | undefined,
+): string {
+  if (stored === pageDerivedUrl) {
+    return defaultUrl;
+  }
+  if (autoDerivedFlag === true) {
+    return defaultUrl;
+  }
+  if (autoDerivedFlag === false) {
+    return stored;
+  }
+  // Pre-existing data without the flag.  Cannot reliably determine
+  // whether this was auto-derived or user-set, so preserve it.
+  // The fix takes effect on the *next* load: persistSettings writes
+  // the page-scoped key and the flag, so a subsequent page visit
+  // will find its own scoped key and never reach this path.
+  return stored;
 }
 
 function normalizeGatewayTokenScope(gatewayUrl: string): string {
@@ -220,7 +245,22 @@ export function loadSettings(): UiSettings {
     }
     const parsed = JSON.parse(raw) as PersistedUiSettings;
     const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
-    const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
+    // Resolve gatewayUrl with three tiers:
+    //  1. Matches current page derivation → always use page default.
+    //  2. Flag present (new data) → flag is authoritative:
+    //     true  = auto-derived from another page → use page default.
+    //     false = user-set override → trust stored value.
+    //  3. Flag absent (pre-existing data) → one-time migration heuristic:
+    //     same-host different-path is treated as stale auto-derived
+    //     (nginx reverse-proxy pattern).  The subsequent persistSettings
+    //     write will set the flag, so this heuristic only fires once
+    //     per legacy record.
+    const gatewayUrl = resolveGatewayUrl(
+      parsedGatewayUrl,
+      pageDerivedUrl,
+      defaultUrl,
+      parsed.gatewayUrlAutoDerived,
+    );
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const customTheme = parseImportedCustomTheme((parsed as { customTheme?: unknown }).customTheme);
     const { theme, mode } = parseThemeSelection(
@@ -376,6 +416,7 @@ function persistSettings(next: UiSettings) {
   );
   const persisted: PersistedUiSettings = {
     gatewayUrl: next.gatewayUrl,
+    gatewayUrlAutoDerived: next.gatewayUrl === deriveDefaultGatewayUrl().pageUrl,
     theme: next.theme,
     themeMode: next.themeMode,
     chatFocusMode: next.chatFocusMode,
@@ -394,6 +435,16 @@ function persistSettings(next: UiSettings) {
   try {
     storage?.setItem(scopedKey, serialized);
     storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
+    // Also write under the page-derived URL's scoped key so that the
+    // next load on this page path finds its own scoped entry directly,
+    // without falling back to the shared legacy key.  This ensures that
+    // nginx reverse-proxy multi-instance setups (e.g. /a, /b, /c) each
+    // get their own authoritative scoped record after the first visit.
+    // Always update so that user endpoint changes are reflected on reload.
+    const pageDerivedKey = settingsKeyForGateway(deriveDefaultGatewayUrl().pageUrl);
+    if (pageDerivedKey !== scopedKey) {
+      storage?.setItem(pageDerivedKey, serialized);
+    }
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory settings and visual updates from being applied
