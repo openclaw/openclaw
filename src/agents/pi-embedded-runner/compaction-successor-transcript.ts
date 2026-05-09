@@ -9,7 +9,7 @@ import {
   resolveSqliteSessionTranscriptScopeForPath,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   CURRENT_SESSION_VERSION,
   type CompactionEntry,
@@ -66,10 +66,12 @@ export async function rotateTranscriptAfterCompaction(params: {
   const sessionId = randomUUID();
   const sourceScope = resolveSourceTranscriptScope({
     agentId: params.agentId,
-    transcriptPath: transcriptLocator,
+    transcriptLocator,
   });
+  if (!sourceScope) {
+    return { rotated: false, reason: "transcript not in SQLite" };
+  }
   const successorTranscriptPath = resolveSuccessorTranscriptPath({
-    transcriptPath: transcriptLocator,
     sessionId,
     agentId: sourceScope.agentId,
   });
@@ -128,23 +130,19 @@ export async function rotateTranscriptFileAfterCompaction(params: {
   });
 }
 
-function resolveAgentIdFromTranscriptPath(transcriptPath: string): string {
-  void transcriptPath;
-  return DEFAULT_AGENT_ID;
-}
-
-function resolveSourceTranscriptScope(params: { agentId?: string; transcriptPath: string }): {
+function resolveSourceTranscriptScope(params: { agentId?: string; transcriptLocator: string }): {
   agentId: string;
-} {
+} | null {
+  const existing = resolveSqliteSessionTranscriptScopeForPath({
+    transcriptPath: params.transcriptLocator,
+  });
+  if (!existing) {
+    return null;
+  }
   if (params.agentId?.trim()) {
     return { agentId: normalizeAgentId(params.agentId) };
   }
-  const existing = resolveSqliteSessionTranscriptScopeForPath({
-    transcriptPath: params.transcriptPath,
-  });
-  return {
-    agentId: existing?.agentId ?? resolveAgentIdFromTranscriptPath(params.transcriptPath),
-  };
+  return { agentId: existing.agentId };
 }
 
 function loadTranscriptStateFromSqlite(params: {
@@ -154,13 +152,11 @@ function loadTranscriptStateFromSqlite(params: {
   const scope = resolveSqliteSessionTranscriptScopeForPath({
     transcriptPath: params.transcriptPath,
   });
-  const agentId = params.agentId?.trim()
-    ? normalizeAgentId(params.agentId)
-    : (scope?.agentId ?? resolveAgentIdFromTranscriptPath(params.transcriptPath));
   const sessionId = scope?.sessionId;
   if (!sessionId) {
     return null;
   }
+  const agentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : scope.agentId;
   const events = loadSqliteSessionTranscriptEvents({ agentId, sessionId }).map(
     (entry) => entry.event,
   );
@@ -359,16 +355,9 @@ function buildSuccessorHeader(params: {
   };
 }
 
-function resolveSuccessorTranscriptPath(params: {
-  transcriptPath: string;
-  sessionId: string;
-  agentId: string;
-}): string {
-  const existing = resolveSqliteSessionTranscriptScopeForPath({
-    transcriptPath: params.transcriptPath,
-  });
+function resolveSuccessorTranscriptPath(params: { sessionId: string; agentId: string }): string {
   return createSqliteSessionTranscriptLocator({
-    agentId: params.agentId || existing?.agentId || DEFAULT_AGENT_ID,
+    agentId: params.agentId,
     sessionId: params.sessionId,
   });
 }

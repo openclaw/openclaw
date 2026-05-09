@@ -1,10 +1,7 @@
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  hasSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
-} from "../../config/sessions/transcript-store.sqlite.js";
+import { hasSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import type { resolveCronSession } from "./session.js";
@@ -27,13 +24,9 @@ function cronTranscriptExists(params: { sessionKey: string; entry: SessionEntry 
   if (!sessionId) {
     return false;
   }
-  const sessionFile = params.entry.sessionFile?.trim();
-  const scope = sessionFile
-    ? resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile })
-    : undefined;
   return hasSqliteSessionTranscriptEvents({
-    agentId: scope?.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-    sessionId: scope?.sessionId ?? sessionId,
+    agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    sessionId,
   });
 }
 
