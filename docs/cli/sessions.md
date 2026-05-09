@@ -109,6 +109,7 @@ openclaw sessions cleanup --json
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
+  - The text preview also includes a per-label breakdown with kept, removed, and total counts; unlabeled sessions are grouped as `(unlabeled)`.
 - `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
 - `--fix-missing`: remove entries whose transcript files are missing, even if they would not normally age/count out yet.
 - `--fix-dm-scope`: when `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying the cleanup removes those rows from `sessions.json` and preserves their transcripts as deleted archives.

@@ -454,6 +454,65 @@ describe("sessionsCleanupCommand", () => {
     expect(stalePruneLines.length).toBeGreaterThan(0);
   });
 
+  it("renders a dry-run label breakdown after the action table", async () => {
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 4,
+            afterCount: 2,
+            missing: 0,
+            dmScopeRetired: 0,
+            pruned: 1,
+            capped: 1,
+            diskBudget: null,
+            wouldMutate: true,
+          },
+          beforeStore: {
+            oldWork: { sessionId: "old-work", updatedAt: 1, model: "pi:opus", label: "Work" },
+            newWork: { sessionId: "new-work", updatedAt: 2, model: "pi:opus", label: "Work" },
+            personal: { sessionId: "personal", updatedAt: 3, model: "pi:opus", label: "Personal" },
+            unlabeled: { sessionId: "unlabeled", updatedAt: 4, model: "pi:opus" },
+          },
+          missingKeys: new Set<string>(),
+          staleKeys: new Set(["oldWork"]),
+          cappedKeys: new Set(["personal"]),
+          budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        dryRun: true,
+      },
+      runtime,
+    );
+
+    const actionTableIndex = logs.findIndex((line) => line.includes("Planned session actions:"));
+    const labelBreakdownIndex = logs.findIndex((line) =>
+      line.includes("Session cleanup by label:"),
+    );
+    expect(actionTableIndex).toBeGreaterThanOrEqual(0);
+    expect(labelBreakdownIndex).toBeGreaterThan(actionTableIndex);
+    expectLogsToInclude(logs, "Label");
+    expectLogsToInclude(logs, "Keep");
+    expectLogsToInclude(logs, "Remove");
+    expectLogsToInclude(logs, "Total");
+    expect(logs.some((line) => /^Work\s+1\s+1\s+2$/.test(line))).toBe(true);
+    expect(logs.some((line) => /^Personal\s+0\s+1\s+1$/.test(line))).toBe(true);
+    expect(logs.some((line) => /^\(unlabeled\)\s+1\s+0\s+1$/.test(line))).toBe(true);
+  });
+
   it("returns grouped JSON for --all-agents dry-runs", async () => {
     mocks.resolveSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/main-sessions.json" },

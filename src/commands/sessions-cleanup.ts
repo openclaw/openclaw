@@ -26,9 +26,20 @@ import {
 } from "./sessions-table.js";
 
 const ACTION_PAD = 16;
+const LABEL_PAD = 30;
+const COUNT_PAD = 8;
+const UNLABELED_SESSION_LABEL = "(unlabeled)";
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
+  label?: string;
+};
+
+type SessionCleanupLabelSummaryRow = {
+  label: string;
+  keep: number;
+  remove: number;
+  total: number;
 };
 
 function formatCleanupActionCell(
@@ -75,8 +86,78 @@ function buildActionRows(params: {
         budgetEvictedKeys: params.budgetEvictedKeys,
         dmScopeRetiredKeys: params.dmScopeRetiredKeys,
       }),
+      label: params.beforeStore[row.key]?.label,
     }),
   );
+}
+
+function normalizeSessionLabel(label: string | undefined): string {
+  const trimmed = label?.trim();
+  return trimmed ? trimmed : UNLABELED_SESSION_LABEL;
+}
+
+function compareLabelSummaryRows(
+  left: SessionCleanupLabelSummaryRow,
+  right: SessionCleanupLabelSummaryRow,
+): number {
+  if (left.label === UNLABELED_SESSION_LABEL && right.label !== UNLABELED_SESSION_LABEL) {
+    return 1;
+  }
+  if (right.label === UNLABELED_SESSION_LABEL && left.label !== UNLABELED_SESSION_LABEL) {
+    return -1;
+  }
+  return (
+    left.label.localeCompare(right.label, "en", { sensitivity: "base" }) ||
+    left.label.localeCompare(right.label)
+  );
+}
+
+function buildLabelSummaryRows(
+  actionRows: SessionCleanupActionRow[],
+): SessionCleanupLabelSummaryRow[] {
+  const summaries = new Map<string, SessionCleanupLabelSummaryRow>();
+  for (const actionRow of actionRows) {
+    const label = normalizeSessionLabel(actionRow.label);
+    const summary = summaries.get(label) ?? { label, keep: 0, remove: 0, total: 0 };
+    summary.total += 1;
+    if (actionRow.action === "keep") {
+      summary.keep += 1;
+    } else {
+      summary.remove += 1;
+    }
+    summaries.set(label, summary);
+  }
+  return Array.from(summaries.values()).sort(compareLabelSummaryRows);
+}
+
+function renderLabelSummary(params: {
+  actionRows: SessionCleanupActionRow[];
+  runtime: RuntimeEnv;
+  rich: boolean;
+}) {
+  const labelSummaryRows = buildLabelSummaryRows(params.actionRows);
+  if (labelSummaryRows.length === 0) {
+    return;
+  }
+  params.runtime.log("");
+  params.runtime.log("Session cleanup by label:");
+  const header = [
+    "Label".padEnd(LABEL_PAD),
+    "Keep".padStart(COUNT_PAD),
+    "Remove".padStart(COUNT_PAD),
+    "Total".padStart(COUNT_PAD),
+  ].join(" ");
+  params.runtime.log(params.rich ? theme.heading(header) : header);
+  for (const row of labelSummaryRows) {
+    params.runtime.log(
+      [
+        row.label.padEnd(LABEL_PAD),
+        String(row.keep).padStart(COUNT_PAD),
+        String(row.remove).padStart(COUNT_PAD),
+        String(row.total).padStart(COUNT_PAD),
+      ].join(" "),
+    );
+  }
 }
 
 function renderStoreDryRunPlan(params: {
@@ -133,6 +214,7 @@ function renderStoreDryRunPlan(params: {
     ].join(" ");
     params.runtime.log(line.trimEnd());
   }
+  renderLabelSummary({ actionRows: params.actionRows, runtime: params.runtime, rich });
 }
 
 function renderAppliedSummaries(params: {
