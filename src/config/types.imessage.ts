@@ -93,11 +93,10 @@ export type IMessageAccountConfig = {
   sendReadReceipts?: boolean;
   /**
    * Merge consecutive same-sender DM rows from `chat.db` into a single agent
-   * turn. Mirrors `channels.bluebubbles.coalesceSameSenderDms` so Apple's
-   * split-send (`<command> <URL>` arriving as two separate rows ~0.8-2.0 s
-   * apart) lands as one merged message. DM-only — group chats keep instant
-   * per-message dispatch. Widens the default inbound debounce window to
-   * 2500 ms when enabled without an explicit
+   * turn, so Apple's split-send (`<command> <URL>` arriving as two separate
+   * rows ~0.8-2.0 s apart) lands as one merged message. DM-only — group chats
+   * keep instant per-message dispatch. Widens the default inbound debounce
+   * window to 2500 ms when enabled without an explicit
    * `messages.inbound.byChannel.imessage`. Default: `false`.
    */
   coalesceSameSenderDms?: boolean;

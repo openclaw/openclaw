@@ -254,7 +254,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // explicit inbound debounce for this channel, widen the window to 2500 ms.
   // Apple's split-send for `<command> <URL>` arrives ~0.8-2.0 s apart on most
   // setups, so the legacy 0 ms default would flush the command alone before
-  // the URL row reaches the debouncer. Mirrors the BlueBubbles policy.
+  // the URL row reaches the debouncer.
   const coalesceSameSenderDms = imessageCfg.coalesceSameSenderDms === true;
   const inboundCfg = cfg.messages?.inbound;
   const hasExplicitInboundDebounce =
@@ -421,9 +421,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         loopRateLimiter.record(rateLimitKey);
       }
       // Surface the silent-allowlist drop once per chat. Without this, operators
-      // who migrate from BlueBubbles and copy groupPolicy="allowlist" without
-      // populating channels.imessage.groups see every group message vanish at
-      // default log level. See issue #78749.
+      // who set groupPolicy="allowlist" without populating
+      // channels.imessage.groups see every group message vanish at default log
+      // level. See issue #78749.
       if (decision.reason === "group id not in allowlist") {
         warnGroupAllowlistDropPerChatOnce({
           accountId: accountInfo.accountId,
