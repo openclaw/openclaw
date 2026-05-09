@@ -203,6 +203,7 @@
   "session-binding-runtime",
   "session-key-runtime",
   "session-store-runtime",
+  "sqlite-runtime",
   "session-transcript-hit",
   "session-visibility",
   "ssrf-dispatcher",

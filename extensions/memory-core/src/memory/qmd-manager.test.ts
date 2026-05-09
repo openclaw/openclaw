@@ -8,7 +8,7 @@ import { replaceSqliteSessionTranscriptEvents } from "openclaw/plugin-sdk/sessio
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
-} from "openclaw/plugin-sdk/testing";
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 

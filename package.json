@@ -611,6 +611,14 @@
       "types": "./dist/plugin-sdk/migration-runtime.d.ts",
       "default": "./dist/plugin-sdk/migration-runtime.js"
     },
+    "./plugin-sdk/plugin-state-runtime": {
+      "types": "./dist/plugin-sdk/plugin-state-runtime.d.ts",
+      "default": "./dist/plugin-sdk/plugin-state-runtime.js"
+    },
+    "./plugin-sdk/sqlite-state-lock": {
+      "types": "./dist/plugin-sdk/sqlite-state-lock.d.ts",
+      "default": "./dist/plugin-sdk/sqlite-state-lock.js"
+    },
     "./plugin-sdk/markdown-table-runtime": {
       "types": "./dist/plugin-sdk/markdown-table-runtime.d.ts",
       "default": "./dist/plugin-sdk/markdown-table-runtime.js"
@@ -898,6 +906,10 @@
     "./plugin-sdk/session-store-runtime": {
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
+    },
+    "./plugin-sdk/sqlite-runtime": {
+      "types": "./dist/plugin-sdk/sqlite-runtime.d.ts",
+      "default": "./dist/plugin-sdk/sqlite-runtime.js"
     },
     "./plugin-sdk/session-transcript-hit": {
       "types": "./dist/plugin-sdk/session-transcript-hit.d.ts",

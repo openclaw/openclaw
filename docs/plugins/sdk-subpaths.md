@@ -239,7 +239,8 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers and markers such as `buildHistoryContext`, `HISTORY_CONTEXT_MARKER`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
-    | `plugin-sdk/session-store-runtime` | SQLite-backed session row, session-key, updated-at, and transcript locator helpers |
+    | `plugin-sdk/session-store-runtime` | SQLite-backed session row, session-key, updated-at, and transcript row helpers |
+    | `plugin-sdk/sqlite-runtime` | Focused SQLite database open/path helpers for first-party runtime and migration tests |
     | `plugin-sdk/cron-store-runtime` | SQLite cron store load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
@@ -291,7 +292,8 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/runtime-fetch` | Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
     | `plugin-sdk/response-limit-runtime` | Bounded response-body reader without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |
-    | `plugin-sdk/session-store-runtime` | SQLite session row helpers without broad config writes/maintenance imports |
+    | `plugin-sdk/session-store-runtime` | SQLite session row helpers without broad config writes, maintenance imports, or raw database openers |
+    | `plugin-sdk/sqlite-runtime` | Focused SQLite database helpers without session-row helper imports |
     | `plugin-sdk/context-visibility-runtime` | Context visibility resolution and supplemental context filtering without broad config/security imports |
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |

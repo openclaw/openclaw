@@ -392,9 +392,10 @@ sessionId}` and session key context.
   path or locator as the identity for the new session.
 - Plugin runtime no longer exposes `api.runtime.agent.session.resolveTranscriptLocatorPath`;
   plugin code uses SQLite row helpers and scope values.
-- The public `session-store-runtime` SDK surface no longer exports database
-  close/reset test helpers; plugin tests import those through the testing SDK
-  surface instead.
+- The public `session-store-runtime` SDK surface now only exports session row
+  and transcript row helpers. Raw SQLite database open/path and close/reset
+  helpers live in the focused `sqlite-runtime` SDK surface, so plugin tests no
+  longer pull the deprecated broad testing barrel for database cleanup.
 - Active-memory blocking subagent runs use SQLite transcript rows instead of
   creating temporary or persisted `session.jsonl` files under plugin state. The
   old `transcriptDir` option is removed.

@@ -164,7 +164,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";',
     'export type { BlockStreamingCoalesceConfig, DmConfig, DmPolicy, GroupPolicy, GroupToolPolicyConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
     'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";',
-    'export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";',
+    'export { createChannelMessageReplyPipeline, dispatchChannelMessageReplyWithBase } from "openclaw/plugin-sdk/channel-message";',
     'export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";',
     'export { deliverFormattedTextWithAttachments } from "openclaw/plugin-sdk/reply-payload";',
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',

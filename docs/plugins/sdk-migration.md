@@ -575,7 +575,8 @@ releases.
   | `plugin-sdk/reply-history` | Reply-history helpers | `buildHistoryContext`, `buildPendingHistoryContextFromMap`, `recordPendingHistoryEntry`, `clearHistoryEntriesIfEnabled` |
   | `plugin-sdk/reply-reference` | Reply reference planning | `createReplyReferencePlanner` |
   | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
-  | `plugin-sdk/session-store-runtime` | Session row helpers | SQLite-backed session row, session-key, updated-at, and transcript locator helpers |
+  | `plugin-sdk/session-store-runtime` | Session row helpers | SQLite-backed session row, session-key, updated-at, and transcript row helpers |
+  | `plugin-sdk/sqlite-runtime` | SQLite helpers | Focused database open/path helpers for first-party runtime and migration tests |
   | `plugin-sdk/state-paths` | State path helpers | State and OAuth dir helpers |
   | `plugin-sdk/routing` | Routing/session-key helpers | `resolveAgentRoute`, `buildAgentSessionKey`, `resolveDefaultAgentBoundAccountId`, session-key normalization helpers |
   | `plugin-sdk/status-helpers` | Channel status helpers | Channel/account status summary builders, runtime-state defaults, issue metadata helpers |
