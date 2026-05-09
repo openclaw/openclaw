@@ -4,7 +4,10 @@ import path from "node:path";
 import type { Message } from "@grammyjs/types";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTelegramMessageCache, resolveTelegramMessageCachePath } from "./message-cache.js";
+import {
+  createTelegramMessageCache,
+  resolveTelegramMessageCacheScopeKey,
+} from "./message-cache.js";
 import {
   clearSentMessageCache,
   resetSentMessageCacheForTest,
@@ -212,7 +215,7 @@ describe("Telegram legacy state migrations", () => {
 
     expect(result.changes.join("\n")).toContain("Imported 1 Telegram message cache");
     const cache = createTelegramMessageCache({
-      persistedPath: resolveTelegramMessageCachePath(legacyStorePath),
+      persistedScopeKey: resolveTelegramMessageCacheScopeKey(legacyStorePath),
     });
     expect(cache.get({ accountId: "work", chatId: "-100123", messageId: "77" })).toMatchObject({
       body: "Ship the cache migration",
