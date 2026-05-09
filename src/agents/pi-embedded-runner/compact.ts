@@ -3,7 +3,6 @@ import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
@@ -511,10 +510,6 @@ async function compactEmbeddedPiSessionDirectOnce(
     config: params.config,
   });
   const sessionAgentId = earlyAgentIds.sessionAgentId;
-  const transcriptLocator = createSqliteSessionTranscriptLocator({
-    agentId: sessionAgentId,
-    sessionId: params.sessionId,
-  });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   await ensureOpenClawModelsJson(params.config, agentDir, {
     workspaceDir: resolvedWorkspace,
