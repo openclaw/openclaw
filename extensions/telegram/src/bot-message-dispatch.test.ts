@@ -442,7 +442,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({
         chatId: 123,
         thread: { id: 777, scope: "dm" },
-        minInitialChars: 30,
+        minInitialChars: 0,
       }),
     );
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
@@ -466,6 +466,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends direct model partials through the Telegram draft transport before final delivery", async () => {
+    const { createTelegramDraftStream: createRealTelegramDraftStream } =
+      await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
+    const bot = createBot();
+    createTelegramDraftStream.mockImplementation((params) => createRealTelegramDraftStream(params));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hi" });
+        await vi.waitFor(() =>
+          expect(bot.api.sendMessage).toHaveBeenCalledWith(
+            123,
+            "Hi",
+            expect.objectContaining({ message_thread_id: 777 }),
+          ),
+        );
+        expect(deliverReplies).not.toHaveBeenCalled();
+
+        await dispatcherOptions.deliver({ text: "Hi there" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext(), bot });
+
+    await vi.waitFor(() =>
+      expect(bot.api.editMessageText).toHaveBeenCalledWith(
+        123,
+        777,
+        "Hi there",
+        expect.objectContaining({ parse_mode: "HTML" }),
+      ),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("keeps retained overflow draft previews", async () => {
