@@ -451,15 +451,22 @@ describe("memory index", () => {
     );
     managersForCleanup.add(second);
 
-    expect(second.getCachedEmbeddingAvailability?.()).toEqual(
-      expect.objectContaining({
-        ok: true,
-        checked: true,
-        cached: true,
-        checkedAtMs: expect.any(Number),
-        cacheExpiresAtMs: expect.any(Number),
-      }),
-    );
+    const cachedBeforeProbe = second.getCachedEmbeddingAvailability?.();
+    expect(cachedBeforeProbe).toMatchObject({
+      ok: true,
+      checked: true,
+      cached: true,
+    });
+    expect(cachedBeforeProbe?.checkedAtMs).toBeTypeOf("number");
+    expect(cachedBeforeProbe?.cacheExpiresAtMs).toBeTypeOf("number");
+    if (
+      typeof cachedBeforeProbe?.checkedAtMs === "number" &&
+      typeof cachedBeforeProbe.cacheExpiresAtMs === "number"
+    ) {
+      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(
+        EMBEDDING_PROBE_CACHE_TTL_MS,
+      );
+    }
     await expect(second.probeEmbeddingAvailability()).resolves.toEqual(
       expect.objectContaining({ ok: true, cached: true }),
     );
