@@ -210,8 +210,9 @@ Required members:
 </ParamField>
 
 `compact` returns a `CompactResult`. When compaction rotates the active
-transcript, `result.sessionId` and `result.sessionFile` identify the successor
-session that the next retry or turn must use.
+transcript, `result.sessionId` identifies the successor session that the next
+retry or turn must use. Transcript rows stay in SQLite; compaction does not
+handoff a transcript file or locator.
 
 Optional members:
 
