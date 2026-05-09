@@ -118,6 +118,8 @@ export type AgentCommandOpts = {
   promptMode?: PromptMode;
   /** Internal ACP-ready session turn source. Manual spawn turns bypass only the dispatch gate. */
   acpTurnSource?: AcpTurnSource;
+  /** Internal handoffs can feed the model without writing the synthetic prompt to transcript. */
+  suppressPromptPersistence?: boolean;
 };
 
 export type AgentCommandIngressOpts = Omit<
