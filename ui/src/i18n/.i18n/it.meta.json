@@ -1,18 +1,11 @@
 {
-  "fallbackKeys": [
-    "sessionsView.statusDone",
-    "sessionsView.statusFailed",
-    "sessionsView.statusIdle",
-    "sessionsView.statusKilled",
-    "sessionsView.statusLive",
-    "sessionsView.statusTimeout"
-  ],
-  "generatedAt": "2026-05-10T07:23:38.613Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-05-09T23:45:22.295Z",
   "locale": "it",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "04f9782fb603b70763dc3256fcf7ce6bc5076834bd168b00de6984904e4dabae",
-  "totalKeys": 1082,
-  "translatedKeys": 1076,
+  "sourceHash": "8f6a605bd20aa0341c8bafe6ae2022efee3f82c8dac9dabb9befb90160ab6d48",
+  "totalKeys": 1088,
+  "translatedKeys": 1088,
   "workflow": 1
 }
