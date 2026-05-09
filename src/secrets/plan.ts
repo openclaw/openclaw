@@ -50,7 +50,6 @@ export type SecretsApplyPlan = {
   options?: {
     scrubEnv?: boolean;
     scrubAuthProfilesForProviderTargets?: boolean;
-    scrubLegacyAuthJson?: boolean;
   };
 };
 
@@ -184,6 +183,5 @@ export function normalizeSecretsPlanOptions(
   return {
     scrubEnv: options?.scrubEnv ?? true,
     scrubAuthProfilesForProviderTargets: options?.scrubAuthProfilesForProviderTargets ?? true,
-    scrubLegacyAuthJson: options?.scrubLegacyAuthJson ?? true,
   };
 }

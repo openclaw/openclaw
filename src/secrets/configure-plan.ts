@@ -261,7 +261,6 @@ export function buildSecretsConfigurePlan(params: {
     options: {
       scrubEnv: true,
       scrubAuthProfilesForProviderTargets: true,
-      scrubLegacyAuthJson: true,
     },
   };
 }

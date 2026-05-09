@@ -649,6 +649,9 @@ sessionId}` and session key context.
 - Auth profile save/state tests now assert SQLite KV rows directly and only use
   legacy auth-profile filenames for doctor migration inputs or explicit
   "file absent" assertions.
+- `openclaw secrets apply` scrubs the config file, env file, and SQLite
+  auth-profile store only. It no longer carries compatibility logic that edits
+  retired per-agent `auth.json`; doctor owns importing and deleting that file.
 - Hermes secret migration plans and applies imported API-key profiles directly
   into the SQLite auth-profile store. It no longer writes or verifies
   `auth-profiles.json` as an intermediate target.

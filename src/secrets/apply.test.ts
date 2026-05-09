@@ -45,7 +45,6 @@ type ApplyFixture = {
   configPath: string;
   authStoreAgentDir: string;
   stateDbPath: string;
-  authJsonPath: string;
   envPath: string;
   env: NodeJS.ProcessEnv;
 };
@@ -86,7 +85,6 @@ function buildFixturePaths(rootDir: string) {
     configPath: path.join(stateDir, "openclaw.json"),
     authStoreAgentDir: path.join(stateDir, "agents", "main", "agent"),
     stateDbPath: path.join(stateDir, "state", "openclaw.sqlite"),
-    authJsonPath: path.join(stateDir, "agents", "main", "agent", "auth.json"),
     envPath: path.join(stateDir, ".env"),
   };
 }
@@ -145,12 +143,6 @@ async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<void> {
         key: "sk-ope...text", // pragma: allowlist secret
         keyRef: OPENAI_API_KEY_ENV_REF,
       },
-    },
-  });
-  await writeJsonFile(fixture.authJsonPath, {
-    openai: {
-      type: "api_key",
-      key: "sk-openai-plaintext", // pragma: allowlist secret
     },
   });
   await fs.writeFile(
@@ -216,7 +208,6 @@ function createOpenAiExecProviderPlan(): SecretsApplyPlan {
     options: {
       scrubEnv: false,
       scrubAuthProfilesForProviderTargets: false,
-      scrubLegacyAuthJson: false,
     },
   });
 }
@@ -273,7 +264,6 @@ function createOneWayScrubOptions(): NonNullable<SecretsApplyPlan["options"]> {
   return {
     scrubEnv: true,
     scrubAuthProfilesForProviderTargets: true,
-    scrubLegacyAuthJson: true,
   };
 }
 
@@ -328,12 +318,6 @@ describe("secrets apply", () => {
       provider: "default",
       id: "OPENAI_API_KEY",
     });
-
-    const nextAuthJson = JSON.parse(await fs.readFile(fixture.authJsonPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    expect(nextAuthJson.openai).toBeUndefined();
 
     const nextEnv = await fs.readFile(fixture.envPath, "utf8");
     expect(nextEnv).not.toContain("sk-openai-plaintext");
@@ -477,7 +461,6 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
       },
     });
 
@@ -501,7 +484,6 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
       },
     });
 
@@ -523,7 +505,6 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
       },
     });
 
@@ -550,7 +531,6 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
       },
     };
 
@@ -588,7 +568,6 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
       },
     };
 
@@ -623,7 +602,6 @@ describe("secrets apply", () => {
     expect(first.changed).toBe(true);
     const configAfterFirst = await fs.readFile(fixture.configPath, "utf8");
     const authStoreAfterFirst = readAuthStoreFixture(fixture);
-    const authJsonAfterFirst = await fs.readFile(fixture.authJsonPath, "utf8");
     const envAfterFirst = await fs.readFile(fixture.envPath, "utf8");
 
     await fs.chmod(fixture.configPath, 0o400);
@@ -635,7 +613,6 @@ describe("secrets apply", () => {
       stripVolatileConfigMeta(configAfterFirst),
     );
     expect(readAuthStoreFixture(fixture)).toEqual(authStoreAfterFirst);
-    await expect(fs.readFile(fixture.authJsonPath, "utf8")).resolves.toBe(authJsonAfterFirst);
     await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe(envAfterFirst);
   });
 
@@ -659,7 +636,6 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
       },
     });
 
@@ -739,7 +715,6 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
       },
     };
 
@@ -779,7 +754,6 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
       },
     });
 
@@ -840,7 +814,6 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
       },
     };
 
