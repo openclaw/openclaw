@@ -1,5 +1,4 @@
 import {
-  createSqliteSessionTranscriptLocator,
   CURRENT_SESSION_VERSION,
   loadCommitmentStore,
   replaceSqliteSessionTranscriptEvents,
@@ -94,7 +93,6 @@ async function seedQaSessionTranscript(
   if (!sessionId) {
     throw new Error("seedQaSessionTranscript requires sessionId");
   }
-  const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId, sessionId });
   const sessionKey = params.sessionKey?.trim() || `agent:${agentId}:seed-${sessionId}`;
   const messages = params.messages ?? [];
   let parentId: string | null = null;
@@ -152,7 +150,7 @@ async function seedQaSessionTranscript(
       },
     },
   });
-  return { agentId, sessionId, sessionKey, transcriptLocator };
+  return { agentId, sessionId, sessionKey, transcriptScope: { agentId, sessionId } };
 }
 
 async function setQaActiveMemorySessionDisabled(
