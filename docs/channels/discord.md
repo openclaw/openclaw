@@ -1172,8 +1172,7 @@ Auto-join example:
     discord: {
       voice: {
         enabled: true,
-        mode: "stt-tts",
-        model: "openai/gpt-5.4-mini",
+        model: "openai-codex/gpt-5.5",
         autoJoin: [
           {
             guildId: "123456789012345678",
@@ -1184,12 +1183,10 @@ Auto-join example:
         decryptionFailureTolerance: 24,
         connectTimeoutMs: 30000,
         reconnectGraceMs: 15000,
-        tts: {
+        realtime: {
           provider: "openai",
-          openai: {
-            model: "gpt-4o-mini-tts",
-            voice: "cedar",
-          },
+          model: "gpt-realtime-2",
+          voice: "cedar",
         },
       },
     },
@@ -1199,10 +1196,11 @@ Auto-join example:
 
 Notes:
 
-- `voice.tts` overrides `messages.tts` for voice playback only.
-- `voice.mode` controls the conversation path: `stt-tts` keeps the existing batch STT plus TTS flow, `talk-buffer` uses a realtime voice shell for turn timing/transcription/playback while the OpenClaw agent produces the answer, and `bidi` lets the realtime model converse directly while exposing `openclaw_agent_consult` for the OpenClaw brain.
+- `voice.tts` overrides `messages.tts` for `stt-tts` voice playback only. Realtime modes use `voice.realtime.voice`.
+- `voice.mode` controls the conversation path. The default is `agent-proxy`: a realtime voice shell handles turn timing, transcription, interruption, and playback, while the routed OpenClaw agent produces the answer with the same session/tool permissions as a typed Discord prompt from that speaker. `stt-tts` keeps the older batch STT plus TTS flow. `bidi` lets the realtime model converse directly while exposing `openclaw_agent_consult` for the OpenClaw brain.
 - `voice.agentSession` controls which OpenClaw conversation receives voice turns. Leave it unset for the voice channel's own session, or set `{ mode: "target", target: "channel:<text-channel-id>" }` to make the voice channel act as the microphone/speaker extension of an existing Discord text channel session such as `#maintainers`.
 - `voice.model` overrides the OpenClaw agent brain for Discord voice responses and realtime consults. Leave it unset to inherit the routed agent model. It is separate from `voice.realtime.model`.
+- `agent-proxy` routes speech through `discord-voice`, which preserves normal owner/tool authorization for the speaker and target session but hides the agent `tts` tool because Discord voice owns playback.
 - In `stt-tts` mode, STT uses `tools.media.audio`; `voice.model` does not affect transcription.
 - In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.voice` configure the realtime audio session. For OpenAI Realtime 2 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2"` and `voice.model: "openai-codex/gpt-5.5"`.
 - `voice.realtime.bargeIn` controls whether Discord speaker-start events interrupt active realtime playback. If unset, it follows the realtime provider's input-audio interruption setting.
@@ -1234,7 +1232,29 @@ STT plus TTS pipeline:
 - `voice.model`, when set, overrides only the response LLM for this voice-channel turn.
 - `voice.tts` is merged over `messages.tts`; streaming-capable providers feed the player directly, otherwise the resulting audio file is played in the joined channel.
 
-Default voice-channel session example:
+Default agent-proxy voice-channel session example:
+
+```json5
+{
+  channels: {
+    discord: {
+      voice: {
+        enabled: true,
+        model: "openai-codex/gpt-5.5",
+        realtime: {
+          provider: "openai",
+          model: "gpt-realtime-2",
+          voice: "cedar",
+        },
+      },
+    },
+  },
+}
+```
+
+With no `voice.agentSession` block, each voice channel gets its own routed OpenClaw session. For example, `/vc join channel:234567890123456789` talks to the session for that Discord voice channel.
+
+Legacy STT plus TTS example:
 
 ```json5
 {
@@ -1244,28 +1264,12 @@ Default voice-channel session example:
         enabled: true,
         mode: "stt-tts",
         model: "openai/gpt-5.4-mini",
-      },
-    },
-  },
-}
-```
-
-With no `voice.agentSession` block, each voice channel gets its own routed OpenClaw session. For example, `/vc join channel:234567890123456789` talks to the session for that Discord voice channel.
-
-Realtime talk-buffer example:
-
-```json5
-{
-  channels: {
-    discord: {
-      voice: {
-        enabled: true,
-        mode: "talk-buffer",
-        model: "openai-codex/gpt-5.5",
-        realtime: {
+        tts: {
           provider: "openai",
-          model: "gpt-realtime-2",
-          voice: "cedar",
+          openai: {
+            model: "gpt-4o-mini-tts",
+            voice: "cedar",
+          },
         },
       },
     },
@@ -1304,7 +1308,7 @@ Voice as an extension of an existing Discord channel session:
     discord: {
       voice: {
         enabled: true,
-        mode: "bidi",
+        mode: "agent-proxy",
         model: "openai-codex/gpt-5.5",
         agentSession: {
           mode: "target",
@@ -1314,8 +1318,6 @@ Voice as an extension of an existing Discord channel session:
           provider: "openai",
           model: "gpt-realtime-2",
           voice: "cedar",
-          toolPolicy: "safe-read-only",
-          consultPolicy: "always",
         },
       },
     },
@@ -1323,7 +1325,7 @@ Voice as an extension of an existing Discord channel session:
 }
 ```
 
-In this mode the bot joins the configured voice channel, but OpenClaw agent turns use the target channel's normal routed session and agent. The realtime voice session speaks the returned result back into the voice channel. The supervisor agent can still use normal message tools according to its tool policy, including sending a separate Discord message if that is the right action.
+In `agent-proxy` mode the bot joins the configured voice channel, but OpenClaw agent turns use the target channel's normal routed session and agent. The realtime voice session speaks the returned result back into the voice channel. The supervisor agent can still use normal message tools according to its tool policy, including sending a separate Discord message if that is the right action.
 
 Useful target forms:
 

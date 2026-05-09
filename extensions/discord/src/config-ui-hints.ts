@@ -183,7 +183,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.mode": {
     label: "Discord Voice Mode",
-    help: "Conversation mode: stt-tts uses batch speech-to-text plus TTS, talk-buffer uses a realtime voice shell with the OpenClaw agent as the brain, and bidi lets the realtime provider converse directly with the OpenClaw consult tool.",
+    help: "Conversation mode: agent-proxy (default) uses realtime voice as the microphone/speaker for the routed OpenClaw agent, stt-tts uses batch speech-to-text plus TTS, and bidi lets the realtime provider converse directly with the OpenClaw consult tool.",
   },
   "voice.agentSession": {
     label: "Discord Voice Agent Session",
@@ -195,7 +195,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.provider": {
     label: "Discord Realtime Provider",
-    help: "Realtime voice provider for talk-buffer or bidi Discord voice modes, such as openai.",
+    help: "Realtime voice provider for agent-proxy or bidi Discord voice modes, such as openai.",
   },
   "voice.realtime.model": {
     label: "Discord Realtime Model",

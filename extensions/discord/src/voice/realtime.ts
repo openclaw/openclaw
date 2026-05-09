@@ -43,7 +43,7 @@ const DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT = 32;
 const DISCORD_REALTIME_LOG_PREVIEW_CHARS = 500;
 const DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 
-export type DiscordVoiceMode = "stt-tts" | "talk-buffer" | "bidi";
+export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
 
 type DiscordRealtimeSpeakerContext = VoiceRealtimeSpeakerContext & { userId: string };
 
@@ -112,11 +112,18 @@ function readProviderConfigBoolean(
 
 export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): DiscordVoiceMode {
   const mode = voice?.mode;
-  return mode === "talk-buffer" || mode === "bidi" ? mode : "stt-tts";
+  if (mode === "stt-tts" || mode === "bidi") {
+    return mode;
+  }
+  return "agent-proxy";
 }
 
 export function isDiscordRealtimeVoiceMode(mode: DiscordVoiceMode): boolean {
-  return mode === "talk-buffer" || mode === "bidi";
+  return mode === "agent-proxy" || mode === "bidi";
+}
+
+function isDiscordAgentProxyVoiceMode(mode: DiscordVoiceMode): boolean {
+  return mode === "agent-proxy";
 }
 
 export function resolveDiscordRealtimeInterruptResponseOnInputAudio(params: {
@@ -237,7 +244,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
             `discord voice: realtime ${role} transcript (${text.length} chars): ${formatRealtimeLogPreview(text)}`,
           );
         }
-        if (!isFinal || role !== "user" || this.params.mode !== "talk-buffer") {
+        if (!isFinal || role !== "user" || !isDiscordAgentProxyVoiceMode(this.params.mode)) {
           return;
         }
         this.talkback.enqueue(text, this.consumePendingSpeakerContext());
@@ -546,10 +553,10 @@ function buildDiscordRealtimeInstructions(params: {
       "You are OpenClaw's Discord voice interface.",
       "Keep spoken replies concise, natural, and suitable for a live Discord voice channel.",
     ].join("\n");
-  if (params.mode === "talk-buffer") {
+  if (isDiscordAgentProxyVoiceMode(params.mode)) {
     return [
       base,
-      "Mode: buffered OpenClaw agent talkback.",
+      "Mode: OpenClaw agent proxy.",
       "Use audio input only to transcribe the speaker. Do not answer user speech by yourself.",
       "When OpenClaw sends an exact answer to speak, say only that answer.",
     ].join("\n\n");

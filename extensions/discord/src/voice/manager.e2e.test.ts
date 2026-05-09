@@ -302,7 +302,7 @@ describe("DiscordVoiceManager", () => {
   const createManager = (
     discordConfig: ConstructorParameters<
       typeof managerModule.DiscordVoiceManager
-    >[0]["discordConfig"] = { voice: { enabled: true } },
+    >[0]["discordConfig"] = { voice: { enabled: true, mode: "stt-tts" } },
     clientOverride?: ReturnType<typeof createClient>,
     cfgOverride: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"] = {},
   ) =>
@@ -805,7 +805,7 @@ describe("DiscordVoiceManager", () => {
       groupPolicy: "open",
       voice: {
         enabled: true,
-        mode: "talk-buffer",
+        mode: "agent-proxy",
         realtime: { provider: "openai" },
       },
     });
@@ -832,7 +832,7 @@ describe("DiscordVoiceManager", () => {
       groupPolicy: "open",
       voice: {
         enabled: true,
-        mode: "talk-buffer",
+        mode: "agent-proxy",
         realtime: { provider: "openai" },
       },
     });
@@ -848,13 +848,12 @@ describe("DiscordVoiceManager", () => {
     expect(manager.status()).toStrictEqual([]);
   });
 
-  it("starts Discord realtime voice in talk-buffer mode", async () => {
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "buffered brain answer" }] });
+  it("uses agent-proxy realtime voice by default", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "agent proxy answer" }] });
     const manager = createManager({
       groupPolicy: "open",
       voice: {
         enabled: true,
-        mode: "talk-buffer",
         model: "openai-codex/gpt-5.5",
         realtime: {
           provider: "openai",
@@ -907,11 +906,12 @@ describe("DiscordVoiceManager", () => {
       expect.objectContaining({
         model: "openai-codex/gpt-5.5",
         messageProvider: "discord-voice",
+        toolsAllow: undefined,
       }),
       expect.anything(),
     );
     expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("buffered brain answer"),
+      expect.stringContaining("agent proxy answer"),
     );
   });
 
@@ -920,7 +920,7 @@ describe("DiscordVoiceManager", () => {
       groupPolicy: "open",
       voice: {
         enabled: true,
-        mode: "talk-buffer",
+        mode: "agent-proxy",
         realtime: { provider: "openai" },
       },
     });
@@ -960,7 +960,7 @@ describe("DiscordVoiceManager", () => {
       groupPolicy: "open",
       voice: {
         enabled: true,
-        mode: "talk-buffer",
+        mode: "agent-proxy",
         realtime: {
           model: "gpt-realtime-2",
           voice: "cedar",
@@ -991,13 +991,13 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
-  it("keeps talk-buffer realtime transcripts on the audio turn speaker context", async () => {
+  it("keeps agent-proxy realtime transcripts on the audio turn speaker context", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "non-owner answer" }] });
     const manager = createManager({
       groupPolicy: "open",
       voice: {
         enabled: true,
-        mode: "talk-buffer",
+        mode: "agent-proxy",
         realtime: { provider: "openai", debounceMs: 1 },
       },
     });
@@ -1040,13 +1040,13 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
-  it("expires closed talk-buffer turns before later speaker audio", async () => {
+  it("expires closed agent-proxy turns before later speaker audio", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "guest answer" }] });
     const manager = createManager({
       groupPolicy: "open",
       voice: {
         enabled: true,
-        mode: "talk-buffer",
+        mode: "agent-proxy",
         realtime: { provider: "openai", debounceMs: 1 },
       },
     });
@@ -1528,7 +1528,7 @@ describe("DiscordVoiceManager", () => {
       allowFrom: ["discord:u-speaker"],
       voice: {
         enabled: true,
-        mode: "talk-buffer",
+        mode: "agent-proxy",
         realtime: { provider: "openai" },
       },
     });

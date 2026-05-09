@@ -576,7 +576,7 @@ const DiscordVoiceAgentSessionSchema = z
 const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
-    mode: z.enum(["stt-tts", "talk-buffer", "bidi"]).optional(),
+    mode: z.enum(["stt-tts", "agent-proxy", "bidi"]).optional(),
     agentSession: DiscordVoiceAgentSessionSchema.optional(),
     model: z.string().min(1).optional(),
     realtime: DiscordVoiceRealtimeSchema.optional(),
