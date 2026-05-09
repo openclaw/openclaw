@@ -478,7 +478,7 @@ export async function runCodexAppServerAttempt(
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const startupBinding = await readCodexAppServerBinding({
     sessionKey: sandboxSessionKey,
-    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
   });
   const startupAuthProfileCandidate =
     params.runtimePlan?.auth.forwardedAuthProfileId ??
@@ -548,7 +548,6 @@ export async function runCodexAppServerAttempt(
   let historyMessages =
     (await readMirroredSessionHistoryMessages({
       agentId: sessionAgentId,
-      sessionFile: params.sessionFile,
       sessionId: params.sessionId,
     })) ?? [];
   const hookContext = {
@@ -563,11 +562,12 @@ export async function runCodexAppServerAttempt(
   };
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
-      hadSessionFile,
+      hadTranscriptLocator: hadSessionFile,
       contextEngine: activeContextEngine,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
-      sessionFile: params.sessionFile,
+      transcriptScope: { agentId: sessionAgentId, sessionId: params.sessionId },
+      transcriptLocator: params.sessionId,
       runtimeContext: buildHarnessContextEngineRuntimeContext({
         attempt: runtimeParams,
         workspaceDir: effectiveWorkspace,
@@ -581,7 +581,6 @@ export async function runCodexAppServerAttempt(
     historyMessages =
       (await readMirroredSessionHistoryMessages({
         agentId: sessionAgentId,
-        sessionFile: params.sessionFile,
         sessionId: params.sessionId,
       })) ?? historyMessages;
   }
@@ -839,7 +838,7 @@ export async function runCodexAppServerAttempt(
     throw error;
   }
   trajectoryRecorder?.recordEvent("session.started", {
-    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
     threadId: thread.threadId,
     authProfileId: startupAuthProfileId,
     workspaceDir: effectiveWorkspace,
@@ -1479,7 +1478,6 @@ export async function runCodexAppServerAttempt(
       const finalMessages =
         (await readMirroredSessionHistoryMessages({
           agentId: sessionAgentId,
-          sessionFile: params.sessionFile,
           sessionId: params.sessionId,
         })) ?? historyMessages.concat(result.messagesSnapshot);
       await finalizeHarnessContextEngineTurn({
@@ -1489,7 +1487,8 @@ export async function runCodexAppServerAttempt(
         yieldAborted: Boolean(result.yieldDetected),
         sessionIdUsed: params.sessionId,
         sessionKey: sandboxSessionKey,
-        sessionFile: params.sessionFile,
+        transcriptScope: { agentId: sessionAgentId, sessionId: params.sessionId },
+        transcriptLocator: params.sessionId,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,
         tokenBudget: params.contextTokenBudget,
@@ -2195,13 +2194,12 @@ function readString(record: JsonObject, key: string): string | undefined {
 
 async function readMirroredSessionHistoryMessages(scope: {
   agentId: string;
-  sessionFile: string;
   sessionId: string;
 }): Promise<AgentMessage[] | undefined> {
   const messages = await readCodexMirroredSessionHistoryMessages(scope);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
-      sessionFile: scope.sessionFile,
+      sessionId: scope.sessionId,
     });
   }
   return messages;
@@ -2326,9 +2324,8 @@ async function mirrorTranscriptBestEffort(params: {
 }): Promise<void> {
   try {
     await mirrorCodexAppServerTranscript({
-      sessionFile: params.params.sessionFile,
       sessionId: params.params.sessionId,
-      agentId: params.agentId,
+      agentId: params.agentId ?? "main",
       sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,
       // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged

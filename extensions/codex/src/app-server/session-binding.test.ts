@@ -46,21 +46,24 @@ describe("codex app-server session binding", () => {
   });
 
   it("round-trips the thread binding through SQLite", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-123",
-      cwd: tempDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "tools-v1",
-    });
+    const sessionId = "session-1";
+    await writeCodexAppServerBinding(
+      { sessionId },
+      {
+        threadId: "thread-123",
+        cwd: tempDir,
+        model: "gpt-5.4-codex",
+        modelProvider: "openai",
+        dynamicToolsFingerprint: "tools-v1",
+      },
+    );
 
-    const binding = await readCodexAppServerBinding(sessionFile);
+    const binding = await readCodexAppServerBinding({ sessionId });
 
     expect(binding).toMatchObject({
       schemaVersion: 1,
       threadId: "thread-123",
-      sessionFile,
+      sessionId,
       cwd: tempDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",

@@ -45,11 +45,11 @@ export function createCodexAppServerAgentHarness(options?: {
       return maybeCompactCodexAppServerSession(params, { pluginConfig: options?.pluginConfig });
     },
     reset: async (params) => {
-      if (params.sessionFile) {
+      if (params.sessionId || params.sessionKey) {
         const { clearCodexAppServerBinding } = await import("./src/app-server/session-binding.js");
         await clearCodexAppServerBinding({
           sessionKey: params.sessionKey,
-          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
         });
       }
     },

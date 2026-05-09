@@ -377,7 +377,6 @@ export class CodexAppServerEventProjector {
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.add(itemId);
       await runAgentHarnessBeforeCompactionHook({
-        sessionFile: this.params.sessionFile,
         messages: await this.readMirroredSessionMessages(),
         ctx: {
           runId: this.params.runId,
@@ -429,7 +428,6 @@ export class CodexAppServerEventProjector {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
       await runAgentHarnessAfterCompactionHook({
-        sessionFile: this.params.sessionFile,
         messages: await this.readMirroredSessionMessages(),
         compactedCount: -1,
         ctx: {
@@ -876,7 +874,6 @@ export class CodexAppServerEventProjector {
     return (
       (await readCodexMirroredSessionHistoryMessages({
         agentId: sessionAgentId,
-        sessionFile: this.params.sessionFile,
         sessionId: this.params.sessionId,
       })) ?? []
     );
