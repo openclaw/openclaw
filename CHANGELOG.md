@@ -220,6 +220,7 @@ Docs: https://docs.openclaw.ai
 - Image generation: honor configured web-fetch SSRF policy across OpenAI, Google, MiniMax, OpenRouter, and Vydra provider requests so RFC2544 fake-IP proxy opt-ins reach generation calls. Fixes #79716. (#79765) Thanks @hclsys.
 - Telegram: persist reply-chain message cache records as a compact append log instead of rewriting the full cache on every inbound message, reducing large-group turn latency.
 - Telegram/CLI-backend: mirror outbound replies to the session transcript so CLI-backend agent responses create `.jsonl` session files, preventing `sessionId=unknown` on subsequent runs. Fixes #75991.
+- Gateway/nodes: allow approved chat-channel macOS node exec replays to cross transient agent WebSocket reconnects only when node, agent session, and channel target metadata still match, restoring Telegram/WeCom host=node approvals without opening a general backend replay bypass. Fixes #77656. Thanks @BunsDev.
 - QQBot: route gateway WebSocket connections through the ambient proxy agent so deployments with `https_proxy`, `HTTPS_PROXY`, or `HTTP_PROXY` can reach the QQ gateway. (#72961) Thanks @xialonglee.
 - Agents/subagents: treat `sessions_spawn` `model: "default"` as the default-model fallback and ignore ACP-only stream targets for native sub-agent spawns. Fixes #72078. (#72101) Thanks @xialonglee.
 - Agents/failover: stop retrying assistant-prefill format rejections across auth profiles or model fallbacks, surfacing the deterministic provider error instead of requeueing the lane. Fixes #79688. (#79728) Thanks @hclsys.
