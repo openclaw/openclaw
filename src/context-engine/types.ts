@@ -315,9 +315,9 @@ export interface ContextEngine {
     childSessionKey: string;
     contextMode?: "isolated" | "fork";
     parentSessionId?: string;
-    parentTranscriptLocator?: string;
+    parentTranscriptScope?: ContextEngineTranscriptScope;
     childSessionId?: string;
-    childTranscriptLocator?: string;
+    childTranscriptScope?: ContextEngineTranscriptScope;
     ttlMs?: number;
   }): Promise<SubagentSpawnPreparation | undefined>;
 

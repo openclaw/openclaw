@@ -7,7 +7,6 @@ import {
   type SessionHeader,
 } from "../../agents/transcript/session-transcript-contract.js";
 import { derivePromptTokens } from "../../agents/usage.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
@@ -28,6 +27,10 @@ type ForkSourceTranscript = {
 };
 
 const FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN = 4;
+
+function formatTranscriptParentReference(scope: { agentId: string; sessionId: string }): string {
+  return `agent-db:${scope.agentId}:transcript_events:${scope.sessionId}`;
+}
 
 function resolvePositiveTokenCount(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -224,7 +227,7 @@ function buildBranchLabelEntries(params: {
 }
 
 async function writeForkHeaderOnly(params: {
-  parentTranscriptLocator: string;
+  parentTranscriptReference: string;
   agentId: string;
   cwd: string;
 }): Promise<{ sessionId: string }> {
@@ -236,7 +239,7 @@ async function writeForkHeaderOnly(params: {
     id: sessionId,
     timestamp,
     cwd: params.cwd,
-    parentSession: params.parentTranscriptLocator,
+    parentSession: params.parentTranscriptReference,
   } satisfies SessionHeader;
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId,
@@ -247,7 +250,7 @@ async function writeForkHeaderOnly(params: {
 }
 
 async function writeBranchedSession(params: {
-  parentTranscriptLocator: string;
+  parentTranscriptReference: string;
   source: ForkSourceTranscript;
 }): Promise<{ sessionId: string }> {
   const sessionId = crypto.randomUUID();
@@ -265,7 +268,7 @@ async function writeBranchedSession(params: {
     id: sessionId,
     timestamp,
     cwd: params.source.cwd,
-    parentSession: params.parentTranscriptLocator,
+    parentSession: params.parentTranscriptReference,
   } satisfies SessionHeader;
   const entries = [header, ...pathWithoutLabels, ...labelEntries];
   const hasAssistant = entries.some(
@@ -285,7 +288,7 @@ export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;
 }): Promise<{ sessionId: string } | null> {
-  const parentTranscriptLocator = createSqliteSessionTranscriptLocator({
+  const parentTranscriptReference = formatTranscriptParentReference({
     agentId: params.agentId,
     sessionId: params.parentEntry.sessionId,
   });
@@ -298,9 +301,9 @@ export async function forkSessionFromParentRuntime(params: {
       return null;
     }
     return source.leafId
-      ? await writeBranchedSession({ parentTranscriptLocator, source })
+      ? await writeBranchedSession({ parentTranscriptReference, source })
       : await writeForkHeaderOnly({
-          parentTranscriptLocator,
+          parentTranscriptReference,
           agentId: source.agentId,
           cwd: source.cwd,
         });

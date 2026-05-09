@@ -49,7 +49,6 @@ describe("sessions_spawn context modes", () => {
     const store: SessionStore = {
       main: {
         sessionId: "parent-session-id",
-        transcriptLocator: "sqlite-transcript://main/parent-session",
         updatedAt: 1,
         totalTokens: 1200,
       },
@@ -82,8 +81,9 @@ describe("sessions_spawn context modes", () => {
         childSessionKey: result.childSessionKey,
         contextMode: "fork",
         parentSessionId: "parent-session-id",
+        parentTranscriptScope: { agentId: "main", sessionId: "parent-session-id" },
         childSessionId: "forked-session-id",
-        childTranscriptLocator: "sqlite-transcript://main/forked-session-id",
+        childTranscriptScope: { agentId: "main", sessionId: "forked-session-id" },
       }),
     );
   });
@@ -113,7 +113,6 @@ describe("sessions_spawn context modes", () => {
     const store: SessionStore = {
       main: {
         sessionId: "parent-session-id",
-        transcriptLocator: "sqlite-transcript://main/parent-session",
         updatedAt: 1,
         totalTokens: 170_000,
       },
@@ -144,7 +143,6 @@ describe("sessions_spawn context modes", () => {
     const store: SessionStore = {
       main: {
         sessionId: "parent-session-id",
-        transcriptLocator: "sqlite-transcript://main/parent-session",
         updatedAt: 1,
         totalTokens: 1200,
       },

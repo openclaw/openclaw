@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
@@ -48,6 +47,10 @@ function seedTranscript(params: { agentId?: string; sessionId: string; events: u
   });
 }
 
+function transcriptParentReference(params: { agentId: string; sessionId: string }): string {
+  return `agent-db:${params.agentId}:transcript_events:${params.sessionId}`;
+}
+
 function readTranscript(agentId: string, sessionId: string): unknown[] {
   return loadSqliteSessionTranscriptEvents({ agentId, sessionId }).map((entry) => entry.event);
 }
@@ -58,7 +61,6 @@ describe("resolveParentForkTokenCountRuntime", () => {
     useStateRoot(root);
 
     const sessionId = "parent-overflow-transcript";
-    const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
     const events: unknown[] = [
       {
         type: "session",
@@ -113,7 +115,6 @@ describe("resolveParentForkTokenCountRuntime", () => {
     useStateRoot(root);
 
     const sessionId = "parent-no-usage-transcript";
-    const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
     const events: unknown[] = [
       {
         type: "session",
@@ -153,7 +154,6 @@ describe("resolveParentForkTokenCountRuntime", () => {
     useStateRoot(root);
 
     const sessionId = "parent-multiple-usage-transcript";
-    const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
     seedTranscript({
       sessionId,
       events: [
@@ -200,7 +200,6 @@ describe("resolveParentForkTokenCountRuntime", () => {
     useStateRoot(root);
 
     const sessionId = "parent-post-usage-tail";
-    const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
     seedTranscript({
       sessionId,
       events: [
@@ -249,7 +248,7 @@ describe("forkSessionFromParentRuntime", () => {
     const cwd = path.join(root, "workspace");
     await fs.mkdir(cwd);
     const parentSessionId = "parent-session";
-    const parentTranscriptLocator = createSqliteSessionTranscriptLocator({
+    const parentTranscriptReference = transcriptParentReference({
       agentId: "main",
       sessionId: parentSessionId,
     });
@@ -311,7 +310,7 @@ describe("forkSessionFromParentRuntime", () => {
       type: "session",
       id: fork.sessionId,
       cwd,
-      parentSession: parentTranscriptLocator,
+      parentSession: parentTranscriptReference,
     });
     expect(forkedEntries.map((entry) => entry.type)).toEqual([
       "session",
@@ -330,7 +329,7 @@ describe("forkSessionFromParentRuntime", () => {
     const root = await makeRoot("openclaw-parent-fork-empty-");
     useStateRoot(root);
     const parentSessionId = "parent-empty";
-    const parentTranscriptLocator = createSqliteSessionTranscriptLocator({
+    const parentTranscriptReference = transcriptParentReference({
       agentId: "main",
       sessionId: parentSessionId,
     });
@@ -363,7 +362,7 @@ describe("forkSessionFromParentRuntime", () => {
     expect(entries[0]).toMatchObject({
       type: "session",
       id: fork.sessionId,
-      parentSession: parentTranscriptLocator,
+      parentSession: parentTranscriptReference,
     });
   });
 });
