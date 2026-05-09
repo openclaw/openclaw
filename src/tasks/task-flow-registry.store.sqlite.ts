@@ -144,12 +144,7 @@ function selectFlowRows(db: DatabaseSync): FlowRegistryRow[] {
     ])
     .orderBy("created_at", "asc")
     .orderBy("flow_id", "asc");
-  return executeSqliteQuerySync(db, query).rows.map((row) => ({
-    ...row,
-    sync_mode: row.sync_mode as TaskFlowSyncMode | null,
-    status: row.status as TaskFlowRecord["status"],
-    notify_policy: row.notify_policy as TaskFlowRecord["notifyPolicy"],
-  }));
+  return executeSqliteQuerySync(db, query).rows;
 }
 
 function upsertFlowRow(db: DatabaseSync, row: Insertable<FlowRunsTable>): void {

@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   importLegacyExecApprovalsFileToSqlite,
   legacyExecApprovalsFileExists,
-} from "./exec-approvals-migration.js";
+} from "../commands/doctor/legacy/exec-approvals.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());

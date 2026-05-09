@@ -155,27 +155,6 @@ export async function writeTuiLastSessionKey(params: {
   });
 }
 
-export async function writeTuiLastSessionRecordForMigration(params: {
-  scopeKey: string;
-  sessionKey: string;
-  updatedAt: number;
-  stateDir?: string;
-}): Promise<boolean> {
-  const record = normalizeLastSessionRecord({
-    sessionKey: params.sessionKey,
-    updatedAt: params.updatedAt,
-  });
-  if (!record || isHeartbeatSessionKey(record.sessionKey)) {
-    return false;
-  }
-  writeTuiLastSessionRow({
-    scopeKey: params.scopeKey,
-    record,
-    stateDir: params.stateDir,
-  });
-  return true;
-}
-
 export async function clearTuiLastSessionPointers(params: {
   stateDir?: string;
   sessionKeys: ReadonlySet<string>;

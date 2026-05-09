@@ -71,7 +71,9 @@ patching:
    - After touching Kysely/native SQLite code, run `pnpm lint:kysely`. The AST
      guard rejects raw identifier helpers, unreviewed typed `sql<T>` snippets,
      `db.dynamic`, explicit sync-helper row generics for builders, and new raw
-     `node:sqlite` runtime access outside owner allowlists.
+     `node:sqlite` runtime access outside owner allowlists. It also rejects
+     persisted enum-like casts in SQLite stores; keep row fields as `string` and
+     parse through closed validators.
 4. Keep raw SQL deliberate:
    - Good: pragmas, virtual tables, FTS, SQLite JSON functions, migrations,
      `sqlite_master`, compact repeated expressions.
@@ -117,6 +119,9 @@ generator or SQL source and regenerate.
 - New direct `db.prepare(...)` / `db.exec(...)` runtime access should be rare.
   Prefer Kysely or add an explicit `scripts/check-kysely-guardrails.mjs`
   allowlist entry with a clear owner reason.
+- If raw SQLite is repeated or cast-heavy, extract a narrow boundary helper
+  such as `assertSqliteIntegrityOk(db, message)` and allowlist that helper
+  instead of each caller.
 - Keep sync helper result types derived from `CompiledQuery<Row>` / Kysely
   builders. Explicit helper generics are for raw SQL or external boundaries,
   not for widening a typed builder result into a generic record.
@@ -153,6 +158,8 @@ Add or update focused tests for:
 - type inference contracts for sync helpers and public query result maps
 - negative type contracts with `@ts-expect-error` for important column/preset
   mistakes
+- corruption-path tests that mutate SQLite directly and assert the public load
+  or read method rejects invalid persisted strings
 - public store behavior, not just private SQL shape
 
 ## Helper Extraction

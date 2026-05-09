@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import {
   parseStoredDeviceIdentityForMigration,
   writeStoredDeviceIdentityForMigration,
-} from "./device-identity.js";
+} from "../../../infra/device-identity.js";
 
 function resolveIdentityPathForEnv(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "identity", "device.json");

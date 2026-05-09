@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { importLegacyDeviceIdentityFileToSqlite } from "../commands/doctor/legacy/device-identity.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { importLegacyDeviceIdentityFileToSqlite } from "./device-identity-legacy.js";
 import {
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,

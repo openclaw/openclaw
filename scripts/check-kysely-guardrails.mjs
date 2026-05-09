@@ -28,33 +28,46 @@ const compiledRawAllowPaths = new Set([
   "src/infra/kysely-node-sqlite.test.ts",
 ]);
 
-const rawSqliteAllowPaths = new Set([
-  "src/acp/event-ledger.ts",
-  "src/agents/subagent-registry.store.ts",
-  "src/commands/backup-verify.ts",
-  "src/config/sessions/transcript-store.sqlite.ts",
-  "src/cron/run-log.ts",
-  "src/cron/store.ts",
-  "src/infra/backup-create.ts",
-  "src/infra/kysely-node-sqlite.ts",
-  "src/infra/kysely-sync.ts",
-  "src/infra/node-sqlite.ts",
-  "src/infra/outbound/current-conversation-bindings.ts",
-  "src/infra/sqlite-pragma.test-support.ts",
-  "src/infra/sqlite-transaction.ts",
-  "src/infra/sqlite-wal.ts",
-  "src/media/store.ts",
-  "src/plugin-sdk/memory-core-host-engine-storage.ts",
-  "src/plugin-state/plugin-blob-store.ts",
-  "src/plugin-state/plugin-state-store.sqlite.ts",
-  "src/proxy-capture/store.sqlite.ts",
-  "src/state/openclaw-agent-db.ts",
-  "src/state/openclaw-state-db.ts",
-  "src/state/sqlite-schema-shape.test-support.ts",
-  "src/tasks/task-flow-registry.store.sqlite.ts",
-  "src/tasks/task-registry.store.sqlite.ts",
-  "src/tui/tui-last-session.ts",
-]);
+const rawSqliteAllowPathGroups = {
+  "native Kysely adapter and sync execution": [
+    "src/infra/kysely-node-sqlite.ts",
+    "src/infra/kysely-sync.ts",
+  ],
+  "SQLite database lifecycle, schema, transactions, and pragmas": [
+    "src/infra/node-sqlite.ts",
+    "src/infra/sqlite-integrity.ts",
+    "src/infra/sqlite-pragma.test-support.ts",
+    "src/infra/sqlite-transaction.ts",
+    "src/infra/sqlite-wal.ts",
+    "src/state/openclaw-agent-db.ts",
+    "src/state/openclaw-state-db.ts",
+    "src/state/sqlite-schema-shape.test-support.ts",
+  ],
+  "backup snapshot maintenance": ["src/commands/backup-verify.ts", "src/infra/backup-create.ts"],
+  "legacy feature stores awaiting Kysely owner cleanup": [
+    "src/acp/event-ledger.ts",
+    "src/agents/subagent-registry.store.ts",
+    "src/config/sessions/transcript-store.sqlite.ts",
+    "src/cron/run-log.ts",
+    "src/cron/store.ts",
+    "src/infra/outbound/current-conversation-bindings.ts",
+    "src/media/store.ts",
+    "src/plugin-sdk/memory-core-host-engine-storage.ts",
+    "src/plugin-state/plugin-blob-store.ts",
+    "src/plugin-state/plugin-state-store.sqlite.ts",
+    "src/proxy-capture/store.sqlite.ts",
+    "src/tasks/task-flow-registry.store.sqlite.ts",
+    "src/tasks/task-registry.store.sqlite.ts",
+    "src/tui/tui-last-session.ts",
+  ],
+};
+
+const rawSqliteAllowPathReasons = new Map();
+for (const [reason, paths] of Object.entries(rawSqliteAllowPathGroups)) {
+  for (const allowedPath of paths) {
+    rawSqliteAllowPathReasons.set(allowedPath, reason);
+  }
+}
 
 function lineText(sourceFile, node) {
   const line = toLine(sourceFile, node);
@@ -162,6 +175,10 @@ function isTestPath(relativePath) {
   return /\.(?:test|spec|e2e)\.ts$/u.test(relativePath) || relativePath.includes(".test-helpers.");
 }
 
+function isSqliteStorePath(relativePath) {
+  return relativePath.endsWith(".sqlite.ts") || relativePath.includes(".store.sqlite.ts");
+}
+
 function isLikelySqliteReceiver(expression) {
   const unwrapped = unwrapExpression(expression);
   if (ts.isIdentifier(unwrapped)) {
@@ -170,12 +187,35 @@ function isLikelySqliteReceiver(expression) {
   return ts.isPropertyAccessExpression(unwrapped) && getPropertyNameText(unwrapped.name) === "db";
 }
 
+function isPersistedStringCastType(typeText) {
+  return [
+    /\bTaskRecord\["(?:runtime|scopeKind|status|deliveryStatus|notifyPolicy|terminalOutcome)"\]/u,
+    /\bTaskFlowRecord\["(?:status|notifyPolicy)"\]/u,
+    /\bTaskFlowSyncMode\b/u,
+    /\bVirtualAgentFsEntryKind\b/u,
+  ].some((pattern) => pattern.test(typeText));
+}
+
 function collectKyselyGuardrailViolations(content, relativePath) {
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
   const imports = collectImports(sourceFile);
   const violations = [];
 
   function visit(node) {
+    if (
+      isSqliteStorePath(relativePath) &&
+      (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) &&
+      isPersistedStringCastType(node.type.getText(sourceFile)) &&
+      !hasAllowComment(sourceFile, node, "sqlite-allow-persisted-cast")
+    ) {
+      addViolation(
+        violations,
+        sourceFile,
+        node,
+        "persisted SQLite enum-like values must be parsed through closed validators, not cast",
+      );
+    }
+
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
@@ -258,7 +298,7 @@ function collectKyselyGuardrailViolations(content, relativePath) {
       ts.isPropertyAccessExpression(node.expression) &&
       ["prepare", "exec"].includes(getPropertyNameText(node.expression.name) ?? "") &&
       isLikelySqliteReceiver(node.expression.expression) &&
-      !rawSqliteAllowPaths.has(relativePath) &&
+      !rawSqliteAllowPathReasons.has(relativePath) &&
       !hasAllowComment(sourceFile, node, "sqlite-allow-raw")
     ) {
       addViolation(

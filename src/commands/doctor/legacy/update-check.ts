@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { resolveStateDir } from "../../../config/paths.js";
+import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import {
   writeOpenClawStateKvJson,
   type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+} from "../../../state/openclaw-state-kv.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;

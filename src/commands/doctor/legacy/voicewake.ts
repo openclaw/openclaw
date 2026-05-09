@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import {
   normalizeVoiceWakeConfigForMigration,
   writeVoiceWakeConfigForMigration,
-} from "./voicewake.js";
+} from "../../../infra/voicewake.js";
 
 function resolveLegacyPath(baseDir?: string) {
   const root = baseDir ?? resolveStateDir();

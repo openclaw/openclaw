@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import {
@@ -15,6 +16,7 @@ import {
   configureTaskRegistryRuntime,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
+import { loadTaskRegistryStateFromSqlite } from "./task-registry.store.sqlite.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   parseOptionalTaskTerminalOutcome,
@@ -120,6 +122,32 @@ describe("task-registry store runtime", () => {
     expect(() => parseTaskNotifyPolicy("verbose")).toThrow("Invalid persisted task notify policy");
     expect(() => parseOptionalTaskTerminalOutcome("failed")).toThrow(
       "Invalid persisted task terminal outcome",
+    );
+  });
+
+  it("rejects corrupt persisted task rows during sqlite restore", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-corrupt-" },
+      async () => {
+        resetTaskRegistryForTests();
+        const created = createTaskRecord({
+          runtime: "cron",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          sourceId: "job-corrupt",
+          runId: "run-corrupt-task-status",
+          task: "Corrupt task row",
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+        });
+
+        openOpenClawStateDatabase()
+          .db.prepare("UPDATE task_runs SET status = ? WHERE task_id = ?")
+          .run("done", created.taskId);
+
+        expect(() => loadTaskRegistryStateFromSqlite()).toThrow("Invalid persisted task status");
+      },
     );
   });
 

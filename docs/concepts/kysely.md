@@ -169,13 +169,16 @@ Rules:
   or a `keyof` generated table type first.
 - Raw snippets are fine for SQLite pragmas, virtual tables, FTS, JSON functions,
   and migrations, but wrap repeated raw expressions in typed helpers.
+- Direct `node:sqlite` runtime access needs an owner reason in
+  `scripts/check-kysely-guardrails.mjs`. Prefer small boundary helpers such as
+  `assertSqliteIntegrityOk(db, message)` over repeated `db.prepare(...)` casts.
 - Prefer `eb.fn.countAll`, `eb.fn.count`, `eb.fn.max`, `eb.fn.coalesce`,
   `eb.lit`, expression callbacks, and `eb.ref` substitutions before raw SQL for
   scalar expressions and constant selections.
 - Run `pnpm lint:kysely` after touching Kysely-backed stores. It rejects raw
   identifier helpers, unreviewed typed raw SQL, `db.dynamic`, sync-helper row
-  generics at builder call sites, and new direct `node:sqlite` runtime access
-  outside explicit owner allowlists.
+  generics at builder call sites, persisted string casts in SQLite stores, and
+  new direct `node:sqlite` runtime access outside explicit owner allowlists.
 
 ## Helper Extraction
 
@@ -187,6 +190,7 @@ Extract helpers when they protect a boundary or carry a reusable typed concept:
   values, not loose column strings
 - public preset-to-row maps for finite query APIs
 - JSON/BLOB/timestamp mappers at store boundaries
+- direct SQLite boundary helpers for repeated PRAGMA or maintenance checks
 
 Avoid helpers that hide a single clear builder chain, replace every checked
 literal with a constant, or accept generic table/column/order strings.
@@ -318,10 +322,14 @@ Rules:
   correct; SQLite does not enforce TypeScript unions.
 - Parse runtime/preset/status/kind/direction/mode columns into closed unions at
   the module boundary.
+- Keep selected row types honest. If a persisted column can be corrupt on disk,
+  keep the row field as `string` and let `rowToRecord`/`rowToEntry` parse it.
 - Throw on corrupt values instead of silently widening to a default unless the
   store owns a documented legacy fallback.
 - Keep compatibility rewrites in migrations or doctor/fix paths when the shape
   has shipped. If it has not shipped, clean the schema/code and skip migrations.
+- Add at least one corruption-path test for public store behavior when a new
+  parser protects persisted data.
 
 ## Benchmark Before Caching
 

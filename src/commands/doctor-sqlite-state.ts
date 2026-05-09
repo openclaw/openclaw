@@ -27,46 +27,6 @@ import {
   importLegacyManagedOutgoingImageRecordFilesToSqlite,
   legacyManagedOutgoingImageRecordFilesExist,
 } from "../gateway/managed-image-attachments.js";
-import {
-  importLegacyDeviceAuthFileToSqlite,
-  legacyDeviceAuthFileExists,
-} from "../infra/device-auth-store-legacy.js";
-import {
-  importLegacyDeviceBootstrapFileToSqlite,
-  legacyDeviceBootstrapFileExists,
-} from "../infra/device-bootstrap-legacy.js";
-import {
-  importLegacyDeviceIdentityFileToSqlite,
-  legacyDeviceIdentityFileExists,
-} from "../infra/device-identity-legacy.js";
-import {
-  importLegacyExecApprovalsFileToSqlite,
-  legacyExecApprovalsFileExists,
-} from "../infra/exec-approvals-migration.js";
-import {
-  importLegacyPairingStateFilesToSqlite,
-  legacyPairingStateFilesExist,
-} from "../infra/pairing-files-legacy.js";
-import {
-  importLegacyApnsRegistrationFileToSqlite,
-  legacyApnsRegistrationFileExists,
-} from "../infra/push-apns-legacy.js";
-import {
-  importLegacyWebPushFilesToSqlite,
-  legacyWebPushFilesExist,
-} from "../infra/push-web-legacy.js";
-import {
-  importLegacyUpdateCheckFileToSqlite,
-  legacyUpdateCheckFileExists,
-} from "../infra/update-startup-legacy.js";
-import {
-  importLegacyVoiceWakeConfigFileToSqlite,
-  legacyVoiceWakeConfigFileExists,
-} from "../infra/voicewake-legacy.js";
-import {
-  importLegacyVoiceWakeRoutingConfigFileToSqlite,
-  legacyVoiceWakeRoutingConfigFileExists,
-} from "../infra/voicewake-routing-legacy.js";
 import { importLegacyMediaFilesToSqlite, legacyMediaFilesExist } from "../media/store.js";
 import {
   importLegacyMemoryCoreDreamingStateFilesToSqlite,
@@ -89,11 +49,51 @@ import {
   legacyInstalledPluginIndexFileExists,
 } from "../plugins/installed-plugin-index-legacy-migration.js";
 import { note } from "../terminal/note.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  importLegacyDeviceAuthFileToSqlite,
+  legacyDeviceAuthFileExists,
+} from "./doctor/legacy/device-auth-store.js";
+import {
+  importLegacyDeviceBootstrapFileToSqlite,
+  legacyDeviceBootstrapFileExists,
+} from "./doctor/legacy/device-bootstrap.js";
+import {
+  importLegacyDeviceIdentityFileToSqlite,
+  legacyDeviceIdentityFileExists,
+} from "./doctor/legacy/device-identity.js";
+import {
+  importLegacyExecApprovalsFileToSqlite,
+  legacyExecApprovalsFileExists,
+} from "./doctor/legacy/exec-approvals.js";
+import {
+  importLegacyPairingStateFilesToSqlite,
+  legacyPairingStateFilesExist,
+} from "./doctor/legacy/pairing-files.js";
+import {
+  importLegacyApnsRegistrationFileToSqlite,
+  legacyApnsRegistrationFileExists,
+} from "./doctor/legacy/push-apns.js";
+import {
+  importLegacyWebPushFilesToSqlite,
+  legacyWebPushFilesExist,
+} from "./doctor/legacy/push-web.js";
 import {
   importLegacyTuiLastSessionStoreToSqlite,
   legacyTuiLastSessionFileExists,
-} from "../tui/tui-last-session-legacy.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
+} from "./doctor/legacy/tui-last-session.js";
+import {
+  importLegacyUpdateCheckFileToSqlite,
+  legacyUpdateCheckFileExists,
+} from "./doctor/legacy/update-check.js";
+import {
+  importLegacyVoiceWakeRoutingConfigFileToSqlite,
+  legacyVoiceWakeRoutingConfigFileExists,
+} from "./doctor/legacy/voicewake-routing.js";
+import {
+  importLegacyVoiceWakeConfigFileToSqlite,
+  legacyVoiceWakeConfigFileExists,
+} from "./doctor/legacy/voicewake.js";
 
 type LegacyStateProbe = {
   deviceIdentity: boolean;

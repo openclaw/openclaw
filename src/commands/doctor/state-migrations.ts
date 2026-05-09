@@ -6,54 +6,54 @@ import {
   listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+} from "../../agents/agent-scope.js";
 import {
   listBundledChannelLegacySessionSurfaces,
   listBundledChannelLegacyStateMigrationDetectors,
-} from "../channels/plugins/bundled.js";
-import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
-import { CONFIG_AUDIT_NAMESPACE, CONFIG_AUDIT_OWNER_ID } from "../config/io.audit.js";
+} from "../../channels/plugins/bundled.js";
+import type { ChannelLegacyStateMigrationPlan } from "../../channels/plugins/types.core.js";
+import { CONFIG_AUDIT_NAMESPACE, CONFIG_AUDIT_OWNER_ID } from "../../config/io.audit.js";
 import {
   normalizeEnvPathOverride,
   resolveLegacyStateDirs,
   resolveNewStateDir,
   resolveOAuthDir,
   resolveStateDir,
-} from "../config/paths.js";
-import type { SessionEntry } from "../config/sessions.js";
-import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
-import { mergeSqliteSessionEntries } from "../config/sessions/store-backend.sqlite.js";
-import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
-import type { SessionScope } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { CRESTODIAN_AUDIT_NAMESPACE, CRESTODIAN_AUDIT_OWNER_ID } from "../crestodian/audit.js";
+} from "../../config/paths.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
+import { mergeSqliteSessionEntries } from "../../config/sessions/store-backend.sqlite.js";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
+import type { SessionScope } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { CRESTODIAN_AUDIT_NAMESPACE, CRESTODIAN_AUDIT_OWNER_ID } from "../../crestodian/audit.js";
 import {
   CRESTODIAN_RESCUE_PENDING_NAMESPACE,
   CRESTODIAN_RESCUE_PENDING_OWNER_ID,
   isRescuePendingOperation,
-} from "../crestodian/rescue-pending-state.js";
+} from "../../crestodian/rescue-pending-state.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { normalizeConversationRef } from "../../infra/outbound/session-binding-normalization.js";
+import type { SessionBindingRecord } from "../../infra/outbound/session-binding.types.js";
+import { isWithinDir } from "../../infra/path-safety.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
   parseAgentSessionKey,
-} from "../routing/session-key.js";
+} from "../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+} from "../../shared/string-coerce.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   recordOpenClawStateMigrationSource,
   recordOpenClawStateMigrationRun,
   runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { normalizeConversationRef } from "./outbound/session-binding-normalization.js";
-import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
-import { isWithinDir } from "./path-safety.js";
+} from "../../state/openclaw-state-db.js";
 import {
   ensureDir,
   existsDir,

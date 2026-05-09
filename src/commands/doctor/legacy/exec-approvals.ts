@@ -1,10 +1,10 @@
 import fs from "node:fs";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { resolveExecApprovalsPath } from "../../../infra/exec-approvals.js";
+import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import {
   writeOpenClawStateKvJson,
   type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
-import { resolveExecApprovalsPath } from "./exec-approvals.js";
+} from "../../../state/openclaw-state-kv.js";
 
 const EXEC_APPROVALS_KV_SCOPE = "exec.approvals";
 const EXEC_APPROVALS_KV_KEY = "current";
