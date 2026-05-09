@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -76,6 +77,10 @@ function requireString(value: string | undefined, label: string): string {
     throw new Error(`expected ${label}`);
   }
   return value;
+}
+
+function sqliteTranscript(sessionId: string): string {
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
 }
 
 describe("gateway session utils", () => {
@@ -887,7 +892,7 @@ describe("listSessionsFromStore selected model display", () => {
         replaceSqliteSessionTranscriptEvents({
           agentId: "main",
           sessionId,
-          transcriptPath: path.join(tmpDir, `${sessionId}.jsonl`),
+          transcriptPath: sqliteTranscript(sessionId),
           events: [
             { type: "session", version: 1, id: sessionId },
             { message: { role: "user", content: `title ${i}` } },
@@ -959,7 +964,7 @@ describe("listSessionsFromStore selected model display", () => {
         replaceSqliteSessionTranscriptEvents({
           agentId: "main",
           sessionId,
-          transcriptPath: path.join(tmpDir, `${sessionId}.jsonl`),
+          transcriptPath: sqliteTranscript(sessionId),
           events: [
             { type: "session", version: 1, id: sessionId },
             { message: { role: "user", content: `title ${i}` } },

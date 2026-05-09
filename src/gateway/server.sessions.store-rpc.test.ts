@@ -1,6 +1,6 @@
-import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { getSessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
@@ -14,8 +14,12 @@ import {
 
 const { createSessionFixtureDir, openClient } = setupGatewaySessionsTestHarness();
 
+function sqliteTranscript(sessionId: string): string {
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
+}
+
 test("lists and patches session entries via sessions.* RPC", async () => {
-  const { dir } = await createSessionFixtureDir();
+  await createSessionFixtureDir();
   const now = Date.now();
   const recent = now - 30_000;
   const stale = now - 15 * 60_000;
@@ -23,13 +27,13 @@ test("lists and patches session entries via sessions.* RPC", async () => {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath: path.join(dir, "sess-main.jsonl"),
+    transcriptPath: sqliteTranscript("sess-main"),
     events: Array.from({ length: 10 }, (_, idx) => ({ role: "user", content: `line ${idx}` })),
   });
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-group",
-    transcriptPath: path.join(dir, "sess-group.jsonl"),
+    transcriptPath: sqliteTranscript("sess-group"),
     events: [{ role: "user", content: "group line 0" }],
   });
 

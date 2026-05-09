@@ -8,6 +8,7 @@ import {
 } from "../agents/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -46,6 +47,10 @@ function createLegacyRuntimeStore(model: string): Record<string, SessionEntry> {
   };
 }
 
+function sqliteTranscript(sessionId: string): string {
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
+}
+
 function withTranscriptStoreFixture<T>(params: {
   prefix: string;
   transcriptId: string;
@@ -64,7 +69,7 @@ function withTranscriptStoreFixture<T>(params: {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: params.transcriptId,
-    transcriptPath: path.join(tmpDir, `${params.transcriptId}.jsonl`),
+    transcriptPath: sqliteTranscript(params.transcriptId),
     events: [
       { type: "session", version: 1, id: params.transcriptId },
       {
