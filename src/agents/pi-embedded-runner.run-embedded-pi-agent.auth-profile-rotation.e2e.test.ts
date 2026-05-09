@@ -6,10 +6,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import { savePersistedAuthProfileSecretsStore } from "./auth-profiles/persisted.js";
 import {
   loadPersistedAuthProfileState,
   savePersistedAuthProfileState,
 } from "./auth-profiles/state.js";
+import type { AuthProfileSecretsStore } from "./auth-profiles/types.js";
 import type { AssistantMessage } from "./pi-ai-contract.js";
 import { buildAttemptReplayMetadata } from "./pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
@@ -353,7 +355,6 @@ const writeAuthStore = async (
     >;
   },
 ) => {
-  const authPath = path.join(agentDir, "auth-profiles.json");
   const authPayload = {
     version: 1,
     profiles: {
@@ -374,23 +375,21 @@ const writeAuthStore = async (
         "openai:p2": { lastUsed: 2 },
       } as Record<string, { lastUsed?: number }>),
   };
-  await fs.writeFile(authPath, JSON.stringify(authPayload));
+  savePersistedAuthProfileSecretsStore(authPayload as AuthProfileSecretsStore, agentDir);
   savePersistedAuthProfileState(statePayload, agentDir);
 };
 
 const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
-  const authPath = path.join(agentDir, "auth-profiles.json");
   const payload = {
     version: 1,
     profiles: {
       "github-copilot:github": { type: "token", provider: "github-copilot", token },
     },
   };
-  await fs.writeFile(authPath, JSON.stringify(payload));
+  savePersistedAuthProfileSecretsStore(payload as AuthProfileSecretsStore, agentDir);
 };
 
 const writeOpenAiCodexAuthStore = async (agentDir: string) => {
-  const authPath = path.join(agentDir, "auth-profiles.json");
   const payload = {
     version: 1,
     profiles: {
@@ -401,7 +400,7 @@ const writeOpenAiCodexAuthStore = async (agentDir: string) => {
       },
     },
   };
-  await fs.writeFile(authPath, JSON.stringify(payload));
+  savePersistedAuthProfileSecretsStore(payload as AuthProfileSecretsStore, agentDir);
 };
 
 const buildCopilotAssistant = (overrides: Partial<AssistantMessage> = {}) =>
@@ -1528,8 +1527,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     delete process.env.OPENAI_API_KEY;
     try {
       await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
-        const authPath = path.join(agentDir, "auth-profiles.json");
-        await fs.writeFile(authPath, JSON.stringify({ version: 1, profiles: {} }));
+        savePersistedAuthProfileSecretsStore({ version: 1, profiles: {} }, agentDir);
         savePersistedAuthProfileState({ usageStats: {} }, agentDir);
 
         await expectFailoverError(
@@ -1601,7 +1599,6 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
   it("skips profiles in cooldown when rotating after failure", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
-      const authPath = path.join(agentDir, "auth-profiles.json");
       const p2CooldownUntil = Date.now() + 60 * 60 * 1000;
       const payload = {
         version: 1,
@@ -1616,7 +1613,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
           "openai:p3": { lastUsed: 3 },
         },
       };
-      await fs.writeFile(authPath, JSON.stringify(payload));
+      savePersistedAuthProfileSecretsStore(payload as AuthProfileSecretsStore, agentDir);
 
       mockFailedThenSuccessfulAttempt("rate limit");
       await runAutoPinnedOpenAiTurn({
