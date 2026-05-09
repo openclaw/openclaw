@@ -107,13 +107,15 @@ describe("scripts/lib/docker-e2e-plan", () => {
       bareImage: true,
       e2eImage: true,
       functionalImage: true,
-      liveImage: false,
+      liveImage: true,
       package: true,
     });
     expect(plan.credentials).toEqual(["anthropic", "openai"]);
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-openai");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("codex-on-demand");
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-anthropic");
     expect(plan.lanes.map((lane) => lane.name)).toContain("mcp-channels");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("live-plugin-tool");
     expect(plan.lanes.map((lane) => lane.name)).toContain("commitments-safety");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-23");
@@ -209,7 +211,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       releaseChunk: "plugins-runtime-install-h",
     });
 
-    expect(packageInstallOpenAi.lanes.map((lane) => lane.name)).toEqual(["install-e2e-openai"]);
+    expect(packageInstallOpenAi.lanes.map((lane) => lane.name)).toEqual([
+      "install-e2e-openai",
+      "codex-on-demand",
+    ]);
     expect(packageInstallAnthropic.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-anthropic",
     ]);
@@ -315,6 +320,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 2,
       },
       {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
+        imageKind: "live",
+        live: true,
+        name: "live-plugin-tool",
+        resources: ["docker", "live", "live:openai", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 4,
+      },
+      {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
         imageKind: "functional",
         live: true,
@@ -324,6 +339,20 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 5,
       },
     ]);
+    expect(pluginsRuntimeServices.lanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "cron-mcp-cleanup",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          live: true,
+          name: "live-plugin-tool",
+          resources: ["docker", "live", "live:openai", "npm"],
+          stateScenario: "empty",
+        }),
+      ]),
+    );
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).not.toContain(
       "bundled-plugin-install-uninstall-0",
     );
