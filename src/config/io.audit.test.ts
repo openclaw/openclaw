@@ -10,7 +10,6 @@ import {
   formatConfigOverwriteLogMessage,
   listConfigAuditRecordsForTests,
   redactConfigAuditArgv,
-  resolveConfigAuditLogPath,
 } from "./io.audit.js";
 
 function createAuditRecordBase(configPath: string) {
@@ -75,20 +74,6 @@ describe("config io audit helpers", () => {
 
   afterEach(() => {
     resetPluginStateStoreForTests();
-  });
-
-  it('ignores literal "undefined" home env values when choosing the legacy audit log path', async () => {
-    const home = await suiteRootTracker.make("home");
-    const auditPath = resolveConfigAuditLogPath(
-      {
-        HOME: "undefined",
-        USERPROFILE: "null",
-        OPENCLAW_HOME: "undefined",
-      } as NodeJS.ProcessEnv,
-      () => home,
-    );
-    expect(auditPath).toBe(path.join(home, ".openclaw", "logs", "config-audit.jsonl"));
-    expect(auditPath.startsWith(path.resolve("undefined"))).toBe(false);
   });
 
   it("formats overwrite warnings with hash transition and backup path", () => {

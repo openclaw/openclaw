@@ -6,13 +6,13 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
   importMemoryWikiLegacyDigestFiles,
   legacyMemoryWikiDigestFilesExist,
-} from "./digest-state.js";
+} from "./digest-state-migration.js";
 import { writeMemoryWikiImportRunRecord } from "./import-runs.js";
-import { importMemoryWikiLegacyLog, resolveMemoryWikiLegacyLogPath } from "./log.js";
+import { importMemoryWikiLegacyLog, resolveMemoryWikiLegacyLogPath } from "./log-migration.js";
 import {
   importMemoryWikiLegacySourceSyncState,
   resolveMemoryWikiLegacySourceSyncStatePath,
-} from "./source-sync-state.js";
+} from "./source-sync-state-migration.js";
 
 const PROVIDER_ID = "memory-wiki-source-sync";
 

@@ -133,7 +133,6 @@ export function snapshotConfigAuditProcessInfo(): ConfigAuditProcessInfo {
   };
 }
 
-const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 export const CONFIG_AUDIT_OWNER_ID = "core:config";
 export const CONFIG_AUDIT_NAMESPACE = "audit";
 export const CONFIG_AUDIT_MAX_ENTRIES = 50_000;
@@ -291,10 +290,6 @@ function resolveConfigAuditProcessInfo(
     };
   }
   return snapshotConfigAuditProcessInfo();
-}
-
-export function resolveConfigAuditLogPath(env: NodeJS.ProcessEnv, homedir: () => string): string {
-  return path.join(resolveStateDir(env, homedir), "logs", CONFIG_AUDIT_LOG_FILENAME);
 }
 
 export function formatConfigOverwriteLogMessage(params: {
