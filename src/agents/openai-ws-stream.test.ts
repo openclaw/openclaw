@@ -39,6 +39,22 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) 
   return count;
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock OpenAIWebSocketManager
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2722,16 +2738,15 @@ describe("createOpenAIWebSocketStreamFn", () => {
     );
 
     await expect(
-      Promise.race([
+      withTimeout(
         (
           stream as unknown as {
             result: () => Promise<{ content?: Array<{ text?: string }> }>;
           }
         ).result(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("SSE fallback result timed out")), 100),
-        ),
-      ]),
+        100,
+        "SSE fallback result timed out",
+      ),
     ).resolves.toMatchObject({
       content: [{ text: "http fallback response" }],
     });
