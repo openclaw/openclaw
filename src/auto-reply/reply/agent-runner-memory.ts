@@ -508,10 +508,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const transcriptSizeSnapshot = shouldCheckActiveTranscriptBytes
     ? await readSessionLogSnapshot({
         sessionId: entry.sessionId,
-        sessionEntry:
-          entry.transcriptLocator || !params.followupRun.run.transcriptLocator
-            ? entry
-            : { ...entry, transcriptLocator: params.followupRun.run.transcriptLocator },
+        sessionEntry: { ...entry, transcriptLocator: params.followupRun.run.transcriptLocator },
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
         includeByteSize: true,
         includeUsage: false,
@@ -536,7 +533,7 @@ export async function runPreflightCompactionIfNeeded(params: {
           sessionId: entry.sessionId,
           sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-          transcriptLocator: entry.transcriptLocator ?? params.followupRun.run.transcriptLocator,
+          transcriptLocator: params.followupRun.run.transcriptLocator,
         });
   const stalePersistedPromptTokens = hasPersistedTotalTokens
     ? Math.floor(persistedTotalTokens)
@@ -605,17 +602,12 @@ export async function runPreflightCompactionIfNeeded(params: {
   const transcriptLocator =
     resolveSqliteSessionTranscriptPath({
       sessionId: entry.sessionId,
-      sessionEntry:
-        entry.transcriptLocator || !params.followupRun.run.transcriptLocator
-          ? entry
-          : { ...entry, transcriptLocator: params.followupRun.run.transcriptLocator },
+      sessionEntry: { ...entry, transcriptLocator: params.followupRun.run.transcriptLocator },
       sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
     }) ??
     resolveSessionLogPath(
       entry.sessionId,
-      entry.transcriptLocator
-        ? entry
-        : { ...entry, transcriptLocator: params.followupRun.run.transcriptLocator },
+      { ...entry, transcriptLocator: params.followupRun.run.transcriptLocator },
       params.sessionKey ?? params.followupRun.run.sessionKey,
     );
   const result = await memoryDeps.compactEmbeddedPiSession({
