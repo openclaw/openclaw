@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createSqliteSessionTranscriptLocator } from "./paths.js";
 import { loadSqliteSessionEntries } from "./store-backend.sqlite.js";
 import {
   deleteSessionEntry,
@@ -13,6 +12,7 @@ import {
   patchSessionEntry,
   upsertSessionEntry,
 } from "./store.js";
+import { createSqliteSessionTranscriptLocator } from "./test-helpers/transcript-locator.js";
 import type { SessionEntry } from "./types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;

@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { AssistantMessage, UserMessage } from "../../agents/pi-ai-contract.js";
 import { readTranscriptStateForSession } from "../../agents/transcript/transcript-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";

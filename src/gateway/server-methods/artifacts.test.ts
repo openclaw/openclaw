@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import { artifactsHandlers, collectArtifactsFromMessages } from "./artifacts.js";
 
 const hoisted = vi.hoisted(() => ({

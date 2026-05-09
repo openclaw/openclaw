@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import type { FollowupRun } from "./queue.js";
 import type { TypingController } from "./typing.js";
 

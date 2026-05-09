@@ -6,11 +6,7 @@ import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
-import {
-  createSqliteSessionTranscriptLocator,
-  resolveSessionTranscriptLocator,
-  validateSessionId,
-} from "./paths.js";
+import { validateSessionId } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { resolveAndPersistSessionTranscriptScope } from "./session-locator.js";
 import {
@@ -20,6 +16,10 @@ import {
   upsertSessionEntry,
 } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import {
+  createSqliteSessionTranscriptLocator,
+  resolveSessionTranscriptLocator,
+} from "./test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "./transcript-store.sqlite.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 

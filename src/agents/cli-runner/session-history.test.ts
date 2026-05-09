@@ -263,7 +263,6 @@ describe("loadCliSessionReseedMessages", () => {
     try {
       const reseed = await loadCliSessionReseedMessages({
         sessionId: "session-opt-in-raw-tail",
-        sessionFile,
         sessionKey: "agent:main:main",
         agentId: "main",
         allowRawTranscriptReseed: true,
@@ -296,7 +295,6 @@ describe("loadCliSessionReseedMessages", () => {
       await expect(
         loadCliSessionReseedMessages({
           sessionId: "session-auth-boundary",
-          sessionFile,
           sessionKey: "agent:main:main",
           agentId: "main",
           allowRawTranscriptReseed: true,
@@ -306,7 +304,6 @@ describe("loadCliSessionReseedMessages", () => {
       await expect(
         loadCliSessionReseedMessages({
           sessionId: "session-auth-boundary",
-          sessionFile,
           sessionKey: "agent:main:main",
           agentId: "main",
           allowRawTranscriptReseed: true,

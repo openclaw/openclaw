@@ -9,12 +9,12 @@ import {
 } from "../../agents/pi-bundle-mcp-tools.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntry,
   listSessionEntries,
   upsertSessionEntry,
 } from "../../config/sessions/store.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,

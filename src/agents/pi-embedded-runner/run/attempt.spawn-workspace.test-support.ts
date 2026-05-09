@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi, type Mock } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../../config/sessions/test-helpers/transcript-locator.js";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -13,6 +13,7 @@ import type {
   IngestResult,
 } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { DEFAULT_AGENT_ID, resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
