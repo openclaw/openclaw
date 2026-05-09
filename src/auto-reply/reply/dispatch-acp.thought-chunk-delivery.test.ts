@@ -9,21 +9,11 @@ import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 
-// Catalog finding #12 — red-light TDD spec for `agent_thought_chunk` delivery.
+// Catalog finding #12 — regression spec for `agent_thought_chunk` delivery.
 //
-// Hypothesis: the projector unconditionally drops `text_delta` events whose
-// `stream` is not "output" (acp-projector.ts:408-411). When the acpx
-// translator emits a thought chunk it sets `stream: "thought"` and
-// `tag: "agent_thought_chunk"`. So even when an operator overrides
-// `tagVisibility.agent_thought_chunk = true`, the visibility flag is never
-// consulted — the event is dropped before the visibility check at line 412.
-//
-// Three scenarios:
-//   1. default visibility (false) — thought is hidden → GREEN today.
-//   2. visibility true — thought should be delivered → RED today (drop
-//      happens before visibility check).
-//   3. control: an output-stream agent_message_chunk delivers normally →
-//      GREEN today; sanity-checks the test infrastructure.
+// Fix: reorder guards in acp-projector.ts so the operator-tunable
+// tagVisibility.agent_thought_chunk flag is authoritative for stream="thought"
+// events. Also guards against untagged thought-stream leakage (security).
 //
 // Preamble duplicated from dispatch-acp.tool-stream-supergroup.test.ts and
 // dispatch-acp.spawn-child-delivery.test.ts. TODO: share via test-fixtures
@@ -337,7 +327,7 @@ describe("tryDispatchAcpReply agent_thought_chunk delivery (catalog #12)", () =>
     expect(finalReplyMock).not.toHaveBeenCalled();
   });
 
-  it("delivers thought chunks when tagVisibility.agent_thought_chunk=true (expected RED today)", async () => {
+  it("delivers thought chunks when tagVisibility.agent_thought_chunk=true", async () => {
     setReadyAcpResolution();
     managerMocks.runTurn.mockImplementation(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
@@ -358,12 +348,9 @@ describe("tryDispatchAcpReply agent_thought_chunk delivery (catalog #12)", () =>
       dispatcher,
     });
 
-    // Expected RED today: the projector drops events with stream="thought"
-    // before the visibility check fires (acp-projector.ts:408-411). Once the
-    // projector honors tagVisibility.agent_thought_chunk for thought-stream
-    // text_delta events, this assertion goes green. Asserting on the union
-    // of dispatcher calls (any of tool/block/final) carrying the thought
-    // text avoids over-specifying which kind the future fix routes through.
+    // Asserting on the union of dispatcher calls (any of tool/block/final)
+    // carrying the thought text avoids over-specifying which kind the fix
+    // routes through.
     const thoughtCalls = [
       ...toolResultMock.mock.calls,
       ...blockReplyMock.mock.calls,
@@ -402,6 +389,36 @@ describe("tryDispatchAcpReply agent_thought_chunk delivery (catalog #12)", () =>
     // visibility check. An event with stream="diagnostic" must be dropped
     // regardless of tagVisibility.agent_thought_chunk=true. This proves the
     // visibility flag cannot bypass the stream allow-list.
+    expect(toolResultMock).not.toHaveBeenCalled();
+    expect(blockReplyMock).not.toHaveBeenCalled();
+    expect(finalReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("drops thought-stream events that carry no tag even when agent_thought_chunk visibility=true", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "text_delta",
+          // no tag — backend omitted it
+          stream: "thought",
+          text: "Untagged internal reasoning.",
+        });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher, toolResultMock, blockReplyMock, finalReplyMock } = createDispatcher();
+    await runThoughtDispatch({
+      bodyForAgent: "think out loud",
+      cfg: createLiveStreamConfig({ thoughtVisible: true }),
+      dispatcher,
+    });
+
+    // Security gate: isAcpTagVisible returns true for undefined tags, so
+    // without an explicit thought-tag guard an untagged stream="thought" event
+    // would reach delivery even though no operator opt-in can be verified.
+    // The projector must drop it before consulting visibility.
     expect(toolResultMock).not.toHaveBeenCalled();
     expect(blockReplyMock).not.toHaveBeenCalled();
     expect(finalReplyMock).not.toHaveBeenCalled();

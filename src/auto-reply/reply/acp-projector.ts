@@ -416,6 +416,14 @@ export function createAcpReplyProjector(params: {
   const onEvent = async (event: AcpRuntimeEvent): Promise<void> => {
     params.onProgress?.();
     if (event.type === "text_delta") {
+      // Thought-stream events must carry the agent_thought_chunk tag to reach
+      // delivery. Requiring the explicit tag prevents an untagged backend
+      // thought emission from defaulting visible (isAcpTagVisible returns true
+      // for undefined tags). This is checked before the generic visibility path
+      // so that missing-tag thought events are dropped before any default kicks in.
+      if (event.stream === "thought" && event.tag !== "agent_thought_chunk") {
+        return;
+      }
       // Visibility is authoritative: check it first so the operator-tunable
       // tagVisibility flag is never bypassed by a stream discriminator.
       if (!isAcpTagVisible(settings, event.tag)) {
