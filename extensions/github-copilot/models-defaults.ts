@@ -26,6 +26,7 @@ const DEFAULT_MODEL_IDS = [
   "gpt-5.4",
   "gpt-5.4-mini",
   "gpt-5.4-nano",
+  "gpt-5.5",
   "grok-code-fast-1",
   "raptor-mini",
   "goldeneye",
