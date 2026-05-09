@@ -87,6 +87,33 @@ describe("redactTranscriptMessage", () => {
     );
   });
 
+  it("redacts structured secret fields in assistant tool-call arguments", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "send_request",
+          arguments: {
+            apiKey: "plainsecretvalue123",
+            password: "hunter2",
+            nested: { accessToken: ["nestedplainsecret123"] },
+            safe: "visible",
+          },
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = (msgContent(result) as Array<{ arguments: unknown }>)[0];
+    const serializedArguments = JSON.stringify(block.arguments);
+    expect(serializedArguments).not.toContain("plainsecretvalue123");
+    expect(serializedArguments).not.toContain("hunter2");
+    expect(serializedArguments).not.toContain("nestedplainsecret123");
+    expect(serializedArguments).toContain("visible");
+  });
+
   it("redacts string-form content", () => {
     const msg = {
       role: "user",
@@ -150,6 +177,24 @@ describe("redactTranscriptMessage", () => {
     const msg = textMessage("key is sk-abcdef1234567890xyz");
     const result = redactTranscriptMessage(msg, cfg("off"));
     expect(result).toBe(msg); // same reference; nothing changed
+  });
+
+  it("leaves structured tool-call secrets unchanged when redactSensitive is off", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "send_request",
+          arguments: { apiKey: "plainsecretvalue123", password: "hunter2" },
+        },
+      ],
+    } as unknown as AgentMessage;
+    const result = redactTranscriptMessage(msg, cfg("off"));
+    expect(result).toBe(msg);
+    expect(JSON.stringify(msgContent(result))).toContain("plainsecretvalue123");
+    expect(JSON.stringify(msgContent(result))).toContain("hunter2");
   });
 
   it("returns same object reference when nothing matches", () => {

@@ -96,6 +96,8 @@ describe("appendSessionTranscriptMessage - redaction", () => {
             arguments: {
               command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
               env: { nested: ["token sk-abcdef1234567890xyz"] },
+              apiKey: "plainsecretvalue123",
+              password: "hunter2",
             },
           },
         ],
@@ -105,6 +107,8 @@ describe("appendSessionTranscriptMessage - redaction", () => {
 
     const raw = fs.readFileSync(sessionFile, "utf-8");
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
+    expect(raw).not.toContain("plainsecretvalue123");
+    expect(raw).not.toContain("hunter2");
     expect(raw).toContain("openclaw health");
 
     const [msg] = readMessages(sessionFile) as Array<{
