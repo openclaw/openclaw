@@ -1,6 +1,6 @@
-import { LEGACY_CONFIG_RULES } from "./legacy.rules.js";
-import type { LegacyConfigRule } from "./legacy.shared.js";
-import type { LegacyConfigIssue } from "./types.js";
+import type { LegacyConfigRule } from "../../../config/legacy.shared.js";
+import type { LegacyConfigIssue } from "../../../config/types.js";
+import { LEGACY_CONFIG_RULES } from "./legacy-config-rules.js";
 
 function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   let cursor: unknown = root;

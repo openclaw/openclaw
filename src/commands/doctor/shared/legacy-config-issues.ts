@@ -1,5 +1,4 @@
 import { collectChannelLegacyConfigRules } from "../../../channels/plugins/legacy-config.js";
-import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigRule } from "../../../config/legacy.shared.js";
 import type { LegacyConfigIssue, OpenClawConfig } from "../../../config/types.js";
 import {
@@ -7,6 +6,7 @@ import {
   collectRelevantDoctorPluginIdsForTouchedPaths,
   listPluginDoctorLegacyConfigRules,
 } from "../../../plugins/doctor-contract-registry.js";
+import { findLegacyConfigIssues } from "./legacy-config-find.js";
 
 function collectConfiguredChannelIds(raw: unknown): ReadonlySet<string> {
   if (!raw || typeof raw !== "object") {

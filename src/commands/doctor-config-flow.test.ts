@@ -274,7 +274,7 @@ vi.mock("../config/validation.js", () => ({
   validateConfigObjectWithPlugins: vi.fn((config: unknown) => ({ ok: true, config })),
 }));
 
-vi.mock("../config/legacy.js", () => {
+vi.mock("./doctor/shared/legacy-config-find.js", () => {
   type LegacyRule = {
     path: string[];
     message: string;
@@ -861,8 +861,8 @@ vi.mock("./doctor/shared/legacy-config-issues.js", async () => {
     listPluginDoctorLegacyConfigRules,
   }: typeof import("../plugins/doctor-contract-registry.js") =
     await import("../plugins/doctor-contract-registry.js");
-  const { findLegacyConfigIssues }: typeof import("../config/legacy.js") =
-    await import("../config/legacy.js");
+  const { findLegacyConfigIssues }: typeof import("./doctor/shared/legacy-config-find.js") =
+    await import("./doctor/shared/legacy-config-find.js");
   return {
     findDoctorLegacyConfigIssues: (raw: unknown, sourceRaw?: unknown) =>
       findLegacyConfigIssues(
@@ -1173,8 +1173,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
     listPluginDoctorLegacyConfigRules,
   }: typeof import("../plugins/doctor-contract-registry.js") =
     await import("../plugins/doctor-contract-registry.js");
-  const { findLegacyConfigIssues }: typeof import("../config/legacy.js") =
-    await import("../config/legacy.js");
+  const { findLegacyConfigIssues }: typeof import("./doctor/shared/legacy-config-find.js") =
+    await import("./doctor/shared/legacy-config-find.js");
 
   function resolveConfigPath() {
     const stateDir =
