@@ -1,4 +1,3 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { SessionManager } from "../../agents/transcript/session-transcript-contract.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -246,24 +245,21 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const explicitIdempotencyKey =
     params.idempotencyKey ??
     ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
-  const transcriptScope = {
-    agentId,
-    sessionId: entry.sessionId,
-  };
-
-  const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
-    ? await findLatestEquivalentAssistantMessageId(params.message, transcriptScope, params.config)
-    : undefined;
-  if (latestEquivalentAssistantId) {
-    return { ok: true, messageId: latestEquivalentAssistantId };
-  }
-
   const message = {
     ...params.message,
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   };
+  const dedupeLatestAssistantText = isRedundantDeliveryMirror(params.message)
+    ? extractAssistantMessageText(
+        redactTranscriptMessage(
+          message,
+          params.config,
+        ) as unknown as SessionTranscriptAssistantMessage,
+      )
+    : null;
   const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
     agentId,
+    ...(dedupeLatestAssistantText ? { dedupeLatestAssistantText } : {}),
     message,
     sessionId: entry.sessionId,
     config: params.config,
@@ -313,59 +309,4 @@ function extractAssistantMessageText(message: SessionTranscriptAssistantMessage)
     .map((part) => part.text.trim());
 
   return parts.length > 0 ? parts.join("\n").trim() : null;
-}
-
-async function findLatestEquivalentAssistantMessageId(
-  message: SessionTranscriptAssistantMessage,
-  scope?: TranscriptQueryScope,
-  config?: OpenClawConfig,
-): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(
-    redactTranscriptMessage(message, config) as unknown as SessionTranscriptAssistantMessage,
-  );
-  if (!expectedText) {
-    return undefined;
-  }
-
-  const scopedEvents = loadScopedSqliteTranscriptEvents(scope);
-  if (scopedEvents) {
-    return findLatestEquivalentAssistantMessageIdInEvents(scopedEvents, expectedText, config);
-  }
-
-  return undefined;
-}
-
-function findLatestEquivalentAssistantMessageIdInEvents(
-  events: unknown[],
-  expectedText: string,
-  config?: OpenClawConfig,
-): string | undefined {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (!event || typeof event !== "object" || Array.isArray(event)) {
-      continue;
-    }
-    const parsed = event as {
-      id?: unknown;
-      message?: SessionTranscriptAssistantMessage;
-    };
-    const candidate = parsed.message;
-    if (!candidate || candidate.role !== "assistant") {
-      continue;
-    }
-    const candidateText = extractAssistantMessageText(
-      redactTranscriptMessage(
-        candidate as AgentMessage,
-        config,
-      ) as unknown as SessionTranscriptAssistantMessage,
-    );
-    if (candidateText !== expectedText) {
-      return undefined;
-    }
-    if (typeof parsed.id === "string" && parsed.id) {
-      return parsed.id;
-    }
-    return undefined;
-  }
-  return undefined;
 }

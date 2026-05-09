@@ -186,7 +186,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     expect(rewriteTranscriptEntriesInSqliteTranscriptMock).not.toHaveBeenCalled();
   });
 
-  it("defers file rewrites onto the session lane when requested", async () => {
+  it("defers SQLite transcript rewrites onto the session lane when requested", async () => {
     vi.useFakeTimers();
     try {
       resetCommandQueueStateForTest();

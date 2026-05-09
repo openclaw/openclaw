@@ -109,6 +109,50 @@ describe("SQLite session transcript store", () => {
     expect(identityRows).toEqual([{ message_idempotency_key: "idem-1" }]);
   });
 
+  it("dedupes delivery mirrors against the latest assistant inside the append transaction", () => {
+    const stateDir = createTempDir();
+    const scope = {
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      agentId: "main",
+      sessionId: "session-1",
+      sessionVersion: 1,
+    };
+    const first = appendSqliteSessionTranscriptMessage({
+      ...scope,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Already delivered" }],
+      },
+      now: () => 100,
+    });
+
+    const duplicate = appendSqliteSessionTranscriptMessage({
+      ...scope,
+      dedupeLatestAssistantText: "Already delivered",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Already delivered" }],
+      },
+      now: () => 200,
+    });
+
+    expect(duplicate.messageId).toBe(first.messageId);
+    const events = loadSqliteSessionTranscriptEvents({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      agentId: "main",
+      sessionId: "session-1",
+    }).map((entry) => entry.event);
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({
+      type: "message",
+      id: first.messageId,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Already delivered" }],
+      },
+    });
+  });
+
   it("links transcript message parents inside the SQLite append transaction", () => {
     const stateDir = createTempDir();
     const first = appendSqliteSessionTranscriptMessage({

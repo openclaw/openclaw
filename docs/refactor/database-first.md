@@ -42,8 +42,9 @@ This migration has one canonical runtime shape:
 - Transcript identity is always SQLite identity: `{agentId, sessionId}` plus
   optional topic metadata where the protocol needs it.
 - `sqlite-transcript://...` is not a runtime or protocol identity. New code must
-  not derive, persist, pass, parse, or migrate transcript locators. Remaining
-  uses are cleanup debt in tests or explicit export/debug materialization only.
+  not derive, persist, pass, parse, or migrate transcript locators. Runtime and
+  tests should not contain pseudo-locators at all; docs may mention the string
+  only to ban it.
 - Legacy `sessions.json`, transcript JSONL, `.jsonl.lock`, pruning, truncation,
   and old session-path logic belong only to the doctor migration/import path.
 - Runtime startup, hot reply paths, compaction, reset, recovery, diagnostics,

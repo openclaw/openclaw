@@ -33,6 +33,7 @@ export type AppendSqliteSessionTranscriptEventOptions = SqliteSessionTranscriptS
 
 export type AppendSqliteSessionTranscriptMessageOptions = SqliteSessionTranscriptStoreOptions & {
   cwd?: string;
+  dedupeLatestAssistantText?: string;
   message: unknown;
   now?: () => number;
   sessionVersion: number;
@@ -129,6 +130,85 @@ function readMessageIdempotencyKey(message: unknown): string | null {
   }
   const key = (message as { idempotencyKey?: unknown }).idempotencyKey;
   return typeof key === "string" && key.trim() ? key : null;
+}
+
+function extractAssistantMessageText(message: unknown): string | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  if ((message as { role?: unknown }).role !== "assistant") {
+    return null;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed || null;
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const parts = content
+    .filter(
+      (
+        part,
+      ): part is {
+        type: string;
+        text: string;
+      } =>
+        Boolean(
+          part &&
+          typeof part === "object" &&
+          (part as { type?: unknown }).type === "text" &&
+          typeof (part as { text?: unknown }).text === "string" &&
+          (part as { text: string }).text.trim(),
+        ),
+    )
+    .map((part) => part.text.trim());
+  return parts.length > 0 ? parts.join("\n").trim() : null;
+}
+
+function extractAssistantTranscriptEventText(event: unknown): string | null {
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    return null;
+  }
+  return extractAssistantMessageText((event as { message?: unknown }).message);
+}
+
+function readLatestEquivalentAssistantMessageId(params: {
+  database: OpenClawAgentDatabase;
+  sessionId: string;
+  expectedText: string;
+}): string | undefined {
+  const rows = executeSqliteQuerySync(
+    params.database.db,
+    getAgentTranscriptKysely(params.database.db)
+      .selectFrom("transcript_events")
+      .select(["event_json"])
+      .where("session_id", "=", params.sessionId)
+      .orderBy("seq", "desc"),
+  ).rows;
+  for (const row of rows) {
+    const eventJson = row.event_json;
+    if (typeof eventJson !== "string") {
+      continue;
+    }
+    let event: unknown;
+    try {
+      event = JSON.parse(eventJson);
+    } catch {
+      continue;
+    }
+    const candidateText = extractAssistantTranscriptEventText(event);
+    if (candidateText === null) {
+      continue;
+    }
+    if (candidateText !== params.expectedText) {
+      return undefined;
+    }
+    const id = (event as { id?: unknown }).id;
+    return typeof id === "string" && id ? id : undefined;
+  }
+  return undefined;
 }
 
 function readTranscriptEventIdentity(params: {
@@ -405,6 +485,18 @@ export function appendSqliteSessionTranscriptMessage(
       );
       if (typeof existing?.event_id === "string") {
         return existing.event_id;
+      }
+    }
+
+    const dedupeLatestAssistantText = options.dedupeLatestAssistantText?.trim();
+    if (dedupeLatestAssistantText) {
+      const existingMessageId = readLatestEquivalentAssistantMessageId({
+        database,
+        sessionId,
+        expectedText: dedupeLatestAssistantText,
+      });
+      if (existingMessageId) {
+        return existingMessageId;
       }
     }
 
