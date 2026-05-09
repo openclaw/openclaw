@@ -1922,7 +1922,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const records = {
       brave: {
         source: "npm",
-        spec: "@openclaw/brave-plugin@beta",
+        spec: "@openclaw/brave-plugin",
         installPath: "/missing/brave",
       },
     };
@@ -1957,7 +1957,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           installs: {
             brave: {
               source: "npm",
-              spec: "@openclaw/brave-plugin@beta",
+              spec: "@openclaw/brave-plugin",
               installPath: process.cwd(),
             },
           },
