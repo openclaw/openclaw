@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import {
   classifySessionKeyShape,
   isValidAgentId,
@@ -44,11 +41,6 @@ const DEFAULT_ROUTING: VoiceWakeRoutingConfig = {
 
 function sqliteOptionsForBaseDir(baseDir: string | undefined): OpenClawStateDatabaseOptions {
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
-}
-
-function resolveLegacyPath(baseDir?: string) {
-  const root = baseDir ?? resolveStateDir();
-  return path.join(root, "settings", "voicewake-routing.json");
 }
 
 export function normalizeVoiceWakeTriggerWord(value: string): string {
@@ -303,41 +295,16 @@ export async function setVoiceWakeRoutingConfig(
   return next;
 }
 
-export async function legacyVoiceWakeRoutingConfigFileExists(baseDir?: string): Promise<boolean> {
-  try {
-    await fs.access(resolveLegacyPath(baseDir));
-    return true;
-  } catch (error) {
-    if ((error as { code?: unknown })?.code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-}
-
-export async function importLegacyVoiceWakeRoutingConfigFileToSqlite(baseDir?: string): Promise<{
-  imported: boolean;
-  routes: number;
-}> {
-  const filePath = resolveLegacyPath(baseDir);
-  let raw: unknown;
-  try {
-    raw = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
-  } catch (error) {
-    if ((error as { code?: unknown })?.code === "ENOENT") {
-      return { imported: false, routes: 0 };
-    }
-    throw error;
-  }
-  const normalized = normalizeVoiceWakeRoutingConfig(raw);
+export function writeVoiceWakeRoutingConfigForMigration(
+  config: VoiceWakeRoutingConfig,
+  baseDir?: string,
+): void {
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     VOICEWAKE_ROUTING_SCOPE,
     VOICEWAKE_ROUTING_CONFIG_KEY,
-    normalized as unknown as OpenClawStateJsonValue,
+    config as unknown as OpenClawStateJsonValue,
     sqliteOptionsForBaseDir(baseDir),
   );
-  await fs.rm(filePath, { force: true }).catch(() => undefined);
-  return { imported: true, routes: normalized.routes.length };
 }
 
 type VoiceWakeResolvedRoute = { mode: "current" } | { agentId: string } | { sessionKey: string };

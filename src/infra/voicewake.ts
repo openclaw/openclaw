@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
@@ -9,7 +6,7 @@ import {
   type OpenClawStateJsonValue,
 } from "../state/openclaw-state-kv.js";
 
-type VoiceWakeConfig = {
+export type VoiceWakeConfig = {
   triggers: string[];
   updatedAtMs: number;
 };
@@ -20,11 +17,6 @@ const VOICEWAKE_CONFIG_KEY = "triggers";
 
 function sqliteOptionsForBaseDir(baseDir: string | undefined): OpenClawStateDatabaseOptions {
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
-}
-
-function resolveLegacyPath(baseDir?: string) {
-  const root = baseDir ?? resolveStateDir();
-  return path.join(root, "settings", "voicewake.json");
 }
 
 function sanitizeTriggers(triggers: string[] | undefined | null): string[] {
@@ -74,46 +66,19 @@ export async function setVoiceWakeTriggers(
   return next;
 }
 
-export async function legacyVoiceWakeConfigFileExists(baseDir?: string): Promise<boolean> {
-  try {
-    await fs.access(resolveLegacyPath(baseDir));
-    return true;
-  } catch (error) {
-    if ((error as { code?: unknown })?.code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
+export function normalizeVoiceWakeConfigForMigration(raw: unknown): VoiceWakeConfig {
+  const updatedAtMs = (raw as Partial<VoiceWakeConfig> | undefined)?.updatedAtMs;
+  return {
+    triggers: sanitizeTriggers((raw as Partial<VoiceWakeConfig> | undefined)?.triggers),
+    updatedAtMs: typeof updatedAtMs === "number" && updatedAtMs > 0 ? updatedAtMs : 0,
+  };
 }
 
-export async function importLegacyVoiceWakeConfigFileToSqlite(baseDir?: string): Promise<{
-  imported: boolean;
-  triggers: number;
-}> {
-  const filePath = resolveLegacyPath(baseDir);
-  let raw: unknown;
-  try {
-    raw = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
-  } catch (error) {
-    if ((error as { code?: unknown })?.code === "ENOENT") {
-      return { imported: false, triggers: 0 };
-    }
-    throw error;
-  }
-  const normalized = {
-    triggers: sanitizeTriggers((raw as Partial<VoiceWakeConfig> | undefined)?.triggers),
-    updatedAtMs:
-      typeof (raw as Partial<VoiceWakeConfig> | undefined)?.updatedAtMs === "number" &&
-      ((raw as Partial<VoiceWakeConfig>).updatedAtMs ?? 0) > 0
-        ? (raw as Partial<VoiceWakeConfig>).updatedAtMs
-        : 0,
-  };
+export function writeVoiceWakeConfigForMigration(config: VoiceWakeConfig, baseDir?: string): void {
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     VOICEWAKE_SCOPE,
     VOICEWAKE_CONFIG_KEY,
-    normalized as OpenClawStateJsonValue,
+    config as unknown as OpenClawStateJsonValue,
     sqliteOptionsForBaseDir(baseDir),
   );
-  await fs.rm(filePath, { force: true }).catch(() => undefined);
-  return { imported: true, triggers: normalized.triggers.length };
 }

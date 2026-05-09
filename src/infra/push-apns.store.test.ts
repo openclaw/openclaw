@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { importLegacyApnsRegistrationFileToSqlite } from "./push-apns-legacy.js";
 import {
   clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
-  importLegacyApnsRegistrationFileToSqlite,
   loadApnsRegistration,
   registerApnsRegistration,
   registerApnsToken,

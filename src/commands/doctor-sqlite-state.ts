@@ -50,20 +50,23 @@ import {
 import {
   importLegacyApnsRegistrationFileToSqlite,
   legacyApnsRegistrationFileExists,
-} from "../infra/push-apns.js";
-import { importLegacyWebPushFilesToSqlite, legacyWebPushFilesExist } from "../infra/push-web.js";
+} from "../infra/push-apns-legacy.js";
+import {
+  importLegacyWebPushFilesToSqlite,
+  legacyWebPushFilesExist,
+} from "../infra/push-web-legacy.js";
 import {
   importLegacyUpdateCheckFileToSqlite,
   legacyUpdateCheckFileExists,
 } from "../infra/update-startup.js";
 import {
-  importLegacyVoiceWakeRoutingConfigFileToSqlite,
-  legacyVoiceWakeRoutingConfigFileExists,
-} from "../infra/voicewake-routing.js";
-import {
   importLegacyVoiceWakeConfigFileToSqlite,
   legacyVoiceWakeConfigFileExists,
-} from "../infra/voicewake.js";
+} from "../infra/voicewake-legacy.js";
+import {
+  importLegacyVoiceWakeRoutingConfigFileToSqlite,
+  legacyVoiceWakeRoutingConfigFileExists,
+} from "../infra/voicewake-routing-legacy.js";
 import { importLegacyMediaFilesToSqlite, legacyMediaFilesExist } from "../media/store.js";
 import {
   importLegacyMemoryCoreDreamingStateFilesToSqlite,
