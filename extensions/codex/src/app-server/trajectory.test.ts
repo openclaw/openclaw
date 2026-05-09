@@ -5,7 +5,7 @@ import { listTrajectoryRuntimeEvents } from "openclaw/plugin-sdk/agent-harness-r
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
-} from "openclaw/plugin-sdk/session-store-runtime";
+} from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { createCodexTrajectoryRecorder } from "./trajectory.js";
 

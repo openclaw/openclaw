@@ -258,6 +258,9 @@ The remaining cleanup is mostly consolidation and deletion:
 - Plugin runtime no longer exposes `api.runtime.agent.session.resolveSessionFilePath`;
   plugin code either uses the SQLite row helpers or creates a
   `sqlite-transcript://...` locator through `session-store-runtime`.
+- The public `session-store-runtime` SDK surface no longer exports database
+  close/reset test helpers; plugin tests import those through the testing SDK
+  surface instead.
 - Active-memory blocking subagent runs now pass virtual SQLite transcript
   locators to embedded agents instead of creating temporary or persisted
   `session.jsonl` files under plugin state. The old `transcriptDir` option is
