@@ -2,6 +2,11 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import * as agentEvents from "../infra/agent-events.js";
 import {
+  type AgentEventPayload,
+  onAgentEvent,
+  resetAgentEventsForTest,
+} from "../infra/agent-events.js";
+import {
   THINKING_TAG_CASES,
   createSubscribedSessionHarness,
   createStubSessionHarness,
@@ -830,6 +835,92 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDelta(emit, " files</think>\nFinal answer");
 
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  describe("agent stream=thinking emission without onReasoningStream callback", () => {
+    // Regression coverage for the gateway/WebSocket path: chat.send-originated
+    // runs (webchat / non-channel WS clients) do not supply onReasoningStream,
+    // so streamReasoning previously short-circuited and live thinking never
+    // reached gateway subscribers even with reasoningMode: "stream".
+
+    function captureGlobalAgentEvents(): {
+      events: AgentEventPayload[];
+      restore: () => void;
+    } {
+      resetAgentEventsForTest();
+      const events: AgentEventPayload[] = [];
+      const stop = onAgentEvent((evt) => events.push(evt));
+      return {
+        events,
+        restore: () => {
+          stop();
+          resetAgentEventsForTest();
+        },
+      };
+    }
+
+    it("emits agent stream=thinking when reasoningMode='stream' without an onReasoningStream callback", () => {
+      const captured = captureGlobalAgentEvents();
+      try {
+        const { emit } = createSubscribedHarness({
+          runId: "run-no-callback",
+          reasoningMode: "stream",
+          // No onReasoningStream — this is the gateway/WS client path.
+        });
+
+        emit({
+          type: "message_update",
+          message: {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "Checking files" }],
+          },
+          assistantMessageEvent: {
+            type: "thinking_delta",
+            delta: "Checking files",
+          },
+        });
+
+        const thinking = captured.events.filter((e) => e.stream === "thinking");
+        expect(thinking.length).toBeGreaterThan(0);
+        expect(thinking[0]?.runId).toBe("run-no-callback");
+        const lastText = thinking.at(-1)?.data?.text;
+        expect(typeof lastText).toBe("string");
+        expect(lastText as string).toContain("Checking files");
+      } finally {
+        captured.restore();
+      }
+    });
+
+    it("does not emit agent stream=thinking when canShowReasoning is gated by thinkingLevel='off'", () => {
+      // canShowReasoning is preserved as a visibility gate — thinkingLevel:'off'
+      // must continue to suppress live reasoning broadcasts even when
+      // reasoningMode='stream'.
+      const captured = captureGlobalAgentEvents();
+      try {
+        const { emit } = createSubscribedHarness({
+          runId: "run-thinking-off",
+          reasoningMode: "stream",
+          thinkingLevel: "off",
+        });
+
+        emit({
+          type: "message_update",
+          message: {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "Should not stream" }],
+          },
+          assistantMessageEvent: {
+            type: "thinking_delta",
+            delta: "Should not stream",
+          },
+        });
+
+        const thinking = captured.events.filter((e) => e.stream === "thinking");
+        expect(thinking).toHaveLength(0);
+      } finally {
+        captured.restore();
+      }
+    });
   });
 
   it("emits delta chunks in agent events for streaming assistant text", () => {
