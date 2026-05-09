@@ -3005,6 +3005,117 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("maps persisted thinking runtime options to advertised effort config keys before running turns", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      configOptionKeys: ["mode", "model", "effort"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "claude" }),
+        runtimeOptions: {
+          thinking: "high",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "effort",
+        value: "high",
+      }),
+    );
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "thinking",
+      }),
+    );
+  });
+
+  it("maps persisted runtime options to backend-advertised aliases before running turns", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option", "session/status"],
+      configOptionKeys: ["model", "thought_level", "permissions", "timeout_seconds"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:gemini:acp:session-1",
+      storeSessionKey: "agent:gemini:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "gemini" }),
+        runtimeOptions: {
+          model: "gemini-3-flash-preview",
+          thinking: "high",
+          permissionProfile: "strict",
+          timeoutSeconds: 120,
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:gemini:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "thought_level",
+        value: "high",
+      }),
+    );
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "permissions",
+        value: "strict",
+      }),
+    );
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "timeout_seconds",
+        value: "120",
+      }),
+    );
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "thinking",
+      }),
+    );
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "approval_policy",
+      }),
+    );
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "timeout",
+      }),
+    );
+  });
+
   it("re-ensures runtime handles after cwd runtime option updates", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -3108,6 +3219,111 @@ describe("AcpSessionManager", () => {
     ).rejects.toMatchObject({
       code: "ACP_BACKEND_UNSUPPORTED_CONTROL",
     });
+  });
+
+  it("maps explicit thinking config updates to advertised effort keys", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option", "session/status"],
+      configOptionKeys: ["effort"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: readySessionMeta({ agent: "claude" }),
+    });
+
+    const manager = new AcpSessionManager();
+    const nextOptions = await manager.setSessionConfigOption({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      key: "thinking",
+      value: "high",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "effort",
+        value: "high",
+      }),
+    );
+    expect(nextOptions).toEqual({ thinking: "high" });
+  });
+
+  it("maps thinking config updates using status config options when capabilities omit keys", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option", "session/status"],
+    });
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=alive",
+      details: {
+        configOptions: [{ id: "mode" }, { id: "model" }, { id: "effort" }],
+      },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: readySessionMeta({ agent: "claude" }),
+    });
+
+    const manager = new AcpSessionManager();
+    const nextOptions = await manager.setSessionConfigOption({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      key: "thinking",
+      value: "high",
+    });
+
+    expect(runtimeState.getStatus).toHaveBeenCalled();
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "effort",
+        value: "high",
+      }),
+    );
+    expect(nextOptions).toEqual({ thinking: "high" });
+  });
+
+  it("persists explicit native effort config updates as canonical thinking options", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option", "session/status"],
+      configOptionKeys: ["effort"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: readySessionMeta({ agent: "claude" }),
+    });
+
+    const manager = new AcpSessionManager();
+    const nextOptions = await manager.setSessionConfigOption({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      key: "effort",
+      value: "high",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "effort",
+        value: "high",
+      }),
+    );
+    expect(nextOptions).toEqual({ thinking: "high" });
   });
 
   it("rejects invalid runtime option values before backend controls run", async () => {
