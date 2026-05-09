@@ -1625,6 +1625,56 @@ process.on("SIGINT", shutdown);`,
     expect(manager.resolveSessionId("agent:test:session-idle")).toBeUndefined();
   });
 
+  it("applies the caller's new TTL before the pre-getOrCreate sweep", async () => {
+    let now = 1_000;
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      let lastUsedAt = now;
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        get lastUsedAt() {
+          return lastUsedAt;
+        },
+        markUsed: () => {
+          lastUsedAt = now;
+        },
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = __testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
+
+    const first = await manager.getOrCreate({
+      sessionId: "session-ttl-bump",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 50 } },
+    });
+
+    // Idle past the original TTL so the sweep would evict under it.
+    now += 200;
+
+    // Caller raises TTL to 0 (disabled). Sweep must see the new TTL, keep the
+    // runtime, and the same instance must come back — no cold-start respawn.
+    const second = await manager.getOrCreate({
+      sessionId: "session-ttl-bump",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 0 } },
+    });
+
+    expect(second).toBe(first);
+    expect(disposed).toStrictEqual([]);
+    expect(manager.listSessionIds()).toEqual(["session-ttl-bump"]);
+  });
+
   it("keeps idle runtime eviction disabled when the TTL is zero", async () => {
     let now = 1_000;
     const disposed: string[] = [];

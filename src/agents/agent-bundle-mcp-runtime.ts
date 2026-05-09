@@ -1016,6 +1016,21 @@ function createSessionMcpRuntimeManager(
     async getOrCreate(params) {
       const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
       const scope = resolveSessionMcpRuntimeScope(params.cfg);
+      // Apply the caller's latest TTL to its currently-attached runtime BEFORE
+      // the sweep, so a caller raising or disabling its TTL doesn't get an
+      // avoidable cold start because the sweep ran under the previous TTL.
+      // Sole owner: replace (matches main's session-scope semantics, allowing
+      // lower/raise/zero). Shared: take max so a stricter caller can't evict a
+      // runtime another session expected to keep alive.
+      const attachedRuntimeKey = runtimeKeyBySessionId.get(params.sessionId);
+      if (attachedRuntimeKey && runtimesByKey.has(attachedRuntimeKey)) {
+        const attached = sessionIdsByRuntimeKey.get(attachedRuntimeKey);
+        if (!attached || attached.size <= 1) {
+          idleTtlMsByRuntimeKey.set(attachedRuntimeKey, idleTtlMs);
+        } else {
+          bumpIdleTtlForRuntimeKey(attachedRuntimeKey, idleTtlMs);
+        }
+      }
       await sweepIdleRuntimes();
       if (idleTtlMs > 0) {
         ensureIdleSweepTimer();
