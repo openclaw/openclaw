@@ -1435,6 +1435,7 @@ function renderGroupedMessage(
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
+  const hasActions = canCopyMarkdown || canExpand;
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -1442,6 +1443,7 @@ function renderGroupedMessage(
   const isToolMessage = normalizedRole === "tool" || isToolResult;
   const bubbleClasses = [
     "chat-bubble",
+    hasActions ? "has-copy" : "",
     isToolMessage ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
@@ -1479,7 +1481,6 @@ function renderGroupedMessage(
         : "Tool call"
       : "Tool output";
 
-  const hasActions = canCopyMarkdown || canExpand;
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
   return html`

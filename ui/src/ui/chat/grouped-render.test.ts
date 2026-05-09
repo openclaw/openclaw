@@ -443,6 +443,26 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
+  it("adds spacing class when assistant bubble actions are rendered", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "Short answer",
+        timestamp: 1000,
+      },
+      { onOpenSidebar: vi.fn() },
+    );
+
+    const bubble = expectElement(container, ".chat-group.assistant .chat-bubble", HTMLElement);
+
+    expect(bubble.classList.contains("has-copy")).toBe(true);
+    expect(bubble.querySelector(".chat-bubble-actions")).toBeInstanceOf(HTMLDivElement);
+    expect(bubble.querySelector(".chat-expand-btn")).toBeInstanceOf(HTMLButtonElement);
+    expect(bubble.querySelector(".chat-copy-btn")).toBeInstanceOf(HTMLButtonElement);
+  });
+
   it("positions delete confirm by message side", () => {
     const container = document.createElement("div");
     clearDeleteConfirmSkip();
