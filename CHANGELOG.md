@@ -56,6 +56,7 @@ Docs: https://docs.openclaw.ai
 - Codex/failover: classify `deactivated_workspace` as a permanent auth failure so configured fallback models can advance when a Codex workspace is deactivated. (#55893) Thanks @litang9.
 - Exec: keep configured `tools.exec.pathPrepend` entries ahead of user shell startup PATH changes on POSIX gateway runs. (#81403) Thanks @medns.
 - Gateway/sessions: allow shared-secret bearer callers to read and stream session history without an explicit scope header. (#81815) Thanks @medns.
+- Agents/embedded runner: classify HTML auth provider responses as `auth_html` and return a re-authentication hint instead of the CDN-blocked copy that `upstream_html` returns. Cloudflare Access login pages, nginx basic-auth challenges, and gateway login walls all produce HTML auth bodies that were previously misdiagnosed as transient CDN blocks. (#79900) Thanks @martingarramon.
 
 ## 2026.5.20
 

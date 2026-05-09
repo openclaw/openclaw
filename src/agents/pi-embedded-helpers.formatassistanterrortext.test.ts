@@ -342,6 +342,23 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns an HTML-401 auth message for HTML provider 401 auth failures", () => {
+    // Cloudflare Access login pages, nginx basic-auth challenges, and
+    // gateway login walls all return 401 with an HTML body. Before this fix
+    // these were classified as `upstream_html` ("CDN blocked — retry"),
+    // sending the wrong remediation to the user.
+    const msg = makeAssistantError("401 <!DOCTYPE html><html><body>Unauthorized</body></html>");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication failed with an HTML 401 response from the provider. Re-authenticate and verify your provider credentials.",
+    );
+  });
+
+  it("does not return CDN-blocked copy for HTML 401 auth failures", () => {
+    const msg = makeAssistantError("401 <!DOCTYPE html><html><body>Unauthorized</body></html>");
+    expect(formatAssistantErrorText(msg)).not.toContain("CDN");
+    expect(formatAssistantErrorText(msg)).not.toContain("blocked the request");
+  });
+
   it("returns an HTML-403 auth message for HTML provider auth failures", () => {
     const msg = makeAssistantError("403 <!DOCTYPE html><html><body>Access denied</body></html>");
     expect(formatAssistantErrorText(msg)).toBe(
