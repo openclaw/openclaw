@@ -61,9 +61,9 @@ describe("session-compaction-checkpoints", () => {
       timestamp: Date.now(),
     } as AssistantMessage);
 
-    const sessionFile = session.getSessionFile();
+    const transcriptLocator = session.getTranscriptLocator();
     const leafId = session.getLeafId();
-    expect(sessionFile).toBeTruthy();
+    expect(transcriptLocator).toBeTruthy();
     expect(leafId).toBeTruthy();
 
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
@@ -74,7 +74,7 @@ describe("session-compaction-checkpoints", () => {
     try {
       const snapshot = await captureCompactionCheckpointSnapshotAsync({
         sessionManager: session,
-        sessionFile: sessionFile!,
+        transcriptLocator: transcriptLocator!,
       });
 
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
@@ -82,8 +82,8 @@ describe("session-compaction-checkpoints", () => {
       expect(snapshot?.agentId).toBe(DEFAULT_AGENT_ID);
       expect(snapshot?.sourceSessionId).toBe(session.getSessionId());
       expect(snapshot?.leafId).toBe(leafId);
-      expect(snapshot?.sessionFile).not.toBe(sessionFile);
-      expect(snapshot?.sessionFile).toContain("sqlite-transcript://");
+      expect(snapshot?.transcriptLocator).not.toBe(transcriptLocator);
+      expect(snapshot?.transcriptLocator).toContain("sqlite-transcript://");
       expect(
         hasSqliteSessionTranscriptSnapshot({
           agentId: DEFAULT_AGENT_ID,
@@ -153,19 +153,19 @@ describe("session-compaction-checkpoints", () => {
       timestamp: Date.now(),
     } as unknown as AssistantMessage);
 
-    const sessionFile = session.getSessionFile();
+    const transcriptLocator = session.getTranscriptLocator();
     const sessionId = session.getSessionId();
     const leafId = session.getLeafId();
-    expect(sessionFile).toBeTruthy();
+    expect(transcriptLocator).toBeTruthy();
     expect(sessionId).toBeTruthy();
     expect(leafId).toBeTruthy();
 
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
     let snapshot: Awaited<ReturnType<typeof captureCompactionCheckpointSnapshotAsync>> = null;
     try {
-      expect(await readSessionLeafIdFromTranscriptAsync(sessionFile!)).toBe(leafId);
+      expect(await readSessionLeafIdFromTranscriptAsync(transcriptLocator!)).toBe(leafId);
       snapshot = await captureCompactionCheckpointSnapshotAsync({
-        sessionFile: sessionFile!,
+        transcriptLocator: transcriptLocator!,
       });
 
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
@@ -174,8 +174,8 @@ describe("session-compaction-checkpoints", () => {
       expect(snapshot?.sourceSessionId).toBe(sessionId);
       expect(snapshot?.sessionId).not.toBe(sessionId);
       expect(snapshot?.leafId).toBe(leafId);
-      expect(snapshot?.sessionFile).not.toBe(sessionFile);
-      expect(snapshot?.sessionFile).toContain("sqlite-transcript://");
+      expect(snapshot?.transcriptLocator).not.toBe(transcriptLocator);
+      expect(snapshot?.transcriptLocator).toContain("sqlite-transcript://");
     } finally {
       await cleanupCompactionCheckpointSnapshot(snapshot);
       sessionManagerOpenSpy.mockRestore();
@@ -184,14 +184,14 @@ describe("session-compaction-checkpoints", () => {
 
   test("async capture keeps checkpoint transcript locators virtual for SQLite sources", async () => {
     const sourceSessionId = "source-capture-virtual";
-    const sourceFile = createSqliteSessionTranscriptLocator({
+    const sourceTranscriptLocator = createSqliteSessionTranscriptLocator({
       agentId: DEFAULT_AGENT_ID,
       sessionId: sourceSessionId,
     });
     replaceSqliteSessionTranscriptEvents({
       agentId: DEFAULT_AGENT_ID,
       sessionId: sourceSessionId,
-      transcriptPath: sourceFile,
+      transcriptPath: sourceTranscriptLocator,
       events: [
         {
           type: "session",
@@ -209,15 +209,15 @@ describe("session-compaction-checkpoints", () => {
     });
 
     const snapshot = await captureCompactionCheckpointSnapshotAsync({
-      sessionFile: sourceFile,
+      transcriptLocator: sourceTranscriptLocator,
     });
 
     expect(snapshot).not.toBeNull();
     expect(snapshot?.leafId).toBe("capture-leaf");
-    expect(snapshot?.sessionFile).toBeTruthy();
-    expect(isSqliteSessionTranscriptLocator(snapshot?.sessionFile)).toBe(true);
-    expect(snapshot?.sessionFile).toContain("sqlite-transcript://");
-    expect(snapshot?.sessionFile).not.toMatch(/^sqlite-transcript:\/[^/]/u);
+    expect(snapshot?.transcriptLocator).toBeTruthy();
+    expect(isSqliteSessionTranscriptLocator(snapshot?.transcriptLocator)).toBe(true);
+    expect(snapshot?.transcriptLocator).toContain("sqlite-transcript://");
+    expect(snapshot?.transcriptLocator).not.toMatch(/^sqlite-transcript:\/[^/]/u);
     expect(
       hasSqliteSessionTranscriptSnapshot({
         agentId: DEFAULT_AGENT_ID,
@@ -228,7 +228,7 @@ describe("session-compaction-checkpoints", () => {
     expect(readSqliteTranscriptEvents(snapshot!.sessionId)[0]).toMatchObject({
       type: "session",
       id: snapshot!.sessionId,
-      parentSession: sourceFile,
+      parentSession: sourceTranscriptLocator,
     });
   });
 
@@ -242,12 +242,12 @@ describe("session-compaction-checkpoints", () => {
       content: "before compaction",
       timestamp: Date.now(),
     });
-    const sessionFile = session.getSessionFile();
-    expect(sessionFile).toBeTruthy();
+    const transcriptLocator = session.getTranscriptLocator();
+    expect(transcriptLocator).toBeTruthy();
 
     const snapshot = await captureCompactionCheckpointSnapshotAsync({
       sessionManager: session,
-      sessionFile: sessionFile!,
+      transcriptLocator: transcriptLocator!,
       maxBytes: 64,
     });
 
@@ -274,21 +274,21 @@ describe("session-compaction-checkpoints", () => {
       timestamp: Date.now(),
     } as unknown as AssistantMessage);
 
-    const sessionFile = session.getSessionFile();
-    expect(sessionFile).toBeTruthy();
+    const transcriptLocator = session.getTranscriptLocator();
+    expect(transcriptLocator).toBeTruthy();
 
     const openSpy = vi.spyOn(SessionManager, "open");
     const forkSpy = vi.spyOn(SessionManager, "forkFrom");
     let forked: Awaited<ReturnType<typeof forkCompactionCheckpointTranscriptAsync>> = null;
     try {
       forked = await forkCompactionCheckpointTranscriptAsync({
-        sourceFile: sessionFile!,
+        sourceTranscriptLocator: transcriptLocator!,
       });
 
       expect(openSpy).not.toHaveBeenCalled();
       expect(forkSpy).not.toHaveBeenCalled();
       expect(forked).not.toBeNull();
-      expect(forked?.sessionFile).not.toBe(sessionFile);
+      expect(forked?.transcriptLocator).not.toBe(transcriptLocator);
       expect(forked?.sessionId).toBeTruthy();
     } finally {
       openSpy.mockRestore();
@@ -302,7 +302,7 @@ describe("session-compaction-checkpoints", () => {
       type: "session",
       id: forked!.sessionId,
       cwd: dir,
-      parentSession: sessionFile,
+      parentSession: transcriptLocator,
     });
     expect(forkedEntries.slice(1)).toEqual(
       sourceEntries.filter((entry) => entry.type !== "session"),
@@ -311,14 +311,14 @@ describe("session-compaction-checkpoints", () => {
 
   test("async fork keeps transcript locators virtual for SQLite sources", async () => {
     const sourceSessionId = "source-fork-virtual";
-    const sourceFile = createSqliteSessionTranscriptLocator({
+    const sourceTranscriptLocator = createSqliteSessionTranscriptLocator({
       agentId: DEFAULT_AGENT_ID,
       sessionId: sourceSessionId,
     });
     replaceSqliteSessionTranscriptEvents({
       agentId: DEFAULT_AGENT_ID,
       sessionId: sourceSessionId,
-      transcriptPath: sourceFile,
+      transcriptPath: sourceTranscriptLocator,
       events: [
         {
           type: "session",
@@ -336,20 +336,20 @@ describe("session-compaction-checkpoints", () => {
     });
 
     const forked = await forkCompactionCheckpointTranscriptAsync({
-      sourceFile,
+      sourceTranscriptLocator,
     });
 
     expect(forked).not.toBeNull();
     expect(forked?.sessionId).toBeTruthy();
-    expect(isSqliteSessionTranscriptLocator(forked?.sessionFile)).toBe(true);
-    expect(forked?.sessionFile).toContain("sqlite-transcript://");
-    expect(forked?.sessionFile).not.toMatch(/^sqlite-transcript:\/[^/]/u);
+    expect(isSqliteSessionTranscriptLocator(forked?.transcriptLocator)).toBe(true);
+    expect(forked?.transcriptLocator).toContain("sqlite-transcript://");
+    expect(forked?.transcriptLocator).not.toMatch(/^sqlite-transcript:\/[^/]/u);
     const forkedEntries = readSqliteTranscriptEvents(forked!.sessionId);
     expect(forkedEntries[0]).toMatchObject({
       type: "session",
       id: forked!.sessionId,
       cwd: "/tmp/openclaw-virtual-fork",
-      parentSession: sourceFile,
+      parentSession: sourceTranscriptLocator,
     });
     expect(forkedEntries[1]).toMatchObject({
       type: "message",
@@ -364,7 +364,7 @@ describe("session-compaction-checkpoints", () => {
 
   test("async fork ignores legacy checkpoint locators that doctor has not imported", async () => {
     const forked = await forkCompactionCheckpointTranscriptAsync({
-      sourceFile: path.join(os.tmpdir(), "openclaw-unimported-legacy-session.jsonl"),
+      sourceTranscriptLocator: path.join(os.tmpdir(), "openclaw-unimported-legacy-session.jsonl"),
     });
 
     expect(forked).toBeNull();
