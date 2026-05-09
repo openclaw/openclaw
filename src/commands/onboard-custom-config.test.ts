@@ -5,6 +5,7 @@ import {
   applyCustomApiConfig,
   buildAnthropicVerificationProbeRequest,
   buildOpenAiVerificationProbeRequest,
+  CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
   inferCustomModelSupportsImageInput,
   parseNonInteractiveCustomApiFlags,
   resolveCustomModelImageInputInference,
@@ -106,14 +107,19 @@ it("uses expanded max_tokens for anthropic verification probes", () => {
 describe("applyCustomApiConfig", () => {
   it.each([
     {
-      name: "uses hard-min context window for newly added custom models",
+      name: "uses stable default context window for newly added custom models",
       existingContextWindow: undefined,
-      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
     },
     {
       name: "upgrades existing custom model context window when below hard minimum",
       existingContextWindow: 2048,
-      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
+    },
+    {
+      name: "raises context window below stable default compaction floor (#79428)",
+      existingContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
     },
     {
       name: "preserves existing custom model context window when already above minimum",
