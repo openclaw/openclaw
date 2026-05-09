@@ -1003,6 +1003,70 @@ function parseTextSignature(
   return { id: signature };
 }
 
+function getAssistantToolCallIds(message: Context["messages"][number]): Set<string> {
+  const ids = new Set<string>();
+  if (message.role !== "assistant") {
+    return ids;
+  }
+  for (const block of message.content) {
+    if (block.type === "toolCall") {
+      ids.add(block.id);
+    }
+  }
+  return ids;
+}
+
+function hasLaterNonToolResultMessage(messages: Context["messages"], index: number): boolean {
+  for (let i = index + 1; i < messages.length; i += 1) {
+    if (messages[i]?.role !== "toolResult") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function stripCompletedToolReplayBlocks(
+  message: Extract<Context["messages"][number], { role: "assistant" }>,
+): Extract<Context["messages"][number], { role: "assistant" }> | undefined {
+  const content = message.content.filter(
+    (block) => block.type !== "toolCall" && block.type !== "thinking",
+  );
+  if (content.length === 0) {
+    return undefined;
+  }
+  return { ...message, content };
+}
+
+function pruneCompletedResponsesToolReplay(messages: Context["messages"]): Context["messages"] {
+  const consumedToolCallIds = new Set<string>();
+  const pruned: Context["messages"] = [];
+  let changed = false;
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    if (message.role === "assistant") {
+      const toolCallIds = getAssistantToolCallIds(message);
+      if (toolCallIds.size > 0 && hasLaterNonToolResultMessage(messages, i)) {
+        for (const id of toolCallIds) {
+          consumedToolCallIds.add(id);
+        }
+        const stripped = stripCompletedToolReplayBlocks(message);
+        if (stripped) {
+          pruned.push(stripped);
+        }
+        changed = true;
+        continue;
+      }
+    } else if (message.role === "toolResult" && consumedToolCallIds.has(message.toolCallId)) {
+      changed = true;
+      continue;
+    }
+    pruned.push(message);
+  }
+
+  return changed ? pruned : messages;
+}
+
 function convertResponsesMessages(
   model: Model<Api>,
   context: Context,
@@ -1014,6 +1078,7 @@ function convertResponsesMessages(
     replayResponsesItemIds?: boolean;
     sessionId?: string;
     authProfileId?: string;
+    pruneCompletedToolReplay?: boolean;
   },
 ): ResponseInput {
   const messages: ResponseInput = [];
@@ -1069,6 +1134,10 @@ function convertResponsesMessages(
     normalizeToolCallId,
     { normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds },
   );
+  const replayMessages =
+    options?.pruneCompletedToolReplay === true
+      ? pruneCompletedResponsesToolReplay(transformedMessages)
+      : transformedMessages;
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push({
@@ -1077,7 +1146,8 @@ function convertResponsesMessages(
     });
   }
   let msgIndex = 0;
-  for (const msg of transformedMessages) {
+  const pendingFunctionCallIds = new Set<string>();
+  for (const msg of replayMessages) {
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push({
@@ -1164,6 +1234,7 @@ function convertResponsesMessages(
             shouldReplayResponsesItemIds && !(isDifferentModel && itemIdRaw?.startsWith("fc_"))
               ? itemIdRaw
               : undefined;
+          pendingFunctionCallIds.add(callId);
           output.push({
             type: "function_call",
             id: itemId,
@@ -1186,6 +1257,10 @@ function convertResponsesMessages(
         .join("\n");
       const hasImages = msg.content.some((item) => item.type === "image");
       const [callId] = msg.toolCallId.split("|");
+      if (!pendingFunctionCallIds.has(callId)) {
+        msgIndex += 1;
+        continue;
+      }
       messages.push({
         type: "function_call_output",
         call_id: callId,
@@ -1205,6 +1280,7 @@ function convertResponsesMessages(
               ] as ResponseFunctionCallOutputItemList)
             : sanitizeTransportPayloadText(textResult || "(see attached image)"),
       });
+      pendingFunctionCallIds.delete(callId);
     }
     msgIndex += 1;
   }
@@ -2036,6 +2112,7 @@ export function buildOpenAIResponsesParams(
       replayResponsesItemIds: !isNativeCodexResponses,
       authProfileId: options?.authProfileId,
       sessionId: options?.sessionId,
+      pruneCompletedToolReplay: isNativeCodexResponses,
     },
   );
   if (isCodexResponses) {
@@ -3670,6 +3747,8 @@ export const testing = {
   createOpenAIResponsesClient,
   enforceCodeModeResponsesToolSurface,
   sanitizeOpenAICodexResponsesParams,
+  buildOpenAICompletionsClientConfig,
+  processOpenAICompletionsStream,
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
   processResponsesStream,
