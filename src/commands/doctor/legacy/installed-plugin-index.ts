@@ -7,10 +7,7 @@ import {
   parseInstalledPluginIndex,
   resolveInstalledPluginIndexStateDbOptions,
 } from "../../../plugins/installed-plugin-index-persisted-read.js";
-import {
-  resolveInstalledPluginIndexStorePath,
-  type InstalledPluginIndexStoreOptions,
-} from "../../../plugins/installed-plugin-index-store-path.js";
+import type { InstalledPluginIndexStoreOptions } from "../../../plugins/installed-plugin-index-store-options.js";
 import {
   INSTALLED_PLUGIN_INDEX_WARNING,
   type InstalledPluginIndex,
@@ -19,6 +16,7 @@ import {
   writeOpenClawStateKvJson,
   type OpenClawStateJsonValue,
 } from "../../../state/openclaw-state-kv.js";
+import { resolveLegacyInstalledPluginIndexStorePath } from "./installed-plugin-index-path.js";
 
 function withInstalledPluginIndexWarning(index: InstalledPluginIndex): InstalledPluginIndex & {
   warning: string;
@@ -30,7 +28,7 @@ export function legacyInstalledPluginIndexFileExists(
   options: InstalledPluginIndexStoreOptions = {},
 ): boolean {
   try {
-    return fs.existsSync(resolveInstalledPluginIndexStorePath(options));
+    return fs.existsSync(resolveLegacyInstalledPluginIndexStorePath(options));
   } catch {
     return false;
   }
@@ -46,7 +44,7 @@ export type ImportLegacyInstalledPluginIndexResult = {
 export function importLegacyInstalledPluginIndexFileToSqlite(
   options: InstalledPluginIndexStoreOptions = {},
 ): ImportLegacyInstalledPluginIndexResult {
-  const filePath = resolveInstalledPluginIndexStorePath(options);
+  const filePath = resolveLegacyInstalledPluginIndexStorePath(options);
   const parsed = parseInstalledPluginIndex(tryReadJsonSync(filePath));
   if (!parsed) {
     return { imported: false, plugins: 0, installRecords: 0, removedSource: false };

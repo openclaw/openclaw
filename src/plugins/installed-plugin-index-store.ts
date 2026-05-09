@@ -22,7 +22,7 @@ import {
   resolveCompatRegistryVersion,
   resolveInstalledPluginIndexPolicyHash,
 } from "./installed-plugin-index-policy.js";
-import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
+import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-options.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,
@@ -36,10 +36,7 @@ export {
   readPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-persisted-read.js";
-export {
-  resolveInstalledPluginIndexStorePath,
-  type InstalledPluginIndexStoreOptions,
-} from "./installed-plugin-index-store-path.js";
+export type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-options.js";
 
 export type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
 

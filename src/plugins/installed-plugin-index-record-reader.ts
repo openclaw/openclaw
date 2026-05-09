@@ -7,7 +7,7 @@ import {
   readPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-persisted-read.js";
-import { type InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
+import { type InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-options.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

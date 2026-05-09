@@ -538,6 +538,9 @@ The remaining cleanup is mostly consolidation and deletion:
 - The installed plugin index now reads and writes shared SQLite KV
   `installed_plugin_index/current` instead of `plugins/installs.json`; the
   legacy JSON file is only a doctor migration input and is removed after import.
+- The legacy `plugins/installs.json` path helper now lives in doctor legacy
+  code. Runtime plugin-index modules expose only SQLite-backed persistence
+  options, not a JSON file path.
 - Matrix sync cache, storage metadata, thread bindings, inbound dedupe markers,
   startup verification cooldown state, and SDK IndexedDB crypto snapshots now
   use shared SQLite plugin state/blob tables. Their legacy JSON import plan
