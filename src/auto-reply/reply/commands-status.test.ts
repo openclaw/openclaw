@@ -627,54 +627,58 @@ describe("buildStatusReply subagent summary", () => {
           );
         });
 
-        const commonParams = {
-          sessionEntry: {
-            sessionId: "sess-status-codex-oauth",
-            updatedAt: 0,
-          },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender" as const,
-          statusChannel: "mobilechat",
-          provider: "openai",
-          model: "gpt-5.5",
-          contextTokens: 32_000,
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off" as const,
-          resolvedReasoningLevel: "off" as const,
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention" as const,
-        };
+        try {
+          const commonParams = {
+            sessionEntry: {
+              sessionId: "sess-status-codex-oauth",
+              updatedAt: 0,
+            },
+            sessionKey: "agent:main:main",
+            parentSessionKey: "agent:main:main",
+            sessionScope: "per-sender" as const,
+            statusChannel: "mobilechat",
+            provider: "openai",
+            model: "gpt-5.5",
+            contextTokens: 32_000,
+            resolvedFastMode: false,
+            resolvedVerboseLevel: "off" as const,
+            resolvedReasoningLevel: "off" as const,
+            resolveDefaultThinkingLevel: async () => undefined,
+            isGroup: false,
+            defaultGroupActivation: () => "mention" as const,
+          };
 
-        const codexText = await buildStatusText({
-          cfg: {
-            ...baseCfg,
-            agents: {
-              defaults: {
-                agentRuntime: { id: "codex" },
+          const codexText = await buildStatusText({
+            cfg: {
+              ...baseCfg,
+              agents: {
+                defaults: {
+                  agentRuntime: { id: "codex" },
+                },
               },
             },
-          },
-          ...commonParams,
-        });
-        const implicitCodexText = await buildStatusText({
-          cfg: baseCfg,
-          ...commonParams,
-        });
+            ...commonParams,
+          });
+          const implicitCodexText = await buildStatusText({
+            cfg: baseCfg,
+            ...commonParams,
+          });
 
-        const normalizedCodex = normalizeTestText(codexText);
-        const normalizedImplicitCodex = normalizeTestText(implicitCodexText);
-        expect(normalizedCodex).toContain("Model: openai/gpt-5.5");
-        expect(normalizedCodex).toContain("oauth (openai-codex:status)");
-        expect(normalizedCodex).toContain("openai-codex:status");
-        expect(normalizedCodex).toContain("Usage: 5h 91% left");
-        expect(normalizedCodex).toContain("Week 70% left");
-        expect(normalizedImplicitCodex).toContain("Model: openai/gpt-5.5");
-        expect(normalizedImplicitCodex).toContain("oauth (openai-codex:status)");
-        expect(normalizedImplicitCodex).toContain("Runtime: OpenAI Codex");
-        expect(normalizedImplicitCodex).toContain("Usage: 5h 91% left");
-        expect(usageFetch).toHaveBeenCalled();
+          const normalizedCodex = normalizeTestText(codexText);
+          const normalizedImplicitCodex = normalizeTestText(implicitCodexText);
+          expect(normalizedCodex).toContain("Model: openai/gpt-5.5");
+          expect(normalizedCodex).toContain("oauth (openai-codex:status)");
+          expect(normalizedCodex).toContain("openai-codex:status");
+          expect(normalizedCodex).toContain("Usage: 5h 91% left");
+          expect(normalizedCodex).toContain("Week 70% left");
+          expect(normalizedImplicitCodex).toContain("Model: openai/gpt-5.5");
+          expect(normalizedImplicitCodex).toContain("oauth (openai-codex:status)");
+          expect(normalizedImplicitCodex).toContain("Runtime: OpenAI Codex");
+          expect(normalizedImplicitCodex).toContain("Usage: 5h 91% left");
+          expect(usageFetch).toHaveBeenCalled();
+        } finally {
+          usageFetch.mockRestore();
+        }
       },
       {
         env: {
