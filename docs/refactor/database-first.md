@@ -1087,6 +1087,16 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `cron/runs/*.jsonl`
 - `jobs-state.json`
 - `device-pair-notify.json`
+- `devices/pending.json`
+- `devices/paired.json`
+- `devices/bootstrap.json`
+- `nodes/pending.json`
+- `nodes/paired.json`
+- `identity/device.json`
+- `identity/device-auth.json`
+- `push/web-push-subscriptions.json`
+- `push/vapid-keys.json`
+- `push/apns-registrations.json`
 - `session-toggles.json`
 - Memory-core `.dreams/events.jsonl`
 - Memory-core `.dreams/session-corpus/`
