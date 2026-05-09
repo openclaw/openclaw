@@ -57,7 +57,8 @@
     "mediaUnderstandingProviders": ["openrouter"],
     "imageGenerationProviders": ["openrouter"],
     "videoGenerationProviders": ["openrouter"],
-    "speechProviders": ["openrouter"]
+    "speechProviders": ["openrouter"],
+    "musicGenerationProviders": ["openrouter"]
   },
   "mediaUnderstandingProviderMetadata": {
     "openrouter": {
