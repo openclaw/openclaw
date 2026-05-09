@@ -4,7 +4,7 @@ read_when:
   - Investigating log markers during ACPX channel-adapter tool deliveries
   - Debugging which runtime path produced a stream=tool event in gateway logs
   - Understanding how each channel adapter emits WS broadcast events for ACPX
-  - Understanding how session/load works and why conversation history is not carried on the wire
+  - Understanding how session/load works and how conversation history is replayed for ACP bridge vs ACPX harness sessions
 title: "ACP streaming and session model"
 ---
 
@@ -55,7 +55,7 @@ owns its delivery path and emits its own log markers.
 The shared plumbing stops at `options.deliver` in `reply-dispatcher.ts`.
 After that callback, delivery is adapter-specific.
 
-Adapter-level delivery notes:
+Adapter-level delivery notes (examples — OpenClaw has many more channel plugins):
 
 - **Discord** — delivery runs through the Discord channel adapter;
   broadcast labels appear in that adapter's send path.
@@ -66,24 +66,35 @@ Adapter-level delivery notes:
 - **Telegram** — delivery runs through the Telegram channel adapter;
   broadcast labels appear in that adapter's `sendMessage`/`editMessageText` path.
 
-When adding observability for ACP tool delivery, instrument the adapter
-deliver function for the channel in question rather than searching for a
-shared broadcast label.
+The same pattern applies to every other channel plugin (Mattermost, MS Teams,
+WhatsApp, and so on). When adding observability for ACP tool delivery, instrument
+the adapter deliver function for the channel in question rather than searching for
+a shared broadcast label.
 
 ## session/load and the history model
 
-`session/load` does **not** carry conversation history on the wire.
+`session/load` behavior differs between the two ACP runtime modes:
 
-The wire request includes `sessionId` plus optional setup fields
-(`cwd`, `mcpServers`, `_meta`). The wire response carries config,
-model, and mode state. No conversation transcript is exchanged between
-OpenClaw and the ACP harness on the wire during `session/load`.
+| Mode                        | session/load behavior                                                                                                                                                                     |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ACPX harness                | Each side maintains its own transcript. The harness replays locally from `events.jsonl`. No conversation history flows on the wire.                                                       |
+| ACP bridge (`openclaw acp`) | `loadSession` replays event-ledger history (or transcript fallback) to the ACP client via `session-update` notifications. History **does** flow on the wire as ACP session-update events. |
 
-History reconstruction happens locally on each side: the ACPX harness
-replays its own `events.jsonl`, and the OpenClaw bridge reads its
-own ledger or session transcript (see `src/acp/translator.ts` —
-`loadSession` drives ledger or transcript replay entirely from
-locally stored state, not from wire payload).
+For ACP bridge sessions, `loadSession` (`src/acp/translator.ts:725-784`) calls
+`replayLedgerSession()` (L773) when the event ledger is complete, or
+`replaySessionTranscript()` (L775) as a fallback, emitting
+`user_message_chunk`, `tool_call`, `tool_call_update`, and
+`agent_message_chunk` session-update notifications to the connected ACP
+client. The transcript fallback fetches stored messages via the Gateway
+`sessions.get` RPC (`src/acp/translator.ts:2022-2023`) — this is a wire
+call to the Gateway, not a read from local disk.
+
+For ACPX harness sessions the original claim holds: the wire request
+includes `sessionId` plus optional setup fields (`cwd`, `mcpServers`,
+`_meta`); the wire response carries config, model, and mode state; and
+no conversation transcript crosses the wire. See also
+[ACP compatibility matrix](/cli/acp#compatibility-matrix) for the current
+`loadSession` status.
 
 ### Parallel transcripts
 
@@ -99,11 +110,16 @@ your install. In gateway environments, these default to
 `<config-root>/copilot/session-state/` and `<config-root>/openclaw/agents/`
 respectively.
 
-### Reconstruction is the harness responsibility
+### Reconstruction is the harness responsibility (ACPX harness mode)
 
-When OpenClaw drives `session/load`, the ACP harness (for example
-Copilot) reads its own `events.jsonl` for the given `sessionId` and
-rehydrates its internal state. The transcript never crosses the wire.
+In ACPX harness mode, when OpenClaw drives `session/load`, the ACP
+harness (for example Copilot) reads its own `events.jsonl` for the
+given `sessionId` and rehydrates its internal state. No transcript
+crosses the wire in this direction.
+
+In ACP bridge mode the situation is reversed: OpenClaw is the
+responder, and it actively replays history to the connecting ACP client
+via session-update notifications (see the mode table above).
 
 ### Session join model
 
