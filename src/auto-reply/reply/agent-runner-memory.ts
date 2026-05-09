@@ -583,7 +583,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     }) ??
     resolveSessionLogPath(
       entry.sessionId,
-      { ...entry, transcriptLocator: params.followupRun.run.transcriptLocator },
+      entry,
       params.sessionKey ?? params.followupRun.run.sessionKey,
     );
   const result = await memoryDeps.compactEmbeddedPiSession({

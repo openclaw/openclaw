@@ -31,7 +31,7 @@ function cronTranscriptExists(params: { sessionKey: string; entry: SessionEntry 
 }
 
 function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
-  const next = { ...entry } as Partial<SessionEntry>;
+  const next = { ...entry } as Partial<SessionEntry> & { transcriptLocator?: unknown };
   delete next.sessionId;
   delete next.sessionFile;
   delete next.sessionStartedAt;

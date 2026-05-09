@@ -73,7 +73,7 @@ export function isSqliteSessionTranscriptLocator(locator: string | undefined): b
 
 export function resolveSessionTranscriptLocator(
   sessionId: string,
-  entry?: { transcriptLocator?: string },
+  entry?: unknown,
   opts?: SessionTranscriptLocatorOptions,
 ): string {
   void entry;

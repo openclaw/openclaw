@@ -34,8 +34,11 @@ export async function resolveAndPersistSessionTranscriptIdentity(params: {
     sessionStartedAt: baseEntry.sessionId === sessionId ? (baseEntry.sessionStartedAt ?? now) : now,
   };
   const { transcriptLocator: _derivedTranscriptLocator, ...entryWithoutDerivedLocator } =
-    persistedEntry;
-  if (baseEntry.sessionId !== sessionId || baseEntry.transcriptLocator) {
+    persistedEntry as SessionEntry & { transcriptLocator?: unknown };
+  if (
+    baseEntry.sessionId !== sessionId ||
+    "transcriptLocator" in (baseEntry as SessionEntry & { transcriptLocator?: unknown })
+  ) {
     upsertSessionEntry({
       agentId,
       sessionKey,

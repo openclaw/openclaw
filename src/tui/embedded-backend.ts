@@ -207,7 +207,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages = sessionId
-      ? await readSessionMessagesAsync(sessionId, entry?.sessionFile, {
+      ? await readSessionMessagesAsync(sessionId, undefined, {
           agentId: sessionAgentId,
           mode: "recent",
           maxMessages: max,

@@ -4,10 +4,7 @@ import {
   forkSessionFromParent,
   resolveParentForkDecision,
 } from "../auto-reply/reply/session-fork.js";
-import {
-  createSqliteSessionTranscriptLocator,
-  isSqliteSessionTranscriptLocator,
-} from "../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -167,7 +164,6 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
             ...existing,
             ...deliveryFields,
             sessionId: fork.sessionId,
-            sessionFile: fork.sessionFile,
             spawnedBy: requesterSessionKey,
             forkedFromParent: true,
             updatedAt: now,
@@ -220,7 +216,6 @@ export async function consultRealtimeVoiceAgent(params: {
   provider?: RunEmbeddedPiAgentParams["provider"];
   model?: RunEmbeddedPiAgentParams["model"];
   thinkLevel?: RunEmbeddedPiAgentParams["thinkLevel"];
-  fastMode?: RunEmbeddedPiAgentParams["fastMode"];
   timeoutMs?: number;
   toolsAllow?: string[];
   extraSystemPrompt?: string;
@@ -250,14 +245,10 @@ export async function consultRealtimeVoiceAgent(params: {
     resolvedDeliveryContext ?? deliveryContextFromSession(sessionEntry);
   const sessionId = sessionEntry.sessionId;
 
-  const persistedSessionFile = sessionEntry.sessionFile?.trim();
-  const sessionFile =
-    persistedSessionFile && isSqliteSessionTranscriptLocator(persistedSessionFile)
-      ? persistedSessionFile
-      : createSqliteSessionTranscriptLocator({
-          agentId,
-          sessionId,
-        });
+  const transcriptLocator = createSqliteSessionTranscriptLocator({
+    agentId,
+    sessionId,
+  });
   const result = await params.agentRuntime.runEmbeddedPiAgent({
     sessionId,
     sessionKey: params.sessionKey,
@@ -273,7 +264,7 @@ export async function consultRealtimeVoiceAgent(params: {
       consultDeliveryContext?.threadId != null
         ? String(consultDeliveryContext.threadId)
         : undefined,
-    sessionFile,
+    transcriptLocator,
     workspaceDir,
     config: params.cfg,
     prompt: buildRealtimeVoiceAgentConsultPrompt({
@@ -287,7 +278,6 @@ export async function consultRealtimeVoiceAgent(params: {
     provider: params.provider,
     model: params.model,
     thinkLevel: params.thinkLevel ?? "high",
-    fastMode: params.fastMode,
     verboseLevel: "off",
     reasoningLevel: "off",
     toolResultFormat: "plain",
