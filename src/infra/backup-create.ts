@@ -13,6 +13,7 @@ import {
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { writeJson } from "./json-files.js";
 
 type TarRuntime = typeof import("tar");
@@ -32,6 +33,12 @@ export type BackupCreateOptions = {
   verify?: boolean;
   json?: boolean;
   nowMs?: number;
+  /**
+   * Optional info logger invoked for non-fatal backup events such as tar
+   * retry notices or volatile-file skip counts. When omitted, events are
+   * silent aside from the final result.
+   */
+  log?: (message: string) => void;
 };
 
 type BackupManifestAsset = {
@@ -82,7 +89,90 @@ export type BackupCreateResult = {
     reason: string;
     coveredBy?: string;
   }>;
+  /**
+   * Count of files the archiver actively skipped because they matched the
+   * known-volatile filter (live sessions, cron logs, queues, sockets, pid/tmp).
+   * Populated on real writes only; dry runs report 0.
+   */
+  skippedVolatileCount: number;
 };
+
+const BACKUP_TAR_MAX_ATTEMPTS = 3;
+// Backoff between attempts: wait 10s before attempt 2, 20s before attempt 3.
+const BACKUP_TAR_BACKOFF_MS = [10_000, 20_000];
+
+function isTarEofRaceError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "EOF") {
+    return true;
+  }
+  // Keep this regex narrow: match only the two tar-specific EOF-class error
+  // strings thrown by node-tar's WriteEntry#onread (grow and shrink races,
+  // see node_modules/tar/dist/commonjs/write-entry.js around the
+  // "did not encounter expected EOF" and "encountered unexpected EOF"
+  // Object.assign sites), plus the TAR_BAD_ARCHIVE code surfaced by the
+  // parser on truncated input. A bare /EOF/i alternative also matched
+  // unrelated SSL/OpenSSL strings like "EOF occurred in violation of
+  // protocol" and "unexpected eof while reading", causing pointless retries.
+  const message = (err as Error).message ?? "";
+  return /(did not encounter expected|encountered unexpected) EOF|TAR_BAD_ARCHIVE/i.test(message);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export type BackupTarRetryLogger = (message: string) => void;
+
+async function writeTarArchiveWithRetry(params: {
+  tempArchivePath: string;
+  runTar: () => Promise<void>;
+  log?: BackupTarRetryLogger;
+  sleepMs?: (ms: number) => Promise<void>;
+}): Promise<void> {
+  const sleepFn = params.sleepMs ?? sleep;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= BACKUP_TAR_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await params.runTar();
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (!isTarEofRaceError(err) || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
+        break;
+      }
+      try {
+        await fs.rm(params.tempArchivePath, { force: true });
+      } catch (cleanupErr) {
+        const code = (cleanupErr as NodeJS.ErrnoException).code;
+        if (code && code !== "ENOENT") {
+          params.log?.(
+            `Backup archiver could not remove temp archive ${params.tempArchivePath} between retries: ${code}. Continuing.`,
+          );
+        }
+      }
+      const backoff = BACKUP_TAR_BACKOFF_MS[attempt - 1] ?? 0;
+      const offendingPath = (err as NodeJS.ErrnoException).path;
+      params.log?.(
+        `Backup archiver hit a live-write race${
+          offendingPath ? ` on ${offendingPath}` : ""
+        } (attempt ${attempt}/${BACKUP_TAR_MAX_ATTEMPTS}); retrying in ${Math.round(backoff / 1000)}s.`,
+      );
+      await sleepFn(backoff);
+    }
+  }
+  const final = lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  const offendingPath = (lastErr as NodeJS.ErrnoException | undefined)?.path;
+  const suffix = offendingPath
+    ? ` (last offending path: ${offendingPath}, after ${BACKUP_TAR_MAX_ATTEMPTS} attempts)`
+    : ` (after ${BACKUP_TAR_MAX_ATTEMPTS} attempts)`;
+  throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
+}
+
+export const __test = { writeTarArchiveWithRetry, isTarEofRaceError };
 
 async function resolveOutputPath(params: {
   output?: string;
@@ -259,6 +349,13 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
     lines.push("Dry run only; archive was not written.");
   } else {
     lines.push(`Created ${result.archivePath}`);
+    if (result.skippedVolatileCount > 0) {
+      lines.push(
+        `Skipped ${result.skippedVolatileCount} volatile file${
+          result.skippedVolatileCount === 1 ? "" : "s"
+        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
+      );
+    }
     if (result.verified) {
       lines.push("Archive verification: passed");
     }
@@ -344,6 +441,7 @@ export async function createBackupArchive(
     verified: false,
     assets: plan.included,
     skipped: plan.skipped,
+    skippedVolatileCount: 0,
   };
 
   if (opts.dryRun) {
@@ -371,24 +469,61 @@ export async function createBackupArchive(
 
     const tar = await loadTarRuntime();
     const stateAsset = result.assets.find((asset) => asset.kind === "state");
-    const filter = stateAsset ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath) : undefined;
-    await tar.c(
-      {
-        file: tempArchivePath,
-        ...(filter ? { filter } : {}),
-        gzip: true,
-        portable: true,
-        preservePaths: true,
-        onWriteEntry: (entry) => {
-          entry.path = remapArchiveEntryPath({
-            entryPath: entry.path,
-            manifestPath,
-            archiveRoot,
-          });
-        },
+    const extensionsFilter = stateAsset
+      ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath)
+      : undefined;
+    const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
+    let skippedVolatileCount = 0;
+    const tarFilter = (entryPath: string): boolean => {
+      // The manifest is staged in a tmp dir outside any state directory and
+      // is always safe to include.
+      if (path.resolve(entryPath) === manifestPath) {
+        return true;
+      }
+      if (extensionsFilter && !extensionsFilter(entryPath)) {
+        return false;
+      }
+      if (isVolatileBackupPath(entryPath, volatilePlan)) {
+        skippedVolatileCount += 1;
+        return false;
+      }
+      return true;
+    };
+    await writeTarArchiveWithRetry({
+      tempArchivePath,
+      log: opts.log,
+      runTar: () => {
+        // tar.c re-walks the tree (and thus re-invokes tarFilter) on every
+        // attempt, so reset the closure counter here or retries would report
+        // cumulative skip counts across attempts instead of the final one.
+        skippedVolatileCount = 0;
+        return tar.c(
+          {
+            file: tempArchivePath,
+            gzip: true,
+            portable: true,
+            preservePaths: true,
+            filter: tarFilter,
+            onWriteEntry: (entry) => {
+              entry.path = remapArchiveEntryPath({
+                entryPath: entry.path,
+                manifestPath,
+                archiveRoot,
+              });
+            },
+          },
+          [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
+        );
       },
-      [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
-    );
+    });
+    result.skippedVolatileCount = skippedVolatileCount;
+    if (skippedVolatileCount > 0) {
+      opts.log?.(
+        `Backup skipped ${skippedVolatileCount} volatile file${
+          skippedVolatileCount === 1 ? "" : "s"
+        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
+      );
+    }
     await publishTempArchive({ tempArchivePath, outputPath });
   } finally {
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
