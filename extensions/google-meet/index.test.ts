@@ -1040,37 +1040,45 @@ describe("google-meet plugin", () => {
   it("lists Meet artifact metadata for the latest conference record by default", async () => {
     const fetchMock = stubMeetArtifactsApi();
 
-    await expect(
-      fetchGoogleMeetArtifacts({
-        accessToken: "token",
-        meeting: "abc-defg-hij",
-        pageSize: 2,
-      }),
-    ).resolves.toMatchObject({
-      input: "abc-defg-hij",
-      space: { name: "spaces/abc-defg-hij" },
-      conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
-      artifacts: [
-        {
-          conferenceRecord: { name: "conferenceRecords/rec-1" },
-          participants: [{ name: "conferenceRecords/rec-1/participants/p1" }],
-          recordings: [{ name: "conferenceRecords/rec-1/recordings/r1" }],
-          transcripts: [{ name: "conferenceRecords/rec-1/transcripts/t1" }],
-          transcriptEntries: [
-            {
-              transcript: "conferenceRecords/rec-1/transcripts/t1",
-              entries: [
-                {
-                  name: "conferenceRecords/rec-1/transcripts/t1/entries/e1",
-                  text: "Hello from the transcript.",
-                },
-              ],
-            },
-          ],
-          smartNotes: [{ name: "conferenceRecords/rec-1/smartNotes/sn1" }],
-        },
-      ],
+    const result = await fetchGoogleMeetArtifacts({
+      accessToken: "token",
+      meeting: "abc-defg-hij",
+      pageSize: 2,
     });
+    expect(result.input).toBe("abc-defg-hij");
+    expect(result.space?.name).toBe("spaces/abc-defg-hij");
+    expect(result.conferenceRecords.map((record) => record.name)).toEqual([
+      "conferenceRecords/rec-1",
+    ]);
+    expect(result.artifacts).toHaveLength(1);
+    const artifact = result.artifacts[0];
+    expect(artifact?.conferenceRecord.name).toBe("conferenceRecords/rec-1");
+    expect(artifact?.participants.map((participant) => participant.name)).toEqual([
+      "conferenceRecords/rec-1/participants/p1",
+    ]);
+    expect(artifact?.recordings.map((recording) => recording.name)).toEqual([
+      "conferenceRecords/rec-1/recordings/r1",
+    ]);
+    expect(artifact?.transcripts.map((transcript) => transcript.name)).toEqual([
+      "conferenceRecords/rec-1/transcripts/t1",
+    ]);
+    expect(artifact?.transcriptEntries).toHaveLength(1);
+    expect(artifact?.transcriptEntries[0]?.transcript).toBe(
+      "conferenceRecords/rec-1/transcripts/t1",
+    );
+    expect(artifact?.transcriptEntries[0]?.entries).toEqual([
+      {
+        name: "conferenceRecords/rec-1/transcripts/t1/entries/e1",
+        participant: "conferenceRecords/rec-1/participants/p1",
+        text: "Hello from the transcript.",
+        languageCode: "en-US",
+        startTime: "2026-04-25T10:01:00Z",
+        endTime: "2026-04-25T10:01:05Z",
+      },
+    ]);
+    expect(artifact?.smartNotes.map((smartNote) => smartNote.name)).toEqual([
+      "conferenceRecords/rec-1/smartNotes/sn1",
+    ]);
 
     const listCall = fetchMock.mock.calls.find(([input]) => {
       const url = requestUrl(input);
@@ -1082,17 +1090,13 @@ describe("google-meet plugin", () => {
     const listUrl = requestUrl(listCall[0]);
     expect(listUrl.searchParams.get("filter")).toBe('space.name = "spaces/abc-defg-hij"');
     expect(listUrl.searchParams.get("pageSize")).toBe("1");
-    expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://meet.googleapis.com/v2/conferenceRecords/rec-1/smartNotes?pageSize=2",
-        auditContext: "google-meet.conferenceRecords.smartNotes.list",
-      }),
+    expect(requireFetchGuardCall("google-meet.conferenceRecords.smartNotes.list").url).toBe(
+      "https://meet.googleapis.com/v2/conferenceRecords/rec-1/smartNotes?pageSize=2",
     );
-    expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://meet.googleapis.com/v2/conferenceRecords/rec-1/transcripts/t1/entries?pageSize=2",
-        auditContext: "google-meet.conferenceRecords.transcripts.entries.list",
-      }),
+    expect(
+      requireFetchGuardCall("google-meet.conferenceRecords.transcripts.entries.list").url,
+    ).toBe(
+      "https://meet.googleapis.com/v2/conferenceRecords/rec-1/transcripts/t1/entries?pageSize=2",
     );
   });
 
@@ -1121,20 +1125,18 @@ describe("google-meet plugin", () => {
   it("exports linked Google Docs bodies when requested", async () => {
     const fetchMock = stubMeetArtifactsApi();
 
-    await expect(
-      fetchGoogleMeetArtifacts({
-        accessToken: "token",
-        conferenceRecord: "rec-1",
-        includeDocumentBodies: true,
-      }),
-    ).resolves.toMatchObject({
-      artifacts: [
-        {
-          transcripts: [{ documentText: "Transcript document body." }],
-          smartNotes: [{ documentText: "Smart note document body." }],
-        },
-      ],
+    const result = await fetchGoogleMeetArtifacts({
+      accessToken: "token",
+      conferenceRecord: "rec-1",
+      includeDocumentBodies: true,
     });
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0]?.transcripts.map((transcript) => transcript.documentText)).toEqual([
+      "Transcript document body.",
+    ]);
+    expect(result.artifacts[0]?.smartNotes.map((smartNote) => smartNote.documentText)).toEqual([
+      "Smart note document body.",
+    ]);
     const driveCalls = fetchMock.mock.calls
       .map(([input]) => requestUrl(input))
       .filter((url) => url.pathname.startsWith("/drive/v3/files/"));
@@ -1151,16 +1153,13 @@ describe("google-meet plugin", () => {
   it("fetches only the latest Meet conference record for a meeting", async () => {
     const fetchMock = stubMeetArtifactsApi();
 
-    await expect(
-      fetchLatestGoogleMeetConferenceRecord({
-        accessToken: "token",
-        meeting: "abc-defg-hij",
-      }),
-    ).resolves.toMatchObject({
-      input: "abc-defg-hij",
-      space: { name: "spaces/abc-defg-hij" },
-      conferenceRecord: { name: "conferenceRecords/rec-1" },
+    const result = await fetchLatestGoogleMeetConferenceRecord({
+      accessToken: "token",
+      meeting: "abc-defg-hij",
     });
+    expect(result.input).toBe("abc-defg-hij");
+    expect(result.space.name).toBe("spaces/abc-defg-hij");
+    expect(result.conferenceRecord?.name).toBe("conferenceRecords/rec-1");
 
     const listCall = fetchMock.mock.calls.find(([input]) => {
       const url = requestUrl(input);
@@ -1177,34 +1176,31 @@ describe("google-meet plugin", () => {
   it("lists Meet attendance rows with participant sessions", async () => {
     const fetchMock = stubMeetArtifactsApi();
 
-    await expect(
-      fetchGoogleMeetAttendance({
-        accessToken: "token",
-        conferenceRecord: "rec-1",
-        pageSize: 3,
-      }),
-    ).resolves.toMatchObject({
-      input: "rec-1",
-      conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
-      attendance: [
-        {
-          conferenceRecord: "conferenceRecords/rec-1",
-          participant: "conferenceRecords/rec-1/participants/p1",
-          displayName: "Alice",
-          user: "users/alice",
-          sessions: [
-            {
-              name: "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
-            },
-          ],
-        },
-      ],
+    const result = await fetchGoogleMeetAttendance({
+      accessToken: "token",
+      conferenceRecord: "rec-1",
+      pageSize: 3,
     });
+    expect(result.input).toBe("rec-1");
+    expect(result.conferenceRecords.map((record) => record.name)).toEqual([
+      "conferenceRecords/rec-1",
+    ]);
+    expect(result.attendance).toHaveLength(1);
+    expect(result.attendance[0]?.conferenceRecord).toBe("conferenceRecords/rec-1");
+    expect(result.attendance[0]?.participant).toBe("conferenceRecords/rec-1/participants/p1");
+    expect(result.attendance[0]?.displayName).toBe("Alice");
+    expect(result.attendance[0]?.user).toBe("users/alice");
+    expect(result.attendance[0]?.sessions.map((session) => session.name)).toEqual([
+      "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
+    ]);
     expect(fetchMock).toHaveBeenCalledWith(
       "https://meet.googleapis.com/v2/conferenceRecords/rec-1",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer token" }),
-      }),
+      {
+        headers: {
+          Authorization: "Bearer token",
+          Accept: "application/json",
+        },
+      },
     );
   });
 
