@@ -153,8 +153,8 @@ export async function listSessionTranscriptsForAgent(
   }));
 }
 
-export function sessionPathForTranscript(scope: SessionTranscriptScope): string {
-  return `sessions/${scope.agentId}/${scope.sessionId}.jsonl`;
+export function sessionSourceKeyForTranscript(scope: SessionTranscriptScope): string {
+  return `sessions/${scope.agentId}/${scope.sessionId}`;
 }
 
 export function readSessionTranscriptDeltaStats(
@@ -459,7 +459,7 @@ export async function buildSessionTranscriptEntry(
     const content = collected.join("\n");
     return {
       scope,
-      path: sessionPathForTranscript(scope),
+      path: sessionSourceKeyForTranscript(scope),
       mtimeMs,
       size,
       messageCount,

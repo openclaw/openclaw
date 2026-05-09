@@ -11,7 +11,7 @@ export function resolveMemorySessionSyncPlan(params: {
   targetSessionTranscriptKeys: Set<string> | null;
   dirtySessionTranscripts: Set<string>;
   existingRows?: MemorySourceFileStateRow[] | null;
-  sessionPathForTranscript: (scope: MemorySessionSyncScope) => string;
+  sessionSourceKeyForTranscript: (scope: MemorySessionSyncScope) => string;
 }): {
   activePaths: Set<string> | null;
   existingRows: MemorySourceFileStateRow[] | null;
@@ -20,7 +20,7 @@ export function resolveMemorySessionSyncPlan(params: {
 } {
   const activePaths = params.targetSessionTranscriptKeys
     ? null
-    : new Set(params.files.map((file) => params.sessionPathForTranscript(file)));
+    : new Set(params.files.map((file) => params.sessionSourceKeyForTranscript(file)));
   const existingRows = activePaths === null ? null : (params.existingRows ?? []);
   return {
     activePaths,

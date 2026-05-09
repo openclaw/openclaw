@@ -19,7 +19,7 @@ import {
   type SessionFreshness,
 } from "../../config/sessions/reset.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { resolveAndPersistSessionTranscriptScope } from "../../config/sessions/session-locator.js";
+import { resolveAndPersistSessionTranscriptScope } from "../../config/sessions/session-scope.js";
 import {
   getSessionEntry,
   listSessionEntries,

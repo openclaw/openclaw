@@ -75,7 +75,7 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "test-session",
-        transcriptLocator: "sqlite-transcript://main/test-session",
+        transcriptScope: { agentId: "main", sessionId: "test-session" },
         tokenBudget: 200000,
         force: true,
         compactionTarget: "budget",

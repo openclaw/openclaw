@@ -24,13 +24,6 @@ vi.mock("../../config/sessions/group.js", () => ({
   resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
 }));
 
-vi.mock("../../config/sessions/test-helpers/transcript-locator.js", () => ({
-  createSqliteSessionTranscriptLocator: vi.fn(
-    ({ agentId, sessionId }: { agentId?: string; sessionId: string }) =>
-      `sqlite-transcript://${agentId ?? "main"}/${sessionId}`,
-  ),
-}));
-
 const storeRuntimeLoads = vi.hoisted(() => vi.fn());
 const upsertSessionEntry = vi.hoisted(() => vi.fn());
 

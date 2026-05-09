@@ -5,7 +5,7 @@ export {
   buildSessionTranscriptEntry,
   listSessionTranscriptsForAgent,
   readSessionTranscriptDeltaStats,
-  sessionPathForTranscript,
+  sessionSourceKeyForTranscript,
   type BuildSessionTranscriptEntryOptions,
   type SessionTranscriptEntry,
   type SessionTranscriptDeltaStats,

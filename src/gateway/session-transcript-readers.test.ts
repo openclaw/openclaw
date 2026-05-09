@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -52,26 +51,19 @@ function setupState(prefix = "openclaw-session-utils-sqlite-") {
   process.env.OPENCLAW_STATE_DIR = stateDir;
 }
 
-function transcriptPath(sessionId: string, agentId = "main"): string {
-  return createSqliteSessionTranscriptLocator({ agentId, sessionId });
-}
-
 function seedTranscript(params: {
   sessionId: string;
   agentId?: string;
   events: TranscriptEvent[];
-  filePath?: string;
 }) {
   setupStateIfNeeded();
   const agentId = params.agentId ?? "main";
-  const filePath = params.filePath ?? transcriptPath(params.sessionId, agentId);
   replaceSqliteSessionTranscriptEvents({
     agentId,
     sessionId: params.sessionId,
     events: params.events,
     now: () => 1_778_100_000_000,
   });
-  return filePath;
 }
 
 function setupStateIfNeeded() {
@@ -309,15 +301,12 @@ describe("SQLite transcript readers", () => {
   test("requires explicit SQLite transcript scope", () => {
     setupState();
     const sessionId = "cross-agent";
-    const filePath = transcriptPath(sessionId, "ops");
     seedTranscript({
       agentId: "ops",
       sessionId,
-      filePath,
       events: [header(sessionId), message("user", "from ops")],
     });
 
-    expect(filePath).toBe("sqlite-transcript://ops/cross-agent");
     expect(readSessionMessages({ sessionId })).toEqual([]);
     expect(readSessionMessages({ agentId: "ops", sessionId })).toEqual([
       expect.objectContaining({ content: "from ops" }),

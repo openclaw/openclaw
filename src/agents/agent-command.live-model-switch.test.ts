@@ -187,7 +187,8 @@ vi.mock("../config/sessions.js", () => ({
 
 vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
   resolveSessionTranscriptTarget: async () => ({
-    sessionFile: "sqlite-transcript://default/session-1.jsonl",
+    agentId: "default",
+    sessionId: "session-1",
     sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
   }),
 }));

@@ -8,7 +8,7 @@ import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import { validateSessionId } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
-import { resolveAndPersistSessionTranscriptScope } from "./session-locator.js";
+import { resolveAndPersistSessionTranscriptScope } from "./session-scope.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -16,10 +16,6 @@ import {
   upsertSessionEntry,
 } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import {
-  createSqliteSessionTranscriptLocator,
-  resolveSessionTranscriptLocator,
-} from "./test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "./transcript-store.sqlite.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 
@@ -35,17 +31,6 @@ describe("session path safety", () => {
     for (const sessionId of unsafeSessionIds) {
       expect(() => validateSessionId(sessionId), sessionId).toThrow(/Invalid session ID/);
     }
-  });
-
-  it("ignores invalid transcript locators", () => {
-    const resolved = resolveSessionTranscriptLocator("sess-1");
-    expect(resolved).toBe(createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }));
-  });
-
-  it("uses extensionless SQLite transcript locators by default", () => {
-    expect(resolveSessionTranscriptLocator("sess-1")).toBe(
-      createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }),
-    );
   });
 });
 
@@ -188,10 +173,6 @@ describe("session lifecycle timestamps", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = dir;
     try {
-      const transcriptLocator = createSqliteSessionTranscriptLocator({
-        agentId: "main",
-        sessionId: "lifecycle-session",
-      });
       const headerTimestamp = "2026-04-20T04:30:00.000Z";
       replaceSqliteSessionTranscriptEvents({
         agentId: "main",
@@ -474,7 +455,7 @@ describe("SQLite session store patch retries", () => {
 });
 
 describe("resolveAndPersistSessionTranscriptScope", () => {
-  const fixture = useTempSessionsFixture("session-locator-test-");
+  const fixture = useTempSessionsFixture("session-scope-test-");
 
   function readFixtureSessionEntries(): Record<string, SessionEntry> {
     return Object.fromEntries(

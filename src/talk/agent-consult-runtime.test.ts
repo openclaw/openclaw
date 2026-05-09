@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import {
   __setRealtimeVoiceAgentConsultDepsForTest,
   consultRealtimeVoiceAgent,
@@ -14,7 +13,6 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
     {
       sessionId?: string;
       updatedAt?: number;
-      transcriptLocator?: string;
       spawnedBy?: string;
       forkedFromParent?: boolean;
       totalTokens?: number;
@@ -213,10 +211,6 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedPiAgent, sessionStore } = createAgentRuntime();
     sessionStore["agent:main:main"] = {
       sessionId: "parent-session",
-      transcriptLocator: createSqliteSessionTranscriptLocator({
-        agentId: "main",
-        sessionId: "parent-session",
-      }),
       totalTokens: 100,
       updatedAt: 1,
     };
@@ -227,7 +221,6 @@ describe("realtime voice agent consult runtime", () => {
     }));
     const forkSessionFromParent = vi.fn(async () => ({
       sessionId: "forked-session",
-      transcriptLocator: "sqlite-transcript://main/forked-session",
     }));
     __setRealtimeVoiceAgentConsultDepsForTest({
       resolveParentForkDecision,

@@ -9,10 +9,6 @@ import type { HandleCommandsParams } from "./commands-types.js";
 vi.mock("./commands-compact.runtime.js", () => ({
   abortEmbeddedPiRun: vi.fn(),
   compactEmbeddedPiSession: vi.fn(),
-  createSqliteSessionTranscriptLocator: vi.fn(
-    ({ agentId, sessionId }: { agentId: string; sessionId: string }) =>
-      `sqlite-transcript://${agentId}/${sessionId}`,
-  ),
   enqueueSystemEvent: vi.fn(),
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
   formatTokenCount: vi.fn((value: number) => `${value}`),

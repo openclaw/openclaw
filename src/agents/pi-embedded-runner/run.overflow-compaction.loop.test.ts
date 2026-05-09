@@ -246,7 +246,7 @@ describe("overflow compaction in run loop", () => {
       expect.objectContaining({ contextWindowTokens: 200000 }),
     );
     expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionFile: "sqlite-transcript://main/test-session.jsonl" }),
+      expect.objectContaining({ agentId: "main", sessionId: "test-session" }),
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedLog.info).toHaveBeenCalledWith(
@@ -302,7 +302,7 @@ describe("overflow compaction in run loop", () => {
       }),
     );
     expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionFile: "sqlite-transcript://main/test-session.jsonl" }),
+      expect.objectContaining({ agentId: "main", sessionId: "test-session" }),
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedLog.info).toHaveBeenCalledWith(
@@ -472,7 +472,7 @@ describe("overflow compaction in run loop", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionFile: "sqlite-transcript://main/test-session.jsonl" }),
+      expect.objectContaining({ agentId: "main", sessionId: "test-session" }),
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedLog.info).toHaveBeenCalledWith(

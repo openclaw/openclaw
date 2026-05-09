@@ -166,7 +166,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.forkSessionFromParentMock ??
       (async () => ({
         sessionId: "forked-session-id",
-        sessionFile: "sqlite-transcript://main/forked-session.jsonl",
       })),
     getGlobalHookRunner: () => params.hookRunner ?? { hasHooks: () => false },
     emitSessionLifecycleEvent: (...args: unknown[]) =>

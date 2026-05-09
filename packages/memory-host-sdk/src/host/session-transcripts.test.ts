@@ -10,7 +10,7 @@ import {
   buildSessionTranscriptEntry,
   listSessionTranscriptsForAgent,
   readSessionTranscriptDeltaStats,
-  sessionPathForTranscript,
+  sessionSourceKeyForTranscript,
   type SessionTranscriptEntry,
   type SessionTranscriptScope,
 } from "./session-transcripts.js";
@@ -103,7 +103,7 @@ describe("listSessionTranscriptsForAgent", () => {
     expect(scopes).toEqual([scope]);
     const entry = await buildSessionTranscriptEntry(scope);
     expect(entry?.content).toBe("User: Stored only in SQLite");
-    expect(entry?.path).toBe("sessions/main/sqlite-only.jsonl");
+    expect(entry?.path).toBe("sessions/main/sqlite-only");
   });
 
   it("ignores remembered legacy transcript paths when listing active SQLite transcripts", async () => {
@@ -120,10 +120,10 @@ describe("listSessionTranscriptsForAgent", () => {
   });
 });
 
-describe("sessionPathForTranscript", () => {
-  it("formats SQLite scopes as stable session export paths", () => {
-    expect(sessionPathForTranscript({ agentId: "main", sessionId: "active-session" })).toBe(
-      "sessions/main/active-session.jsonl",
+describe("sessionSourceKeyForTranscript", () => {
+  it("formats SQLite scopes as stable memory source keys", () => {
+    expect(sessionSourceKeyForTranscript({ agentId: "main", sessionId: "active-session" })).toBe(
+      "sessions/main/active-session",
     );
   });
 });

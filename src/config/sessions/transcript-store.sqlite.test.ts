@@ -168,11 +168,9 @@ describe("SQLite session transcript store", () => {
     ).toEqual([{ type: "message", id: "main" }]);
   });
 
-  it("lists SQLite transcripts with canonical transcript locators", () => {
+  it("lists SQLite transcript scopes", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const olderPath = path.join(stateDir, "session-old.jsonl");
-    const newerPath = path.join(stateDir, "session-new.jsonl");
 
     appendSqliteSessionTranscriptEvent({
       env,
@@ -202,7 +200,6 @@ describe("SQLite session transcript store", () => {
   it("deletes transcript snapshots with the transcript", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const transcriptPath = path.join(stateDir, "session.jsonl");
 
     appendSqliteSessionTranscriptEvent({
       env,
@@ -231,7 +228,6 @@ describe("SQLite session transcript store", () => {
 
   it("renders JSONL from SQLite for explicit transcript export", () => {
     const stateDir = createTempDir();
-    const sourcePath = path.join(stateDir, "source.jsonl");
 
     replaceSqliteSessionTranscriptEvents({
       env: { OPENCLAW_STATE_DIR: stateDir },
