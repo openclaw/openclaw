@@ -476,9 +476,9 @@ The remaining cleanup is mostly consolidation and deletion:
   compatibility surfaces are temp materializations of the database row, not the
   durable media store.
 - Cache-trace diagnostics, Anthropic payload diagnostics, and raw model stream
-  diagnostics now default to SQLite diagnostic rows instead of
-  `logs/*.jsonl` files. Explicit path flags/env vars remain only as
-  export/debug overrides.
+  diagnostics now write SQLite diagnostic rows instead of `logs/*.jsonl` files.
+  Runtime path override flags and env vars have been removed; export/debug
+  commands can materialize files explicitly from database rows.
 - Gateway singleton locks now use shared SQLite KV instead of temp-dir lock
   files. Done.
 - Gateway restart sentinel state now uses shared SQLite KV instead of

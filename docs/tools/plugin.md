@@ -414,7 +414,7 @@ do not run in live chat traffic, check these first:
   produces assistant output.
 - For proof of the effective session model, use `openclaw sessions` or the
   Gateway session/status surfaces and, when debugging provider payloads, start
-  the Gateway with `--raw-stream --raw-stream-path <path>`.
+  the Gateway with `--raw-stream`.
 
 ### Slow plugin tool setup
 

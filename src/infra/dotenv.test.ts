@@ -750,7 +750,6 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_SKIP_PROVIDERS",
           "OPENCLAW_SKIP_CRON",
           "OPENCLAW_RAW_STREAM",
-          "OPENCLAW_RAW_STREAM_PATH",
           "OPENCLAW_CACHE_TRACE",
           "OPENCLAW_CACHE_TRACE_MESSAGES",
           "OPENCLAW_CACHE_TRACE_PROMPT",

@@ -526,10 +526,6 @@ export async function startGatewayServer(
     key: "OPENCLAW_RAW_STREAM",
     description: "raw stream logging enabled",
   });
-  logAcceptedEnvOption({
-    key: "OPENCLAW_RAW_STREAM_PATH",
-    description: "raw stream log path override",
-  });
   const startupTrace = createGatewayStartupTrace();
   const startupConfigModulePromise = import("./server-startup-config.js");
   let startupPluginsModulePromise: Promise<typeof import("./server-startup-plugins.js")> | null =
