@@ -90,7 +90,7 @@ function getAgentRuntimeBaseTargetIds(): string[] {
 function isScopedChannelSecretTargetEntry(params: {
   entry: {
     id: string;
-    configFile?: string;
+    store?: string;
     pathPattern?: string;
     refPathPattern?: string;
   };
@@ -103,7 +103,7 @@ function isScopedChannelSecretTargetEntry(params: {
   const allowedPrefix = `channels.${channelId}.`;
   return (
     params.entry.id.startsWith(allowedPrefix) &&
-    params.entry.configFile === "openclaw.json" &&
+    params.entry.store === "openclaw.json" &&
     typeof params.entry.pathPattern === "string" &&
     params.entry.pathPattern.startsWith(allowedPrefix) &&
     (params.entry.refPathPattern === undefined ||

@@ -50,7 +50,7 @@ import {
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
 } from "./storage-scan.js";
-import { AUTH_PROFILE_TARGET_CONFIG_FILE } from "./target-registry-types.js";
+import { AUTH_PROFILE_TARGET_STORE } from "./target-registry-types.js";
 
 type FileSnapshot = {
   existed: boolean;
@@ -325,7 +325,7 @@ function applyConfigTargetMutations(params: {
   let configChanged = false;
 
   for (const { target, resolved } of resolvedTargets) {
-    if (resolved.entry.configFile === AUTH_PROFILE_TARGET_CONFIG_FILE) {
+    if (resolved.entry.store === AUTH_PROFILE_TARGET_STORE) {
       const authStoreChanged = applyAuthProfileTargetMutation({
         target,
         resolved,
@@ -570,7 +570,7 @@ function applyAuthProfileTargetMutation(params: {
   authStoreByAgentDir: Map<string, Record<string, unknown>>;
   scrubbedValues: Set<string>;
 }): boolean {
-  if (params.resolved.entry.configFile !== AUTH_PROFILE_TARGET_CONFIG_FILE) {
+  if (params.resolved.entry.store !== AUTH_PROFILE_TARGET_STORE) {
     return false;
   }
   const { store } = resolveAuthStoreForTarget({

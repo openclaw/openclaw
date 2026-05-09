@@ -1,5 +1,8 @@
-export const AUTH_PROFILE_TARGET_CONFIG_FILE = "auth-profiles.json" as const; // pragma: allowlist secret
-export type SecretTargetConfigFile = "openclaw.json" | typeof AUTH_PROFILE_TARGET_CONFIG_FILE;
+export const OPENCLAW_CONFIG_TARGET_STORE = "openclaw.json" as const;
+export const AUTH_PROFILE_TARGET_STORE = "auth-profile-store" as const; // pragma: allowlist secret
+export type SecretTargetStore =
+  | typeof OPENCLAW_CONFIG_TARGET_STORE
+  | typeof AUTH_PROFILE_TARGET_STORE;
 export type SecretTargetShape = "secret_input" | "sibling_ref"; // pragma: allowlist secret
 export type SecretTargetExpected = "string" | "string-or-object"; // pragma: allowlist secret
 export type AuthProfileType = "api_key" | "token";
@@ -8,7 +11,7 @@ export type SecretTargetRegistryEntry = {
   id: string;
   targetType: string;
   targetTypeAliases?: string[];
-  configFile: SecretTargetConfigFile;
+  store: SecretTargetStore;
   pathPattern: string;
   refPathPattern?: string;
   secretShape: SecretTargetShape;

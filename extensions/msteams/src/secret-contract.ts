@@ -10,7 +10,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.msteams.appPassword",
       targetType: "channels.msteams.appPassword",
-      configFile: "openclaw.json",
+      store: "openclaw.json",
       pathPattern: "channels.msteams.appPassword",
       secretShape: "secret_input",
       expectedResolvedValue: "string",

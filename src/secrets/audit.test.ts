@@ -10,7 +10,7 @@ type AuditFixture = {
   rootDir: string;
   stateDir: string;
   configPath: string;
-  authStorePath: string;
+  legacyAuthProfilePath: string;
   authJsonPath: string;
   agentDir: string;
   modelCatalogSource: string;
@@ -142,20 +142,20 @@ async function createAuditFixture(): Promise<AuditFixture> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-"));
   const stateDir = path.join(rootDir, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const legacyAuthProfilePath = path.join(agentDir, "auth-profiles.json");
   const authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
-  const agentDir = path.dirname(authStorePath);
   const modelCatalogSource = `stored model catalog: ${agentDir}`;
   const envPath = path.join(stateDir, ".env");
 
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+  await fs.mkdir(agentDir, { recursive: true });
 
   return {
     rootDir,
     stateDir,
     configPath,
-    authStorePath,
+    legacyAuthProfilePath,
     authJsonPath,
     agentDir,
     modelCatalogSource,
@@ -273,7 +273,7 @@ describe("secrets audit", () => {
   });
 
   it("does not mutate legacy auth.json during audit", async () => {
-    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.rm(fixture.legacyAuthProfilePath, { force: true });
     await writeJsonFile(fixture.authJsonPath, {
       openai: {
         type: "api_key",
@@ -285,7 +285,7 @@ describe("secrets audit", () => {
     expectFindingCode(report, "LEGACY_RESIDUE");
     const authJsonStat = await fs.stat(fixture.authJsonPath);
     expect(authJsonStat.isFile()).toBe(true);
-    await expectPathMissing(fixture.authStorePath);
+    await expectPathMissing(fixture.legacyAuthProfilePath);
   });
 
   it("reports malformed sidecar JSON as findings instead of crashing", async () => {
@@ -321,7 +321,7 @@ describe("secrets audit", () => {
         },
       ],
     });
-    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.rm(fixture.legacyAuthProfilePath, { force: true });
     await fs.writeFile(fixture.envPath, "", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
@@ -363,7 +363,7 @@ describe("secrets audit", () => {
         },
       ],
     });
-    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.rm(fixture.legacyAuthProfilePath, { force: true });
     await fs.writeFile(fixture.envPath, "", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env, allowExec: true });
@@ -427,7 +427,7 @@ describe("secrets audit", () => {
       )}\n`,
       "utf8",
     );
-    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.rm(fixture.legacyAuthProfilePath, { force: true });
     await fs.writeFile(fixture.envPath, "", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env, allowExec: true });

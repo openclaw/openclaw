@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
@@ -11,6 +11,25 @@ import {
   collectConfigureProviderChanges,
   hasConfigurePlanChanges,
 } from "./configure-plan.js";
+
+const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const previousTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+
+process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ??= "extensions";
+process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR ??= "1";
+
+afterAll(() => {
+  if (previousBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+  }
+  if (previousTrustBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = previousTrustBundledPluginsDir;
+  }
+});
 
 describe("secrets configure plan helpers", () => {
   it("builds configure candidates from supported configure targets", () => {
@@ -80,7 +99,7 @@ describe("secrets configure plan helpers", () => {
     );
     expect(openaiCandidate?.type).toBe("auth-profiles.api_key.key");
     expect(openaiCandidate?.agentId).toBe("main");
-    expect(openaiCandidate?.configFile).toBe("auth-profiles.json");
+    expect(openaiCandidate?.store).toBe("auth-profile-store");
     expect(openaiCandidate?.authProfileProvider).toBe("openai");
   });
 
@@ -170,7 +189,7 @@ describe("secrets configure plan helpers", () => {
           path: TALK_TEST_PROVIDER_API_KEY_PATH,
           pathSegments: ["talk", "providers", TALK_TEST_PROVIDER_ID, "apiKey"],
           label: TALK_TEST_PROVIDER_API_KEY_PATH,
-          configFile: "openclaw.json" as const,
+          store: "openclaw.json" as const,
           expectedResolvedValue: "string" as const,
           providerId: TALK_TEST_PROVIDER_ID,
           ref: {

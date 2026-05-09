@@ -3,7 +3,7 @@ import { getUnsupportedSecretRefSurfacePatterns } from "./unsupported-surface-po
 
 type CredentialMatrixEntry = {
   id: string;
-  configFile: "openclaw.json" | "auth-profiles.json";
+  store: "openclaw.json" | "auth-profile-store";
   path: string;
   refPath?: string;
   when?: { type: "api_key" | "token" };
@@ -34,7 +34,7 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
         : entry.pathPattern;
 
       return Object.assign(
-        { id: canonicalId, configFile: entry.configFile, path: canonicalPath },
+        { id: canonicalId, store: entry.store, path: canonicalPath },
         entry.refPathPattern ? { refPath: entry.refPathPattern } : {},
         entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
         { secretShape: entry.secretShape, optIn: true as const },
