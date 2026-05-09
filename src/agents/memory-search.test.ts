@@ -327,6 +327,53 @@ describe("memory search config", () => {
     expect(resolved?.store.vector.extensionPath).toBe("/opt/sqlite-vec.dylib");
   });
 
+  it("merges memory search query reliability controls", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            query: {
+              timeoutMs: 4000,
+              cacheTtlMs: 60000,
+              retry: {
+                attempts: 2,
+                minDelayMs: 150,
+                maxDelayMs: 1000,
+                jitter: 0.2,
+              },
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              query: {
+                cacheTtlMs: 5000,
+                retry: {
+                  attempts: 3,
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.query.timeoutMs).toBe(4000);
+    expect(resolved?.query.cacheTtlMs).toBe(5000);
+    expect(resolved?.query.retry).toEqual({
+      attempts: 3,
+      minDelayMs: 150,
+      maxDelayMs: 1000,
+      jitter: 0.2,
+    });
+  });
+
   it("merges extra memory paths from defaults and overrides", () => {
     const cfg = asConfig({
       agents: {

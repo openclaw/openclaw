@@ -26,6 +26,17 @@ describe("memory embedding timeout resolution", () => {
     ).toBe(600_000);
   });
 
+  it("lets configured query timeout override provider defaults", () => {
+    expect(
+      resolveEmbeddingTimeoutMs({
+        kind: "query",
+        providerId: "openai",
+        providerRuntime: { inlineQueryTimeoutMs: 90_000 },
+        configuredQueryTimeoutMs: 4_000,
+      }),
+    ).toBe(4_000);
+  });
+
   it("lets configured batch timeout override provider defaults", () => {
     expect(
       resolveEmbeddingTimeoutMs({

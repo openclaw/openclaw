@@ -71,9 +71,14 @@ export function resolveEmbeddingTimeoutMs(params: {
     MemoryEmbeddingProviderRuntime,
     "inlineQueryTimeoutMs" | "inlineBatchTimeoutMs"
   >;
+  configuredQueryTimeoutMs?: number;
   configuredBatchTimeoutSeconds?: number;
 }): number {
   if (params.kind === "query") {
+    const configuredQueryTimeoutMs = params.configuredQueryTimeoutMs;
+    if (typeof configuredQueryTimeoutMs === "number" && configuredQueryTimeoutMs > 0) {
+      return Math.floor(configuredQueryTimeoutMs);
+    }
     const runtimeTimeoutMs = params.providerRuntime?.inlineQueryTimeoutMs;
     if (typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0) {
       return runtimeTimeoutMs;
@@ -394,6 +399,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       kind,
       providerId: this.provider?.id,
       providerRuntime: this.providerRuntime,
+      configuredQueryTimeoutMs: this.settings.query.timeoutMs,
       configuredBatchTimeoutSeconds: this.settings.sync.embeddingBatchTimeoutSeconds,
     });
   }

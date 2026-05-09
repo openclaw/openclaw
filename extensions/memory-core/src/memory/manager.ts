@@ -39,6 +39,11 @@ import {
 import { closeMemoryDatabase } from "./manager-db.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import {
+  isRetryableMemoryEmbeddingError,
+  resolveMemoryEmbeddingRetryDelay,
+  runMemoryOperationRetryLoop,
+} from "./manager-embedding-policy.js";
+import {
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
 } from "./manager-provider-state.js";
@@ -72,6 +77,13 @@ type EmbeddingProbeCacheEntry = {
   checkedAtMs: number;
   expireAtMs: number;
 };
+
+type QueryResultCacheEntry = {
+  results: MemorySearchResult[];
+  expireAtMs: number;
+};
+
+type MemoryQueryHybridConfig = ResolvedMemorySearchConfig["query"]["hybrid"];
 
 const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
 
@@ -147,6 +159,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private syncing: Promise<void> | null = null;
   private queuedSessionFiles = new Set<string>();
   private queuedSessionSync: Promise<void> | null = null;
+  private readonly queryResultCache = new Map<string, QueryResultCacheEntry>();
   private readonlyRecoveryAttempts = 0;
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
@@ -259,6 +272,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerUnavailableReason = providerState.providerUnavailableReason;
     this.providerRuntime = providerState.providerRuntime;
     this.providerInitialized = true;
+    this.clearQueryResultCache();
   }
 
   private async ensureProviderInitialized(): Promise<void> {
@@ -275,6 +289,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         this.applyProviderResult(providerResult);
         this.providerKey = this.computeProviderKey();
         this.batch = this.resolveBatchConfig();
+        this.clearQueryResultCache();
       })();
     }
     try {
@@ -300,6 +315,68 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (key) {
       this.sessionWarm.add(key);
     }
+  }
+
+  private clearQueryResultCache(): void {
+    this.queryResultCache.clear();
+  }
+
+  private cloneQueryResults(results: MemorySearchResult[]): MemorySearchResult[] {
+    return results.map((entry) => ({ ...entry }));
+  }
+
+  private buildQueryResultCacheKey(params: {
+    query: string;
+    maxResults: number;
+    minScore: number;
+    sourceFilterList: MemorySource[];
+    hybrid: MemoryQueryHybridConfig;
+  }): string {
+    return JSON.stringify({
+      query: params.query,
+      maxResults: params.maxResults,
+      minScore: params.minScore,
+      sources: [...params.sourceFilterList].sort(),
+      provider: this.provider
+        ? { id: this.provider.id, model: this.provider.model }
+        : { id: "none", model: "fts-only" },
+      providerKey: this.providerKey,
+      fts: {
+        enabled: this.fts.enabled,
+        available: this.fts.available,
+        tokenizer: this.settings.store.fts.tokenizer,
+      },
+      vector: {
+        enabled: this.vector.enabled,
+        available: this.vector.available,
+        semanticAvailable: this.vector.semanticAvailable,
+        dims: this.vector.dims,
+      },
+      hybrid: params.hybrid,
+    });
+  }
+
+  private getCachedQueryResults(cacheKey: string): MemorySearchResult[] | null {
+    const cached = this.queryResultCache.get(cacheKey);
+    if (!cached) {
+      return null;
+    }
+    if (Date.now() >= cached.expireAtMs) {
+      this.queryResultCache.delete(cacheKey);
+      return null;
+    }
+    return this.cloneQueryResults(cached.results);
+  }
+
+  private setCachedQueryResults(cacheKey: string, results: MemorySearchResult[]): void {
+    const ttlMs = this.settings.query.cacheTtlMs;
+    if (ttlMs <= 0) {
+      return;
+    }
+    this.queryResultCache.set(cacheKey, {
+      results: this.cloneQueryResults(results),
+      expireAtMs: Date.now() + ttlMs,
+    });
   }
 
   async search(
@@ -367,6 +444,24 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       200,
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
+    const queryCacheEnabled =
+      this.settings.query.cacheTtlMs > 0 && !this.dirty && !this.sessionsDirty;
+    if (this.dirty || this.sessionsDirty) {
+      this.clearQueryResultCache();
+    }
+    const queryCacheKey = queryCacheEnabled
+      ? this.buildQueryResultCacheKey({
+          query: cleaned,
+          maxResults,
+          minScore,
+          sourceFilterList,
+          hybrid,
+        })
+      : null;
+    const cachedResults = queryCacheKey ? this.getCachedQueryResults(queryCacheKey) : null;
+    if (cachedResults) {
+      return cachedResults;
+    }
 
     // FTS-only mode: no embedding provider available
     if (!this.provider) {
@@ -375,103 +470,228 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         return [];
       }
 
-      const fullQueryResults = await this.searchKeyword(
+      const results = await this.searchKeywordOnly({
         cleaned,
         candidates,
-        {
-          boostFallbackRanking: true,
-        },
         sourceFilterList,
-      ).catch((err) => {
-        log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
-        return [];
+        maxResults,
+        minScore,
+        hybrid,
       });
-      const resultSets =
-        fullQueryResults.length > 0
-          ? [fullQueryResults]
-          : await Promise.all(
-              // Fallback: broaden recall for conversational queries when the
-              // exact AND query is too strict to return any results.
-              (() => {
-                const keywords = extractKeywords(cleaned, {
-                  ftsTokenizer: this.settings.store.fts.tokenizer,
-                });
-                const searchTerms = keywords.length > 0 ? keywords : [cleaned];
-                return searchTerms.map((term) =>
-                  this.searchKeyword(
-                    term,
-                    candidates,
-                    { boostFallbackRanking: true },
-                    sourceFilterList,
-                  ).catch((err) => {
-                    log.warn(
-                      `memory search: FTS per-keyword query failed for "${term}": ${formatErrorMessage(err)}`,
-                    );
-                    return [];
-                  }),
-                );
-              })(),
-            );
-
-      // Merge and deduplicate results, keeping highest score for each chunk
-      const seenIds = new Map<string, (typeof resultSets)[0][0]>();
-      for (const results of resultSets) {
-        for (const result of results) {
-          const existing = seenIds.get(result.id);
-          if (!existing || result.score > existing.score) {
-            seenIds.set(result.id, result);
-          }
-        }
+      if (queryCacheKey) {
+        this.setCachedQueryResults(queryCacheKey, results);
       }
-
-      const merged = [...seenIds.values()];
-      const decayed = await applyTemporalDecayToHybridResults({
-        results: merged,
-        temporalDecay: hybrid.temporalDecay,
-        workspaceDir: this.workspaceDir,
-      });
-      const sorted = decayed.toSorted((a, b) => b.score - a.score);
-      return this.selectScoredResults(sorted, maxResults, minScore, 0);
+      return results;
     }
 
+    const results = await this.searchWithProvider({
+      cleaned,
+      candidates,
+      sourceFilterList,
+      maxResults,
+      minScore,
+      hybrid,
+    });
+    if (queryCacheKey) {
+      this.setCachedQueryResults(queryCacheKey, results);
+    }
+    return results;
+  }
+
+  private async searchKeywordOnly(params: {
+    cleaned: string;
+    candidates: number;
+    sourceFilterList: MemorySource[];
+    maxResults: number;
+    minScore: number;
+    hybrid: MemoryQueryHybridConfig;
+  }): Promise<MemorySearchResult[]> {
+    const fullQueryResults = await this.searchKeyword(
+      params.cleaned,
+      params.candidates,
+      {
+        boostFallbackRanking: true,
+      },
+      params.sourceFilterList,
+    ).catch((err) => {
+      log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
+      return [];
+    });
+    const resultSets =
+      fullQueryResults.length > 0
+        ? [fullQueryResults]
+        : await Promise.all(
+            // Fallback: broaden recall for conversational queries when the
+            // exact AND query is too strict to return any results.
+            (() => {
+              const keywords = extractKeywords(params.cleaned, {
+                ftsTokenizer: this.settings.store.fts.tokenizer,
+              });
+              const searchTerms = keywords.length > 0 ? keywords : [params.cleaned];
+              return searchTerms.map((term) =>
+                this.searchKeyword(
+                  term,
+                  params.candidates,
+                  { boostFallbackRanking: true },
+                  params.sourceFilterList,
+                ).catch((err) => {
+                  log.warn(
+                    `memory search: FTS per-keyword query failed for "${term}": ${formatErrorMessage(err)}`,
+                  );
+                  return [];
+                }),
+              );
+            })(),
+          );
+
+    // Merge and deduplicate results, keeping highest score for each chunk
+    const seenIds = new Map<string, (typeof resultSets)[0][0]>();
+    for (const results of resultSets) {
+      for (const result of results) {
+        const existing = seenIds.get(result.id);
+        if (!existing || result.score > existing.score) {
+          seenIds.set(result.id, result);
+        }
+      }
+    }
+
+    const merged = [...seenIds.values()];
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: merged,
+      temporalDecay: params.hybrid.temporalDecay,
+      workspaceDir: this.workspaceDir,
+    });
+    const sorted = decayed.toSorted((a, b) => b.score - a.score);
+    return this.selectScoredResults(sorted, params.maxResults, params.minScore, 0);
+  }
+
+  private resolveRetryCandidateLimit(
+    baseCandidates: number,
+    maxResults: number,
+    attemptIndex: number,
+  ): number {
+    if (attemptIndex <= 0) {
+      return baseCandidates;
+    }
+    const narrowed = Math.floor(baseCandidates / 2 ** attemptIndex);
+    return Math.min(baseCandidates, Math.max(1, maxResults, narrowed));
+  }
+
+  private async waitForQueryRetry(delayMs: number, attemptIndex: number): Promise<void> {
+    const retry = this.settings.query.retry;
+    const waitMs = resolveMemoryEmbeddingRetryDelay(
+      delayMs,
+      Math.random(),
+      retry.maxDelayMs,
+      retry.jitter,
+    );
+    log.warn(
+      `memory search: transient provider query failed; retrying attempt ${attemptIndex + 1}/${retry.attempts} with narrower scope in ${waitMs}ms`,
+    );
+    if (waitMs <= 0) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+
+  private async searchWithProvider(params: {
+    cleaned: string;
+    candidates: number;
+    sourceFilterList: MemorySource[];
+    maxResults: number;
+    minScore: number;
+    hybrid: MemoryQueryHybridConfig;
+  }): Promise<MemorySearchResult[]> {
+    const retry = this.settings.query.retry;
+    try {
+      return await runMemoryOperationRetryLoop({
+        run: async (attemptIndex) =>
+          await this.searchWithProviderAttempt({
+            ...params,
+            candidates: this.resolveRetryCandidateLimit(
+              params.candidates,
+              params.maxResults,
+              attemptIndex,
+            ),
+          }),
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async (delayMs, attemptIndex) =>
+          await this.waitForQueryRetry(delayMs, attemptIndex),
+        attempts: retry.attempts,
+        baseDelayMs: retry.minDelayMs,
+      });
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      if (!isRetryableMemoryEmbeddingError(message)) {
+        throw err;
+      }
+      if (!this.fts.enabled || !this.fts.available) {
+        log.warn(
+          `memory search: provider query failed after ${retry.attempts} attempt(s) and FTS is unavailable: ${message}`,
+        );
+        return [];
+      }
+      log.warn(
+        `memory search: provider query failed after ${retry.attempts} attempt(s); falling back to keyword search: ${message}`,
+      );
+      return await this.searchKeywordOnly(params);
+    }
+  }
+
+  private async searchWithProviderAttempt(params: {
+    cleaned: string;
+    candidates: number;
+    sourceFilterList: MemorySource[];
+    maxResults: number;
+    minScore: number;
+    hybrid: MemoryQueryHybridConfig;
+  }): Promise<MemorySearchResult[]> {
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
     const keywordResults =
-      hybrid.enabled && this.fts.enabled && this.fts.available
+      params.hybrid.enabled && this.fts.enabled && this.fts.available
         ? await this.searchKeyword(
-            cleaned,
-            candidates,
+            params.cleaned,
+            params.candidates,
             { boostFallbackRanking: true },
-            sourceFilterList,
+            params.sourceFilterList,
           ).catch((err) => {
             log.warn(`memory search: FTS hybrid keyword query failed: ${formatErrorMessage(err)}`);
             return [];
           })
         : [];
 
-    const queryVec = await this.embedQueryWithTimeout(cleaned);
+    const queryVec = await this.embedQueryWithTimeout(params.cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
-      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err) => {
-          log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
-          return [];
-        })
+      ? await this.searchVector(queryVec, params.candidates, params.sourceFilterList).catch(
+          (err) => {
+            const message = formatErrorMessage(err);
+            if (isRetryableMemoryEmbeddingError(message)) {
+              throw err;
+            }
+            log.warn(`memory search: vector query failed: ${message}`);
+            return [];
+          },
+        )
       : [];
 
-    if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
-      return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+    if (!params.hybrid.enabled || !this.fts.enabled || !this.fts.available) {
+      return vectorResults
+        .filter((entry) => entry.score >= params.minScore)
+        .slice(0, params.maxResults);
     }
 
     const merged = await this.mergeHybridResults({
       vector: vectorResults,
       keyword: keywordResults,
-      vectorWeight: hybrid.vectorWeight,
-      textWeight: hybrid.textWeight,
-      mmr: hybrid.mmr,
-      temporalDecay: hybrid.temporalDecay,
+      vectorWeight: params.hybrid.vectorWeight,
+      textWeight: params.hybrid.textWeight,
+      mmr: params.hybrid.mmr,
+      temporalDecay: params.hybrid.temporalDecay,
     });
-    const strict = merged.filter((entry) => entry.score >= minScore);
+    const strict = merged.filter((entry) => entry.score >= params.minScore);
     if (strict.length > 0 || keywordResults.length === 0) {
-      return strict.slice(0, maxResults);
+      return strict.slice(0, params.maxResults);
     }
 
     // Hybrid defaults can produce keyword-only matches below minScore after
@@ -487,8 +707,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       merged.filter((entry) =>
         keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`),
       ),
-      maxResults,
-      minScore,
+      params.maxResults,
+      params.minScore,
       relaxedMinScore,
     );
   }
@@ -625,6 +845,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.closed) {
       return;
     }
+    this.clearQueryResultCache();
     await this.ensureProviderInitialized();
     if (this.syncing) {
       if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
@@ -933,6 +1154,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;
     }
+    this.clearQueryResultCache();
     await awaitPendingManagerWork({ pendingSync, pendingProviderInit });
     closeMemoryDatabase(this.db);
     INDEX_CACHE.delete(this.cacheKey);

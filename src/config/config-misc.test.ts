@@ -222,6 +222,52 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("agents.defaults.memorySearch.query reliability controls", () => {
+  it("accepts timeout, query cache TTL, and retry policy knobs", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        defaults: {
+          memorySearch: {
+            query: {
+              timeoutMs: 4000,
+              cacheTtlMs: 60000,
+              retry: {
+                attempts: 2,
+                minDelayMs: 150,
+                maxDelayMs: 1000,
+                jitter: 0.2,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid query reliability values", () => {
+    for (const query of [
+      { timeoutMs: 0 },
+      { cacheTtlMs: -1 },
+      { retry: { attempts: 0 } },
+      { retry: { minDelayMs: 1000, maxDelayMs: 999 } },
+      { retry: { jitter: 1.1 } },
+    ]) {
+      const result = OpenClawSchema.safeParse({
+        agents: {
+          defaults: {
+            memorySearch: {
+              query,
+            },
+          },
+        },
+      });
+      expect(result.success).toBe(false);
+    }
+  });
+});
+
 describe("models.pricing", () => {
   it("accepts the model pricing bootstrap toggle", () => {
     for (const enabled of [true, false]) {

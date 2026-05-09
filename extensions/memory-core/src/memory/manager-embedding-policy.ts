@@ -96,8 +96,10 @@ export function resolveMemoryEmbeddingRetryDelay(
   delayMs: number,
   randomValue: number,
   maxDelayMs: number,
+  jitter = 0.2,
 ): number {
-  return Math.min(maxDelayMs, Math.round(delayMs * (1 + randomValue * 0.2)));
+  const clampedJitter = Math.max(0, Math.min(1, jitter));
+  return Math.min(maxDelayMs, Math.round(delayMs * (1 + randomValue * clampedJitter)));
 }
 
 export async function runMemoryEmbeddingRetryLoop<T>(params: {
@@ -120,6 +122,32 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
       await params.waitForRetry(delayMs);
       delayMs *= 2;
       attempt += 1;
+    }
+  }
+}
+
+export async function runMemoryOperationRetryLoop<T>(params: {
+  run: (attemptIndex: number) => Promise<T>;
+  isRetryable: (message: string) => boolean;
+  waitForRetry: (delayMs: number, attemptIndex: number) => Promise<void>;
+  attempts: number;
+  baseDelayMs: number;
+}): Promise<T> {
+  const attempts = Math.max(1, Math.floor(params.attempts));
+  let attemptIndex = 0;
+  let delayMs = Math.max(0, Math.floor(params.baseDelayMs));
+  while (true) {
+    try {
+      return await params.run(attemptIndex);
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      const nextAttempt = attemptIndex + 1;
+      if (!params.isRetryable(message) || nextAttempt >= attempts) {
+        throw err;
+      }
+      await params.waitForRetry(delayMs, nextAttempt);
+      delayMs *= 2;
+      attemptIndex = nextAttempt;
     }
   }
 }
