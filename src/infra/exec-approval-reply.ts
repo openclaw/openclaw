@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
+import { summarizeExecApprovalCommandForPrompt } from "./exec-approval-command-summary.js";
 import {
   describeNativeExecApprovalClientSetup,
   listNativeExecApprovalClientLabels,
@@ -305,8 +306,9 @@ export function buildExecApprovalPendingReplyPayload(
     lines.push("Run:");
     lines.push(buildFence(primaryAction.command, "txt"));
   }
+  const commandSummary = summarizeExecApprovalCommandForPrompt(params.command).text;
   lines.push("Pending command:");
-  lines.push(buildFence(params.command, "sh"));
+  lines.push(buildFence(commandSummary, "sh"));
   const secondaryFence = buildApprovalCommandFence(secondaryActions);
   if (secondaryFence) {
     lines.push("Other options:");

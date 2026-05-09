@@ -318,6 +318,7 @@ Shared behavior:
   straight to plugin approvals, everything else goes to exec approvals
 - native Telegram approval buttons follow the same bounded exec-to-plugin fallback as `/approve`
 - when native `target` enables origin-chat delivery, approval prompts include the command text
+- long command prompts are summarized for reviewability; the full sanitized command remains bound to the pending approval record for matching and resolution
 - pending exec approvals expire after 30 minutes by default
 - if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
 

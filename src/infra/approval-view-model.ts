@@ -9,6 +9,7 @@ import type {
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
+import { summarizeExecApprovalCommandForPrompt } from "./exec-approval-command-summary.js";
 import { buildExecApprovalActionDescriptors } from "./exec-approval-reply.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
@@ -62,6 +63,7 @@ function buildExecViewBase<TPhase extends ApprovalPhase>(
   phase: TPhase,
 ): ExecApprovalViewBase & { phase: TPhase } {
   const { commandText, commandPreview } = resolveExecApprovalCommandDisplay(request.request);
+  const commandSummary = summarizeExecApprovalCommandForPrompt(commandText);
   return {
     approvalId: request.id,
     approvalKind: "exec",
@@ -73,7 +75,7 @@ function buildExecViewBase<TPhase extends ApprovalPhase>(
     agentId: request.request.agentId ?? null,
     warningText: request.request.warningText ?? null,
     commandAnalysis: request.request.commandAnalysis ?? null,
-    commandText,
+    commandText: commandSummary.text,
     commandPreview,
     cwd: request.request.cwd ?? null,
     envKeys: request.request.envKeys ?? undefined,

@@ -28,6 +28,7 @@ import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalWarningText,
 } from "./exec-approval-command-display.js";
+import { summarizeExecApprovalCommandForPrompt } from "./exec-approval-command-summary.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
@@ -250,7 +251,9 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
     }
   }
   const command = formatApprovalCommand(
-    resolveExecApprovalCommandDisplay(request.request).commandText,
+    summarizeExecApprovalCommandForPrompt(
+      resolveExecApprovalCommandDisplay(request.request).commandText,
+    ).text,
   );
   if (command.inline) {
     lines.push(`Command: ${command.text}`);

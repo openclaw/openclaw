@@ -302,6 +302,19 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).not.toContain("C:\\Users\\alice");
   });
 
+  it("summarizes long commands in pending reply payloads", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-long",
+      approvalSlug: "slug-long",
+      command: Array.from({ length: 8 }, (_, index) => `echo line ${index + 1}\\u{A}`).join(""),
+      host: "gateway",
+    });
+
+    expect(payload.text).toContain("echo line 1\\u{A}");
+    expect(payload.text).toContain("...[truncated: showing first 5 of 9 lines");
+    expect(payload.text).not.toContain("echo line 8");
+  });
+
   it("omits allow-always actions when the effective policy requires approval every time", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-ask-always",

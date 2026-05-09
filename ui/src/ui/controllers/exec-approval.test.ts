@@ -5,14 +5,28 @@ describe("parseExecApprovalRequested", () => {
   it("returns entries with kind 'exec'", () => {
     const result = parseExecApprovalRequested({
       id: "exec-1",
-      request: { command: "rm -rf /" },
+      request: { command: "rm -rf /", allowedDecisions: ["allow-once", "deny"] },
       createdAtMs: 1000,
       expiresAtMs: 2000,
     });
     expect(result).toMatchObject({
       kind: "exec",
-      request: { command: "rm -rf /" },
+      request: { command: "rm -rf /", allowedDecisions: ["allow-once", "deny"] },
     });
+  });
+
+  it("drops invalid and duplicate allowed decisions", () => {
+    const result = parseExecApprovalRequested({
+      id: "exec-1",
+      request: {
+        command: "rm -rf /",
+        allowedDecisions: ["allow-once", "allow-once", "invalid", "deny"],
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    });
+
+    expect(result?.request.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 });
 
@@ -28,6 +42,7 @@ describe("parsePluginApprovalRequested", () => {
       description: "chmod 777 script.sh modifies file permissions",
       severity: "high",
       pluginId: "sage",
+      allowedDecisions: ["allow-once", "deny"],
       agentId: "agent-1",
       sessionKey: "sess-1",
     },
@@ -43,6 +58,7 @@ describe("parsePluginApprovalRequested", () => {
       pluginId: "sage",
       request: {
         command: "Dangerous command detected",
+        allowedDecisions: ["allow-once", "deny"],
         agentId: "agent-1",
         sessionKey: "sess-1",
       },

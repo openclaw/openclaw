@@ -168,6 +168,37 @@ describe("approval and confirmation modals", () => {
     expect(spans).toEqual(["ls", "python -c"]);
   });
 
+  it("summarizes long commands in exec approvals", async () => {
+    const request = createExecRequest();
+    request.request.command = Array.from({ length: 8 }, (_, index) => {
+      const line = index + 1;
+      return `echo line ${line}\\u{A}`;
+    }).join("");
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    const command = container.querySelector(".exec-approval-command")?.textContent ?? "";
+    expect(command).toContain("echo line 1\\u{A}");
+    expect(command).toContain("...[truncated: showing first 5 of 9 lines");
+    expect(command).not.toContain("echo line 8");
+  });
+
+  it("only renders approval decisions allowed by the gateway", async () => {
+    const request = createExecRequest();
+    request.request.allowedDecisions = ["allow-once", "deny"];
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    const actions = [...container.querySelectorAll(".exec-approval-actions button")].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(actions).toEqual(["Allow once", "Deny"]);
+  });
+
   it("maps Escape to exec denial when approval is idle", async () => {
     const handleExecApprovalDecision = vi.fn(async () => undefined);
     render(renderExecApprovalPrompt(createExecState({ handleExecApprovalDecision })), container);

@@ -600,6 +600,23 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("- Contains inline-eval: python3 -c");
   });
 
+  it("summarizes long commands in fallback delivery text", () => {
+    const text = buildExecApprovalRequestMessage(
+      {
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          command: Array.from({ length: 8 }, (_, index) => `echo line ${index + 1}\\u{A}`).join(""),
+        },
+      },
+      1000,
+    );
+
+    expect(text).toContain("echo line 1\\u{A}");
+    expect(text).toContain("...[truncated: showing first 5 of 9 lines");
+    expect(text).not.toContain("echo line 8");
+  });
+
   it("omits allow-always from forwarded fallback text when ask=always", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });

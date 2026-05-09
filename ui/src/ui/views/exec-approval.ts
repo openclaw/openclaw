@@ -1,12 +1,16 @@
 import { html, nothing } from "lit";
 import { formatApprovalDisplayPath } from "../../../../src/infra/approval-display-paths.ts";
+import { summarizeExecApprovalCommandForPrompt } from "../../../../src/infra/exec-approval-command-summary.ts";
 import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import "../components/modal-dialog.ts";
 import type {
+  ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
 } from "../controllers/exec-approval.ts";
+
+const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 
 function formatRemaining(ms: number): string {
   const remaining = Math.max(0, ms);
@@ -33,6 +37,10 @@ function renderMetaRow(label: string, value?: string | null, opts?: { path?: boo
 }
 
 function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
+  const commandSummary = summarizeExecApprovalCommandForPrompt(request.command);
+  if (commandSummary.truncated || commandSummary.text !== request.command) {
+    return html`<div class="exec-approval-command mono">${commandSummary.text}</div>`;
+  }
   const commandSpans = [...(request.commandSpans ?? [])]
     .filter(
       (span) =>
@@ -72,6 +80,13 @@ function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
     parts.push(request.command.slice(cursor));
   }
   return html`<div class="exec-approval-command mono">${parts}</div>`;
+}
+
+function isDecisionAllowed(
+  allowedDecisions: readonly ExecApprovalDecision[],
+  decision: ExecApprovalDecision,
+): boolean {
+  return allowedDecisions.includes(decision);
 }
 
 function renderExecBody(request: ExecApprovalRequestPayload) {
@@ -125,6 +140,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
     : t("execApproval.execApprovalNeeded");
   const titleId = "exec-approval-title";
   const descriptionId = "exec-approval-description";
+  const allowedDecisions = request.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS;
   const handleCancel = () => {
     if (!state.execApprovalBusy) {
       void state.handleExecApprovalDecision("deny");
@@ -149,27 +165,33 @@ export function renderExecApprovalPrompt(state: AppViewState) {
           ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
           : nothing}
         <div class="exec-approval-actions">
-          <button
-            class="btn primary"
-            ?disabled=${state.execApprovalBusy}
-            @click=${() => state.handleExecApprovalDecision("allow-once")}
-          >
-            ${t("execApproval.allowOnce")}
-          </button>
-          <button
-            class="btn"
-            ?disabled=${state.execApprovalBusy}
-            @click=${() => state.handleExecApprovalDecision("allow-always")}
-          >
-            ${t("execApproval.alwaysAllow")}
-          </button>
-          <button
-            class="btn danger"
-            ?disabled=${state.execApprovalBusy}
-            @click=${() => state.handleExecApprovalDecision("deny")}
-          >
-            ${t("execApproval.deny")}
-          </button>
+          ${isDecisionAllowed(allowedDecisions, "allow-once")
+            ? html`<button
+                class="btn primary"
+                ?disabled=${state.execApprovalBusy}
+                @click=${() => state.handleExecApprovalDecision("allow-once")}
+              >
+                ${t("execApproval.allowOnce")}
+              </button>`
+            : nothing}
+          ${isDecisionAllowed(allowedDecisions, "allow-always")
+            ? html`<button
+                class="btn"
+                ?disabled=${state.execApprovalBusy}
+                @click=${() => state.handleExecApprovalDecision("allow-always")}
+              >
+                ${t("execApproval.alwaysAllow")}
+              </button>`
+            : nothing}
+          ${isDecisionAllowed(allowedDecisions, "deny")
+            ? html`<button
+                class="btn danger"
+                ?disabled=${state.execApprovalBusy}
+                @click=${() => state.handleExecApprovalDecision("deny")}
+              >
+                ${t("execApproval.deny")}
+              </button>`
+            : nothing}
         </div>
       </div>
     </openclaw-modal-dialog>
