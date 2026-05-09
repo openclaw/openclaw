@@ -168,6 +168,7 @@ const ERROR_PATTERNS = {
     // aborted). These arrive as bare strings on the outer error and, without
     // an explicit match, the fallback chain is never attempted (#69368).
     /^terminated$/i,
+    /^stream_read_error$/i,
     /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
     // pi-ai's openai-codex provider surfaces `Request failed` when the HTTP
     // response has no body and no status text (typical of Cloudflare 502s

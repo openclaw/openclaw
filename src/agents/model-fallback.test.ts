@@ -1113,6 +1113,14 @@ describe("runWithModelFallback", () => {
         error: new Error("Model not found: openai/gpt-6"),
         expectedFallback: ["anthropic", "claude-haiku-3-5"],
       },
+      {
+        name: "bare stream read transport error",
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        error: new Error("stream_read_error"),
+        expectedFallback: ["anthropic", "claude-haiku-3-5"],
+        expectedReason: "timeout",
+      },
     ];
 
     for (const testCase of cases) {
