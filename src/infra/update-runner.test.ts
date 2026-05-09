@@ -345,7 +345,7 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("fetch-failed");
     expect(calls).toContain(fetchCommand);
-    expect(calls.slice(calls.indexOf(fetchCommand) + 1)).toEqual([]);
+    expect(calls.slice(calls.indexOf(fetchCommand) + 1)).toStrictEqual([]);
   });
 
   it("aborts rebase on failure", async () => {
@@ -1431,7 +1431,7 @@ describe("runGatewayUpdate", () => {
     expect(calls).not.toContain("npm run build");
     expect(calls).not.toContain("npm run lint");
     const preflightCalls = calls.filter((call) => preflightPrefixPattern.test(call));
-    expect(preflightCalls).toEqual([]);
+    expect(preflightCalls).toStrictEqual([]);
   });
 
   it("skips update when no git root", async () => {
@@ -1453,8 +1453,8 @@ describe("runGatewayUpdate", () => {
     expect(result.reason).toBe("not-git-install");
     const pnpmGlobalInstallCalls = calls.filter((call) => call.startsWith("pnpm add -g"));
     const npmGlobalInstallCalls = calls.filter((call) => call.startsWith("npm i -g"));
-    expect(pnpmGlobalInstallCalls).toEqual([]);
-    expect(npmGlobalInstallCalls).toEqual([]);
+    expect(pnpmGlobalInstallCalls).toStrictEqual([]);
+    expect(npmGlobalInstallCalls).toStrictEqual([]);
   });
 
   async function runNpmGlobalUpdateCase(params: {
@@ -1908,7 +1908,7 @@ describe("runGatewayUpdate", () => {
     );
     const pnpmAddGlobalCalls = calls.filter((call) => call.startsWith("pnpm add -g"));
     expect(npmPrefixedGlobalInstallCalls.length).toBeGreaterThan(0);
-    expect(pnpmAddGlobalCalls).toEqual([]);
+    expect(pnpmAddGlobalCalls).toStrictEqual([]);
     expect(result.steps.map((step) => step.name)).toEqual(["global update", "global install swap"]);
     await expect(fs.access(staleInstallChunk)).rejects.toMatchObject({ code: "ENOENT" });
   });
