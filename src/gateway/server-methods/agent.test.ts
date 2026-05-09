@@ -5,6 +5,7 @@ import {
   resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -542,7 +543,10 @@ describe("gateway agent handler", () => {
     vi.setSystemTime(new Date("2026-05-07T12:00:00.000Z"));
     const staleEntry = {
       sessionId: "old-session-id",
-      sessionFile: "/tmp/openclaw/agents/main/sessions/old-session-id.jsonl",
+      sessionFile: createSqliteSessionTranscriptLocator({
+        agentId: "main",
+        sessionId: "old-session-id",
+      }),
       updatedAt: 0,
       sessionStartedAt: 0,
     };

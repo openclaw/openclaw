@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { artifactsHandlers, collectArtifactsFromMessages } from "./artifacts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -63,7 +64,13 @@ describe("artifacts RPC handlers", () => {
     vi.clearAllMocks();
     hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue(undefined);
     hoisted.loadSessionEntry.mockReturnValue({
-      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
+      entry: {
+        sessionId: "sess-main",
+        sessionFile: createSqliteSessionTranscriptLocator({
+          agentId: "main",
+          sessionId: "sess-main",
+        }),
+      },
     });
     mockedMessages([
       {
