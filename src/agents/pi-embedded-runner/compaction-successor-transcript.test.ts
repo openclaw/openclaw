@@ -82,6 +82,10 @@ function requireEntryByType<T extends TranscriptEntry["type"]>(
   return entry as Extract<TranscriptEntry, { type: T }>;
 }
 
+function transcriptParentReference(scope: { agentId: string; sessionId: string }): string {
+  return `agent-db:${scope.agentId}:transcript_events:${scope.sessionId}`;
+}
+
 function createCompactedSession(sessionDir: string): {
   manager: SessionManager;
   transcriptLocator: string;
@@ -112,8 +116,9 @@ describe("rotateTranscriptAfterCompaction", () => {
     const openSpy = vi.spyOn(SessionManager, "openForSession").mockImplementation(() => {
       throw new Error("SessionManager.openForSession should not be used for SQLite rotation");
     });
+    const sourceScope = scopeForTranscript(transcriptLocator);
     const result = await rotateSqliteTranscriptAfterCompaction({
-      ...scopeForTranscript(transcriptLocator),
+      ...sourceScope,
       now: () => new Date("2026-04-27T12:00:00.000Z"),
     });
     openSpy.mockRestore();
@@ -126,7 +131,7 @@ describe("rotateTranscriptAfterCompaction", () => {
       sessionId: result.sessionId!,
     });
     expect(successor.getHeader()).toMatchObject({
-      parentSession: transcriptLocator,
+      parentSession: transcriptParentReference(sourceScope),
       cwd: dir,
     });
     expect(successor.buildSessionContext().messages.length).toBeGreaterThan(0);
@@ -138,9 +143,10 @@ describe("rotateTranscriptAfterCompaction", () => {
     const originalEntryCount = manager.getEntries().length;
     const originalEntries = manager.getEntries();
 
+    const sourceScope = scopeForTranscript(transcriptLocator);
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      ...scopeForTranscript(transcriptLocator),
+      ...sourceScope,
       now: () => new Date("2026-04-27T12:00:00.000Z"),
     });
 
@@ -158,7 +164,7 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
     expect(successor.getHeader()).toMatchObject({
       id: result.sessionId,
-      parentSession: transcriptLocator,
+      parentSession: transcriptParentReference(sourceScope),
       cwd: dir,
     });
     expect(successor.getEntries().length).toBeLessThan(originalEntryCount);
