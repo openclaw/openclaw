@@ -15,10 +15,12 @@ export async function finalizeDoctorConfigFlow(params: {
     const flatCfg = flattenObject(params.cfg);
     const flatCandidate = flattenObject(params.candidate);
     const allKeys = new Set([...Object.keys(flatCfg), ...Object.keys(flatCandidate)]);
-    for (const key of [...allKeys].sort()) {
+    for (const key of [...allKeys].toSorted()) {
       const oldVal = flatCfg[key];
       const newVal = flatCandidate[key];
-      if (oldVal === newVal) continue;
+      if (oldVal === newVal) {
+        continue;
+      }
       if (oldVal === undefined) {
         changes.push(`+ ${key}: ${JSON.stringify(newVal)}`);
       } else if (newVal === undefined) {
