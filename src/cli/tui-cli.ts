@@ -20,6 +20,11 @@ export function registerTuiCli(program: Command) {
     .option("--message <text>", "Send an initial message after connecting")
     .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")
     .option("--history-limit <n>", "History entries to load", "200")
+    .option(
+      "--quiet-status",
+      "Suppress animated spinner and elapsed counter (recording-friendly)",
+      false,
+    )
     .addHelpText(
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/tui", "docs.openclaw.ai/cli/tui")}\n`,
@@ -54,6 +59,7 @@ export function registerTuiCli(program: Command) {
           message: opts.message as string | undefined,
           timeoutMs,
           historyLimit: Number.isNaN(historyLimit) ? undefined : historyLimit,
+          quietStatus: Boolean(opts.quietStatus),
         });
       } catch (err) {
         defaultRuntime.error(String(err));
