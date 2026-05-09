@@ -12,7 +12,6 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -1015,7 +1014,6 @@ function extractTranscriptUserText(content: unknown): string | undefined {
 }
 
 async function rewriteChatSendUserTurnMediaPaths(params: {
-  transcriptLocator: string;
   agentId: string;
   sessionId: string;
   sessionKey: string;
@@ -1315,28 +1313,11 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
   return { messages: [], placeholderCount: 0 };
 }
 
-function resolveTranscriptLocator(params: {
-  sessionId: string;
-  transcriptLocator?: string;
-  agentId?: string;
-}): string | null {
-  const { sessionId, agentId } = params;
-  if (!agentId && !params.transcriptLocator) {
-    return null;
-  }
-  try {
-    return createSqliteSessionTranscriptLocator({ agentId, sessionId });
-  } catch {
-    return null;
-  }
-}
-
 async function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
   content?: Array<Record<string, unknown>>;
   sessionId: string;
-  transcriptLocator?: string;
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
@@ -1347,17 +1328,7 @@ async function appendAssistantTranscriptMessage(params: {
   };
   cfg?: OpenClawConfig;
 }): Promise<TranscriptAppendResult> {
-  const transcriptLocator = resolveTranscriptLocator({
-    sessionId: params.sessionId,
-    transcriptLocator: params.transcriptLocator,
-    agentId: params.agentId,
-  });
-  if (!transcriptLocator) {
-    return { ok: false, error: "transcript locator not resolved" };
-  }
-
   return await appendInjectedAssistantMessageToTranscript({
-    transcriptLocator,
     message: params.message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
@@ -1409,7 +1380,6 @@ async function persistAbortedPartials(params: {
     const appended = await appendAssistantTranscriptMessage({
       message: snapshot.text,
       sessionId,
-      transcriptLocator: createSqliteSessionTranscriptLocator({ agentId, sessionId }),
       agentId,
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
@@ -2265,13 +2235,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               if (!resolvedSessionId) {
                 return;
               }
-              const transcriptLocator = resolveTranscriptLocator({
-                sessionId: resolvedSessionId,
-                agentId,
-              });
-              if (!transcriptLocator) {
-                return;
-              }
               const persistedImages = await persistedImagesPromise;
               emitSessionTranscriptUpdate({
                 agentId,
@@ -2303,16 +2266,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!resolvedSessionId) {
           return;
         }
-        const transcriptLocator = resolveTranscriptLocator({
-          sessionId: resolvedSessionId,
-          agentId,
-        });
-        if (!transcriptLocator) {
-          return;
-        }
         transcriptMediaRewriteDone = true;
         await rewriteChatSendUserTurnMediaPaths({
-          transcriptLocator,
           agentId,
           sessionId: resolvedSessionId,
           sessionKey,
@@ -2337,13 +2292,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         const { entry: latestEntry } = loadSessionEntry(sessionKey);
         const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-        const resolvedTranscriptLocator = resolveTranscriptLocator({
-          sessionId,
-          agentId,
-        });
         const mediaLocalRoots = appendLocalMediaParentRoots(
           getAgentScopedMediaLocalRoots(cfg, agentId),
-          resolvedTranscriptLocator ? [resolvedTranscriptLocator] : undefined,
         );
         const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
           sessionKey,
@@ -2384,7 +2334,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           message: transcriptReply,
           ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
           sessionId,
-          transcriptLocator: resolvedTranscriptLocator ?? undefined,
           agentId,
           createIfMissing: true,
           idempotencyKey: `${clientRunId}:assistant-media`,
@@ -2528,13 +2477,8 @@ export const chatHandlers: GatewayRequestHandlers = {
                   });
                   const { entry: latestEntry } = loadSessionEntry(sessionKey);
                   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-                  const resolvedTranscriptLocator = resolveTranscriptLocator({
-                    sessionId,
-                    agentId,
-                  });
                   const mediaLocalRoots = appendLocalMediaParentRoots(
                     getAgentScopedMediaLocalRoots(cfg, agentId),
-                    resolvedTranscriptLocator ? [resolvedTranscriptLocator] : undefined,
                   );
                   const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
                     sessionKey,
@@ -2613,7 +2557,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                         ? { content: persistedContentForAppend }
                         : {}),
                       sessionId,
-                      transcriptLocator: resolvedTranscriptLocator ?? undefined,
                       agentId,
                       createIfMissing: true,
                       cfg,
@@ -2785,7 +2728,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: p.message,
       label: p.label,
       sessionId,
-      transcriptLocator: createSqliteSessionTranscriptLocator({ agentId, sessionId }),
       agentId,
       createIfMissing: true,
       cfg,
