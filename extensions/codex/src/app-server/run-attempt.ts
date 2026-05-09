@@ -528,7 +528,7 @@ export async function runCodexAppServerAttempt(
       runId: params.runId,
     },
   });
-  const hadSessionFile = hasSqliteSessionTranscriptEvents({
+  const hadTranscript = hasSqliteSessionTranscriptEvents({
     agentId: sessionAgentId,
     sessionId: params.sessionId,
   });
@@ -549,12 +549,11 @@ export async function runCodexAppServerAttempt(
   };
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
-      hadTranscriptLocator: hadSessionFile,
+      hadTranscript,
       contextEngine: activeContextEngine,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       transcriptScope: { agentId: sessionAgentId, sessionId: params.sessionId },
-      transcriptLocator: params.sessionId,
       runtimeContext: buildHarnessContextEngineRuntimeContext({
         attempt: runtimeParams,
         workspaceDir: effectiveWorkspace,
@@ -1707,7 +1706,6 @@ export async function runCodexAppServerAttempt(
         sessionIdUsed: params.sessionId,
         sessionKey: sandboxSessionKey,
         transcriptScope: { agentId: sessionAgentId, sessionId: params.sessionId },
-        transcriptLocator: params.sessionId,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,
         tokenBudget: params.contextTokenBudget,
