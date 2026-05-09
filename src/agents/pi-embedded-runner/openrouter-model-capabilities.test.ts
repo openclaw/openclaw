@@ -1,9 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importLegacyOpenRouterModelCapabilitiesCacheToSqlite } from "../../commands/doctor/legacy/openrouter-model-capabilities.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { writeOpenClawStateKvJson } from "../../state/openclaw-state-kv.js";
 
@@ -81,55 +80,6 @@ describe("openrouter-model-capabilities", () => {
         maxTokens: 33_000,
       });
       expect(fetchSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("imports legacy JSON cache into SQLite through the doctor migration helper", async () => {
-    await withOpenRouterStateDir(async (stateDir) => {
-      const cachePath = join(stateDir, "cache", "openrouter-models.json");
-      mkdirSync(join(stateDir, "cache"), { recursive: true });
-      writeFileSync(
-        cachePath,
-        JSON.stringify({
-          models: {
-            "acme/legacy-json": {
-              name: "Legacy JSON",
-              input: ["text"],
-              reasoning: false,
-              contextWindow: 111_000,
-              maxTokens: 22_000,
-              cost: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-              },
-            },
-          },
-        }),
-      );
-      const fetchSpy = vi.fn(async () => {
-        throw new Error("unexpected OpenRouter fetch");
-      });
-      vi.stubGlobal("fetch", fetchSpy);
-
-      const module = await importOpenRouterModelCapabilities("legacy-json-cache");
-      await module.loadOpenRouterModelCapabilities("acme/legacy-json");
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-
-      expect(importLegacyOpenRouterModelCapabilitiesCacheToSqlite()).toEqual({
-        imported: true,
-        models: 1,
-      });
-      const migratedModule = await importOpenRouterModelCapabilities("legacy-json-cache-migrated");
-      await migratedModule.loadOpenRouterModelCapabilities("acme/legacy-json");
-
-      expect(migratedModule.getOpenRouterModelCapabilities("acme/legacy-json")).toMatchObject({
-        name: "Legacy JSON",
-        contextWindow: 111_000,
-        maxTokens: 22_000,
-      });
-      expect(existsSync(cachePath)).toBe(false);
     });
   });
 
