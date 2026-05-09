@@ -919,6 +919,38 @@ describe("model compat config schema", () => {
 
     expect(res.success).toBe(true);
   });
+
+  it("accepts qwen and qwen-chat-template thinkingFormat values", () => {
+    for (const thinkingFormat of ["qwen", "qwen-chat-template"] as const) {
+      const res = OpenClawSchema.safeParse({
+        models: {
+          providers: {
+            local: {
+              baseUrl: "http://127.0.0.1:1234/v1",
+              api: "openai-completions",
+              models: [{ id: "qwen3-235b-a22b", name: "Qwen3 235B", compat: { thinkingFormat } }],
+            },
+          },
+        },
+      });
+      expect(res.success, `thinkingFormat "${thinkingFormat}" should be accepted`).toBe(true);
+    }
+  });
+
+  it("rejects unknown thinkingFormat values", () => {
+    const res = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          local: {
+            baseUrl: "http://127.0.0.1:1234/v1",
+            api: "openai-completions",
+            models: [{ id: "m", name: "m", compat: { thinkingFormat: "unknown-format" } }],
+          },
+        },
+      },
+    });
+    expect(res.success).toBe(false);
+  });
 });
 
 describe("config paths", () => {
