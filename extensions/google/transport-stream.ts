@@ -752,13 +752,18 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
     }, timeoutMs);
     timeout.unref?.();
   }
+  const clearDeadline = () => {
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = undefined;
+    }
+  };
   return {
     signal: controller.signal,
     timedOut: () => timedOut,
+    clearDeadline,
     cleanup: () => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
+      clearDeadline();
       parent?.removeEventListener("abort", abortFromParent);
     },
   };
@@ -819,6 +824,7 @@ async function openGoogleSseAttempt(params: {
     const chunks = parseGoogleSseChunks(response, signal);
     const iterator = chunks[Symbol.asyncIterator]();
     const first = await iterator.next();
+    attemptSignal?.clearDeadline();
     if (first.done) {
       return {
         type: "ready",

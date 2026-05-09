@@ -86,6 +86,35 @@ function buildSseResponse(events: unknown[]): Response {
   });
 }
 
+function buildDelayedSecondSseResponse(params: {
+  first: unknown;
+  second: unknown;
+  delayMs: number;
+}): Response {
+  const encoder = new TextEncoder();
+  const first = `data: ${JSON.stringify(params.first)}\n\n`;
+  const second = `data: ${JSON.stringify(params.second)}\n\ndata: [DONE]\n\n`;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(first));
+      timeout = setTimeout(() => {
+        controller.enqueue(encoder.encode(second));
+        controller.close();
+      }, params.delayMs);
+    },
+    cancel() {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
 describe("google transport stream", () => {
   beforeAll(async () => {
     ({
@@ -332,6 +361,40 @@ describe("google transport stream", () => {
       thinkingLevel: "LOW",
     });
     expect(retryBody.tools).toEqual(firstBody.tools);
+  });
+
+  it("keeps streaming after the first Gemini 3 chunk arrives before the retry deadline", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    guardedFetchMock.mockResolvedValueOnce(
+      buildDelayedSecondSseResponse({
+        first: {
+          candidates: [{ content: { parts: [{ text: "first " }] } }],
+        },
+        second: {
+          candidates: [{ content: { parts: [{ text: "second" }] }, finishReason: "STOP" }],
+        },
+        delayMs: 25,
+      }),
+    );
+
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as never,
+        { reasoning: "high" } as never,
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content).toEqual([{ type: "text", text: "first second" }]);
+    expect(guardedFetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses bearer auth when the Google api key is an OAuth JSON payload", async () => {
