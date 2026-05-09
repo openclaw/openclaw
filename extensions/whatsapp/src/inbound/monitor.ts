@@ -495,6 +495,16 @@ export async function attachWebInboxToSocket(
       return null;
     }
 
+    // Filter out WhatsApp system/protocol messages (join/leave notifications, admin changes, etc.)
+    // messageStubType is non-zero/non-null for system events like GROUP_PARTICIPANT_ADD/REMOVE
+    if (msg.messageStubType != null && msg.messageStubType !== 0) {
+      logWhatsAppVerbose(
+        options.verbose,
+        `Skipping system message with messageStubType ${msg.messageStubType} for ${remoteJid}`,
+      );
+      return null;
+    }
+
     const group = isGroupJid(remoteJid);
     // Drop echoes of messages the gateway itself sent (tracked by sendTrackedMessage).
     // Applies to both groups and DMs/self-chat — without this, self-chat mode
