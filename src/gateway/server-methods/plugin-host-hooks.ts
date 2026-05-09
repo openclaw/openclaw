@@ -28,6 +28,18 @@ function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationErro
   return errors.map((error) => error.text).join("; ");
 }
 
+const SESSION_ACTION_SUCCESS_RESULT_KEYS = new Set(["ok", "data", "reply", "continueAgent"]);
+const SESSION_ACTION_FAILURE_RESULT_KEYS = new Set(["ok", "error", "code", "details"]);
+
+function listUnsupportedSessionActionResultKeys(
+  result: Record<string, unknown>,
+  allowedKeys: ReadonlySet<string>,
+): string[] {
+  return Object.keys(result)
+    .filter((key) => !allowedKeys.has(key))
+    .toSorted();
+}
+
 export const pluginHostHookHandlers: GatewayRequestHandlers = {
   "plugins.uiDescriptors": ({ params, respond }) => {
     if (!validatePluginsUiDescriptorsParams(params)) {
@@ -199,6 +211,21 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         return;
       }
       if (result && result.ok === false) {
+        const unsupportedKeys = listUnsupportedSessionActionResultKeys(
+          result,
+          SESSION_ACTION_FAILURE_RESULT_KEYS,
+        );
+        if (unsupportedKeys.length > 0) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `plugin session action failure result contains unsupported fields: ${unsupportedKeys.join(", ")}`,
+            ),
+          );
+          return;
+        }
         if (typeof result.error !== "string" || !result.error.trim()) {
           respond(
             false,
@@ -252,6 +279,23 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         return;
       }
       const success = result;
+      if (success) {
+        const unsupportedKeys = listUnsupportedSessionActionResultKeys(
+          success,
+          SESSION_ACTION_SUCCESS_RESULT_KEYS,
+        );
+        if (unsupportedKeys.length > 0) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `plugin session action result contains unsupported fields: ${unsupportedKeys.join(", ")}`,
+            ),
+          );
+          return;
+        }
+      }
       if (success?.data !== undefined && !isPluginJsonValue(success.data)) {
         respond(
           false,

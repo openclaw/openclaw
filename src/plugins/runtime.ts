@@ -115,14 +115,35 @@ function retirePluginRegistryIfUnused(registry: PluginRegistry | null): boolean 
   return true;
 }
 
-function syncPluginAgentEventBridge(registry: PluginRegistry | null): void {
+function collectLivePluginAgentEventRegistries(): PluginRegistry[] {
+  const registries: PluginRegistry[] = [];
+  const seen = new Set<PluginRegistry>();
+  const addRegistry = (registry: PluginRegistry | null) => {
+    if (!registry || seen.has(registry)) {
+      return;
+    }
+    seen.add(registry);
+    if ((registry.agentEventSubscriptions?.length ?? 0) === 0) {
+      return;
+    }
+    registries.push(registry);
+  };
+  addRegistry(asPluginRegistry(state.activeRegistry));
+  addRegistry(asPluginRegistry(state.httpRoute.registry));
+  addRegistry(asPluginRegistry(state.channel.registry));
+  return registries;
+}
+
+function syncPluginAgentEventBridge(): void {
   pluginAgentEventUnsubscribe?.();
   pluginAgentEventUnsubscribe = undefined;
-  if (!registry) {
+  if (collectLivePluginAgentEventRegistries().length === 0) {
     return;
   }
   pluginAgentEventUnsubscribe = onAgentEvent((event) => {
-    dispatchPluginAgentEventSubscriptions({ registry: state.activeRegistry, event });
+    for (const registry of collectLivePluginAgentEventRegistries()) {
+      dispatchPluginAgentEventSubscriptions({ registry, event });
+    }
   });
 }
 
@@ -175,7 +196,7 @@ export function setActivePluginRegistry(
   state.key = cacheKey ?? null;
   state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
-  syncPluginAgentEventBridge(registry);
+  syncPluginAgentEventBridge();
   if (!previousRegistry || previousRegistry === registry) {
     return;
   }
@@ -208,6 +229,7 @@ export function pinActivePluginHttpRouteRegistry(registry: PluginRegistry) {
   const previousRegistry = asPluginRegistry(state.httpRoute.registry);
   installSurfaceRegistry(state.httpRoute, registry, true);
   markPluginRegistryActive(registry);
+  syncPluginAgentEventBridge();
   if (retirePluginRegistryIfUnused(previousRegistry)) {
     cleanupRetiredPluginHostRegistry(previousRegistry!);
   }
@@ -219,6 +241,7 @@ export function releasePinnedPluginHttpRouteRegistry(registry?: PluginRegistry) 
   }
   const previousRegistry = asPluginRegistry(state.httpRoute.registry);
   installSurfaceRegistry(state.httpRoute, state.activeRegistry, false);
+  syncPluginAgentEventBridge();
   if (retirePluginRegistryIfUnused(previousRegistry)) {
     cleanupRetiredPluginHostRegistry(previousRegistry!);
   }
@@ -266,6 +289,7 @@ export function pinActivePluginChannelRegistry(registry: PluginRegistry) {
   const previousRegistry = asPluginRegistry(state.channel.registry);
   installSurfaceRegistry(state.channel, registry, true);
   markPluginRegistryActive(registry);
+  syncPluginAgentEventBridge();
   if (retirePluginRegistryIfUnused(previousRegistry)) {
     cleanupRetiredPluginHostRegistry(previousRegistry!);
   }
@@ -277,6 +301,7 @@ export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
   }
   const previousRegistry = asPluginRegistry(state.channel.registry);
   installSurfaceRegistry(state.channel, state.activeRegistry, false);
+  syncPluginAgentEventBridge();
   if (retirePluginRegistryIfUnused(previousRegistry)) {
     cleanupRetiredPluginHostRegistry(previousRegistry!);
   }
@@ -357,7 +382,7 @@ export function resetPluginRuntimeStateForTest(): void {
   state.workspaceDir = null;
   state.runtimeSubagentMode = "default";
   state.importedPluginIds.clear();
-  syncPluginAgentEventBridge(null);
+  syncPluginAgentEventBridge();
   // Also clear the plugin host-hook runtime singleton (run context map,
   // scheduler-job records, pending agent-event handlers, closedRunIds set).
   // Otherwise per-test bleed-over of those globals can cause flaky behavior
