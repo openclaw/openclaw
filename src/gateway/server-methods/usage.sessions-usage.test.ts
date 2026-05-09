@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
@@ -32,14 +31,13 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
     "../../infra/session-cost-usage.js",
   );
-  const locator = (agentId: string, sessionId: string) =>
-    `sqlite-transcript://${agentId}/${sessionId}`;
   return {
     ...actual,
     discoverAllSessions: vi.fn(async (params?: { agentId?: string }) => {
       if (params?.agentId === "main") {
         return [
           {
+            agentId: "main",
             sessionId: "s-main",
             mtime: 100,
             firstUserMessage: "hello",
@@ -49,6 +47,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
       if (params?.agentId === "opus") {
         return [
           {
+            agentId: "opus",
             sessionId: "s-opus",
             mtime: 200,
             firstUserMessage: "hi",
@@ -178,10 +177,6 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const transcriptLocator = createSqliteSessionTranscriptLocator({
-          agentId: "opus",
-          sessionId: "s-opus",
-        });
         replaceSqliteSessionTranscriptEvents({
           agentId: "opus",
           sessionId: "s-opus",
@@ -228,14 +223,6 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const currentTranscriptLocator = createSqliteSessionTranscriptLocator({
-          agentId: "opus",
-          sessionId: "current",
-        });
-        const oldTranscriptLocator = createSqliteSessionTranscriptLocator({
-          agentId: "opus",
-          sessionId: "old",
-        });
         replaceSqliteSessionTranscriptEvents({
           agentId: "opus",
           sessionId: "current",
@@ -329,10 +316,6 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const transcriptLocator = createSqliteSessionTranscriptLocator({
-          agentId: "opus",
-          sessionId: "run-dup",
-        });
         replaceSqliteSessionTranscriptEvents({
           agentId: "opus",
           sessionId: "run-dup",
