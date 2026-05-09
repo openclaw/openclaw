@@ -68,6 +68,10 @@ function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   };
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("resolveCronStoreKey", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -146,8 +150,8 @@ describe("cron store", () => {
       id: "job-1",
       state: { nextRunAtMs: payload.jobs[0].createdAtMs + 60_000 },
     });
-    await expect(fs.stat(storePath)).rejects.toThrow();
-    await expect(fs.stat(`${storePath}.bak`)).rejects.toThrow();
+    await expectPathMissing(storePath);
+    await expectPathMissing(`${storePath}.bak`);
   });
 
   it("loads SQLite state synchronously for task reconciliation", async () => {
@@ -206,7 +210,7 @@ describe("cron store", () => {
       id: "job-2",
       delivery: { channel: "telegram", to: "-100123" },
     });
-    await expect(fs.stat(storePath)).rejects.toThrow();
+    await expectPathMissing(storePath);
   });
 
   it("imports legacy jobs.json into SQLite and removes the source file", async () => {
@@ -229,7 +233,7 @@ describe("cron store", () => {
     const loaded = await loadCronStore(store.storePath);
     expect(loaded.jobs[0]?.id).toBe("legacy-job");
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
-    await expect(fs.stat(store.storePath)).rejects.toThrow();
+    await expectPathMissing(store.storePath);
   });
 
   it("imports legacy state sidecars into SQLite and sanitizes invalid updatedAtMs values", async () => {
@@ -267,7 +271,7 @@ describe("cron store", () => {
 
     expect(loaded.jobs[0]?.updatedAtMs).toBe(job.createdAtMs);
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(job.createdAtMs + 60_000);
-    await expect(fs.stat(statePath)).rejects.toThrow();
+    await expectPathMissing(statePath);
   });
 
   it("propagates unreadable legacy state sidecar errors during doctor import", async () => {
