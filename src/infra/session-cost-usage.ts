@@ -1,9 +1,7 @@
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
-  listSqliteSessionTranscriptLocators,
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
   type SqliteSessionTranscriptEvent,
@@ -261,35 +259,14 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
   totals.totalCost += costTotal;
 };
 
-function getRememberedTranscriptPath(agentId: string, sessionId: string): string | undefined {
-  return listSqliteSessionTranscriptLocators().find(
-    (entry) => entry.agentId === agentId && entry.sessionId === sessionId,
-  )?.locator;
-}
-
-function resolveSyntheticTranscriptLocator(params: {
-  agentId: string;
-  sessionId: string;
-  transcriptLocator?: string;
-  rememberedPath?: string;
-}): string {
-  return (
-    params.transcriptLocator ??
-    params.rememberedPath ??
-    createSqliteSessionTranscriptLocator({ agentId: params.agentId, sessionId: params.sessionId })
-  );
-}
-
 function resolveUsageSessionScope(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  transcriptLocator?: string;
   agentId?: string;
 }):
   | {
       agentId: string;
       sessionId: string;
-      transcriptLocator: string;
     }
   | undefined {
   const explicitSessionId = params.sessionId?.trim() || params.sessionEntry?.sessionId?.trim();
@@ -298,12 +275,6 @@ function resolveUsageSessionScope(params: {
     return {
       agentId,
       sessionId: explicitSessionId,
-      transcriptLocator: resolveSyntheticTranscriptLocator({
-        agentId,
-        sessionId: explicitSessionId,
-        transcriptLocator: params.transcriptLocator,
-        rememberedPath: getRememberedTranscriptPath(agentId, explicitSessionId),
-      }),
     };
   }
   return undefined;
@@ -368,15 +339,6 @@ function scanUsageEvents(params: {
       });
     },
   });
-}
-
-export function resolveExistingUsageTranscriptLocator(params: {
-  sessionId?: string;
-  sessionEntry?: SessionEntry;
-  transcriptLocator?: string;
-  agentId?: string;
-}): string | undefined {
-  return resolveUsageSessionScope(params)?.transcriptLocator;
 }
 
 export async function loadCostUsageSummary(params?: {
@@ -488,7 +450,6 @@ export async function loadCostUsageSummaryFromCache(params: {
 export async function loadSessionCostSummaryFromCache(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  transcriptLocator?: string;
   config?: OpenClawConfig;
   agentId?: string;
   startMs?: number;
@@ -567,12 +528,8 @@ export async function discoverAllSessions(params?: {
       }
     }
     discovered.push({
+      agentId: transcript.agentId,
       sessionId: transcript.sessionId,
-      transcriptLocator: resolveSyntheticTranscriptLocator({
-        agentId: transcript.agentId,
-        sessionId: transcript.sessionId,
-        rememberedPath: transcript.locator,
-      }),
       mtime: transcript.updatedAt,
       firstUserMessage,
     });
@@ -584,7 +541,6 @@ export async function discoverAllSessions(params?: {
 export async function loadSessionCostSummary(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  transcriptLocator?: string;
   config?: OpenClawConfig;
   agentId?: string;
   startMs?: number;
@@ -594,7 +550,6 @@ export async function loadSessionCostSummary(params: {
   if (!scope) {
     return null;
   }
-  const transcriptLocator = scope.transcriptLocator;
   const events = loadSqliteSessionTranscriptEvents(scope);
   if (!events.length) {
     return null;
@@ -870,8 +825,8 @@ export async function loadSessionCostSummary(params: {
     : undefined;
 
   return {
+    agentId: scope.agentId,
     sessionId: scope.sessionId,
-    transcriptLocator,
     firstActivity,
     lastActivity,
     durationMs:
@@ -900,7 +855,6 @@ export async function loadSessionCostSummary(params: {
 export async function loadSessionUsageTimeSeries(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  transcriptLocator?: string;
   config?: OpenClawConfig;
   agentId?: string;
   maxPoints?: number;
@@ -996,16 +950,15 @@ export async function loadSessionUsageTimeSeries(params: {
         cumulativeCost: downsampledCumulativeCost,
       });
     }
-    return { sessionId: params.sessionId, points: downsampled };
+    return { sessionId: scope.sessionId, points: downsampled };
   }
 
-  return { sessionId: params.sessionId, points: sortedPoints };
+  return { sessionId: scope.sessionId, points: sortedPoints };
 }
 
 export async function loadSessionLogs(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  transcriptLocator?: string;
   config?: OpenClawConfig;
   agentId?: string;
   limit?: number;

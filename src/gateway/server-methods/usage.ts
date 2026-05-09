@@ -1,4 +1,4 @@
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
+import { validateSessionId } from "../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
@@ -19,7 +19,6 @@ import {
   loadSessionCostSummaryFromCache,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
-  resolveExistingUsageTranscriptLocator,
   type DiscoveredSession,
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
@@ -67,7 +66,6 @@ type CostUsageCacheEntry = {
 function readSessionTranscriptUpdatedAt(params: {
   agentId?: string;
   sessionId: string;
-  transcriptLocator?: string;
 }): number | undefined {
   const scope = resolveSqliteSessionTranscriptScope({
     agentId: params.agentId,
@@ -115,7 +113,6 @@ function resolveSessionUsageFileOrRespond(
   entry: SessionEntry | undefined;
   agentId: string | undefined;
   sessionId: string;
-  transcriptLocator: string;
 } | null {
   const { entry, agentId: loadedAgentId } = loadSessionEntry(key);
 
@@ -124,9 +121,8 @@ function resolveSessionUsageFileOrRespond(
   const agentId = parsed?.agentId ?? loadedAgentId;
   const rawSessionId = parsed?.rest ?? key;
   const sessionId = entry?.sessionId ?? rawSessionId;
-  let transcriptLocator: string;
   try {
-    transcriptLocator = createSqliteSessionTranscriptLocator({ agentId, sessionId });
+    validateSessionId(sessionId);
   } catch {
     respond(
       false,
@@ -136,7 +132,7 @@ function resolveSessionUsageFileOrRespond(
     return null;
   }
 
-  return { config, entry, agentId, sessionId, transcriptLocator };
+  return { config, entry, agentId, sessionId };
 }
 
 const parseDateParts = (
@@ -321,13 +317,12 @@ const parseDateRange = (params: {
   return { startMs: defaultStartMs, endMs: todayEndMs };
 };
 
-type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
 type UsageGroupingMode = "instance" | "family";
 
 type MergedEntry = {
   key: string;
+  agentId?: string;
   sessionId: string;
-  transcriptLocator: string;
   label?: string;
   updatedAt: number;
   storeEntry?: SessionEntry;
@@ -369,7 +364,7 @@ async function discoverAllSessionsForUsage(params: {
   config: OpenClawConfig;
   startMs: number;
   endMs: number;
-}): Promise<DiscoveredSessionWithAgent[]> {
+}): Promise<DiscoveredSession[]> {
   const agents = listAgentsForGateway(params.config).agents;
   const results = await Promise.all(
     agents.map(async (agent) => {
@@ -379,7 +374,7 @@ async function discoverAllSessionsForUsage(params: {
         endMs: params.endMs,
         includeFirstUserMessage: false,
       });
-      return sessions.map((session) => Object.assign({}, session, { agentId: agent.id }));
+      return sessions;
     }),
   );
   return results.flat().toSorted((a, b) => b.mtime - a.mtime);
@@ -874,15 +869,8 @@ export const usageHandlers: GatewayRequestHandlers = {
       const agentId = agentIdFromKey ?? storeAgentId;
       const sessionId = storeEntry?.sessionId ?? keyRest;
 
-      // Resolve the SQLite transcript locator.
-      let transcriptLocator: string | undefined;
       try {
-        transcriptLocator = resolveExistingUsageTranscriptLocator({
-          sessionId,
-          sessionEntry: storeEntry,
-          transcriptLocator: createSqliteSessionTranscriptLocator({ agentId, sessionId }),
-          agentId,
-        });
+        validateSessionId(sessionId);
       } catch {
         respond(
           false,
@@ -892,26 +880,23 @@ export const usageHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      if (transcriptLocator) {
-        const transcriptUpdatedAt = readSessionTranscriptUpdatedAt({
-          agentId,
-          sessionId,
-          transcriptLocator,
+      const transcriptUpdatedAt = readSessionTranscriptUpdatedAt({
+        agentId,
+        sessionId,
+      });
+      if (transcriptUpdatedAt !== undefined) {
+        maybeMergeFamilyEntry({
+          mergedEntries,
+          groupingMode,
+          base: {
+            key: resolvedStoreKey,
+            agentId,
+            sessionId,
+            label: storeEntry?.label,
+            updatedAt: storeEntry?.updatedAt ?? transcriptUpdatedAt,
+            storeEntry,
+          },
         });
-        if (transcriptUpdatedAt !== undefined) {
-          maybeMergeFamilyEntry({
-            mergedEntries,
-            groupingMode,
-            base: {
-              key: resolvedStoreKey,
-              sessionId,
-              transcriptLocator,
-              label: storeEntry?.label,
-              updatedAt: storeEntry?.updatedAt ?? transcriptUpdatedAt,
-              storeEntry,
-            },
-          });
-        }
       }
     } else {
       // Full discovery for list view
@@ -941,8 +926,8 @@ export const usageHandlers: GatewayRequestHandlers = {
             groupingMode,
             base: {
               key: storeMatch.key,
+              agentId: discovered.agentId,
               sessionId: discovered.sessionId,
-              transcriptLocator: discovered.transcriptLocator,
               label: storeMatch.entry.label,
               updatedAt: storeMatch.entry.updatedAt ?? discovered.mtime,
               storeEntry: storeMatch.entry,
@@ -956,8 +941,8 @@ export const usageHandlers: GatewayRequestHandlers = {
           mergedEntries.push({
             // Keep agentId in the key so the dashboard can attribute sessions and later fetch logs.
             key: `agent:${discovered.agentId}:${discovered.sessionId}`,
+            agentId: discovered.agentId,
             sessionId: discovered.sessionId,
-            transcriptLocator: discovered.transcriptLocator,
             label: undefined, // No label for unnamed sessions
             updatedAt: discovered.mtime,
             scope: "instance",
@@ -1056,24 +1041,14 @@ export const usageHandlers: GatewayRequestHandlers = {
     };
 
     for (const merged of limitedEntries) {
-      const agentId = parseAgentSessionKey(merged.key)?.agentId;
+      const agentId = merged.agentId ?? parseAgentSessionKey(merged.key)?.agentId;
       let usage: SessionCostSummary | null = null;
       const includedSessionIds = merged.includedSessionIds ?? [merged.sessionId];
       for (const includedSessionId of includedSessionIds) {
         const isCurrentSession = includedSessionId === merged.sessionId;
-        const includedTranscriptLocator = isCurrentSession
-          ? merged.transcriptLocator
-          : resolveExistingUsageTranscriptLocator({
-              sessionId: includedSessionId,
-              agentId,
-            });
-        if (!includedTranscriptLocator) {
-          continue;
-        }
         const cachedUsage = await loadSessionCostSummaryFromCache({
           sessionId: includedSessionId,
           sessionEntry: isCurrentSession ? merged.storeEntry : undefined,
-          transcriptLocator: includedTranscriptLocator,
           config,
           agentId,
           startMs,
@@ -1088,7 +1063,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         if (!usage) {
           usage = createEmptySessionCostSummary();
           usage.sessionId = merged.sessionId;
-          usage.transcriptLocator = merged.transcriptLocator;
+          usage.agentId = agentId;
         }
         mergeSessionUsageInto(usage, includedUsage);
       }
@@ -1320,12 +1295,11 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, entry, agentId, sessionId, transcriptLocator } = resolved;
+    const { config, entry, agentId, sessionId } = resolved;
 
     const timeseries = await loadSessionUsageTimeSeries({
       sessionId,
       sessionEntry: entry,
-      transcriptLocator,
       config,
       agentId,
       maxPoints: 200,
@@ -1358,12 +1332,11 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, entry, agentId, sessionId, transcriptLocator } = resolved;
+    const { config, entry, agentId, sessionId } = resolved;
 
     const logs = await loadSessionLogs({
       sessionId,
       sessionEntry: entry,
-      transcriptLocator,
       config,
       agentId,
       limit,

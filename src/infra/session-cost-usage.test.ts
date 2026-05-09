@@ -1,7 +1,6 @@
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -32,9 +31,6 @@ describe("session cost usage", () => {
     });
 
   const makeRoot = async (prefix: string): Promise<string> => await suiteRootTracker.make(prefix);
-
-  const sessionPath = (_root: string, sessionId: string, agentId = "main") =>
-    createSqliteSessionTranscriptLocator({ agentId, sessionId });
 
   const writeTranscript = (params: { agentId?: string; sessionId: string; events: unknown[] }) => {
     const eventTimestamp = params.events
@@ -111,13 +107,8 @@ describe("session cost usage", () => {
 
       const sessions = await discoverAllSessions();
       expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.agentId).toBe("main");
       expect(sessions[0]?.sessionId).toBe("sess-discover");
-      expect(sessions[0]?.transcriptLocator).toBe(
-        createSqliteSessionTranscriptLocator({
-          agentId: "main",
-          sessionId: "sess-discover",
-        }),
-      );
     });
   });
 
@@ -162,7 +153,7 @@ describe("session cost usage", () => {
       });
 
       expect(await refreshCostUsageCache()).toBe("refreshed");
-      requestCostUsageCacheRefresh({ sessionTranscripts: [sessionPath(root, "sess-cache")] });
+      requestCostUsageCacheRefresh({ sessionTranscripts: ["sess-cache"] });
       const summary = await loadCostUsageSummaryFromCache({
         startMs: Date.parse("2026-02-05T00:00:00.000Z"),
         endMs: Date.parse("2026-02-06T00:00:00.000Z"),
@@ -179,7 +170,6 @@ describe("session cost usage", () => {
   it("loads session summary, time series, and logs from SQLite", async () => {
     const root = await makeRoot("session");
     await withStateDir(root, async () => {
-      const transcriptPath = sessionPath(root, "sess-summary");
       writeTranscript({
         sessionId: "sess-summary",
         events: [
@@ -214,7 +204,6 @@ describe("session cost usage", () => {
       const summary = await loadSessionCostSummary({
         agentId: "main",
         sessionId: "sess-summary",
-        transcriptLocator: transcriptPath,
       });
       expect(summary).toMatchObject({
         sessionId: "sess-summary",
@@ -228,7 +217,6 @@ describe("session cost usage", () => {
       const cached = await loadSessionCostSummaryFromCache({
         agentId: "main",
         sessionId: "sess-summary",
-        transcriptLocator: transcriptPath,
       });
       expect(cached.cacheStatus.status).toBe("fresh");
       expect(cached.summary?.totalTokens).toBe(30);
@@ -236,7 +224,6 @@ describe("session cost usage", () => {
       const timeseries = await loadSessionUsageTimeSeries({
         agentId: "main",
         sessionId: "sess-summary",
-        transcriptLocator: transcriptPath,
       });
       expect(timeseries?.points).toHaveLength(1);
       expect(timeseries?.points[0]).toMatchObject({ totalTokens: 30, cumulativeTokens: 30 });
@@ -244,7 +231,6 @@ describe("session cost usage", () => {
       const logs = await loadSessionLogs({
         agentId: "main",
         sessionId: "sess-summary",
-        transcriptLocator: transcriptPath,
       });
       expect(logs?.map((entry) => entry.role)).toEqual(["user", "assistant"]);
       expect(logs?.[0]?.content).toContain("hello");
