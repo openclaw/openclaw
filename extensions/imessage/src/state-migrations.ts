@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import { upsertPluginStateMigrationEntry } from "openclaw/plugin-sdk/migration-runtime";
+import { normalizeIMessageCatchupCursor } from "./monitor/catchup.js";
 
 const IMESSAGE_PLUGIN_ID = "imessage";
 const REPLY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -29,6 +30,16 @@ type SentEchoEntry = {
 function fileExists(filePath: string): boolean {
   try {
     return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function hasJsonFiles(dirPath: string): boolean {
+  try {
+    return fs
+      .readdirSync(dirPath, { withFileTypes: true })
+      .some((entry) => entry.isFile() && entry.name.endsWith(".json"));
   } catch {
     return false;
   }
@@ -182,10 +193,64 @@ function importSentEchoes(
   return { imported, skipped };
 }
 
+function legacyCatchupCursorKey(filePath: string): string | null {
+  const basename = path.basename(filePath, ".json");
+  return /^[A-Za-z0-9_-]+__[a-f0-9]{12}$/u.test(basename) ? basename : null;
+}
+
+function importCatchupCursors(
+  sourcePath: string,
+  env: NodeJS.ProcessEnv,
+): {
+  imported: number;
+  skipped: number;
+} {
+  let imported = 0;
+  let skipped = 0;
+  const files = fs
+    .readdirSync(sourcePath, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => path.join(sourcePath, entry.name));
+
+  for (const filePath of files) {
+    const key = legacyCatchupCursorKey(filePath);
+    if (!key) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const cursor = normalizeIMessageCatchupCursor(JSON.parse(fs.readFileSync(filePath, "utf8")));
+      if (!cursor) {
+        skipped += 1;
+        continue;
+      }
+      upsertPluginStateMigrationEntry({
+        pluginId: IMESSAGE_PLUGIN_ID,
+        namespace: "catchup-cursors",
+        key,
+        value: cursor,
+        createdAt: cursor.updatedAt || Date.now(),
+        env,
+      });
+      imported += 1;
+      fs.rmSync(filePath, { force: true });
+    } catch {
+      skipped += 1;
+    }
+  }
+
+  try {
+    fs.rmdirSync(sourcePath);
+  } catch {
+    // Leave non-empty legacy dirs for a later doctor pass.
+  }
+  return { imported, skipped };
+}
+
 function imessagePluginStatePlan(params: {
   label: string;
   sourcePath: string;
-  namespace: "reply-cache" | "sent-echoes";
+  namespace: "reply-cache" | "sent-echoes" | "catchup-cursors";
   importSource: (
     sourcePath: string,
     env: NodeJS.ProcessEnv,
@@ -234,6 +299,17 @@ export function detectIMessageLegacyStateMigrations(params: {
         sourcePath: sentEchoesPath,
         namespace: "sent-echoes",
         importSource: importSentEchoes,
+      }),
+    );
+  }
+  const catchupPath = path.join(imessageDir(params.stateDir), "catchup");
+  if (hasJsonFiles(catchupPath)) {
+    plans.push(
+      imessagePluginStatePlan({
+        label: "iMessage catchup cursors",
+        sourcePath: catchupPath,
+        namespace: "catchup-cursors",
+        importSource: importCatchupCursors,
       }),
     );
   }

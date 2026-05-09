@@ -563,9 +563,10 @@ sessionId}` and session key context.
   topic-name cache rows, and thread bindings now use shared SQLite plugin
   state. Their legacy JSON import plans live in the Telegram plugin
   setup/doctor migration surface, not in core migration code.
-- iMessage reply short-id mappings and sent-echo dedupe rows now use shared
-  SQLite plugin state. The old `imessage/reply-cache.jsonl` and
-  `imessage/sent-echoes.jsonl` files are doctor inputs only.
+- iMessage catchup cursors, reply short-id mappings, and sent-echo dedupe rows
+  now use shared SQLite plugin state. The old `imessage/catchup/*.json`,
+  `imessage/reply-cache.jsonl`, and `imessage/sent-echoes.jsonl` files are
+  doctor inputs only.
 - Feishu message dedupe rows now use shared SQLite plugin state instead of
   `feishu/dedup/*.json` files. Its legacy JSON import plan lives in the Feishu
   plugin setup/doctor migration surface, not in core migration code.
@@ -847,11 +848,11 @@ Move these into the global database:
   `*.telegram-sent-messages.json`, `*.telegram-topic-names.json`, and
   `thread-bindings-*.json`; the Telegram doctor/setup migration imports and
   removes the legacy files.
-- iMessage reply short-id mappings and sent-echo dedupe rows now use SQLite
-  plugin state under `imessage` namespaces (`reply-cache`, `sent-echoes`)
-  instead of `imessage/reply-cache.jsonl` and
-  `imessage/sent-echoes.jsonl`; the iMessage doctor/setup migration imports
-  and removes the legacy files.
+- iMessage catchup cursors, reply short-id mappings, and sent-echo dedupe rows
+  now use SQLite plugin state under `imessage` namespaces (`catchup-cursors`,
+  `reply-cache`, `sent-echoes`) instead of `imessage/catchup/*.json`,
+  `imessage/reply-cache.jsonl`, and `imessage/sent-echoes.jsonl`; the iMessage
+  doctor/setup migration imports and removes the legacy files.
 - Microsoft Teams conversations, polls, delegated tokens, pending uploads, and
   feedback learnings now use SQLite plugin state/blob namespaces
   (`conversations`, `polls`, `delegated-tokens`, `pending-uploads`,
@@ -1310,6 +1311,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - Telegram `*.telegram-sent-messages.json`
 - Telegram `*.telegram-topic-names.json`
 - Telegram `thread-bindings-*.json`
+- iMessage `catchup/*.json`
 - iMessage `reply-cache.jsonl`
 - iMessage `sent-echoes.jsonl`
 - Microsoft Teams `msteams-conversations.json`

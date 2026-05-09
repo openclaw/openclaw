@@ -6,6 +6,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { iMessageCatchupCursorKey } from "./monitor/catchup.js";
 import { detectIMessageLegacyStateMigrations } from "./state-migrations.js";
 
 function createReplyCacheStore(env: NodeJS.ProcessEnv) {
@@ -32,6 +33,19 @@ function createSentEchoStore(env: NodeJS.ProcessEnv) {
     namespace: "sent-echoes",
     maxEntries: 256,
     defaultTtlMs: 2 * 60 * 1000,
+    env,
+  });
+}
+
+function createCatchupCursorStore(env: NodeJS.ProcessEnv) {
+  return createPluginStateSyncKeyedStore<{
+    lastSeenMs: number;
+    lastSeenRowid: number;
+    updatedAt: number;
+    failureRetries?: Record<string, number>;
+  }>("imessage", {
+    namespace: "catchup-cursors",
+    maxEntries: 256,
     env,
   });
 }
@@ -127,6 +141,53 @@ describe("iMessage legacy state migrations", () => {
           .entries()
           .map((entry) => entry.value.messageId),
       ).toEqual(["guid-1"]);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("imports legacy catchup cursor JSON into SQLite plugin state", async () => {
+    const stateDir = createStateDir();
+    try {
+      const catchupDir = path.join(stateDir, "imessage", "catchup");
+      fs.mkdirSync(catchupDir, { recursive: true });
+      const accountId = "primary@example.com";
+      const key = iMessageCatchupCursorKey(accountId);
+      const sourcePath = path.join(catchupDir, `${key}.json`);
+      fs.writeFileSync(
+        sourcePath,
+        JSON.stringify({
+          lastSeenMs: 1_700_000_000_000,
+          lastSeenRowid: 42,
+          updatedAt: 1_700_000_000_100,
+          failureRetries: { "GUID-A": 3 },
+        }),
+      );
+
+      const plans = detectIMessageLegacyStateMigrations({ stateDir });
+      expect(plans.map((plan) => plan.label)).toContain("iMessage catchup cursors");
+      const plan = plans.find((entry) => entry.label === "iMessage catchup cursors");
+      expect(plan?.kind).toBe("custom");
+      if (!plan || plan.kind !== "custom") {
+        return;
+      }
+
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const result = await plan.apply({
+        cfg: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+      });
+
+      expect(result.changes.join("\n")).toContain("Imported 1 iMessage catchup cursors row");
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      expect(createCatchupCursorStore(env).lookup(key)).toEqual({
+        lastSeenMs: 1_700_000_000_000,
+        lastSeenRowid: 42,
+        updatedAt: 1_700_000_000_100,
+        failureRetries: { "GUID-A": 3 },
+      });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
