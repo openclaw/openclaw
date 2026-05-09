@@ -277,7 +277,7 @@ export async function inspectMatrixDirectRooms(params: {
   const mappedStrict = mappedRooms.find((room) => room.strict);
 
   let joinedRooms: string[] = [];
-  if (!mappedStrict && typeof params.client.getJoinedRooms === "function") {
+  if (typeof params.client.getJoinedRooms === "function") {
     try {
       const resolved = await params.client.getJoinedRooms();
       joinedRooms = Array.isArray(resolved) ? resolved : [];
