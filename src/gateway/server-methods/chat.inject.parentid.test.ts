@@ -8,7 +8,7 @@ import {
 } from "../../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
-import { createTranscriptFixtureSync } from "./chat.test-helpers.js";
+import { createSqliteTranscriptFixtureSync } from "./chat.test-helpers.js";
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -19,7 +19,7 @@ afterEach(() => {
 // current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
   it("appends a Pi session entry that includes parentId", async () => {
-    const { dir, transcriptPath, sessionId } = createTranscriptFixtureSync({
+    const { dir, transcriptLocator, sessionId } = createSqliteTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-",
       sessionId: "sess-1",
     });
@@ -27,7 +27,7 @@ describe("gateway chat.inject transcript writes", () => {
 
     try {
       const appended = await appendInjectedAssistantMessageToTranscript({
-        transcriptPath,
+        transcriptLocator,
         sessionId,
         message: "hello",
       });
@@ -55,7 +55,7 @@ describe("gateway chat.inject transcript writes", () => {
   });
 
   it("links injected messages after oversized SQLite transcript entries", async () => {
-    const { dir, transcriptPath, sessionId } = createTranscriptFixtureSync({
+    const { dir, transcriptLocator, sessionId } = createSqliteTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-large-",
       sessionId: "sess-1",
     });
@@ -65,7 +65,7 @@ describe("gateway chat.inject transcript writes", () => {
       appendSqliteSessionTranscriptEvent({
         agentId: "main",
         sessionId,
-        transcriptPath,
+        transcriptPath: transcriptLocator,
         event: {
           type: "message",
           id: "legacy-large-message",
@@ -78,7 +78,7 @@ describe("gateway chat.inject transcript writes", () => {
       });
 
       const appended = await appendInjectedAssistantMessageToTranscript({
-        transcriptPath,
+        transcriptLocator,
         sessionId,
         message: "hello",
       });
@@ -106,7 +106,7 @@ describe("gateway chat.inject transcript writes", () => {
   });
 
   it("mirrors injected assistant messages into SQLite when agent and session scope are known", async () => {
-    const { dir, transcriptPath } = createTranscriptFixtureSync({
+    const { dir, transcriptLocator } = createSqliteTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-sqlite-",
       sessionId: "sess-1",
     });
@@ -115,7 +115,7 @@ describe("gateway chat.inject transcript writes", () => {
 
     try {
       const appended = await appendInjectedAssistantMessageToTranscript({
-        transcriptPath,
+        transcriptLocator,
         agentId: "main",
         sessionId: "sess-1",
         message: "sqlite hello",

@@ -1015,7 +1015,7 @@ function extractTranscriptUserText(content: unknown): string | undefined {
 }
 
 async function rewriteChatSendUserTurnMediaPaths(params: {
-  transcriptPath: string;
+  transcriptLocator: string;
   agentId: string;
   sessionId: string;
   sessionKey: string;
@@ -1027,7 +1027,7 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   if (!("MediaPath" in mediaFields)) {
     return;
   }
-  const transcriptState = await readTranscriptState(params.transcriptPath);
+  const transcriptState = await readTranscriptState(params.transcriptLocator);
   const target = transcriptState
     .getBranch()
     .toReversed()
@@ -1063,7 +1063,7 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
     ...mediaFields,
   };
   await rewriteTranscriptEntriesInSqliteTranscript({
-    transcriptLocator: params.transcriptPath,
+    transcriptLocator: params.transcriptLocator,
     agentId: params.agentId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -1355,7 +1355,7 @@ async function appendAssistantTranscriptMessage(params: {
   }
 
   return await appendInjectedAssistantMessageToTranscript({
-    transcriptPath: transcriptLocator,
+    transcriptLocator,
     message: params.message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
@@ -2313,7 +2313,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         transcriptMediaRewriteDone = true;
         await rewriteChatSendUserTurnMediaPaths({
-          transcriptPath: transcriptLocator,
+          transcriptLocator,
           agentId,
           sessionId: resolvedSessionId,
           sessionKey,

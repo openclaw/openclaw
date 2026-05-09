@@ -364,6 +364,9 @@ The remaining cleanup is mostly consolidation and deletion:
   `src/gateway/session-transcript-readers.ts` instead of the old
   `session-utils.fs` module name. The fallback retry history check is named for
   SQLite transcript content instead of the old file-helper surface.
+- Gateway injected-chat and compaction helpers now pass SQLite transcript
+  locators through internal helper APIs instead of naming them transcript paths
+  or source files.
 - Bootstrap continuation detection now checks SQLite transcript rows through
   `hasCompletedBootstrapTranscriptTurn`; it no longer exposes a file-shaped
   helper name.

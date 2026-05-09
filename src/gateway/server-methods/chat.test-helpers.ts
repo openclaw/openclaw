@@ -1,13 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 
-export function createTranscriptFixtureSync(params: {
+export function createSqliteTranscriptFixtureSync(params: {
   prefix: string;
   sessionId: string;
-  fileName?: string;
+  agentId?: string;
 }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), params.prefix));
-  const transcriptPath = path.join(dir, params.fileName ?? `${params.sessionId}.jsonl`);
-  return { dir, transcriptPath, sessionId: params.sessionId };
+  const transcriptLocator = createSqliteSessionTranscriptLocator({
+    agentId: params.agentId ?? "main",
+    sessionId: params.sessionId,
+  });
+  return { dir, transcriptLocator, sessionId: params.sessionId };
 }

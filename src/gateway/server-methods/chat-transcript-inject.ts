@@ -45,7 +45,7 @@ function resolveInjectedAssistantContent(params: {
 }
 
 export async function appendInjectedAssistantMessageToTranscript(params: {
-  transcriptPath: string;
+  transcriptLocator: string;
   message: string;
   agentId?: string;
   sessionId?: string;
@@ -107,12 +107,12 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
 
   try {
     const existingScope = resolveSqliteSessionTranscriptScopeForLocator({
-      transcriptLocator: params.transcriptPath,
+      transcriptLocator: params.transcriptLocator,
     });
     const agentId = params.agentId ?? existingScope?.agentId ?? DEFAULT_AGENT_ID;
     const sessionId = params.sessionId ?? existingScope?.sessionId;
     const { messageId } = await appendSessionTranscriptMessage({
-      transcriptLocator: params.transcriptPath,
+      transcriptLocator: params.transcriptLocator,
       agentId,
       sessionId,
       message: messageBody,
@@ -123,7 +123,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     emitSessionTranscriptUpdate({
       agentId,
       ...(sessionId ? { sessionId } : {}),
-      sessionFile: params.transcriptPath,
+      transcriptLocator: params.transcriptLocator,
       message: messageBody,
       messageId,
     });
