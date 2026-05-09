@@ -153,10 +153,19 @@ export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
 }
 
 function shouldSkipPrivateNetworkChecks(hostname: string, policy?: SsrFPolicy): boolean {
-  return (
-    isPrivateNetworkAllowedByPolicy(policy) ||
-    normalizeHostnameSet(policy?.allowedHostnames).has(hostname)
-  );
+  if (isPrivateNetworkAllowedByPolicy(policy)) {
+    return true;
+  }
+  if (normalizeHostnameSet(policy?.allowedHostnames).has(hostname)) {
+    return true;
+  }
+  // hostnameAllowlist from SSRF policy (e.g. auto-generated from baseUrl) should
+  // also skip private network checks so that resolved private IPs are allowed
+  const allowlist = normalizeHostnameAllowlist(policy?.hostnameAllowlist);
+  if (allowlist.length > 0 && matchesHostnameAllowlist(hostname, allowlist)) {
+    return true;
+  }
+  return false;
 }
 
 function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseBlockOptions {
