@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { moveMemoryIndexFiles, runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
+import {
+  moveMemoryIndexFiles,
+  removeMemoryIndexFiles,
+  runMemoryAtomicReindex,
+} from "./manager-atomic-reindex.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -113,6 +117,46 @@ describe("memory manager atomic reindex", () => {
     });
 
     expect(rename).toHaveBeenCalledTimes(3);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("retries transient remove failures during temp file cleanup", async () => {
+    const rm = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "EBUSY" }))
+      .mockResolvedValue(undefined);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await removeMemoryIndexFiles("index.sqlite.tmp", { rename: fs.rename, rm, wait });
+
+    // 3 suffixes, first suffix fails once then succeeds = 4 calls total
+    expect(rm).toHaveBeenCalledTimes(4);
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(wait).toHaveBeenCalledWith(25);
+  });
+
+  it("throws after exhausting remove retry attempts", async () => {
+    const rm = vi.fn().mockRejectedValue(Object.assign(new Error("busy"), { code: "EBUSY" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      removeMemoryIndexFiles("index.sqlite.tmp", { rename: fs.rename, rm, wait }),
+    ).rejects.toMatchObject({ code: "EBUSY" });
+
+    expect(rm).toHaveBeenCalled();
+    expect(wait).toHaveBeenCalled();
+  });
+
+  it("does not retry non-transient remove failures", async () => {
+    const rm = vi.fn().mockRejectedValue(Object.assign(new Error("no space"), { code: "ENOSPC" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      removeMemoryIndexFiles("index.sqlite.tmp", { rename: fs.rename, rm, wait }),
+    ).rejects.toMatchObject({ code: "ENOSPC" });
+
+    // Each suffix attempted once (parallel), no retries
+    expect(rm).toHaveBeenCalledTimes(3);
     expect(wait).not.toHaveBeenCalled();
   });
 

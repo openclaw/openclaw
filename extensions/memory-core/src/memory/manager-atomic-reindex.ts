@@ -20,12 +20,14 @@ const defaultFileOps: MemoryIndexFileOps = {
   wait: sleep,
 };
 
-const transientRenameErrorCodes = new Set(["EBUSY", "EPERM", "EACCES"]);
+const transientFileErrorCodes = new Set(["EBUSY", "EPERM", "EACCES"]);
 const defaultMaxRenameAttempts = 6;
 const defaultRenameRetryDelayMs = 25;
+const defaultMaxRemoveAttempts = 6;
+const defaultRemoveRetryDelayMs = 25;
 
-function isTransientRenameError(err: unknown): boolean {
-  return transientRenameErrorCodes.has((err as NodeJS.ErrnoException).code ?? "");
+function isTransientFileError(err: unknown): boolean {
+  return transientFileErrorCodes.has((err as NodeJS.ErrnoException).code ?? "");
 }
 
 async function renameWithRetry(
@@ -41,7 +43,7 @@ async function renameWithRetry(
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         return;
       }
-      if (!isTransientRenameError(err) || attempt === options.maxRenameAttempts) {
+      if (!isTransientFileError(err) || attempt === options.maxRenameAttempts) {
         throw err;
       }
       await options.fileOps.wait(options.renameRetryDelayMs * attempt);
@@ -68,12 +70,40 @@ export async function moveMemoryIndexFiles(
   }
 }
 
-async function removeMemoryIndexFiles(
+async function removeWithRetry(
+  filePath: string,
+  fileOps: MemoryIndexFileOps,
+  maxAttempts: number,
+  retryDelayMs: number,
+): Promise<void> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await fileOps.rm(filePath, { force: true });
+      return;
+    } catch (err) {
+      if (!isTransientFileError(err) || attempt === maxAttempts) {
+        throw err;
+      }
+      await fileOps.wait(retryDelayMs * attempt);
+    }
+  }
+}
+
+export async function removeMemoryIndexFiles(
   basePath: string,
   fileOps: MemoryIndexFileOps = defaultFileOps,
 ): Promise<void> {
   const suffixes = ["", "-wal", "-shm"];
-  await Promise.all(suffixes.map((suffix) => fileOps.rm(`${basePath}${suffix}`, { force: true })));
+  await Promise.all(
+    suffixes.map((suffix) =>
+      removeWithRetry(
+        `${basePath}${suffix}`,
+        fileOps,
+        defaultMaxRemoveAttempts,
+        defaultRemoveRetryDelayMs,
+      ),
+    ),
+  );
 }
 
 async function swapMemoryIndexFiles(targetPath: string, tempPath: string): Promise<void> {
