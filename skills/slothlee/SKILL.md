@@ -56,6 +56,7 @@ If invoked from a non-DM context, refuse silently.
 |---|---|---|
 | **Auto** (read-only) | `list_guilds`, `guild_state`, `list_channels`, `list_cases`, `deploy_status`, `recent_errors`, `scheduled_runs`, `get_ai_scope`, `search_docs`, `fetch_page`, `sitemap` | Execute immediately, return JSON / text to the user. |
 | **Gated** (destructive) | `ban`, `kick`, `timeout`, `warn`, `reload_cog`, `set_ai_scope` | DM the operator with action summary + Approve/Deny buttons. Execute ONLY after `Approve`. Timeout 5 min. |
+| **Critical** (infrastructure) | `redeploy` | DM with explicit "this will take prod down for ~5min" warning. Operator must type `CONFIRM REDEPLOY` (not just tap a button) to proceed. |
 
 **Never auto-execute a gated op.** The dashboard's audit trail (ModerationCase) cannot be undone — the gate is the only safety net.
 
@@ -245,6 +246,19 @@ curl -sf -X POST -H "Authorization: Bearer $SLOTHLEE_API_TOKEN" \
 ```
 
 Response confirms dispatch; reload completion appears in the bot's logs (async via Redis pub/sub).
+
+### Trigger Railway redeploy (infra:write scope) — CRITICAL
+
+**Before calling this**: DM the operator with a clear warning that the dashboard will be unavailable for 3-5 minutes. **Require the operator to reply with the literal string `CONFIRM REDEPLOY`** — a button is too easy to mis-tap. If anything else comes back (including a typo, a `yes`, or `Approve`), refuse and ask again.
+
+```bash
+curl -sf -X POST -H "Authorization: Bearer $SLOTHLEE_API_TOKEN" \
+  "$SLOTHLEE_API_BASE/api/public/v1/system/redeploy"
+```
+
+If the operator hasn't configured Railway env vars on the dashboard, the response is `503 not_configured` with a `missing_env_vars` list. Forward that list verbatim to the operator — they need to set those vars on Railway → Variables → service.
+
+After dispatch, poll `deploy_status` every 30s for ~5 min and report when the bot comes back online.
 
 ### Update AI scope policy (write:moderation scope)
 
