@@ -81,6 +81,24 @@ describe("embedded acpx plugin config", () => {
     });
   });
 
+  it("quotes agent args that need to survive command-line parsing as one token", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          custom: {
+            command: "node",
+            args: ["/tmp/My Adapter.mjs", "--flag=value with spaces", "owner's-choice"],
+          },
+        },
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.agents).toEqual({
+      custom: "node '/tmp/My Adapter.mjs' '--flag=value with spaces' 'owner'\"'\"'s-choice'",
+    });
+  });
+
   it("handles agent command without args (backward compat)", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
