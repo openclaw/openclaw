@@ -12,13 +12,13 @@ type AuditFixture = {
   authStorePath: string;
   authJsonPath: string;
   agentDir: string;
-  modelsPath: string;
+  modelCatalogSource: string;
   envPath: string;
   env: NodeJS.ProcessEnv;
 };
 
 const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
-const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
+const MAX_AUDIT_MODEL_CATALOG_BYTES = 5 * 1024 * 1024;
 
 function countNonEmptyLines(value: string): number {
   let count = 0;
@@ -133,7 +133,7 @@ async function createAuditFixture(): Promise<AuditFixture> {
   const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
   const authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
   const agentDir = path.dirname(authStorePath);
-  const modelsPath = `stored model catalog: ${agentDir}`;
+  const modelCatalogSource = `stored model catalog: ${agentDir}`;
   const envPath = path.join(stateDir, ".env");
 
   await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -146,7 +146,7 @@ async function createAuditFixture(): Promise<AuditFixture> {
     authStorePath,
     authJsonPath,
     agentDir,
-    modelsPath,
+    modelCatalogSource,
     envPath,
     env: {
       OPENCLAW_STATE_DIR: stateDir,
@@ -239,7 +239,7 @@ describe("secrets audit", () => {
         report,
         (entry) =>
           entry.code === params.code &&
-          entry.file === fixture.modelsPath &&
+          entry.file === fixture.modelCatalogSource &&
           (params.jsonPath === undefined || entry.jsonPath === params.jsonPath),
       ),
     ).toBe(params.present ?? true);
@@ -439,7 +439,7 @@ describe("secrets audit", () => {
       code: "PLAINTEXT_FOUND",
       jsonPath: "providers.openai.apiKey",
     });
-    expect(report.filesScanned).toContain(fixture.modelsPath);
+    expect(report.filesScanned).toContain(fixture.modelCatalogSource);
   });
 
   it("scans stored model catalogs for plaintext provider header values", async () => {
@@ -538,7 +538,7 @@ describe("secrets audit", () => {
   });
 
   it("reports oversized stored model catalog JSON as unresolved findings", async () => {
-    const oversizedApiKey = "a".repeat(MAX_AUDIT_MODELS_JSON_BYTES + 256);
+    const oversizedApiKey = "a".repeat(MAX_AUDIT_MODEL_CATALOG_BYTES + 256);
     writeStoredModelsConfigRaw(
       fixture.agentDir,
       `${JSON.stringify({
@@ -560,7 +560,7 @@ describe("secrets audit", () => {
 
   it("scans active agent-dir override model catalog even when outside state dir", async () => {
     const externalAgentDir = path.join(fixture.rootDir, "external-agent");
-    const externalModelsPath = `stored model catalog: ${externalAgentDir}`;
+    const externalModelCatalogSource = `stored model catalog: ${externalAgentDir}`;
     await fs.mkdir(externalAgentDir, { recursive: true });
     writeStoredModelsConfigRaw(
       externalAgentDir,
@@ -588,11 +588,11 @@ describe("secrets audit", () => {
         report,
         (entry) =>
           entry.code === "PLAINTEXT_FOUND" &&
-          entry.file === externalModelsPath &&
+          entry.file === externalModelCatalogSource &&
           entry.jsonPath === "providers.openai.apiKey",
       ),
     ).toBe(true);
-    expect(report.filesScanned).toContain(externalModelsPath);
+    expect(report.filesScanned).toContain(externalModelCatalogSource);
   });
 
   it("does not flag non-sensitive routing headers in openclaw config", async () => {

@@ -70,7 +70,7 @@ const LIVE_MODEL_CONCURRENCY = resolveLiveModelConcurrency(
   process.env.OPENCLAW_LIVE_MODEL_CONCURRENCY,
 );
 const LIVE_MODEL_CATALOG_TIMEOUT_MS = resolveLiveModelCatalogTimeoutMs(
-  process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
+  process.env.OPENCLAW_LIVE_MODEL_CATALOG_TIMEOUT_MS,
 );
 const LIVE_FILE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_FILE_PROBE_ENV);
 const LIVE_IMAGE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_IMAGE_PROBE_ENV);

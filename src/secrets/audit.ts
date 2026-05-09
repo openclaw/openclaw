@@ -105,7 +105,7 @@ type AuditCollector = {
 };
 
 const REF_RESOLVE_FALLBACK_CONCURRENCY = 8;
-const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
+const MAX_AUDIT_MODEL_CATALOG_BYTES = 5 * 1024 * 1024;
 const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
   "authorization",
   "proxy-authorization",
@@ -381,7 +381,7 @@ function collectStoredModelCatalogSecrets(params: {
   }
   const sourceLabel = `stored model catalog: ${params.agentDir}`;
   params.collector.filesScanned.add(sourceLabel);
-  if (stored.raw.length > MAX_AUDIT_MODELS_JSON_BYTES) {
+  if (stored.raw.length > MAX_AUDIT_MODEL_CATALOG_BYTES) {
     addFinding(params.collector, {
       code: "REF_UNRESOLVED",
       severity: "error",
