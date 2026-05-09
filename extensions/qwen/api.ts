@@ -4,7 +4,6 @@ export {
   buildQwenModelDefinition,
   buildQwenModelCatalogForBaseUrl,
   isNativeQwenBaseUrl,
-  isQwen36PlusSupportedBaseUrl,
   isQwenCodingPlanBaseUrl,
   QWEN_36_PLUS_MODEL_ID,
   QWEN_BASE_URL,
