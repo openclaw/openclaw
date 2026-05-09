@@ -598,8 +598,8 @@ Migration properties:
 
 - One migration pass discovers all legacy file sources and produces a plan
   before mutating anything.
-- A pre-migration backup archive is created. The standalone migrate command can
-  skip it only with an explicit dangerous force flag.
+- Doctor creates a verified pre-migration backup archive before importing
+  legacy files.
 - Imports are idempotent and keyed by source path, mtime, size, hash, and target
   table.
 - Successful source files are removed or archived after the target database has

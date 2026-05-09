@@ -5,11 +5,10 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
-  createInMemoryAcpEventLedger,
-  createSqliteAcpEventLedger,
   importLegacyAcpEventLedgerFileToSqlite,
   resolveLegacyAcpEventLedgerPath,
-} from "./event-ledger.js";
+} from "./event-ledger-legacy.js";
+import { createInMemoryAcpEventLedger, createSqliteAcpEventLedger } from "./event-ledger.js";
 
 describe("ACP event ledger", () => {
   afterEach(() => {

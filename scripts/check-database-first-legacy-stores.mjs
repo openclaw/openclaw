@@ -191,7 +191,7 @@ const allowedExactPaths = new Set([
   "extensions/qqbot/src/state-migrations.ts",
   "extensions/telegram/src/state-migrations.ts",
   "src/infra/state-migrations.ts",
-  "src/acp/event-ledger.ts",
+  "src/acp/event-ledger-legacy.ts",
   "src/agents/pi-embedded-runner/openrouter-model-capabilities.ts",
   "src/agents/subagent-registry.store.ts",
   "src/config/io.audit.ts",
