@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expect, test } from "vitest";
 import { createSqliteSessionTranscriptLocator, getSessionEntry } from "../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
@@ -19,6 +18,10 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+
+function sqliteTranscript(sessionId: string): string {
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
+}
 
 test("sessions.delete rejects main and aborts active runs", async () => {
   const { dir } = await createSessionStoreDir();
@@ -45,7 +48,7 @@ test("sessions.delete rejects main and aborts active runs", async () => {
   expect(deleted.payload?.deleted).toBe(true);
   expectActiveRunCleanup(
     "agent:main:discord:group:dev",
-    ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
+    ["agent:main:discord:group:dev", "sess-active"],
     "sess-active",
   );
   expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-active");
@@ -171,7 +174,7 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
 test("sessions.delete emits session_end with deleted reason and no replacement", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
-  const transcriptPath = path.join(dir, "sess-delete.jsonl");
+  const transcriptPath = sqliteTranscript("sess-delete");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-delete",
@@ -211,7 +214,7 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
     reason: "deleted",
   });
   expect((event as { sessionFile?: string } | undefined)?.sessionFile).toBe(
-    createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "sess-delete" }),
+    sqliteTranscript("sess-delete"),
   );
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
   expect(context).toMatchObject({
@@ -339,7 +342,7 @@ test("sessions.delete returns unavailable when active run does not stop", async 
   expect(deleted.error?.message ?? "").toMatch(/still active/i);
   expectActiveRunCleanup(
     "agent:main:discord:group:dev",
-    ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
+    ["agent:main:discord:group:dev", "sess-active"],
     "sess-active",
   );
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();

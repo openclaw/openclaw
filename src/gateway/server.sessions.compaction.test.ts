@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { readTranscriptState } from "../agents/transcript/transcript-state.js";
 import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -22,6 +23,10 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+
+function sqliteTranscript(sessionId: string, agentId = DEFAULT_AGENT_ID): string {
+  return createSqliteSessionTranscriptLocator({ agentId, sessionId });
+}
 
 test("sessions.compaction.* lists checkpoints and branches or restores from pre-compaction snapshots", async () => {
   const { dir } = await createSessionStoreDir();
@@ -212,10 +217,11 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
 
 test("sessions.compact without maxLines runs embedded manual compaction for checkpoint-capable flows", async () => {
   const { dir } = await createSessionStoreDir();
+  const sessionFile = sqliteTranscript("sess-main");
   replaceSqliteSessionTranscriptEvents({
     agentId: DEFAULT_AGENT_ID,
     sessionId: "sess-main",
-    transcriptPath: path.join(dir, "sess-main.jsonl"),
+    transcriptPath: sessionFile,
     events: [
       {
         type: "session",
@@ -236,7 +242,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     agentId: "main",
     sessionKey: "agent:main:main",
     entry: sessionStoreEntry("sess-main", {
-      sessionFile: path.join(dir, "sess-main.jsonl"),
+      sessionFile,
       thinkingLevel: "medium",
       reasoningLevel: "stream",
     }),
@@ -260,7 +266,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     expect.objectContaining({
       sessionId: "sess-main",
       sessionKey: "agent:main:main",
-      sessionFile: expect.stringMatching(/sess-main\.jsonl$/),
+      sessionFile,
       config: expect.any(Object),
       provider: expect.any(String),
       model: expect.any(String),
