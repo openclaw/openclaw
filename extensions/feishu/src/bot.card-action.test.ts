@@ -236,17 +236,22 @@ describe("Feishu Card Action Handler", () => {
           body: expect.objectContaining({
             elements: expect.arrayContaining([
               expect.objectContaining({
-                tag: "action",
-                actions: expect.arrayContaining([
+                tag: "column_set",
+                columns: expect.arrayContaining([
                   expect.objectContaining({
-                    value: expect.objectContaining({
-                      c: expect.objectContaining({
-                        u: "u123",
-                        h: "chat1",
-                        t: "group",
-                        s: "agent:codex:feishu:chat:chat1",
+                    tag: "column",
+                    elements: expect.arrayContaining([
+                      expect.objectContaining({
+                        value: expect.objectContaining({
+                          c: expect.objectContaining({
+                            u: "u123",
+                            h: "chat1",
+                            t: "group",
+                            s: "agent:codex:feishu:chat:chat1",
+                          }),
+                        }),
                       }),
-                    }),
+                    ]),
                   }),
                 ]),
               }),

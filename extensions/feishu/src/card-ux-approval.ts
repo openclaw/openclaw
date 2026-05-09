@@ -1,5 +1,6 @@
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { buildFeishuCardButton, buildFeishuCardInteractionContext } from "./card-ux-shared.js";
+import { actionRowToColumnSet } from "./outbound.js";
 
 export const FEISHU_APPROVAL_REQUEST_ACTION = "feishu.quick_actions.request_approval";
 export const FEISHU_APPROVAL_CONFIRM_ACTION = "feishu.approval.confirm";
@@ -36,29 +37,26 @@ export function createApprovalCard(params: {
           tag: "markdown",
           content: params.prompt,
         },
-        {
-          tag: "action",
-          actions: [
-            buildFeishuCardButton({
-              label: params.confirmLabel ?? "Confirm",
-              type: "primary",
-              value: createFeishuCardInteractionEnvelope({
-                k: "quick",
-                a: FEISHU_APPROVAL_CONFIRM_ACTION,
-                q: params.command,
-                c: context,
-              }),
+        actionRowToColumnSet([
+          buildFeishuCardButton({
+            label: params.confirmLabel ?? "Confirm",
+            type: "primary",
+            value: createFeishuCardInteractionEnvelope({
+              k: "quick",
+              a: FEISHU_APPROVAL_CONFIRM_ACTION,
+              q: params.command,
+              c: context,
             }),
-            buildFeishuCardButton({
-              label: params.cancelLabel ?? "Cancel",
-              value: createFeishuCardInteractionEnvelope({
-                k: "button",
-                a: FEISHU_APPROVAL_CANCEL_ACTION,
-                c: context,
-              }),
+          }),
+          buildFeishuCardButton({
+            label: params.cancelLabel ?? "Cancel",
+            value: createFeishuCardInteractionEnvelope({
+              k: "button",
+              a: FEISHU_APPROVAL_CANCEL_ACTION,
+              c: context,
             }),
-          ],
-        },
+          }),
+        ]),
       ],
     },
   };
