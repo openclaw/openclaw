@@ -2241,7 +2241,7 @@ describe("runCodexAppServerAttempt", () => {
 
       await expect(run).resolves.toMatchObject({ aborted: true });
       await new Promise((resolve) => setImmediate(resolve));
-      expect(unhandledRejections).toEqual([]);
+      expect(unhandledRejections).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }

@@ -75,7 +75,7 @@ describe("Codex plugin thread config", () => {
       allowDestructiveActions: true,
       mcpServerNames: ["google-calendar"],
     });
-    expect(config.diagnostics).toEqual([]);
+    expect(config.diagnostics).toStrictEqual([]);
   });
 
   it("maps destructive app access from global and per-plugin policy", async () => {
@@ -158,7 +158,7 @@ describe("Codex plugin thread config", () => {
         },
       },
     });
-    expect(config.diagnostics).toEqual([]);
+    expect(config.diagnostics).toStrictEqual([]);
     expect(config.policyContext.apps).toStrictEqual({});
   });
 
@@ -208,7 +208,7 @@ describe("Codex plugin thread config", () => {
       },
     });
     expect(config.policyContext.apps).toStrictEqual({});
-    expect(config.diagnostics).toEqual([]);
+    expect(config.diagnostics).toStrictEqual([]);
   });
 
   it("waits for the initial app inventory before exposing plugin apps", async () => {
@@ -260,7 +260,7 @@ describe("Codex plugin thread config", () => {
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
       pluginName: "google-calendar",
     });
-    expect(config.diagnostics).toEqual([]);
+    expect(config.diagnostics).toStrictEqual([]);
     expect(
       request.mock.calls.reduce((count, [method]) => count + (method === "app/list" ? 1 : 0), 0),
     ).toBe(1);
@@ -391,7 +391,7 @@ describe("Codex plugin thread config", () => {
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
       pluginName: "google-calendar",
     });
-    expect(config.diagnostics).toEqual([]);
+    expect(config.diagnostics).toStrictEqual([]);
     expect(request.mock.calls.map(([method]) => method)).toContain("plugin/install");
     expect(request.mock.calls.some(([method]) => method === "app/list")).toBe(true);
     expect(appListParams.map((params) => params.forceRefetch)).toContain(true);

@@ -529,7 +529,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
 
     expect(config.codexPlugins).toBeUndefined();
-    expect(resolveCodexPluginsPolicy(config).pluginPolicies).toEqual([]);
+    expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
   });
 
   it("treats configured and environment commands as explicit overrides", () => {
