@@ -482,6 +482,20 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                 </div>
               `
             : nothing}
+          ${skill.untrustedLocalSource
+            ? html`
+                <div
+                  class="callout"
+                  style="border-color: var(--warn-subtle); background: var(--warn-subtle); color: var(--warn);"
+                >
+                  <div style="font-weight: 600; margin-bottom: 4px;">Untrusted local source</div>
+                  <div>
+                    ${skill.trustWarning ??
+                    "Review SKILL.md before enabling or invoking this skill."}
+                  </div>
+                </div>
+              `
+            : nothing}
           ${reasons.length > 0
             ? html`
                 <div class="muted" style="font-size: 13px;">Reason: ${reasons.join(", ")}</div>

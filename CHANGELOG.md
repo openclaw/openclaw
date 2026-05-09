@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Skills/security: warn in CLI and Control UI status surfaces when loaded local skills lack ClawHub origin metadata or an explicit `skills.load.trustedDirs` review root, so operators can spot untrusted local sources before enabling or invoking them. Fixes #57535. Thanks @Janx0102.
 - Agents/compaction: preserve scoped background exec/process session references across embedded compaction and after-turn runtime contexts without exposing sessions from unrelated scopes. Fixes #79284. (#79307) Thanks @TurboTheTurtle.
 - CLI/onboarding: improve setup, onboarding, configure, and channel command wayfinding so terminal flows explain the next useful command instead of relying on terse setup labels.
 

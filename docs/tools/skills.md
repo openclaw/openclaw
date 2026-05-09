@@ -49,6 +49,11 @@ In **multi-agent** setups each agent has its own workspace:
 | Shared managed/local | `~/.openclaw/skills`                        | All agents on that machine  |
 | Shared extra dirs    | `skills.load.extraDirs` (lowest precedence) | All agents on that machine  |
 
+Local skill roots, including workspace and extra directories, are surfaced as
+untrusted in `openclaw skills list/check/info` and the Control UI unless they
+come from ClawHub origin metadata or live under `skills.load.trustedDirs`.
+Review `SKILL.md` before enabling or invoking untrusted local skills.
+
 Same name in multiple places → highest source wins. Workspace beats
 project-agent, beats personal-agent, beats managed/local, beats bundled,
 beats extra dirs.
@@ -421,6 +426,7 @@ when `SKILL.md` files change. Configure under `skills.load`:
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills"],
       allowSymlinkTargets: ["~/Projects/manager/skills"],
+      trustedDirs: ["~/Projects/manager/skills"],
       watch: true,
       watchDebounceMs: 250,
     },

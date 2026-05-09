@@ -249,6 +249,40 @@ describe("renderSkills", () => {
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
   });
+
+  it("shows untrusted local skill warnings in the skill detail", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+
+    render(
+      renderSkills(
+        createProps({
+          detailKey: "repo-skill",
+          report: {
+            workspaceDir: "/tmp/workspace",
+            managedSkillsDir: "/tmp/skills",
+            skills: [
+              createSkill({
+                untrustedLocalSource: true,
+                trustWarning: "Review SKILL.md before enabling.",
+              }),
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const text = normalizeText(container);
+    expect(text).toContain("untrusted source");
+    expect(text).toContain("Untrusted local source");
+    expect(text).toContain("Review SKILL.md before enabling");
+  });
 });
 
 function installDialogMethod(

@@ -757,6 +757,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Additional shared skill roots to scan at lowest precedence. Use this for sibling repos or shared skill packs that should be available without copying them into the OpenClaw workspace.",
   "skills.load.allowSymlinkTargets":
     "Trusted real target roots that skill symlinks may resolve into when they sit outside their configured source root. Keep this narrow, such as a sibling repo skills directory.",
+  "skills.load.trustedDirs":
+    "Local skill roots that have been explicitly reviewed and trusted, suppressing untrusted-local-source warnings for skills under those real directories. Keep this narrow and avoid broad roots such as home or project parents.",
   "skills.load.watch":
     "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
   "skills.load.watchDebounceMs":

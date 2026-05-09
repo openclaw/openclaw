@@ -17,6 +17,7 @@ Most skills loader/install configuration lives under `skills` in
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills", "~/Projects/oss/some-skill-pack/skills"],
       allowSymlinkTargets: ["~/Projects/manager/skills"],
+      trustedDirs: ["~/Projects/reviewed-skills"],
       watch: true,
       watchDebounceMs: 250,
     },
@@ -92,6 +93,10 @@ Rules:
   skill folders may resolve into even when the symlink lives outside that
   target root. Use this for intentional sibling-repo layouts such as
   `~/.agents/skills/manager -> ~/Projects/manager/skills`.
+- `load.trustedDirs`: local skill directories that have been reviewed and
+  trusted. Skills under these real target roots do not show untrusted-local-source
+  warnings in the CLI or Control UI. Keep entries narrow and avoid broad roots
+  such as `~` or `~/Projects`.
 - `load.watch`: watch skill folders and refresh the skills snapshot (default: true).
 - `load.watchDebounceMs`: debounce for skill watcher events in milliseconds (default: 250).
 - `install.preferBrew`: prefer brew installers when available (default: true).
@@ -122,6 +127,7 @@ Keep the symlink layout and allow only the trusted target root:
     load: {
       extraDirs: ["~/Projects/manager/skills"],
       allowSymlinkTargets: ["~/Projects/manager/skills"],
+      trustedDirs: ["~/Projects/manager/skills"],
     },
   },
 }
@@ -133,6 +139,9 @@ realpath resolution. `extraDirs` also scans the sibling repo directly, while
 `allowSymlinkTargets` preserves the symlinked path for existing agent-skill
 layouts. Keep target entries narrow; do not point at broad roots such as `~` or
 `~/Projects` unless every skill tree under that root is trusted.
+
+`allowSymlinkTargets` only controls loader containment. Add the same reviewed
+root to `trustedDirs` when you also want to suppress the local-source warning.
 
 Per-skill fields:
 

@@ -14,6 +14,8 @@ function createSkill(overrides: Partial<SkillStatusEntry>): SkillStatusEntry {
     description: "Demo",
     source: "test",
     bundled: false,
+    trustSource: "local",
+    untrustedLocalSource: false,
     filePath: "/tmp/demo/SKILL.md",
     baseDir: "/tmp/demo",
     skillKey: overrides.name ?? "demo",

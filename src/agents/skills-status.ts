@@ -1,8 +1,11 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
-import { CONFIG_DIR } from "../utils.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   hasBinary,
   isBundledSkillAllowed,
@@ -29,11 +32,16 @@ export type SkillInstallOption = {
   bins: string[];
 };
 
+export type SkillTrustSource = "openclaw-bundled" | "clawhub" | "trusted-dir" | "local";
+
 export type SkillStatusEntry = {
   name: string;
   description: string;
   source: string;
   bundled: boolean;
+  trustSource: SkillTrustSource;
+  untrustedLocalSource: boolean;
+  trustWarning?: string;
   filePath: string;
   baseDir: string;
   skillKey: string;
@@ -61,6 +69,33 @@ export type SkillStatusReport = {
   agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
 };
+
+type SkillTrustContext = {
+  trustedDirRealPaths: string[];
+};
+
+type SkillTrustStatus = {
+  trustSource: SkillTrustSource;
+  untrustedLocalSource: boolean;
+  trustWarning?: string;
+};
+
+const LOCAL_SKILL_SOURCES = new Set([
+  "openclaw-workspace",
+  "agents-skills-project",
+  "agents-skills-personal",
+  "openclaw-managed",
+  "openclaw-extra",
+  "unknown",
+]);
+
+const UNTRUSTED_LOCAL_SKILL_WARNING =
+  "Loaded from a local skill source without ClawHub origin metadata or a matching skills.load.trustedDirs entry. Review SKILL.md before enabling or invoking this skill.";
+
+const CLAWHUB_ORIGIN_RELATIVE_PATHS = [
+  path.join(".clawhub", "origin.json"),
+  path.join(".clawdhub", "origin.json"),
+];
 
 function resolveSkillKey(entry: SkillEntry): string {
   return entry.metadata?.skillKey ?? entry.skill.name;
@@ -197,6 +232,93 @@ function isSkillUserInvocable(entry: SkillEntry): boolean {
   return true;
 }
 
+function tryRealpath(filePath: string): string | null {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function isPathInsideOrEqual(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveTrustedSkillDirRealPaths(config?: OpenClawConfig): string[] {
+  const rawDirs = config?.skills?.load?.trustedDirs ?? [];
+  return rawDirs
+    .map((dir) => normalizeOptionalString(dir) ?? "")
+    .filter(Boolean)
+    .map((dir) => tryRealpath(resolveUserPath(dir)))
+    .filter((dir): dir is string => Boolean(dir))
+    .filter((dir, index, all) => all.indexOf(dir) === index);
+}
+
+function readClawHubOriginMarker(baseDir: string): boolean {
+  for (const relativePath of CLAWHUB_ORIGIN_RELATIVE_PATHS) {
+    const candidate = path.join(baseDir, relativePath);
+    try {
+      const raw = JSON.parse(fs.readFileSync(candidate, "utf8")) as Partial<{
+        version: unknown;
+        registry: unknown;
+        slug: unknown;
+        installedVersion: unknown;
+        installedAt: unknown;
+      }>;
+      if (
+        raw.version === 1 &&
+        typeof raw.registry === "string" &&
+        typeof raw.slug === "string" &&
+        typeof raw.installedVersion === "string" &&
+        typeof raw.installedAt === "number"
+      ) {
+        return true;
+      }
+    } catch {
+      // Missing or malformed origin metadata is handled as an untrusted local source.
+    }
+  }
+  return false;
+}
+
+function isTrustedSkillDir(baseDir: string, context: SkillTrustContext): boolean {
+  if (context.trustedDirRealPaths.length === 0) {
+    return false;
+  }
+  const baseDirRealPath = tryRealpath(baseDir) ?? path.resolve(baseDir);
+  return context.trustedDirRealPaths.some(
+    (root) => isPathInside(root, baseDirRealPath) || isPathInsideOrEqual(root, baseDirRealPath),
+  );
+}
+
+function resolveSkillTrustStatus(
+  entry: SkillEntry,
+  params: {
+    bundled: boolean;
+    source: string;
+    context: SkillTrustContext;
+  },
+): SkillTrustStatus {
+  if (params.bundled) {
+    return { trustSource: "openclaw-bundled", untrustedLocalSource: false };
+  }
+  if (readClawHubOriginMarker(entry.skill.baseDir)) {
+    return { trustSource: "clawhub", untrustedLocalSource: false };
+  }
+  if (isTrustedSkillDir(entry.skill.baseDir, params.context)) {
+    return { trustSource: "trusted-dir", untrustedLocalSource: false };
+  }
+  if (LOCAL_SKILL_SOURCES.has(params.source)) {
+    return {
+      trustSource: "local",
+      untrustedLocalSource: true,
+      trustWarning: UNTRUSTED_LOCAL_SKILL_WARNING,
+    };
+  }
+  return { trustSource: "local", untrustedLocalSource: false };
+}
+
 function buildSkillStatus(
   entry: SkillEntry,
   config?: OpenClawConfig,
@@ -204,6 +326,7 @@ function buildSkillStatus(
   eligibility?: SkillEligibilityContext,
   bundledNames?: Set<string>,
   agentSkillFilter?: string[],
+  trustContext: SkillTrustContext = { trustedDirRealPaths: [] },
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
@@ -224,6 +347,11 @@ function buildSkillStatus(
   const bundled =
     skillSource === "openclaw-bundled" ||
     (skillSource === "unknown" && bundledNames?.has(entry.skill.name) === true);
+  const trust = resolveSkillTrustStatus(entry, {
+    bundled,
+    source: skillSource,
+    context: trustContext,
+  });
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({
@@ -243,6 +371,9 @@ function buildSkillStatus(
     description: entry.skill.description,
     source: skillSource,
     bundled,
+    trustSource: trust.trustSource,
+    untrustedLocalSource: trust.untrustedLocalSource,
+    trustWarning: trust.trustWarning,
     filePath: entry.skill.filePath,
     baseDir: entry.skill.baseDir,
     skillKey,
@@ -287,6 +418,9 @@ export function buildWorkspaceSkillStatus(
       bundledSkillsDir: bundledContext.dir,
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
+  const trustContext: SkillTrustContext = {
+    trustedDirRealPaths: resolveTrustedSkillDirRealPaths(opts?.config),
+  };
   return {
     workspaceDir,
     managedSkillsDir,
@@ -300,6 +434,7 @@ export function buildWorkspaceSkillStatus(
         opts?.eligibility,
         bundledContext.names,
         agentSkillFilter,
+        trustContext,
       ),
     ),
   };

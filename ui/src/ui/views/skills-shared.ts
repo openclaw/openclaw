@@ -18,6 +18,9 @@ export function computeSkillReasons(skill: SkillStatusEntry): string[] {
   if (skill.blockedByAllowlist) {
     reasons.push("blocked by allowlist");
   }
+  if (skill.untrustedLocalSource) {
+    reasons.push("untrusted local source");
+  }
   return reasons;
 }
 
@@ -31,6 +34,9 @@ export function renderSkillStatusChips(params: {
     <div class="chip-row" style="margin-top: 6px;">
       <span class="chip">${skill.source}</span>
       ${showBundledBadge ? html` <span class="chip">bundled</span> ` : nothing}
+      ${skill.untrustedLocalSource
+        ? html` <span class="chip chip-warn">untrusted source</span> `
+        : nothing}
       <span class="chip ${skill.eligible ? "chip-ok" : "chip-warn"}">
         ${skill.eligible ? "eligible" : "blocked"}
       </span>

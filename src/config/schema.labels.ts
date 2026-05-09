@@ -385,6 +385,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "broadcast.*": "Broadcast Destination List",
   "skills.load.extraDirs": "Extra Skill Directories",
   "skills.load.allowSymlinkTargets": "Allowed Skill Symlink Targets",
+  "skills.load.trustedDirs": "Trusted Skill Directories",
   "skills.load.watch": "Watch Skills",
   "skills.load.watchDebounceMs": "Skills Watch Debounce (ms)",
   "agents.defaults.skills": "Skills",

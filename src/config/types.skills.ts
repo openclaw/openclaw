@@ -18,6 +18,11 @@ export type SkillsLoadConfig = {
    * sit outside the configured source root.
    */
   allowSymlinkTargets?: string[];
+  /**
+   * Local skill directories that operators have explicitly reviewed and trust.
+   * Skills under these real target roots do not receive untrusted-local-source warnings.
+   */
+  trustedDirs?: string[];
   /** Watch skill folders for changes and refresh the skills snapshot. */
   watch?: boolean;
   /** Debounce for the skills watcher (ms). */

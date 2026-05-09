@@ -679,6 +679,9 @@ export type SkillStatusEntry = {
   baseDir: string;
   skillKey: string;
   bundled?: boolean;
+  trustSource?: string;
+  untrustedLocalSource?: boolean;
+  trustWarning?: string;
   primaryEnv?: string;
   emoji?: string;
   homepage?: string;

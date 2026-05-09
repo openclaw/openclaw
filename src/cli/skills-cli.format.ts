@@ -37,6 +37,9 @@ function formatSkillStatus(skill: SkillStatusEntry): string {
   if (skill.blockedByAgentFilter) {
     return theme.warn("🚫 excluded");
   }
+  if (skill.untrustedLocalSource) {
+    return theme.warn("⚠ untrusted");
+  }
   if (skill.eligible) {
     return theme.success("✓ ready");
   }
@@ -120,6 +123,9 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         commandVisible: s.commandVisible,
         source: s.source,
         bundled: s.bundled,
+        trustSource: s.trustSource,
+        untrustedLocalSource: s.untrustedLocalSource,
+        trustWarning: s.trustWarning,
         primaryEnv: s.primaryEnv,
         homepage: s.homepage,
         missing: s.missing,
@@ -234,6 +240,17 @@ export function formatSkillInfo(
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
   }
 
+  if (skill.untrustedLocalSource) {
+    lines.push("");
+    lines.push(theme.heading("Security:"));
+    lines.push(
+      `  ${theme.warn("⚠")} ${sanitizeForLog(skill.trustWarning ?? "Untrusted local skill source.")}`,
+    );
+    lines.push(
+      `  ${theme.muted("Trust reviewed roots with:")} ${formatCliCommand("openclaw config set skills.load.trustedDirs '[\"~/path/to/skills\"]'")}`,
+    );
+  }
+
   const hasRequirements =
     skill.requirements.bins.length > 0 ||
     skill.requirements.anyBins.length > 0 ||
@@ -317,6 +334,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   const disabled = report.skills.filter((s) => s.disabled);
   const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
   const agentFiltered = report.skills.filter((s) => s.eligible && s.blockedByAgentFilter);
+  const untrustedLocalSources = report.skills.filter((s) => s.untrustedLocalSource);
   const promptHidden = report.skills.filter(
     (s) => s.eligible && !s.blockedByAgentFilter && !s.modelVisible,
   );
@@ -340,6 +358,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           disabled: disabled.length,
           blocked: blocked.length,
           agentFiltered: agentFiltered.length,
+          untrustedLocalSources: untrustedLocalSources.length,
           notInjected: promptHidden.length,
           missingRequirements: missingReqs.length,
         },
@@ -349,6 +368,12 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
         disabled: disabled.map((s) => s.name),
         blocked: blocked.map((s) => s.name),
         agentFiltered: agentFiltered.map((s) => s.name),
+        untrustedLocalSources: untrustedLocalSources.map((s) => ({
+          name: s.name,
+          source: s.source,
+          path: s.filePath,
+          warning: s.trustWarning,
+        })),
         notInjected: promptHidden.map((s) => ({
           name: s.name,
           reason: "disable-model-invocation",
@@ -383,6 +408,9 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
       `${theme.warn("🚫")} ${theme.muted("Excluded by agent allowlist:")} ${agentFiltered.length}`,
     );
   }
+  lines.push(
+    `${theme.warn("⚠")} ${theme.muted("Untrusted local sources:")} ${untrustedLocalSources.length}`,
+  );
   if (promptHidden.length > 0) {
     lines.push(
       `${theme.warn("△")} ${theme.muted("Ready but hidden from model prompt:")} ${promptHidden.length}`,
@@ -443,6 +471,20 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
         `  ${emoji} ${sanitizeForLog(skill.name)} ${theme.muted("(loaded, but this agent is not allowed to see/use it)")}`,
       );
     }
+  }
+
+  if (untrustedLocalSources.length > 0) {
+    lines.push("");
+    lines.push(theme.heading("Untrusted local sources:"));
+    for (const skill of untrustedLocalSources) {
+      const emoji = normalizeSkillEmoji(skill.emoji);
+      lines.push(
+        `  ${emoji} ${sanitizeForLog(skill.name)} ${theme.muted(`(${skill.source}; ${shortenHomePath(skill.filePath)})`)}`,
+      );
+    }
+    lines.push(
+      `  ${theme.muted("Review SKILL.md before enabling or invoking these skills; trusted roots can be configured with skills.load.trustedDirs.")}`,
+    );
   }
 
   if (missingReqs.length > 0) {

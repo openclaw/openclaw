@@ -15,6 +15,8 @@ function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatus
     description: "A test skill",
     source: "bundled",
     bundled: false,
+    trustSource: "local",
+    untrustedLocalSource: false,
     filePath: "/path/to/SKILL.md",
     baseDir: "/path/to",
     skillKey: "test-skill",
@@ -104,6 +106,21 @@ describe("skills-cli", () => {
       expect(output).toContain("needs setup");
       expect(output).toContain("anyBins");
       expect(output).toContain("os:");
+    });
+
+    it("surfaces untrusted local skill sources", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "local-danger",
+          source: "openclaw-workspace",
+          untrustedLocalSource: true,
+          trustWarning: "Review this skill before use.",
+        }),
+      ]);
+
+      const output = formatSkillsList(report, {});
+      expect(output).toContain("local-danger");
+      expect(output).toContain("untrusted");
     });
 
     it("filters to eligible only with --eligible flag", () => {
@@ -237,6 +254,22 @@ describe("skills-cli", () => {
       expect(output).toContain("Available as command");
       expect(output).toContain("excludes this skill");
     });
+
+    it("shows security guidance for untrusted local skill info", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "local-review",
+          source: "openclaw-workspace",
+          untrustedLocalSource: true,
+          trustWarning: "Review SKILL.md before enabling.",
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "local-review", {});
+      expect(output).toContain("Security");
+      expect(output).toContain("Review SKILL.md before enabling");
+      expect(output).toContain("skills.load.trustedDirs");
+    });
   });
 
   describe("formatSkillsCheck", () => {
@@ -327,6 +360,42 @@ describe("skills-cli", () => {
       expect(output).toContain("internal-hidden");
       expect(output).toContain("is not exposed as a command");
       expect(output).not.toContain("commands/cron may still use it");
+    });
+
+    it("summarizes untrusted local sources in check output and JSON", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "review-me",
+          source: "openclaw-workspace",
+          filePath: "/workspace/skills/review-me/SKILL.md",
+          untrustedLocalSource: true,
+          trustWarning: "Review SKILL.md before enabling.",
+        }),
+      ]);
+
+      const output = formatSkillsCheck(report, {});
+      expect(output).toContain("Untrusted local sources");
+      expect(output).toContain("review-me");
+      expect(output).toContain("skills.load.trustedDirs");
+
+      const parsed = JSON.parse(formatSkillsCheck(report, { json: true })) as {
+        summary: { untrustedLocalSources: number };
+        untrustedLocalSources: Array<{
+          name: string;
+          source: string;
+          path: string;
+          warning: string;
+        }>;
+      };
+      expect(parsed.summary.untrustedLocalSources).toBe(1);
+      expect(parsed.untrustedLocalSources).toEqual([
+        {
+          name: "review-me",
+          source: "openclaw-workspace",
+          path: "/workspace/skills/review-me/SKILL.md",
+          warning: "Review SKILL.md before enabling.",
+        },
+      ]);
     });
 
     it("summarizes a mixed bad skill pack in JSON", () => {

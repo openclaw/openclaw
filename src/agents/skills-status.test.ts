@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
@@ -75,6 +78,70 @@ describe("buildWorkspaceSkillStatus", () => {
     const check = discord?.configChecks.find((entry) => entry.path === "channels.discord.token");
     expect(check).toEqual({ path: "channels.discord.token", satisfied: true });
     expect(check && "value" in check).toBe(false);
+  });
+
+  it("warns for local skills without ClawHub origin or trusted root metadata", () => {
+    withTempDir((workspaceDir) => {
+      const entry = createTempSkillEntry(workspaceDir, "local-skill", "openclaw-workspace");
+
+      const report = buildWorkspaceSkillStatus(workspaceDir, { entries: [entry] });
+      const skill = report.skills[0];
+
+      expect(skill?.trustSource).toBe("local");
+      expect(skill?.untrustedLocalSource).toBe(true);
+      expect(skill?.trustWarning).toContain("skills.load.trustedDirs");
+    });
+  });
+
+  it("trusts local skills under configured trusted directories", () => {
+    withTempDir((workspaceDir) => {
+      const trustedRoot = path.join(workspaceDir, "reviewed-skills");
+      const entry = createTempSkillEntry(trustedRoot, "reviewed-skill", "openclaw-extra");
+
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        entries: [entry],
+        config: {
+          skills: {
+            load: {
+              trustedDirs: [trustedRoot],
+            },
+          },
+        },
+      });
+
+      const skill = report.skills[0];
+      expect(skill?.trustSource).toBe("trusted-dir");
+      expect(skill?.untrustedLocalSource).toBe(false);
+      expect(skill?.trustWarning).toBeUndefined();
+    });
+  });
+
+  it("trusts skills with valid ClawHub origin metadata", () => {
+    withTempDir((workspaceDir) => {
+      const entry = createTempSkillEntry(workspaceDir, "clawhub-skill", "openclaw-workspace");
+      fs.mkdirSync(path.join(entry.skill.baseDir, ".clawhub"), { recursive: true });
+      fs.writeFileSync(
+        path.join(entry.skill.baseDir, ".clawhub", "origin.json"),
+        JSON.stringify(
+          {
+            version: 1,
+            registry: "https://clawhub.ai",
+            slug: "clawhub-skill",
+            installedVersion: "1.0.0",
+            installedAt: Date.now(),
+          },
+          null,
+          2,
+        ),
+      );
+
+      const report = buildWorkspaceSkillStatus(workspaceDir, { entries: [entry] });
+      const skill = report.skills[0];
+
+      expect(skill?.trustSource).toBe("clawhub");
+      expect(skill?.untrustedLocalSource).toBe(false);
+      expect(skill?.trustWarning).toBeUndefined();
+    });
   });
 
   it("reports prompt and command visibility separately from eligibility", () => {
@@ -363,6 +430,32 @@ function createEntry(
     metadata: params.metadata,
     invocation: params.invocation,
   };
+}
+
+function createTempSkillEntry(rootDir: string, name: string, source: string): SkillEntry {
+  const baseDir = path.join(rootDir, name);
+  fs.mkdirSync(baseDir, { recursive: true });
+  const filePath = path.join(baseDir, "SKILL.md");
+  fs.writeFileSync(filePath, `---\ndescription: ${name}\n---\n# ${name}\n`);
+  return {
+    skill: createFixtureSkill({
+      name,
+      description: `${name} skill`,
+      filePath,
+      baseDir,
+      source,
+    }),
+    frontmatter: {},
+  };
+}
+
+function withTempDir(run: (dir: string) => void): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skills-status-"));
+  try {
+    run(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function createFixtureSkill(params: {
