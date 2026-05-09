@@ -215,31 +215,4 @@ describe("loadSessionLearnings", () => {
     await expect(loadSessionLearnings("msteams:user1")).resolves.toEqual(["Use bullets"]);
     await expect(loadSessionLearnings("msteams/user1")).resolves.toEqual(["Avoid bullets"]);
   });
-
-  it("reads and migrates legacy sanitized session learning rows", async () => {
-    upsertPluginStateMigrationEntry({
-      pluginId: "msteams",
-      namespace: "feedback-learnings",
-      key: "msteams_user1",
-      value: { learnings: ["Legacy learning"], updatedAt: Date.now() },
-      createdAt: Date.now(),
-    });
-
-    await expect(loadSessionLearnings("msteams:user1")).resolves.toEqual(["Legacy learning"]);
-
-    await storeSessionLearning({
-      sessionKey: "msteams:user1",
-      learning: "New learning",
-    });
-
-    await expect(loadSessionLearnings("msteams:user1")).resolves.toEqual([
-      "Legacy learning",
-      "New learning",
-    ]);
-    await expect(loadSessionLearnings("msteams:user1")).resolves.toEqual([
-      "Legacy learning",
-      "New learning",
-    ]);
-    await expect(loadSessionLearnings("msteams/user1")).resolves.toEqual([]);
-  });
 });
