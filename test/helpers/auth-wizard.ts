@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import { loadPersistedAuthProfileStore } from "../../src/agents/auth-profiles/persisted.js";
 import type { RuntimeEnv } from "../../src/runtime.js";
 import { makeTempWorkspace } from "../../src/test-helpers/workspace.js";
 import { captureEnv } from "../../src/test-utils/env.js";
@@ -82,11 +83,10 @@ export function requireOpenClawAgentDir(): string {
   return agentDir;
 }
 
-function authProfilePathForAgent(agentDir: string): string {
-  return path.join(agentDir, "auth-profiles.json");
-}
-
 export async function readAuthProfilesForAgent<T>(agentDir: string): Promise<T> {
-  const raw = await fs.readFile(authProfilePathForAgent(agentDir), "utf8");
-  return JSON.parse(raw) as T;
+  const store = loadPersistedAuthProfileStore(agentDir);
+  if (!store) {
+    throw new Error(`Expected SQLite auth profile store for ${agentDir}`);
+  }
+  return store as T;
 }

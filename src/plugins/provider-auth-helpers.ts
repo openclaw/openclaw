@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
-import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+import { upsertAuthProfile, upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import type { OAuthCredentials } from "../agents/pi-ai-contract.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -261,7 +261,7 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
     const real = safeRealpathSync(dir);
     if (real && !seen.has(real)) {
       seen.add(real);
-      result.push(real);
+      result.push(dir);
     }
   }
   return result;
@@ -291,7 +291,7 @@ export async function writeOAuthCredentials(
     ...(options?.displayName ? { displayName: options.displayName } : {}),
   };
 
-  upsertAuthProfile({
+  await upsertAuthProfileWithLock({
     profileId,
     credential,
     agentDir: resolvedAgentDir,
@@ -305,7 +305,7 @@ export async function writeOAuthCredentials(
         continue;
       }
       try {
-        upsertAuthProfile({
+        await upsertAuthProfileWithLock({
           profileId,
           credential,
           agentDir: targetAgentDir,

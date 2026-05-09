@@ -14,6 +14,8 @@ import {
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
 
+const legacyAuthProfilePathFor = (dir: string) => path.join(dir, "auth-profiles.json");
+
 const providerEnvVarsById = vi.hoisted(
   (): Record<string, readonly string[]> => ({
     "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
@@ -29,43 +31,6 @@ const providerEnvVarsById = vi.hoisted(
 vi.mock("../config/paths.js", () => ({
   resolveStateDir: () => process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
 }));
-
-vi.mock("../agents/auth-profiles/profiles.js", async () => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  return {
-    upsertAuthProfile: (params: { profileId: string; credential: unknown; agentDir?: string }) => {
-      const stateDir = process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state";
-      const agentDir = params.agentDir ?? path.join(stateDir, "agents", "main", "agent");
-      const file = path.join(agentDir, "auth-profiles.json");
-      fs.mkdirSync(agentDir, { recursive: true });
-      const existing = (() => {
-        try {
-          return JSON.parse(fs.readFileSync(file, "utf8")) as {
-            version?: number;
-            profiles?: Record<string, unknown>;
-          };
-        } catch {
-          return { version: 1, profiles: {} };
-        }
-      })();
-      fs.writeFileSync(
-        file,
-        `${JSON.stringify(
-          {
-            version: existing.version ?? 1,
-            profiles: {
-              ...existing.profiles,
-              [params.profileId]: params.credential,
-            },
-          },
-          null,
-          2,
-        )}\n`,
-      );
-    },
-  };
-});
 
 vi.mock("../agents/provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (provider: string) => {
@@ -96,16 +61,6 @@ function expectFields(value: unknown, expected: Record<string, unknown>, label =
   return record;
 }
 
-async function expectMissingFile(readPromise: Promise<unknown>) {
-  try {
-    await readPromise;
-  } catch (error) {
-    expectFields(error, { code: "ENOENT" }, "read error");
-    return;
-  }
-  throw new Error("Expected file read to fail with ENOENT");
-}
-
 describe("writeOAuthCredentials", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
@@ -115,13 +70,12 @@ describe("writeOAuthCredentials", () => {
   ]);
 
   let tempStateDir: string;
-  const authProfilePathFor = (dir: string) => path.join(dir, "auth-profiles.json");
 
   afterEach(async () => {
     await lifecycle.cleanup();
   });
 
-  it("writes auth-profiles.json under the default agent dir", async () => {
+  it("writes OAuth credentials under the default agent dir SQLite store", async () => {
     const env = await setupAuthTestEnv("openclaw-oauth-");
     lifecycle.setStateDir(env.stateDir);
     const defaultAgentDir = path.join(env.stateDir, "agents", "main", "agent");
@@ -143,7 +97,12 @@ describe("writeOAuthCredentials", () => {
       type: "oauth",
     });
 
-    await expectMissingFile(fs.readFile(path.join(env.agentDir, "auth-profiles.json"), "utf8"));
+    await expect(fs.readFile(legacyAuthProfilePathFor(env.agentDir), "utf8")).rejects.toMatchObject(
+      { code: "ENOENT" },
+    );
+    await expect(
+      fs.readFile(legacyAuthProfilePathFor(defaultAgentDir), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
@@ -171,14 +130,16 @@ describe("writeOAuthCredentials", () => {
     });
 
     for (const dir of [mainAgentDir, kidAgentDir, workerAgentDir]) {
-      const raw = await fs.readFile(authProfilePathFor(dir), "utf8");
-      const parsed = JSON.parse(raw) as {
+      const parsed = await readAuthProfilesForAgent<{
         profiles?: Record<string, OAuthCredentials & { type?: string }>;
-      };
+      }>(dir);
       expectFields(parsed.profiles?.["openai-codex:default"], {
         refresh: "refresh-sync",
         access: "access-sync",
         type: "oauth",
+      });
+      await expect(fs.readFile(legacyAuthProfilePathFor(dir), "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
       });
     }
   });
@@ -203,16 +164,25 @@ describe("writeOAuthCredentials", () => {
 
     await writeOAuthCredentials("openai-codex", creds, kidAgentDir);
 
-    const kidRaw = await fs.readFile(authProfilePathFor(kidAgentDir), "utf8");
-    const kidParsed = JSON.parse(kidRaw) as {
+    const kidParsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
-    };
+    }>(kidAgentDir);
     expectFields(kidParsed.profiles?.["openai-codex:default"], {
       access: "access-kid",
       type: "oauth",
     });
 
-    await expectMissingFile(fs.readFile(authProfilePathFor(mainAgentDir), "utf8"));
+    await expect(readAuthProfilesForAgent(mainAgentDir)).rejects.toThrow(
+      "Expected SQLite auth profile store",
+    );
+    await expect(fs.readFile(legacyAuthProfilePathFor(kidAgentDir), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.readFile(legacyAuthProfilePathFor(mainAgentDir), "utf8")).rejects.toMatchObject(
+      {
+        code: "ENOENT",
+      },
+    );
   });
 
   it("syncs siblings from explicit agentDir outside OPENCLAW_STATE_DIR", async () => {
@@ -240,20 +210,27 @@ describe("writeOAuthCredentials", () => {
 
     // All siblings under the external root should have credentials
     for (const dir of [extMain, extKid, extWorker]) {
-      const raw = await fs.readFile(authProfilePathFor(dir), "utf8");
-      const parsed = JSON.parse(raw) as {
+      const parsed = await readAuthProfilesForAgent<{
         profiles?: Record<string, OAuthCredentials & { type?: string }>;
-      };
+      }>(dir);
       expectFields(parsed.profiles?.["openai-codex:default"], {
         refresh: "refresh-ext",
         access: "access-ext",
         type: "oauth",
       });
+      await expect(fs.readFile(legacyAuthProfilePathFor(dir), "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     }
 
     // Global state dir should NOT have credentials written
     const globalMain = path.join(tempStateDir, "agents", "main", "agent");
-    await expectMissingFile(fs.readFile(authProfilePathFor(globalMain), "utf8"));
+    await expect(readAuthProfilesForAgent(globalMain)).rejects.toThrow(
+      "Expected SQLite auth profile store",
+    );
+    await expect(fs.readFile(legacyAuthProfilePathFor(globalMain), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
 
@@ -430,7 +407,12 @@ describe("upsertApiKeyProfile", () => {
       key: "sk-minimax-test",
     });
 
-    await expectMissingFile(fs.readFile(path.join(env.agentDir, "auth-profiles.json"), "utf8"));
+    await expect(fs.readFile(legacyAuthProfilePathFor(env.agentDir), "utf8")).rejects.toMatchObject(
+      { code: "ENOENT" },
+    );
+    await expect(
+      fs.readFile(legacyAuthProfilePathFor(defaultAgentDir), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
