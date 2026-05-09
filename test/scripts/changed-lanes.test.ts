@@ -3,6 +3,7 @@ import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  createEmptyChangedLanes,
   detectChangedLanes,
   isLiveDockerPackageScriptOnlyChange,
   isPackageScriptOnlyChange,
@@ -46,6 +47,23 @@ const git = (cwd: string, args: string[]) =>
     env: createNestedGitEnv(),
   }).trim();
 
+function expectLanes(
+  lanes: ReturnType<typeof createEmptyChangedLanes>,
+  expected: Partial<ReturnType<typeof createEmptyChangedLanes>>,
+) {
+  expect(lanes).toEqual({ ...createEmptyChangedLanes(), ...expected });
+}
+
+function parseChangedLaneOutput(output: string): {
+  paths: string[];
+  lanes: ReturnType<typeof createEmptyChangedLanes>;
+} {
+  return JSON.parse(output) as {
+    paths: string[];
+    lanes: ReturnType<typeof createEmptyChangedLanes>;
+  };
+}
+
 afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
@@ -80,10 +98,10 @@ describe("scripts/changed-lanes", () => {
       },
     );
 
-    expect(JSON.parse(output)).toMatchObject({
-      paths: ["scripts/new-check.mjs"],
-      lanes: { tooling: true },
-    });
+    const result = parseChangedLaneOutput(output);
+
+    expect(result.paths).toEqual(["scripts/new-check.mjs"]);
+    expectLanes(result.lanes, { tooling: true });
   });
 
   it("includes deleted worktree files in the default local diff", () => {
@@ -119,10 +137,10 @@ describe("scripts/changed-lanes", () => {
       },
     );
 
-    expect(JSON.parse(output)).toMatchObject({
-      paths: ["src/shared/obsolete.ts"],
-      lanes: { core: true, coreTests: true },
-    });
+    const result = parseChangedLaneOutput(output);
+
+    expect(result.paths).toEqual(["src/shared/obsolete.ts"]);
+    expectLanes(result.lanes, { core: true, coreTests: true });
   });
 
   it("includes deleted staged files in the staged diff", () => {
@@ -159,10 +177,10 @@ describe("scripts/changed-lanes", () => {
       },
     );
 
-    expect(JSON.parse(output)).toMatchObject({
-      paths: ["src/shared/obsolete.ts"],
-      lanes: { core: true, coreTests: true },
-    });
+    const result = parseChangedLaneOutput(output);
+
+    expect(result.paths).toEqual(["src/shared/obsolete.ts"]);
+    expectLanes(result.lanes, { core: true, coreTests: true });
   });
 
   it("ignores the explicit path separator", () => {
@@ -177,22 +195,24 @@ describe("scripts/changed-lanes", () => {
     const result = detectChangedLanes(["src/shared/string-normalization.ts"]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       core: true,
       coreTests: true,
-      extensions: false,
-      extensionTests: false,
-      all: false,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
-    expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toMatchObject({
-      PATH: "/usr/bin",
-      OPENCLAW_TSGO_SPARSE_SKIP: "1",
-    });
-    expect(plan.commands.find((command) => command.args[0] === "lint:core")?.env).toMatchObject({
+    expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toEqual({
       PATH: "/usr/bin",
       OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+      OPENCLAW_TSGO_SPARSE_SKIP: "1",
+    });
+    expect(plan.commands.find((command) => command.args[0] === "lint:core")?.env).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
     });
   });
 
@@ -202,15 +222,18 @@ describe("scripts/changed-lanes", () => {
       env: { OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" },
     });
 
-    expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toMatchObject({
+    expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toEqual({
       OPENCLAW_LOCAL_CHECK: "1",
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
       OPENCLAW_TSGO_SPARSE_SKIP: "1",
       PATH: "/usr/bin",
     });
   });
 
   it("marks changed-check children as covered by the parent heavy-check lock", () => {
-    expect(createChangedCheckChildEnv({ PATH: "/usr/bin" })).toMatchObject({
+    expect(createChangedCheckChildEnv({ PATH: "/usr/bin" })).toEqual({
       OPENCLAW_OXLINT_SKIP_LOCK: "1",
       OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
       OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
