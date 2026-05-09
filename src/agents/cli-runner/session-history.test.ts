@@ -226,24 +226,28 @@ describe("loadCliSessionReseedMessages", () => {
     vi.unstubAllEnvs();
   });
 
-  it("does not reseed fresh CLI sessions from raw transcript history before compaction", async () => {
+  it("reseeds fresh CLI sessions from raw message tail when no compaction exists", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const sessionFile = createSessionTranscript({
       rootDir: stateDir,
       sessionId: "session-no-compaction",
-      messages: ["raw secret", "large context"],
+      messages: ["first message", "second message"],
     });
 
     try {
-      expect(
-        await loadCliSessionReseedMessages({
-          sessionId: "session-no-compaction",
-          sessionFile,
-          sessionKey: "agent:main:main",
-          agentId: "main",
-        }),
-      ).toStrictEqual([]);
+      const reseed = await loadCliSessionReseedMessages({
+        sessionId: "session-no-compaction",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+      });
+      expect(reseed).toHaveLength(2);
+      expect(reseed[0]).toMatchObject({ role: "user", content: "first message" });
+      expect(reseed[1]).toMatchObject({ role: "user", content: "second message" });
+      expect(buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" })).toContain(
+        "first message",
+      );
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

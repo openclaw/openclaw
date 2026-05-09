@@ -197,7 +197,13 @@ export async function loadCliSessionReseedMessages(params: {
     return candidate.type === "compaction" && typeof candidate.summary === "string";
   });
   if (latestCompactionIndex < 0) {
-    return [];
+    // Session never compacted — return raw message tail so historyPrompt is
+    // not silently inert on short sessions invalidated before compaction (#79713).
+    const rawTail = entries.flatMap((entry) => {
+      const candidate = entry as HistoryEntry;
+      return candidate.type === "message" ? [candidate.message] : [];
+    });
+    return limitAgentHookHistoryMessages(rawTail, MAX_CLI_SESSION_HISTORY_MESSAGES);
   }
 
   const compaction = entries[latestCompactionIndex] as HistoryEntry;
