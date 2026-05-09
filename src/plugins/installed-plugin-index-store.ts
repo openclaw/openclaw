@@ -65,8 +65,7 @@ function withInstalledPluginIndexWarning(index: InstalledPluginIndex): Installed
 export async function writePersistedInstalledPluginIndex(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions = {},
-): Promise<string> {
-  const filePath = resolveInstalledPluginIndexStorePath(options);
+): Promise<void> {
   writeOpenClawStateKvJson(
     INSTALLED_PLUGIN_INDEX_KV_SCOPE,
     INSTALLED_PLUGIN_INDEX_KV_KEY,
@@ -74,14 +73,12 @@ export async function writePersistedInstalledPluginIndex(
     resolveInstalledPluginIndexStateDbOptions(options),
   );
   clearCurrentPluginMetadataSnapshotState();
-  return filePath;
 }
 
 export function writePersistedInstalledPluginIndexSync(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions = {},
-): string {
-  const filePath = resolveInstalledPluginIndexStorePath(options);
+): void {
   writeOpenClawStateKvJson(
     INSTALLED_PLUGIN_INDEX_KV_SCOPE,
     INSTALLED_PLUGIN_INDEX_KV_KEY,
@@ -89,7 +86,6 @@ export function writePersistedInstalledPluginIndexSync(
     resolveInstalledPluginIndexStateDbOptions(options),
   );
   clearCurrentPluginMetadataSnapshotState();
-  return filePath;
 }
 
 export function deletePersistedInstalledPluginIndexSync(

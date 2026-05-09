@@ -17,7 +17,6 @@ import {
 } from "../infra/shell-env.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
-  resolveInstalledPluginIndexRecordsStorePath,
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
 import {
@@ -144,7 +143,6 @@ type ShippedPluginInstallConfigWriteMigration =
     }
   | {
       migrated: true;
-      filePath: string;
       stateDir: string;
       previousIndex:
         | {
@@ -153,14 +151,6 @@ type ShippedPluginInstallConfigWriteMigration =
         | {
             existed: true;
             value: InstalledPluginIndex;
-          };
-      previousFile:
-        | {
-            existed: false;
-          }
-        | {
-            existed: true;
-            raw: string;
           };
     };
 
@@ -1238,47 +1228,45 @@ export function createConfigIO(
     return applyConfigOverrides(cfgWithOwnerDisplaySecret);
   }
 
-  function captureFileSnapshotSync(filePath: string):
+  function captureInstalledPluginIndexSnapshotSync(stateDir: string):
     | {
         existed: false;
       }
     | {
         existed: true;
-        raw: string;
+        value: InstalledPluginIndex;
       } {
-    return deps.fs.existsSync(filePath)
-      ? ({
-          existed: true,
-          raw: deps.fs.readFileSync(filePath, "utf-8"),
-        } as const)
-      : ({ existed: false } as const);
+    const previousIndexValue = readPersistedInstalledPluginIndexSync({
+      env: deps.env,
+      stateDir,
+    });
+    return previousIndexValue === null
+      ? ({ existed: false } as const)
+      : ({ existed: true, value: previousIndexValue } as const);
   }
 
-  function restoreFileSnapshotSync(
-    filePath: string,
-    previousFile:
+  function restoreInstalledPluginIndexSnapshotSync(
+    stateDir: string,
+    previousIndex:
       | {
           existed: false;
         }
       | {
           existed: true;
-          raw: string;
+          value: InstalledPluginIndex;
         },
   ): void {
-    if (previousFile.existed) {
-      deps.fs.writeFileSync(filePath, previousFile.raw, {
-        encoding: "utf-8",
-        mode: 0o600,
+    if (previousIndex.existed) {
+      writePersistedInstalledPluginIndexSync(previousIndex.value, {
+        env: deps.env,
+        stateDir,
       });
       return;
     }
-    try {
-      deps.fs.unlinkSync(filePath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw err;
-      }
-    }
+    deletePersistedInstalledPluginIndexSync({
+      env: deps.env,
+      stateDir,
+    });
   }
 
   function replaceConfigFileSync(raw: string): void {
@@ -1308,11 +1296,7 @@ export function createConfigIO(
 
     try {
       const stateDir = resolveStateDir(deps.env, deps.homedir);
-      const filePath = resolveInstalledPluginIndexRecordsStorePath({
-        env: deps.env,
-        stateDir,
-      });
-      const previousFile = captureFileSnapshotSync(filePath);
+      const previousIndex = captureInstalledPluginIndexSnapshotSync(stateDir);
       const existingRecords = loadInstalledPluginIndexInstallRecordsSync({
         env: deps.env,
         stateDir,
@@ -1340,7 +1324,7 @@ export function createConfigIO(
         try {
           replaceConfigFileSync(persistedRootRaw);
         } catch (err) {
-          restoreFileSnapshotSync(filePath, previousFile);
+          restoreInstalledPluginIndexSnapshotSync(stateDir, previousIndex);
           throw err;
         }
         return { config: stripped, persistedRootParsed, persistedRootRaw };
@@ -1386,10 +1370,6 @@ export function createConfigIO(
     }
 
     const stateDir = resolveStateDir(deps.env, deps.homedir);
-    const filePath = resolveInstalledPluginIndexRecordsStorePath({
-      env: deps.env,
-      stateDir,
-    });
     const existingRecords = loadInstalledPluginIndexInstallRecordsSync({
       env: deps.env,
       stateDir,
@@ -1398,20 +1378,7 @@ export function createConfigIO(
       return { migrated: false };
     }
 
-    const previousIndexValue = readPersistedInstalledPluginIndexSync({
-      env: deps.env,
-      stateDir,
-    });
-    const previousIndex =
-      previousIndexValue === null
-        ? ({ existed: false } as const)
-        : ({ existed: true, value: previousIndexValue } as const);
-    const previousFile = deps.fs.existsSync(filePath)
-      ? ({
-          existed: true,
-          raw: deps.fs.readFileSync(filePath, "utf-8"),
-        } as const)
-      : ({ existed: false } as const);
+    const previousIndex = captureInstalledPluginIndexSnapshotSync(stateDir);
     try {
       writePersistedInstalledPluginIndexInstallRecordsSync(
         {
@@ -1426,10 +1393,8 @@ export function createConfigIO(
       );
       return {
         migrated: true,
-        filePath,
         stateDir,
         previousIndex,
-        previousFile,
       };
     } catch (err) {
       throw new Error(
@@ -1447,31 +1412,7 @@ export function createConfigIO(
     if (!migration.migrated) {
       return;
     }
-    if (migration.previousFile.existed) {
-      deps.fs.writeFileSync(migration.filePath, migration.previousFile.raw, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-    } else {
-      try {
-        deps.fs.unlinkSync(migration.filePath);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-          throw err;
-        }
-      }
-    }
-    if (migration.previousIndex.existed) {
-      writePersistedInstalledPluginIndexSync(migration.previousIndex.value, {
-        env: deps.env,
-        stateDir: migration.stateDir,
-      });
-      return;
-    }
-    deletePersistedInstalledPluginIndexSync({
-      env: deps.env,
-      stateDir: migration.stateDir,
-    });
+    restoreInstalledPluginIndexSnapshotSync(migration.stateDir, migration.previousIndex);
   }
 
   function loadConfig(): OpenClawConfig {

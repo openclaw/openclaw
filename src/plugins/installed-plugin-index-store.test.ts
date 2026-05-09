@@ -97,7 +97,7 @@ describe("installed plugin index persistence", () => {
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
     const index = createIndex();
 
-    await expect(writePersistedInstalledPluginIndex(index, { stateDir })).resolves.toBe(filePath);
+    await writePersistedInstalledPluginIndex(index, { stateDir });
 
     expect(fs.existsSync(filePath)).toBe(false);
     expect(

@@ -492,12 +492,12 @@ describe("gateway agent handler", () => {
     mockMainSessionEntry(staleEntry);
 
     let capturedEntry: Record<string, unknown> | undefined;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+    mocks.applySessionEntryWrite.mockImplementation(async (_path, updater) => {
       const store: Record<string, unknown> = {
         "agent:main:main": { ...staleEntry },
       };
       const result = await updater(store);
-      capturedEntry = result as Record<string, unknown>;
+      capturedEntry = store["agent:main:main"] as Record<string, unknown>;
       return result;
     });
     mocks.agentCommand.mockResolvedValue({
