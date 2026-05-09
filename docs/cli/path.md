@@ -173,6 +173,164 @@ openclaw path find 'oc://SKILL.md/Tools/*/send_email'
 openclaw path validate 'oc://AGENTS.md/Tools/$last/risk?session=cron-daily'
 ```
 
+## Recipes by file kind
+
+The same five verbs work across kinds; the addressing scheme dispatches on the
+file extension. The examples below use the fixtures from the PR description.
+
+### Markdown
+
+```text
+<!-- frontmatter.md -->
+---
+name: drafter
+description: email drafting agent
+tier: core
+---
+## Tools
+- gh: GitHub CLI
+- curl: HTTP client
+- send_email: enabled
+```
+
+```bash
+$ openclaw path resolve 'oc://x.md/[frontmatter]/tier' --file frontmatter.md --human
+leaf @ L4: "core" (string)
+
+$ openclaw path resolve 'oc://x.md/tools/gh/gh' --file frontmatter.md --human
+leaf @ L9: "GitHub CLI" (string)
+
+$ openclaw path find 'oc://x.md/tools/*' --file frontmatter.md --human
+3 matches for oc://x.md/tools/*:
+  oc://x.md/tools/gh           →  node @ L9 [md-item]
+  oc://x.md/tools/curl         →  node @ L10 [md-item]
+  oc://x.md/tools/send-email   →  node @ L11 [md-item]
+```
+
+The `[frontmatter]` predicate addresses the YAML frontmatter block; `tools`
+matches the `## Tools` heading via slug, and item leaves keep their slug form
+even when the source uses underscores (`send_email` → `send-email`).
+
+### JSONC
+
+```text
+// config.jsonc
+{
+  "plugins": {
+    "github": {"enabled": true, "role": "vcs"},
+    "slack":  {"enabled": false, "role": "chat"}
+  }
+}
+```
+
+```bash
+$ openclaw path resolve 'oc://config.jsonc/plugins/github/enabled' --file config.jsonc --human
+leaf @ L4: "true" (boolean)
+
+$ openclaw path set 'oc://config.jsonc/plugins/slack/enabled' 'true' --file config.jsonc --dry-run
+--dry-run: would write 142 bytes to /…/config.jsonc
+{
+  "plugins": {
+    "github": {"enabled": true, "role": "vcs"},
+    "slack":  {"enabled": true, "role": "chat"}
+  }
+}
+```
+
+JSONC edits go through `jsonc-parser`, so comments and whitespace survive a
+`set`. Run with `--dry-run` first to inspect the bytes before committing.
+
+### JSONL
+
+```text
+{"event":"start","userId":"u1","ts":1}
+{"event":"action","userId":"u1","ts":2}
+{"event":"end","userId":"u1","ts":3}
+```
+
+```bash
+$ openclaw path find 'oc://session.jsonl/[event=action]/userId' --file session.jsonl --human
+1 match for oc://session.jsonl/[event=action]/userId:
+  oc://session.jsonl/L2/userId  →  leaf @ L2: "u1" (string)
+
+$ openclaw path resolve 'oc://session.jsonl/L2/ts' --file session.jsonl --human
+leaf @ L2: "2" (number)
+```
+
+Each line is a record. Address by predicate (`[event=action]`) when you do not
+know the line number, or by the canonical `LN` segment when you do.
+
+## Subcommand reference
+
+### `resolve <oc-path>`
+
+Read a single leaf or node. Wildcards are rejected — use `find` for those.
+Exits `0` on a match, `1` on a clean miss, `2` on a parse error or refused
+pattern.
+
+```bash
+openclaw path resolve 'oc://AGENTS.md/tools/gh/risk' --human
+openclaw path resolve 'oc://gateway.jsonc/server/port' --json
+```
+
+### `find <pattern>`
+
+Enumerate every match for a wildcard / predicate / union pattern. Exits `0`
+on at least one match, `1` on zero. File-slot wildcards are rejected with
+`OC_PATH_FILE_WILDCARD_UNSUPPORTED` — pass a concrete file (multi-file
+globbing is a follow-up feature).
+
+```bash
+openclaw path find 'oc://AGENTS.md/tools/**/risk'
+openclaw path find 'oc://session.jsonl/[event=action]/userId'
+openclaw path find 'oc://config.jsonc/plugins/{github,slack}/enabled'
+```
+
+### `set <oc-path> <value>`
+
+Write a leaf. Pair with `--dry-run` to preview the bytes that would be
+written without touching the file. Exits `0` on a successful write, `1` if
+the substrate refuses (for example, a sentinel guard hit), `2` on parse
+errors.
+
+```bash
+openclaw path set 'oc://gateway.jsonc/version' '2.0' --dry-run
+openclaw path set 'oc://gateway.jsonc/version' '2.0'
+openclaw path set 'oc://AGENTS.md/Tools/+gh/risk' 'low'
+```
+
+The `+key` insertion marker creates the named child if it does not already
+exist; `+nnn` and bare `+` work for indexed and append insertion respectively.
+
+### `validate <oc-path>`
+
+Parse-only check. No filesystem access. Useful when you want to confirm a
+template path is well-formed before substituting variables, or when you want
+the structural breakdown for debugging:
+
+```bash
+$ openclaw path validate 'oc://AGENTS.md/tools/gh' --human
+valid: oc://AGENTS.md/tools/gh
+  file:    AGENTS.md
+  section: tools
+  item:    gh
+```
+
+Exits `0` when valid, `1` when invalid (with a structured `code` and
+`message`), `2` on argument errors.
+
+### `emit <file>`
+
+Round-trip a file through the per-kind parser and emitter. The output should
+be byte-identical to the input on a sound file — divergence indicates a
+parser bug or a sentinel hit. Useful for debugging substrate behavior on
+real-world inputs.
+
+```bash
+openclaw path emit ./AGENTS.md
+openclaw path emit ./gateway.jsonc --json
+```
+
 ## Exit codes
 
 | Code | Meaning                                                                    |
