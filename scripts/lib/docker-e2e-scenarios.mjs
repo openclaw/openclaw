@@ -258,6 +258,13 @@ export const mainLanes = [
       weight: 3,
     },
   ),
+  npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
+    retryPatterns: LIVE_RETRY_PATTERNS,
+    retries: 1,
+    stateScenario: "empty",
+    timeoutMs: 10 * 60 * 1000,
+    weight: 2,
+  }),
   npmLane("upgrade-survivor", upgradeSurvivorCommand, {
     stateScenario: "upgrade-survivor",
     timeoutMs: 20 * 60 * 1000,
@@ -578,6 +585,13 @@ const releasePathPackageUpdateCoreLanes = [
       weight: 3,
     },
   ),
+  npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
+    retryPatterns: LIVE_RETRY_PATTERNS,
+    retries: 1,
+    stateScenario: "empty",
+    timeoutMs: 10 * 60 * 1000,
+    weight: 2,
+  }),
   npmLane("upgrade-survivor", upgradeSurvivorCommand, {
     stateScenario: "upgrade-survivor",
     timeoutMs: 20 * 60 * 1000,

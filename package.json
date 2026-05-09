@@ -83,6 +83,7 @@
     "scripts/lib/official-external-plugin-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
     "scripts/lib/package-dist-imports.mjs",
+    "scripts/lib/bundled-runtime-deps-install.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"
   ],
@@ -1586,6 +1587,7 @@
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:docker:rerun": "node scripts/docker-e2e-rerun.mjs",
     "test:docker:session-runtime-context": "bash scripts/e2e/session-runtime-context-docker.sh",
+    "test:docker:skill-install": "bash scripts/e2e/skill-install-docker.sh",
     "test:docker:timings": "node scripts/docker-e2e-timings.mjs",
     "test:docker:update-channel-switch": "bash scripts/e2e/update-channel-switch-docker.sh",
     "test:docker:update-corrupt-plugin": "bash scripts/e2e/update-corrupt-plugin-docker.sh",
