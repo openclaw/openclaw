@@ -43,15 +43,17 @@ OpenClaw persists sessions in two layers:
 
 1. **Session store**
    - Key/value map: `sessionKey -> SessionEntry`
-   - SQLite-backed by default; JSON export/import remains available for legacy/custom stores and support workflows
+   - SQLite-backed by default; legacy JSON import is doctor-only and support export is explicit
    - Tracks session metadata (current session id, last activity, toggles, token counters, etc.)
 
-2. **Transcript (`<sessionId>.jsonl`)**
+2. **Transcript (`agentId`, `sessionId`)**
    - SQLite-backed transcript event stream with tree structure (entries have `id` + `parentId`)
    - Stores the actual conversation + tool calls + compaction summaries
    - Used to rebuild the model context for future turns
    - Stored in SQLite for OpenClaw-owned runtime paths; JSONL is legacy
      import/export/debug compatibility, not a runtime sidecar
+   - Runtime code passes structured agent/session scope. There is no active
+     transcript file and no canonical transcript URI.
    - Scoped latest/tail assistant-text lookups, session exports, `before_reset`
      hook payloads, silent session rotations, chat history, TUI history,
      recovery, managed media indexing, token estimation, title/preview/usage
@@ -62,8 +64,8 @@ OpenClaw persists sessions in two layers:
 Gateway history readers should avoid materializing the whole transcript unless
 the surface explicitly needs arbitrary historical access. First-page history,
 embedded chat history, restart recovery, and token/usage checks use bounded tail
-reads. Full transcript scans go through the async transcript index, which is
-cached by file path plus `mtimeMs`/`size` and shared across concurrent readers.
+reads. Full transcript scans are keyed by SQLite agent/session scope, not by a
+file path.
 
 ---
 
@@ -72,8 +74,7 @@ cached by file path plus `mtimeMs`/`size` and shared across concurrent readers.
 Per agent, on the Gateway host:
 
 - Global store: `~/.openclaw/state/openclaw.sqlite` by default. It stores
-  shared registry, migration, plugin, task, backup, and transcript-locator
-  metadata.
+  shared registry, migration, plugin, task, and backup metadata.
 - Agent store: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. It
   stores canonical session rows, transcript events, snapshots, VFS entries,
   artifacts, and agent-local cache rows.
@@ -83,10 +84,10 @@ Per agent, on the Gateway host:
   sources after durable verification. Gateway startup leaves legacy indexes
   alone.
 - Transcripts: runtime transcript events live in the per-agent database
-  (`transcript_events` and `transcript_event_identities`). Session file values
-  are canonical `sqlite-transcript://<agentId>/<sessionId>.jsonl` locators;
-  JSONL files are doctor migration inputs, not runtime sidecars.
-  - Telegram topic handles: `.../<sessionId>-topic-<threadId>.jsonl`
+  (`transcript_events` and `transcript_event_identities`). The canonical
+  identity is structured scope: `agentId` plus `sessionId`. Legacy JSONL files
+  are doctor migration inputs or explicit export/debug artifacts, never runtime
+  sidecars.
 
 OpenClaw resolves these via `src/config/sessions/*`.
 
@@ -110,8 +111,8 @@ removes them from older configs.
 
 Transcript mutations are serialized through SQLite transactions plus the
 per-session append queue. Runtime bootstrap and manual compaction repair write
-SQLite transcript rows directly; retained `.jsonl` paths are lookup/export
-metadata only.
+SQLite transcript rows directly. Any retained JSONL shape is an explicit
+doctor/import/export/debug boundary, not a runtime lookup or persistence path.
 
 Legacy session import belongs to `openclaw doctor --fix`. Runtime no longer has
 a session cleanup command that prunes missing transcript rows; after doctor
@@ -185,7 +186,8 @@ Key fields (not exhaustive):
   time for idle freshness.
 - `updatedAt`: last store-row mutation timestamp, used for listing and
   bookkeeping. It is not the authority for daily/idle reset freshness.
-- `sessionFile`: optional explicit transcript path override
+- `sessionId`: current SQLite transcript id; callers pass structured scope
+  instead of a transcript path override
 - `chatType`: `direct | group | room` (helps UIs and send policy)
 - `provider`, `subject`, `room`, `space`, `displayName`: metadata for group/channel labeling
 - Toggles:

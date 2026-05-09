@@ -1,7 +1,5 @@
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { getSessionEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -9,7 +7,6 @@ import type { HandleCommandsParams } from "./commands-types.js";
 export interface ExportCommandSessionTarget {
   agentId: string;
   entry: SessionEntry;
-  sessionFile: string;
 }
 
 const MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS = 512;
@@ -49,17 +46,7 @@ export function resolveExportCommandSessionTarget(
     return { text: `❌ Session not found: ${params.sessionKey}` };
   }
 
-  try {
-    const sessionFile = createSqliteSessionTranscriptLocator({
-      agentId: targetAgentId,
-      sessionId: entry.sessionId,
-    });
-    return { agentId: targetAgentId, entry, sessionFile };
-  } catch (err) {
-    return {
-      text: `❌ Failed to resolve session transcript: ${formatErrorMessage(err)}`,
-    };
-  }
+  return { agentId: targetAgentId, entry };
 }
 
 export function isReplyPayload(

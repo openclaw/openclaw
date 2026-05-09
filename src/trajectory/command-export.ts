@@ -105,9 +105,9 @@ export async function resolveTrajectoryCommandOutputDir(params: {
 }
 
 export async function exportTrajectoryForCommand(params: {
+  agentId: string;
   outputDir?: string;
   outputPath?: string;
-  sessionFile: string;
   sessionId: string;
   sessionKey: string;
   workspaceDir: string;
@@ -120,8 +120,8 @@ export async function exportTrajectoryForCommand(params: {
       sessionId: params.sessionId,
     }));
   const bundle = await exportTrajectoryBundle({
+    agentId: params.agentId,
     outputDir,
-    transcriptLocator: params.sessionFile,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,

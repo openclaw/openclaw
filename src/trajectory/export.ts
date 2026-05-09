@@ -31,8 +31,7 @@ import { safeJsonStringify } from "../utils/safe-json.js";
 import {
   TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
   resolveTrajectoryFilePath,
-  resolveTrajectoryPointerFilePath,
-  safeTrajectoryTranscriptLocatorName,
+  safeTrajectorySessionFileName,
 } from "./paths.js";
 import { listTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type {
@@ -42,8 +41,8 @@ import type {
 } from "./types.js";
 
 type BuildTrajectoryBundleParams = {
+  agentId?: string;
   outputDir: string;
-  transcriptLocator: string;
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
@@ -109,20 +108,16 @@ function migrateLegacySessionEntries(entries: FileEntry[]): void {
   }
 }
 
-function readSessionBranch(params: {
-  transcriptLocator: string;
-  sessionId: string;
-  sessionKey?: string;
-}): {
+function readSessionBranch(params: { agentId?: string; sessionId: string; sessionKey?: string }): {
   header: SessionHeader | null;
   leafId: string | null;
   branchEntries: SessionEntry[];
 } {
   const scope = resolveSqliteSessionTranscriptScope({
-    agentId: params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined,
+    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
     sessionId: params.sessionId,
   }) ?? {
-    agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
     sessionId: params.sessionId,
   };
   const fileEntries = loadSqliteSessionTranscriptEvents(scope)
@@ -130,7 +125,7 @@ function readSessionBranch(params: {
     .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
   if (fileEntries.length === 0) {
     throw new Error(
-      `Transcript is not in SQLite: ${params.transcriptLocator}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
+      `Transcript is not in SQLite for agent ${scope.agentId} session ${params.sessionId}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
     );
   }
   migrateLegacySessionEntries(fileEntries);
@@ -244,59 +239,16 @@ async function isRegularNonSymlinkFile(filePath: string): Promise<boolean> {
   }
 }
 
-async function readRuntimePointerFile(
-  transcriptLocator: string,
-  sessionId: string,
-): Promise<string | undefined> {
-  const pointerPath = resolveTrajectoryPointerFilePath(transcriptLocator);
-  if (!(await isRegularNonSymlinkFile(pointerPath))) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(await fsp.readFile(pointerPath, "utf8")) as unknown;
-    if (!isRecord(parsed)) {
-      return undefined;
-    }
-    if (parsed.sessionId !== sessionId || typeof parsed.runtimeFile !== "string") {
-      return undefined;
-    }
-    const runtimeFile = path.resolve(parsed.runtimeFile);
-    const safeRuntimeFileName = `${safeTrajectoryTranscriptLocatorName(sessionId)}.jsonl`;
-    const defaultRuntimeFile = path.resolve(
-      resolveTrajectoryFilePath({
-        env: {},
-        transcriptLocator,
-        sessionId,
-      }),
-    );
-    if (runtimeFile !== defaultRuntimeFile && path.basename(runtimeFile) !== safeRuntimeFileName) {
-      return undefined;
-    }
-    return runtimeFile;
-  } catch {
-    return undefined;
-  }
-}
-
 async function resolveTrajectoryRuntimeFile(params: {
   runtimeFile?: string;
-  transcriptLocator: string;
   sessionId: string;
 }): Promise<string | undefined> {
   if (params.runtimeFile) {
     return params.runtimeFile;
   }
   const candidates = [
-    await readRuntimePointerFile(params.transcriptLocator, params.sessionId),
-    resolveTrajectoryFilePath({
-      env: {},
-      transcriptLocator: params.transcriptLocator,
-      sessionId: params.sessionId,
-    }),
-    resolveTrajectoryFilePath({
-      transcriptLocator: params.transcriptLocator,
-      sessionId: params.sessionId,
-    }),
+    resolveTrajectoryFilePath({ env: {}, sessionId: params.sessionId }),
+    resolveTrajectoryFilePath({ sessionId: params.sessionId }),
   ].filter((candidate): candidate is string => Boolean(candidate));
   for (const candidate of candidates) {
     if (await isRegularNonSymlinkFile(candidate)) {
@@ -881,12 +833,12 @@ export function resolveDefaultTrajectoryExportDir(params: {
   now?: Date;
 }): string {
   const timestamp = (params.now ?? new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const transcriptLocatorName = safeTrajectoryTranscriptLocatorName(params.sessionId);
+  const safeSessionName = safeTrajectorySessionFileName(params.sessionId);
   return path.join(
     params.workspaceDir,
     ".openclaw",
     "trajectory-exports",
-    `openclaw-trajectory-${transcriptLocatorName.slice(0, 8)}-${timestamp}`,
+    `openclaw-trajectory-${safeSessionName.slice(0, 8)}-${timestamp}`,
   );
 }
 
@@ -902,13 +854,12 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     workspaceDir: params.workspaceDir,
   });
   const { header, leafId, branchEntries } = readSessionBranch({
-    transcriptLocator: params.transcriptLocator,
+    agentId: params.agentId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
   const runtimeFile = await resolveTrajectoryRuntimeFile({
     runtimeFile: params.runtimeFile,
-    transcriptLocator: params.transcriptLocator,
     sessionId: params.sessionId,
   });
   const sqliteRuntimeEvents = loadSqliteRuntimeTrajectoryEvents({
@@ -954,7 +905,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     runtimeEventCount: runtimeEvents.length,
     transcriptEventCount: transcriptEvents.length,
     sourceFiles: {
-      session: maybeRedactPathString(params.transcriptLocator, redaction),
+      session: `agent-db:${params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey)}:transcript_events:${params.sessionId}`,
       runtime:
         sqliteRuntimeEvents.length > 0
           ? `agent-db:${resolveAgentIdFromSessionKey(params.sessionKey)}:trajectory_runtime_events:${params.sessionId}`

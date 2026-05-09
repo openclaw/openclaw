@@ -65,7 +65,11 @@ This plan has started landing in slices:
 - Transcript events are SQLite-primary. OpenClaw-owned append paths require
   agent/session scope and write `transcript_events` directly; `*.jsonl` is no
   longer a runtime mirror for those paths. JSONL is now an explicit
-  import/export/debug boundary shape only. The OpenClaw transcript session manager,
+  import/export/debug boundary shape only. There must not be a runtime transcript
+  file bridge: no active transcript file, no canonical `sqlite-transcript://`
+  locator, and no `sessionFile` handoff for new runtime APIs. Runtime code
+  passes structured `agentId` + `sessionId` scope into SQLite-backed stores.
+  The OpenClaw transcript session manager,
   Gateway-injected assistant messages, CLI transcript persistence, Codex
   app-server mirroring, compaction successor transcripts, manual compaction
   boundary rewrites, and reset/header creation all persist through SQLite.
