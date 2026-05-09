@@ -604,7 +604,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
       identity,
     }) => {
-      const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+      const { replyToMessageId, replyInThread } = resolveFeishuMediaReplyMode({
+        replyToId,
+        threadId,
+      });
       // Scheme A compatibility shim:
       // when upstream accidentally returns a local image path as plain text,
       // auto-upload and send as Feishu image message instead of leaking path text.
@@ -617,6 +620,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             mediaUrl: localImagePath,
             accountId: accountId ?? undefined,
             replyToMessageId,
+            replyInThread,
             mediaLocalRoots,
           });
         } catch (err) {
@@ -632,7 +636,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           text,
           accountId: accountId ?? undefined,
           replyToMessageId,
-          replyInThread: threadId != null && !replyToId,
+          replyInThread,
         });
       }
 
@@ -653,7 +657,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           to,
           text,
           replyToMessageId,
-          replyInThread: threadId != null && !replyToId,
+          replyInThread,
           accountId: accountId ?? undefined,
           header: header?.title ? header : undefined,
         });
@@ -664,7 +668,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text,
         accountId: accountId ?? undefined,
         replyToMessageId,
-        replyInThread: threadId != null && !replyToId,
+        replyInThread,
       });
     },
     sendMedia: async ({
