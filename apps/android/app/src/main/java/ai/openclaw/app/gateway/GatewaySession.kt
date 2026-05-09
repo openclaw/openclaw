@@ -217,7 +217,7 @@ class GatewaySession(
     event: String,
     payloadJson: String?,
   ): Boolean {
-    val conn = currentConnection ?: return false
+    val conn = currentConnection?.takeIf { it.isHandshakeComplete } ?: return false
     return try {
       conn.request(
         "node.event",
@@ -259,7 +259,7 @@ class GatewaySession(
     timeoutMs: Long = 8_000,
   ): RpcResult {
     val conn =
-      currentConnection
+      currentConnection?.takeIf { it.isHandshakeComplete }
         ?: return RpcResult(
           ok = false,
           payloadJson = null,
@@ -332,6 +332,7 @@ class GatewaySession(
   ) {
     private val connectDeferred = CompletableDeferred<Unit>()
     private val closedDeferred = CompletableDeferred<Unit>()
+    @Volatile var isHandshakeComplete = false
     private val isClosed = AtomicBoolean(false)
     private val connectNonceDeferred = CompletableDeferred<String>()
     private val client: OkHttpClient = buildClient()
@@ -617,6 +618,7 @@ class GatewaySession(
           ?.get("sessionDefaults")
           .asObjectOrNull()
       mainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
+      isHandshakeComplete = true
       onConnected(serverName, remoteAddress, mainSessionKey)
     }
 
@@ -898,9 +900,9 @@ class GatewaySession(
           target.options,
           target.tls,
         )
+      currentConnection = conn
       try {
         conn.connect()
-        currentConnection = conn
         conn.awaitClose()
       } finally {
         currentConnection = null
