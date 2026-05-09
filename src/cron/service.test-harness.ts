@@ -105,12 +105,12 @@ export function installCronTestHooks(options: {
 
 export function setupCronServiceSuite(options?: { prefix?: string; baseTimeIso?: string }) {
   const logger = createNoopLogger();
-  const { makeStorePath } = createCronStoreHarness({ prefix: options?.prefix });
+  const { makeStorePath, makeStoreKey } = createCronStoreHarness({ prefix: options?.prefix });
   installCronTestHooks({
     logger,
     baseTimeIso: options?.baseTimeIso,
   });
-  return { logger, makeStorePath };
+  return { logger, makeStorePath, makeStoreKey };
 }
 
 export function createFinishedBarrier() {
@@ -161,7 +161,8 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
 
 export async function withCronServiceForTest(
   params: {
-    makeStorePath: () => Promise<{ storePath: string; cleanup: () => Promise<void> }>;
+    makeStoreKey?: () => Promise<{ storeKey: string; cleanup?: () => Promise<void> }>;
+    makeStorePath?: () => Promise<{ storePath: string; cleanup: () => Promise<void> }>;
     logger: ReturnType<typeof createNoopLogger>;
     cronEnabled: boolean;
     runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
@@ -172,12 +173,16 @@ export async function withCronServiceForTest(
     requestHeartbeat: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
 ): Promise<void> {
-  const store = await params.makeStorePath();
+  const store = params.makeStoreKey ? await params.makeStoreKey() : await params.makeStorePath?.();
+  if (!store) {
+    throw new Error("withCronServiceForTest requires a cron store key or legacy store path");
+  }
+  const storeKey = "storeKey" in store ? store.storeKey : store.storePath;
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
   const cron = new CronService({
     cronEnabled: params.cronEnabled,
-    storeKey: store.storePath,
+    storeKey,
     log: params.logger,
     enqueueSystemEvent,
     requestHeartbeat,
@@ -191,7 +196,7 @@ export async function withCronServiceForTest(
     await run({ cron, enqueueSystemEvent, requestHeartbeat });
   } finally {
     cron.stop();
-    await store.cleanup();
+    await store.cleanup?.();
   }
 }
 
