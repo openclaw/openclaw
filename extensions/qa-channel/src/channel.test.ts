@@ -22,7 +22,7 @@ function installQaChannelTestRegistry() {
 }
 
 function expectDispatchedContext(ctx: Record<string, unknown> | null): Record<string, unknown> {
-  expect(ctx).toEqual(expect.any(Object));
+  expect(ctx).not.toBeNull();
   if (ctx === null) {
     throw new Error("Expected dispatched context");
   }
