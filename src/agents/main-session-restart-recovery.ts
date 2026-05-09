@@ -212,7 +212,7 @@ async function recoverStore(params: {
 
     let messages: unknown[];
     try {
-      messages = await readSessionMessagesAsync(entry.sessionId, entry.sessionFile, {
+      messages = await readSessionMessagesAsync(entry.sessionId, undefined, {
         agentId: resolveAgentIdFromSessionKey(sessionKey),
         mode: "recent",
         maxMessages: 20,

@@ -13,6 +13,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
@@ -171,7 +172,9 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       unknown
     >;
     const currentSessionId = sessionEntry.sessionId as string;
-    const currentTranscriptPath = (sessionEntry.sessionFile as string) || undefined;
+    const currentTranscriptPath = currentSessionId
+      ? createSqliteSessionTranscriptLocator({ agentId, sessionId: currentSessionId })
+      : undefined;
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,

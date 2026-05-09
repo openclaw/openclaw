@@ -1,7 +1,7 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { createSqliteSessionTranscriptLocator, type SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
@@ -456,7 +456,7 @@ async function executeCodexDiagnosticsAddon(
     gatewayClientScopes: params.ctx.GatewayClientScopes,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
-    sessionFile: targetSessionEntry?.sessionFile,
+    transcriptLocator: targetSessionEntry?.transcriptLocator,
     commandBody,
     config: params.cfg,
     from: params.command.from,
@@ -495,11 +495,14 @@ function buildCodexDiagnosticsSessions(
     }
   }
   return Array.from(sessions.entries())
-    .filter(([, entry]) => Boolean(entry.sessionFile))
+    .filter(([, entry]) => Boolean(entry.sessionId))
     .map(([sessionKey, entry]) => ({
       sessionKey,
       sessionId: entry.sessionId,
-      sessionFile: entry.sessionFile,
+      transcriptLocator: createSqliteSessionTranscriptLocator({
+        agentId: resolveSessionAgentId({ sessionKey, config: params.cfg }),
+        sessionId: entry.sessionId,
+      }),
       agentHarnessId: entry.agentHarnessId,
       channel: resolveDiagnosticsSessionChannel(entry, params, sessionKey),
       channelId: resolveDiagnosticsSessionChannelId(entry, params, sessionKey),

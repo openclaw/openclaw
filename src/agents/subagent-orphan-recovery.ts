@@ -350,7 +350,7 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
 
-        const messages = await readSessionMessagesAsync(entry.sessionId, entry.sessionFile, {
+        const messages = await readSessionMessagesAsync(entry.sessionId, undefined, {
           agentId: resolveAgentIdFromSessionKey(childSessionKey),
           mode: "recent",
           maxMessages: 200,

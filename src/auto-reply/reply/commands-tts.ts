@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
-import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
+import {
+  createSqliteSessionTranscriptLocator,
+  readLatestAssistantTextFromSessionTranscript,
+} from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
   normalizeOptionalLowercaseString,
@@ -254,7 +257,10 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       };
     }
     const latest = await readLatestAssistantTextFromSessionTranscript(
-      params.sessionEntry.sessionFile,
+      createSqliteSessionTranscriptLocator({
+        agentId: params.agentId,
+        sessionId: params.sessionEntry.sessionId,
+      }),
       {
         agentId: params.agentId,
         sessionId: params.sessionEntry.sessionId,

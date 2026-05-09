@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export { loadCombinedSessionEntriesForGateway } from "../config/sessions/combined-session-entries-gateway.js";
 
@@ -26,7 +25,7 @@ function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: stri
 
 /**
  * Derive transcript stem `S` from a memory search hit path for `source === "sessions"`.
- * Builtin index uses `sessions/<basename>.jsonl`; QMD exports use `<stem>.md`.
+ * Builtin index uses `sessions/<agent>/<session>`; QMD exports use `<stem>.md`.
  */
 export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): string | null {
   return extractTranscriptIdentityFromSessionsMemoryHit(hitPath)?.stem ?? null;
@@ -36,13 +35,15 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
   hitPath: string,
 ): SessionTranscriptHitIdentity | null {
   const { base, ownerAgentId } = parseSessionsPath(hitPath);
-  if (base.endsWith(".jsonl")) {
-    const stem = base.slice(0, -".jsonl".length);
-    return stem ? { stem, ownerAgentId } : null;
-  }
   if (base.endsWith(".md")) {
     const stem = base.slice(0, -".md".length);
     return stem ? { stem } : null;
+  }
+  if (base.includes(".jsonl")) {
+    return null;
+  }
+  if (hitPath.replace(/\\/g, "/").startsWith("sessions/") && base) {
+    return { stem: base, ownerAgentId };
   }
   return null;
 }
@@ -60,15 +61,6 @@ export function resolveTranscriptStemToSessionKeys(params: {
   const matches: string[] = [];
 
   for (const [sessionKey, entry] of Object.entries(store)) {
-    const sessionFile = normalizeOptionalString(entry.sessionFile);
-    if (sessionFile) {
-      const base = path.basename(sessionFile);
-      const fileStem = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
-      if (fileStem === params.stem) {
-        matches.push(sessionKey);
-        continue;
-      }
-    }
     if (entry.sessionId === params.stem) {
       matches.push(sessionKey);
     }
