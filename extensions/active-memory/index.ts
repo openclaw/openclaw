@@ -224,7 +224,7 @@ type ActiveMemorySearchDebug = {
 
 type ActiveRecallResult =
   | {
-      status: "empty" | "timeout" | "unavailable";
+      status: "empty" | "timeout" | "unavailable" | "no_relevant_memory";
       elapsedMs: number;
       summary: string | null;
       searchDebug?: ActiveMemorySearchDebug;
@@ -2795,7 +2795,7 @@ async function maybeResolveActiveRecall(params: {
             searchDebug,
           }
         : {
-            status: "empty",
+            status: "no_relevant_memory",
             elapsedMs: Date.now() - startedAt,
             summary: null,
             searchDebug,
