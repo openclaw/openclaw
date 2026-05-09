@@ -2801,7 +2801,7 @@ describe("openai transport stream", () => {
       tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
     };
 
-    expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toEqual({});
+    expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toStrictEqual({});
   });
 
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
