@@ -506,7 +506,7 @@ Announce payloads include a stats line at the end (even when wrapped):
 - Runtime (e.g. `runtime 5m12s`).
 - Token usage (input/output/total).
 - Estimated cost when model pricing is configured (`models.providers.*.models[].cost`).
-- `sessionKey`, `sessionId`, and transcript path so the main agent can fetch history via `sessions_history` or inspect the file on disk.
+- `sessionKey` and `sessionId` so the main agent can fetch history via `sessions_history` or inspect the SQLite transcript rows.
 
 Internal metadata is meant for orchestration only; user-facing replies
 should be rewritten in normal assistant voice.

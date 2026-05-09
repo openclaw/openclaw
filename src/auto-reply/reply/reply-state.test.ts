@@ -53,10 +53,7 @@ async function createCompactionSessionFixture(entry: SessionEntry) {
   return { sessionKey, sessionStore };
 }
 
-async function rotateCompactionTranscriptLocator(params: {
-  tempPrefix: string;
-  newSessionId: string;
-}) {
+async function rotateCompactionSessionId(params: { tempPrefix: string; newSessionId: string }) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
   tempDirs.push(tmp);
   vi.stubEnv("OPENCLAW_STATE_DIR", tmp);
@@ -547,8 +544,8 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
-  it("updates sessionId without persisting transcript locators when compaction rotated transcripts", async () => {
-    const { stored, sessionKey } = await rotateCompactionTranscriptLocator({
+  it("updates sessionId without persisting transcript locators when compaction rotates sessions", async () => {
+    const { stored, sessionKey } = await rotateCompactionSessionId({
       tempPrefix: "openclaw-compact-rotate-",
       newSessionId: "s2",
     });
@@ -556,8 +553,8 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey]).not.toHaveProperty("transcriptLocator");
   });
 
-  it("drops legacy fork transcript filenames when compaction rotates transcripts", async () => {
-    const { stored, sessionKey } = await rotateCompactionTranscriptLocator({
+  it("drops legacy fork transcript filenames when compaction rotates sessions", async () => {
+    const { stored, sessionKey } = await rotateCompactionSessionId({
       tempPrefix: "openclaw-compact-fork-",
       newSessionId: "s2",
     });
@@ -565,8 +562,8 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey]).not.toHaveProperty("transcriptLocator");
   });
 
-  it("replaces absolute transcriptLocator paths with sqlite locators during compaction rotation", async () => {
-    const { stored, sessionKey } = await rotateCompactionTranscriptLocator({
+  it("drops legacy transcript locator paths during compaction rotation", async () => {
+    const { stored, sessionKey } = await rotateCompactionSessionId({
       tempPrefix: "openclaw-compact-unsafe-",
       newSessionId: "s2",
     });

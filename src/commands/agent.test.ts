@@ -217,41 +217,16 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
 });
 
 vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
-  const joinPath = (...parts: string[]): string => {
-    const separator = parts.some((part) => part.includes("\\")) ? "\\" : "/";
-    const normalizedParts: string[] = [];
-    for (const [index, part] of parts.entries()) {
-      const normalized =
-        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, "");
-      if (normalized.length > 0) {
-        normalizedParts.push(normalized);
-      }
-    }
-    return normalizedParts.join(separator);
-  };
-  const resolveTranscriptLocator = (
-    sessionId: string,
-    agentId: string,
-    sessionsDir?: string,
-  ): string =>
-    joinPath(sessionsDir ?? ".openclaw", "agents", agentId, "sessions", `${sessionId}.jsonl`);
-
   return {
     resolveSessionTranscriptTarget: vi.fn(
       async (params: {
         sessionId: string;
         sessionKey: string;
-        sessionEntry?: { transcriptLocator?: string; sessionId?: string };
-        sessionStore?: Record<string, { transcriptLocator?: string; sessionId?: string }>;
+        sessionEntry?: { sessionId?: string };
+        sessionStore?: Record<string, { sessionId?: string }>;
         agentId: string;
         threadId?: string | number;
       }) => {
-        const transcriptLocatorFromStorePath =
-          params.sessionEntry?.transcriptLocator ??
-          resolveTranscriptLocator(params.sessionId, params.agentId);
-        const transcriptLocator = params.sessionEntry?.transcriptLocator
-          ? transcriptLocatorFromStorePath
-          : resolveTranscriptLocator(params.sessionId, params.agentId);
         let sessionEntry = params.sessionEntry;
         if (params.sessionStore && params.sessionKey) {
           const existingEntry =
@@ -261,12 +236,11 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
           sessionEntry = {
             ...existingEntry,
             sessionId: params.sessionId,
-            transcriptLocator,
           };
           params.sessionStore[params.sessionKey] = sessionEntry;
           await replaceTestSessionRows(params.agentId, params.sessionStore as never);
         }
-        return { transcriptLocator, sessionEntry };
+        return { agentId: params.agentId, sessionId: params.sessionId, sessionEntry };
       },
     ),
   };
