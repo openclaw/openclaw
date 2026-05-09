@@ -4,10 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   fetchRemoteEmbeddingVectors: vi.fn(async () => [[1, 0]]),
-  resolveRemoteEmbeddingClient: vi.fn(async () => ({
+  resolveRemoteEmbeddingClient: vi.fn(async (params) => ({
     baseUrl: "https://embeddings.example/v1",
     headers: { Authorization: "Bearer test" },
-    model: "text-embedding-3-small",
+    model: params.normalizeModel(params.options.model),
   })),
 }));
 
@@ -119,5 +119,89 @@ describe("OpenAI embedding provider", () => {
         provider: "openai",
       }),
     );
+  });
+
+  describe("query instruction template", () => {
+    it("applies Qwen3-Embedding prefix to query string", async () => {
+      const { provider } = await createOpenAiEmbeddingProvider(
+        createOptions({ model: "qwen3-embedding-4b" }),
+      );
+
+      await provider.embedQuery("memory search query?");
+
+      expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            input: [
+              "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:memory search query?",
+            ],
+          }),
+        }),
+      );
+    });
+
+    it("applies nomic-embed-text prefix to query string", async () => {
+      const { provider } = await createOpenAiEmbeddingProvider(
+        createOptions({ model: "nomic-embed-text" }),
+      );
+
+      await provider.embedQuery("Zabbix monitoring rules");
+
+      expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            input: ["search_query: Zabbix monitoring rules"],
+          }),
+        }),
+      );
+    });
+
+    it("applies mxbai-embed-large prefix to query string", async () => {
+      const { provider } = await createOpenAiEmbeddingProvider(
+        createOptions({ model: "mxbai-embed-large" }),
+      );
+
+      await provider.embedQuery("HVAC automation");
+
+      expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            input: ["Represent this sentence for searching relevant passages: HVAC automation"],
+          }),
+        }),
+      );
+    });
+
+    it("does not apply prefix to batch (document) embeddings", async () => {
+      const { provider } = await createOpenAiEmbeddingProvider(
+        createOptions({ model: "qwen3-embedding-4b" }),
+      );
+
+      await provider.embedBatch(["doc one", "doc two"]);
+
+      expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            input: ["doc one", "doc two"],
+          }),
+        }),
+      );
+    });
+
+    it("sends raw query for unknown model (no matching prefix)", async () => {
+      const { provider } = await createOpenAiEmbeddingProvider(
+        createOptions({ model: "text-embedding-3-small" }),
+      );
+
+      await provider.embedQuery("hello world");
+
+      expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            input: ["hello world"],
+          }),
+        }),
+      );
+    });
   });
 });
