@@ -9,6 +9,7 @@ import {
 } from "../shared/string-coerce.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import {
+  ConfiguredModelProviderRequestSchema,
   GroupChatSchema,
   HumanDelaySchema,
   IdentitySchema,
@@ -905,6 +906,12 @@ export const AgentEntrySchema = z
       .optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
+    providers: z
+      .record(
+        z.string(),
+        z.object({ request: ConfiguredModelProviderRequestSchema }).strict().optional(),
+      )
+      .optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
   })

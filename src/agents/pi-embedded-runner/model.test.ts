@@ -2410,4 +2410,265 @@ describe("resolveModel", () => {
       baseUrl: "https://api.x.ai/v1",
     });
   });
+
+  it("merges agent-level provider request headers with global config", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "custom",
+      modelId: "test-model",
+      templateModel: {
+        ...makeModel("test-model"),
+        provider: "custom",
+      },
+    });
+
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "my-agent",
+            providers: {
+              custom: {
+                request: {
+                  headers: { "X-Agent-Header": "agent-val" },
+                },
+              },
+            },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            request: {
+              headers: { "X-Global-Header": "global-val" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const model = resolveModelWithRegistry({
+      provider: "custom",
+      modelId: "test-model",
+      agentId: "my-agent",
+      cfg,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expect(model).toBeDefined();
+    const transport = getModelProviderRequestTransport(model!);
+    expect(transport).toMatchObject({
+      headers: {
+        "X-Global-Header": "global-val",
+        "X-Agent-Header": "agent-val",
+      },
+    });
+  });
+
+  it("agent-level provider request overrides global headers on conflict", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "custom",
+      modelId: "test-model",
+      templateModel: {
+        ...makeModel("test-model"),
+        provider: "custom",
+      },
+    });
+
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "my-agent",
+            providers: {
+              custom: {
+                request: {
+                  headers: { "X-Shared": "agent-wins" },
+                },
+              },
+            },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            request: {
+              headers: { "X-Shared": "global-loses" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const model = resolveModelWithRegistry({
+      provider: "custom",
+      modelId: "test-model",
+      agentId: "my-agent",
+      cfg,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expect(model).toBeDefined();
+    const transport = getModelProviderRequestTransport(model!);
+    expect(transport?.headers?.["X-Shared"]).toBe("agent-wins");
+  });
+
+  it("job-level provider request overrides agent-level headers", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "custom",
+      modelId: "test-model",
+      templateModel: {
+        ...makeModel("test-model"),
+        provider: "custom",
+      },
+    });
+
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "my-agent",
+            providers: {
+              custom: {
+                request: {
+                  headers: { "X-Agent": "agent-val", "X-Shared": "agent-loses" },
+                },
+              },
+            },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            request: {
+              headers: { "X-Global": "global-val" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const model = resolveModelWithRegistry({
+      provider: "custom",
+      modelId: "test-model",
+      agentId: "my-agent",
+      cfg,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: createRuntimeHooks(),
+      jobProviderRequest: {
+        headers: { "X-Job": "job-val", "X-Shared": "job-wins" },
+      },
+    });
+
+    expect(model).toBeDefined();
+    const transport = getModelProviderRequestTransport(model!);
+    expect(transport).toMatchObject({
+      headers: {
+        "X-Global": "global-val",
+        "X-Agent": "agent-val",
+        "X-Job": "job-val",
+        "X-Shared": "job-wins",
+      },
+    });
+  });
+
+  it("applies agent-level allowPrivateNetwork override", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "local",
+      modelId: "test-model",
+      templateModel: {
+        ...makeModel("test-model"),
+        provider: "local",
+      },
+    });
+
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "a",
+            providers: {
+              local: {
+                request: { allowPrivateNetwork: true },
+              },
+            },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          local: {
+            baseUrl: "http://127.0.0.1:3000/v1",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const model = resolveModelWithRegistry({
+      provider: "local",
+      modelId: "test-model",
+      agentId: "a",
+      cfg,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expect(model).toBeDefined();
+    const transport = getModelProviderRequestTransport(model!);
+    expect(transport?.allowPrivateNetwork).toBe(true);
+  });
+
+  it("skips agent provider lookup when agentId is not provided", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "custom",
+      modelId: "test-model",
+      templateModel: {
+        ...makeModel("test-model"),
+        provider: "custom",
+      },
+    });
+
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "my-agent",
+            providers: {
+              custom: {
+                request: {
+                  headers: { "X-Agent-Only": "should-not-appear" },
+                },
+              },
+            },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const model = resolveModelWithRegistry({
+      provider: "custom",
+      modelId: "test-model",
+      cfg,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expect(model).toBeDefined();
+    const transport = getModelProviderRequestTransport(model!);
+    expect(transport?.headers?.["X-Agent-Only"]).toBeUndefined();
+  });
 });

@@ -524,6 +524,7 @@ export async function runEmbeddedPiAgent(
         agentDir,
         params.config,
         {
+          agentId: params.agentId,
           // Plugin dynamic model hooks can resolve explicit model refs without
           // first generating PI models.json. This keeps one-shot model runs from
           // blocking on unrelated provider discovery.
@@ -539,6 +540,7 @@ export async function runEmbeddedPiAgent(
                 workspaceDir: resolvedWorkspace,
               });
               return await resolveModelAsync(provider, modelId, agentDir, params.config, {
+                agentId: params.agentId,
                 workspaceDir: resolvedWorkspace,
               });
             })();
