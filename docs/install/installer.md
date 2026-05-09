@@ -184,7 +184,7 @@ by default, plus git-checkout installs under the same prefix flow.
 </Info>
 
 <Warning>
-`install-cli.sh` manages its own Node runtime pinned to **Node 22.22.0** by default. This is intentionally separate from your system Node and from `install.sh`, which installs Node 24. If you install native add-ons (like OpenClaw memory plugins) outside the local prefix and they are rebuilt with your system Node, you may see native ABI errors (`NODE_MODULE_VERSION` mismatches) when OpenClaw loads them with its managed Node 22. To opt into Node 24, pass `--node-version 24.x.x` (see flags below).
+`install-cli.sh` manages its own Node runtime pinned to **Node 22.22.0** by default. This is intentionally separate from your system Node and from `install.sh`, which installs Node 24 when no supported Node 22+ is already present. If you install native add-ons (like OpenClaw memory plugins) outside the local prefix and they are rebuilt with your system Node, you may see native ABI errors (`NODE_MODULE_VERSION` mismatches) when OpenClaw loads them with its managed Node 22. To opt into Node 24, pass `--node-version 24.x.x` (see flags below).
 </Warning>
 
 ### Flow (install-cli.sh)
