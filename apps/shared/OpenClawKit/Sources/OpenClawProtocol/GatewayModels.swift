@@ -3406,21 +3406,25 @@ public struct TalkSessionSubmitToolResultParams: Codable, Sendable {
     public let sessionid: String
     public let callid: String
     public let result: AnyCodable
+    public let options: [String: AnyCodable]?
 
     public init(
         sessionid: String,
         callid: String,
-        result: AnyCodable)
+        result: AnyCodable,
+        options: [String: AnyCodable]?)
     {
         self.sessionid = sessionid
         self.callid = callid
         self.result = result
+        self.options = options
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionid = "sessionId"
         case callid = "callId"
         case result
+        case options
     }
 }
 
