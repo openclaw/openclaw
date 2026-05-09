@@ -359,7 +359,7 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {
+  it("forces background maintenance rewrites through SQLite even when a session manager exists", async () => {
     const maintain = vi.fn(async (params?: unknown) => {
       await (
         params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
