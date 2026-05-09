@@ -124,16 +124,10 @@ export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
   }
 }
 
-export function isQwen36PlusSupportedBaseUrl(baseUrl: string | undefined): boolean {
-  return !isQwenCodingPlanBaseUrl(baseUrl);
-}
-
 export function buildQwenModelCatalogForBaseUrl(
   baseUrl: string | undefined,
 ): ReadonlyArray<ModelDefinitionConfig> {
-  return isQwen36PlusSupportedBaseUrl(baseUrl)
-    ? QWEN_MODEL_CATALOG
-    : QWEN_MODEL_CATALOG.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
+  return QWEN_MODEL_CATALOG;
 }
 
 export function isNativeQwenBaseUrl(baseUrl: string | undefined): boolean {
