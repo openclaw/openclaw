@@ -12,6 +12,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
@@ -104,11 +105,17 @@ vi.mock("../../auto-reply/reply/session-reset-prompt.js", async () => {
   };
 });
 
-vi.mock("../../infra/agent-events.js", () => ({
-  emitAgentEvent: mocks.emitAgentEvent,
-  registerAgentRunContext: mocks.registerAgentRunContext,
-  onAgentEvent: vi.fn(),
-}));
+vi.mock("../../infra/agent-events.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+    "../../infra/agent-events.js",
+  );
+  return {
+    ...actual,
+    emitAgentEvent: mocks.emitAgentEvent,
+    registerAgentRunContext: mocks.registerAgentRunContext,
+    onAgentEvent: vi.fn(() => () => undefined),
+  };
+});
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
   getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
@@ -3080,6 +3087,84 @@ describe("gateway agent handler chat.abort integration", () => {
     await pending;
 
     expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves cheap gateway requests after accepted agent dispatch while the agent run is pending", async () => {
+    prime();
+    let releaseAgent: (() => void) | undefined;
+    const pendingAgentResult = new Promise<void>((resolve) => {
+      releaseAgent = resolve;
+    });
+    mocks.agentCommand.mockImplementationOnce(async () => {
+      let checksum = 0;
+      for (let i = 0; i < 100_000; i += 1) {
+        checksum += i;
+      }
+      expect(checksum).toBeGreaterThan(0);
+      await pendingAgentResult;
+      return {
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 1 },
+      };
+    });
+
+    const context = makeContext();
+    const agentRespond = vi.fn();
+    const runId = "idem-gateway-responsive-after-agent-dispatch";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, respond: agentRespond, reqId: runId, flushDispatch: false },
+    );
+
+    expect(agentRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "accepted",
+      }),
+      undefined,
+      { runId },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalledTimes(1));
+
+    const nodeListRespond = vi.fn();
+    await handleGatewayRequest({
+      req: { type: "req", id: "node-list-during-agent-dispatch", method: "node.list" },
+      respond: nodeListRespond as never,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+      extraHandlers: {
+        "node.list": async ({ respond }) => {
+          respond(true, { ts: 1, nodes: [] }, undefined);
+        },
+      },
+    });
+
+    expect(agentRespond).toHaveBeenCalledTimes(1);
+    expect(nodeListRespond).toHaveBeenCalledWith(true, { ts: 1, nodes: [] }, undefined);
+    expect(agentRespond.mock.invocationCallOrder[0]).toBeLessThan(
+      nodeListRespond.mock.invocationCallOrder[0] ?? 0,
+    );
+
+    releaseAgent?.();
+    await waitForAssertion(() =>
+      expect(agentRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId,
+          status: "ok",
+        }),
+        undefined,
+        { runId },
+      ),
+    );
   });
 
   it("uses the explicit no-timeout agent expiry instead of the chat 24h cap", async () => {

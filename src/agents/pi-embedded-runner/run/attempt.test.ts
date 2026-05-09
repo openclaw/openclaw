@@ -29,6 +29,7 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldWarnOnOrphanedUserRepair,
+  yieldAfterAttemptPrepCheckpoint,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
@@ -437,6 +438,34 @@ describe("isPrimaryBootstrapRun", () => {
   it("suppresses bootstrap ownership for subagent and ACP/helper sessions", () => {
     expect(isPrimaryBootstrapRun("agent:main:subagent:worker")).toBe(false);
     expect(isPrimaryBootstrapRun("agent:main:acp:worker")).toBe(false);
+  });
+});
+
+describe("yieldAfterAttemptPrepCheckpoint", () => {
+  it("awaits the injected prep yield before model execution continues", async () => {
+    const events: string[] = [];
+    let releaseYield: (() => void) | undefined;
+    const maybeYield = vi.fn(async () => {
+      events.push("yield:start");
+      await new Promise<void>((resolve) => {
+        releaseYield = resolve;
+      });
+      events.push("yield:end");
+    });
+
+    const pending = (async () => {
+      await yieldAfterAttemptPrepCheckpoint({ maybeYield });
+      events.push("model:execute");
+    })();
+
+    await Promise.resolve();
+    expect(events).toEqual(["yield:start"]);
+    expect(maybeYield).toHaveBeenCalledTimes(1);
+
+    releaseYield?.();
+    await pending;
+
+    expect(events).toEqual(["yield:start", "yield:end", "model:execute"]);
   });
 });
 

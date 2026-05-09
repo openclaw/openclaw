@@ -256,6 +256,10 @@ import {
 import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import {
+  createAttemptPrepYieldController,
+  type AttemptPrepYieldController,
+} from "./attempt-prep-yield.js";
+import {
   createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
@@ -409,6 +413,12 @@ export function resolveUnknownToolGuardThreshold(loopDetection?: {
 
 export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
   return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
+}
+
+export async function yieldAfterAttemptPrepCheckpoint(
+  prepYield: Pick<AttemptPrepYieldController, "maybeYield">,
+): Promise<void> {
+  await prepYield.maybeYield();
 }
 
 export function remapInjectedContextFilesToWorkspace(params: {
@@ -667,6 +677,7 @@ export async function runEmbeddedAttempt(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
   );
   const prepStages = createEmbeddedRunStageTracker();
+  const prepYield = createAttemptPrepYieldController();
   const emitPrepStageSummary = (phase: string) => {
     const summary = prepStages.snapshot();
     const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
@@ -924,6 +935,7 @@ export async function runEmbeddedAttempt(
         })();
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
+    await yieldAfterAttemptPrepCheckpoint(prepYield);
     const toolsEnabled = supportsModelTools(params.model);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
     const bootstrapWarn = makeBootstrapWarn({
@@ -991,6 +1003,7 @@ export async function runEmbeddedAttempt(
       },
     });
     prepStages.mark("bootstrap-context");
+    await yieldAfterAttemptPrepCheckpoint(prepYield);
     const remappedContextFiles = remapInjectedContextFilesToWorkspace({
       files: resolvedContextFiles,
       sourceWorkspaceDir: resolvedWorkspace,
@@ -1124,6 +1137,7 @@ export async function runEmbeddedAttempt(
     });
     const effectiveTools = [...tools, ...filteredBundledTools];
     prepStages.mark("bundle-tools");
+    await yieldAfterAttemptPrepCheckpoint(prepYield);
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
