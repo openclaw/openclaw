@@ -7157,6 +7157,7 @@ module.exports = {
   api.on("llm_output", () => undefined);
   api.on("before_agent_finalize", () => undefined);
   api.on("agent_end", () => undefined);
+  api.on("model_failure_terminal", () => undefined);
   api.on("before_agent_run", () => undefined);
 } };`,
     });
@@ -7174,7 +7175,7 @@ module.exports = {
         "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(7);
+    expect(blockedDiagnostics).toHaveLength(8);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
@@ -7189,6 +7190,7 @@ module.exports = {
   api.on("llm_output", () => undefined);
   api.on("before_agent_finalize", () => undefined);
   api.on("agent_end", () => undefined);
+  api.on("model_failure_terminal", () => undefined);
   api.on("before_agent_run", () => undefined);
 } };`,
     });
@@ -7214,6 +7216,7 @@ module.exports = {
       "llm_output",
       "before_agent_finalize",
       "agent_end",
+      "model_failure_terminal",
       "before_agent_run",
     ]);
   });

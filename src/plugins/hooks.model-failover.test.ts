@@ -36,6 +36,7 @@ describe("model_failover hook", () => {
       failoverReason: "rate_limit",
       profileFailureReason: null,
       fallbackConfigured: true,
+      sourceRecoverable: true,
       timedOut: false,
       aborted: false,
       status: 429,
@@ -53,6 +54,7 @@ describe("model_failover hook", () => {
         decision: "fallback_model",
         failoverReason: "rate_limit",
         fallbackConfigured: true,
+        sourceRecoverable: true,
         status: 429,
       }),
       expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
@@ -185,7 +187,7 @@ describe("model_failure_terminal hook", () => {
 
     await runner.runModelFailureTerminal(event, BASE_AGENT_CTX);
 
-    const [receivedEvent] = handler.mock.calls[0]!;
+    const [receivedEvent] = handler.mock.calls[0];
     expect(receivedEvent).toMatchObject({
       kind: "run_failed_before_reply",
       finalMessage: "OAuth token refresh failed",

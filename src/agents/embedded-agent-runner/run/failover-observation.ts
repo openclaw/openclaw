@@ -4,6 +4,7 @@
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { PluginHookModelFailoverEvent } from "../../../plugins/hook-types.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
+import { shouldAllowCooldownProbeForReason } from "../../failover-policy.js";
 import {
   buildApiErrorObservationFields,
   sanitizeForConsole,
@@ -116,6 +117,7 @@ export function createFailoverDecisionLogger(
       timedOut: normalizedBase.timedOut,
       aborted: normalizedBase.aborted,
       status: extra?.status,
+      sourceRecoverable: shouldAllowCooldownProbeForReason(normalizedBase.failoverReason),
       ...observedError,
       consoleMessage:
         `embedded run failover decision: runId=${safeRunId} stage=${normalizedBase.stage} decision=${decision} ` +
@@ -144,6 +146,7 @@ export function createFailoverDecisionLogger(
         timedOut: normalizedBase.timedOut,
         aborted: normalizedBase.aborted,
         status: extra?.status,
+        sourceRecoverable: shouldAllowCooldownProbeForReason(normalizedBase.failoverReason),
       };
       const hookCtx = {
         runId: normalizedBase.runId,
