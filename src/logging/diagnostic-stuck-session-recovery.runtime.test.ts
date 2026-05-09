@@ -108,10 +108,10 @@ describe("stuck session recovery", () => {
     expect(mocks.waitForEmbeddedPiRunEnd).not.toHaveBeenCalled();
     expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
-    expect(mocks.diag.warn).toHaveBeenCalledWith(
+    expect(mocks.diag.debug).toHaveBeenCalledWith(
       expect.stringContaining("reason=active_embedded_run"),
     );
-    expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("action=observe_only"));
+    expect(mocks.diag.debug).toHaveBeenCalledWith(expect.stringContaining("action=observe_only"));
   });
 
   it("aborts an active embedded run when active abort recovery is enabled", async () => {
