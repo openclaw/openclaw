@@ -631,6 +631,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           text,
           accountId: accountId ?? undefined,
           replyToMessageId,
+          replyInThread: threadId != null && !replyToId,
         });
       }
 
@@ -662,6 +663,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text,
         accountId: accountId ?? undefined,
         replyToMessageId,
+        replyInThread: threadId != null && !replyToId,
       });
     },
     sendMedia: async ({
