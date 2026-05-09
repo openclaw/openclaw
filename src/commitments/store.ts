@@ -11,7 +11,6 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { deleteOpenClawStateKvJson, readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS,
   DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
@@ -28,8 +27,6 @@ import type {
 
 const STORE_VERSION = 1 as const;
 const ROLLING_DAY_MS = 24 * 60 * 60 * 1000;
-const COMMITMENT_STORE_SCOPE = "commitments";
-const COMMITMENT_STORE_KEY = "store";
 const LEGACY_COMMITMENT_STORE_RELATIVE_PATH = path.join("commitments", "commitments.json");
 
 type LoadedCommitmentStore = {
@@ -168,29 +165,6 @@ function loadCommitmentStoreFromSqlite(
       .orderBy("due_earliest_ms", "asc")
       .orderBy("id", "asc"),
   ).rows;
-  if (rows.length === 0) {
-    migrateLegacyCommitmentsKvToRows(env);
-    return loadCommitmentStoreFromSqliteRows(env);
-  }
-  return coerceCommitmentStore({
-    version: STORE_VERSION,
-    commitments: rows.map((row) => parseCommitmentRow(row)),
-  });
-}
-
-function loadCommitmentStoreFromSqliteRows(
-  env: NodeJS.ProcessEnv = process.env,
-): LoadedCommitmentStore {
-  const database = openOpenClawStateDatabase(sqliteOptionsForEnv(env));
-  const db = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
-  const rows = executeSqliteQuerySync<CommitmentRow>(
-    database.db,
-    db
-      .selectFrom("commitments")
-      .select(["id", "record_json"])
-      .orderBy("due_earliest_ms", "asc")
-      .orderBy("id", "asc"),
-  ).rows;
   return coerceCommitmentStore({
     version: STORE_VERSION,
     commitments: rows.map((row) => parseCommitmentRow(row)),
@@ -203,20 +177,6 @@ function parseCommitmentRow(row: CommitmentRow): unknown {
   } catch {
     return undefined;
   }
-}
-
-function migrateLegacyCommitmentsKvToRows(env: NodeJS.ProcessEnv): void {
-  const legacy = readOpenClawStateKvJson(
-    COMMITMENT_STORE_SCOPE,
-    COMMITMENT_STORE_KEY,
-    sqliteOptionsForEnv(env),
-  );
-  if (legacy === undefined) {
-    return;
-  }
-  const { store } = coerceCommitmentStore(legacy);
-  replaceCommitmentRows(store, env);
-  deleteOpenClawStateKvJson(COMMITMENT_STORE_SCOPE, COMMITMENT_STORE_KEY, sqliteOptionsForEnv(env));
 }
 
 function loadCommitmentStoreInternal(): LoadedCommitmentStore {

@@ -5,7 +5,6 @@ import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { loadCommitmentStore, saveCommitmentStore } from "../commitments/store.js";
 import type { CommitmentRecord, CommitmentStoreFile } from "../commitments/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   runHeartbeatOnce,
   setHeartbeatsEnabled,
@@ -67,7 +66,6 @@ describe("runHeartbeatOnce commitments", () => {
     target?: "last" | "none";
     sourceUserText?: string;
     sourceAssistantText?: string;
-    legacyRawSourceText?: boolean;
     visibleReplies?: "automatic" | "message_tool";
   }) {
     return await withTempHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
@@ -105,11 +103,7 @@ describe("runHeartbeatOnce commitments", () => {
           }),
         ],
       };
-      if (params?.legacyRawSourceText) {
-        writeOpenClawStateKvJson("commitments", "store", storePayload);
-      } else {
-        await saveCommitmentStore(undefined, storePayload);
-      }
+      await saveCommitmentStore(undefined, storePayload);
 
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -418,7 +412,6 @@ describe("runHeartbeatOnce commitments", () => {
     const { result, sendTelegram, store } = await setupCommitmentCase({
       sourceUserText: maliciousUserText,
       sourceAssistantText: maliciousAssistantText,
-      legacyRawSourceText: true,
     });
 
     expect(result.status).toBe("ran");

@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   listCommitments,
   listDueCommitmentsForSession,
@@ -129,9 +128,9 @@ describe("commitment store delivery selection", () => {
     expect(store.commitments[0]?.updatedAtMs).toBe(nowMs);
   });
 
-  it("rewrites legacy source text fields when due commitments are listed", async () => {
+  it("rewrites legacy source text fields when commitments are saved", async () => {
     await useTempStateDir();
-    writeOpenClawStateKvJson("commitments", "store", {
+    await saveCommitmentStore(undefined, {
       version: 1,
       commitments: [commitment()],
     });
