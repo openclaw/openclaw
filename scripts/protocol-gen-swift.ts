@@ -242,16 +242,17 @@ function emitStruct(name: string, schema: JsonSchema): string {
               .map((key) => JSON.stringify(key))
               .join(
                 ", ",
-              )}]).contains($0) }\n        if !unexpectedKeys.isEmpty {\n            throw DecodingError.dataCorrupted(\n                .init(\n                    codingPath: rawContainer.codingPath,\n                    debugDescription: "Unexpected keys for ${name}: \\(unexpectedKeys.sorted().joined(separator: \", \"))"\n                )\n            )\n        }\n`
+              )}]).contains($0) }\n        if !unexpectedKeys.isEmpty {\n            throw DecodingError.dataCorrupted(\n                .init(\n                    codingPath: rawContainer.codingPath,\n                    debugDescription: "Unexpected keys for ${name}: \\(unexpectedKeys.sorted().joined(separator: ", "))"\n                )\n            )\n        }\n`
           : "") +
         "        let container = try decoder.container(keyedBy: CodingKeys.self)\n" +
         Object.entries(props)
           .map(([key, propSchema]) => {
             const propName = safeName(key);
+            const capitalizedPropName = propName.slice(0, 1).toUpperCase() + propName.slice(1);
             const literal = literalPropByKey.get(key);
             if (literal !== undefined) {
               const literalType = swiftType(propSchema, true, true);
-              return `        let decoded${propName[0]!.toUpperCase()}${propName.slice(1)} = try container.decode(${literalType}.self, forKey: .${propName})\n        guard decoded${propName[0]!.toUpperCase()}${propName.slice(1)} == ${swiftLiteralSource(literal)} else {\n            throw DecodingError.dataCorruptedError(\n                forKey: .${propName},\n                in: container,\n                debugDescription: "Expected ${key} to equal ${String(literal)}"\n            )\n        }\n        self.${propName} = ${swiftLiteralSource(literal)}`;
+              return `        let decoded${capitalizedPropName} = try container.decode(${literalType}.self, forKey: .${propName})\n        guard decoded${capitalizedPropName} == ${swiftLiteralSource(literal)} else {\n            throw DecodingError.dataCorruptedError(\n                forKey: .${propName},\n                in: container,\n                debugDescription: "Expected ${key} to equal ${String(literal)}"\n            )\n        }\n        self.${propName} = ${swiftLiteralSource(literal)}`;
             }
             if (required.has(key)) {
               return `        self.${propName} = try container.decode(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
@@ -388,12 +389,16 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
     if (cases.some((entry) => !entry)) {
       continue;
     }
-    const resolvedCases = cases as Array<{
+    const resolvedCases: Array<{
       branchName: string;
       caseName: string;
       literal: boolean | number | string | null;
-    }>;
-    const literalType = swiftLiteralTypeName(resolvedCases[0]!.literal);
+    }> = cases;
+    const [firstCase] = resolvedCases;
+    if (!firstCase) {
+      continue;
+    }
+    const literalType = swiftLiteralTypeName(firstCase.literal);
     if (
       resolvedCases.some((entry) => swiftLiteralTypeName(entry.literal) !== literalType) ||
       new Set(resolvedCases.map((entry) => String(entry.literal))).size !== resolvedCases.length
