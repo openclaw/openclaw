@@ -187,12 +187,12 @@ async function seedQaCommitmentStore(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   store: CommitmentStoreFile,
 ) {
-  await saveCommitmentStore(undefined, store, { env: env.gateway.runtimeEnv });
+  await saveCommitmentStore(store, { env: env.gateway.runtimeEnv });
   return { count: store.commitments.length };
 }
 
 async function readQaCommitmentStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
-  return await loadCommitmentStore(undefined, { env: env.gateway.runtimeEnv });
+  return await loadCommitmentStore({ env: env.gateway.runtimeEnv });
 }
 
 async function readEffectiveTools(

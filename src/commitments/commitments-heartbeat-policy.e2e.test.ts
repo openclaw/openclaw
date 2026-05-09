@@ -71,7 +71,7 @@ describe("commitments heartbeat delivery policy e2e", () => {
         lastProvider: "telegram",
         lastTo: "155462274",
       });
-      await saveCommitmentStore(undefined, {
+      await saveCommitmentStore({
         version: 1,
         commitments: [commitment()],
       });
