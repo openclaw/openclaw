@@ -518,8 +518,8 @@ describe("migrateApplyCommand", () => {
             pluginName: "google-calendar",
           },
         },
-        codexPluginPlan().items[1]!,
-        codexPluginPlan().items[2]!,
+        codexPluginPlan().items[1],
+        codexPluginPlan().items[2],
       ],
     });
     mocks.provider.plan.mockResolvedValue(planned);

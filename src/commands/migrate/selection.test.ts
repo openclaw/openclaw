@@ -497,7 +497,7 @@ describe("applyMigrationPluginSelection", () => {
       "plugin:google-calendar",
       "plugin:gmail",
     ]);
-    expect(formatMigrationPluginSelectionHint(items[1]!)).toBe(
+    expect(formatMigrationPluginSelectionHint(items[1])).toBe(
       "openai-curated; conflict: plugin exists",
     );
   });
