@@ -343,9 +343,8 @@ sessionId}` and session key context.
   in-memory manager has no derived locator. Its tests no longer fake active
   `/tmp/*.jsonl` transcript files.
 - BTW and compaction-checkpoint helpers now read and fork transcript rows by
-  SQLite scope. Checkpoint metadata may still include a derived locator for
-  protocol/UI payloads, but the read, capture, fork, and leaf-id helpers no
-  longer parse locators to find runtime state.
+  SQLite scope. Checkpoint metadata now stores session ids and leaf/entry ids
+  only; derived locators are no longer written into checkpoint payloads.
 - Gateway transcript-key lookup compares derived SQLite transcript handles at
   protocol boundaries and no longer realpaths or stats transcript filenames.
 - Automatic compaction transcript rotation writes successor transcript rows
@@ -527,9 +526,8 @@ sessionId}` and session key context.
   only when the path has not been imported or mapped yet.
 - Role-ordering and compaction reset paths no longer unlink old transcript
   files; reset only rotates the SQLite session row and transcript identity.
-- Gateway reset responses still derive a temporary SQLite transcript locator
-  for clients, but the stored session row stays free of transcript locator
-  fields.
+- Gateway reset and checkpoint responses return clean session rows plus session
+  ids. They no longer synthesize SQLite transcript locators for clients.
 - Memory-core dreaming no longer prunes session rows by probing for missing
   JSONL files. Subagent cleanup goes through the session runtime API instead of
   filesystem existence checks. Its transcript-ingestion tests seed SQLite rows
