@@ -12,10 +12,10 @@ import {
   readPersistedInstalledPluginIndexInstallRecords,
   recordPluginInstallInRecords,
   removePluginInstallRecordFromRecords,
-  resolveInstalledPluginIndexRecordsStorePath,
   withoutPluginInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-records.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
@@ -85,7 +85,7 @@ describe("plugin index install records store", () => {
       },
     );
 
-    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    const indexPath = resolveInstalledPluginIndexStorePath({ stateDir });
     expect(indexPath).toBe(path.join(stateDir, "plugins", "installs.json"));
     expect(fs.existsSync(indexPath)).toBe(false);
     const persisted = readOpenClawStateKvJson("installed_plugin_index", "current", {
@@ -133,7 +133,7 @@ describe("plugin index install records store", () => {
       },
     );
 
-    expect(fs.existsSync(resolveInstalledPluginIndexRecordsStorePath({ stateDir }))).toBe(false);
+    expect(fs.existsSync(resolveInstalledPluginIndexStorePath({ stateDir }))).toBe(false);
     const persisted = readOpenClawStateKvJson("installed_plugin_index", "current", {
       env: { OPENCLAW_STATE_DIR: stateDir },
     }) as { installRecords?: Record<string, unknown>; plugins?: unknown[] };
@@ -179,7 +179,7 @@ describe("plugin index install records store", () => {
 
   it("ignores legacy persisted records until doctor imports the plugin index", async () => {
     const stateDir = makeStateDir();
-    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    const indexPath = resolveInstalledPluginIndexStorePath({ stateDir });
     fs.mkdirSync(path.dirname(indexPath), { recursive: true });
     fs.writeFileSync(
       indexPath,
@@ -212,7 +212,7 @@ describe("plugin index install records store", () => {
       pluginId: "codex",
       version: "2026.5.2",
     });
-    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    const indexPath = resolveInstalledPluginIndexStorePath({ stateDir });
     fs.mkdirSync(path.dirname(indexPath), { recursive: true });
     fs.writeFileSync(indexPath, JSON.stringify({ installRecords: {}, plugins: [] }), "utf8");
 
@@ -404,7 +404,7 @@ describe("plugin index install records store", () => {
     const stateDir = makeStateDir();
     fs.mkdirSync(path.join(stateDir, "plugins"), { recursive: true });
     fs.writeFileSync(
-      resolveInstalledPluginIndexRecordsStorePath({ stateDir }),
+      resolveInstalledPluginIndexStorePath({ stateDir }),
       JSON.stringify({ version: 999, records: {} }),
     );
 
