@@ -63,13 +63,13 @@ const defaultRuntime: OutputRuntimeEnv = {
 // Defense-in-depth: replace the redaction sentinel with `[REDACTED]`
 // before writing, even if upstream emits it.
 export function scrubSentinel(s: string): string {
-  if (!s.includes(REDACTED_SENTINEL)) return s;
+  if (!s.includes(REDACTED_SENTINEL)) {return s;}
   return s.split(REDACTED_SENTINEL).join(SCRUB_PLACEHOLDER);
 }
 
 function detectMode(options: PathCommandOptions): OutputMode {
-  if (options.json === true) return "json";
-  if (options.human === true) return "human";
+  if (options.json === true) {return "json";}
+  if (options.human === true) {return "human";}
   return process.stdout.isTTY ? "human" : "json";
 }
 
@@ -157,8 +157,8 @@ function catchSentinel<T>(
 async function loadAst(absPath: string, fileName: string): Promise<OcAst> {
   const raw = await fs.readFile(absPath, "utf-8");
   const kind = inferKind(fileName);
-  if (kind === "jsonc") return parseJsonc(raw).ast;
-  if (kind === "jsonl") return parseJsonl(raw).ast;
+  if (kind === "jsonc") {return parseJsonc(raw).ast;}
+  if (kind === "jsonl") {return parseJsonl(raw).ast;}
   return parseMd(raw).ast;
 }
 
@@ -176,7 +176,7 @@ function emitForKind(ast: OcAst, fileName?: string): string {
 }
 
 function resolveFsPath(path: OcPath, options: PathCommandOptions): string {
-  if (options.file !== undefined) return resolvePath(options.file);
+  if (options.file !== undefined) {return resolvePath(options.file);}
   return resolvePath(options.cwd ?? process.cwd(), path.file);
 }
 
@@ -184,7 +184,7 @@ function formatMatchHuman(match: OcMatch): string {
   if (match.kind === "leaf") {
     return `leaf @ L${match.line}: ${JSON.stringify(match.valueText)} (${match.leafType})`;
   }
-  if (match.kind === "node") return `node @ L${match.line} [${match.descriptor}]`;
+  if (match.kind === "node") {return `node @ L${match.line} [${match.descriptor}]`;}
   if (match.kind === "insertion-point") {
     return `insertion-point @ L${match.line} [${match.container}]`;
   }
@@ -199,9 +199,9 @@ export async function pathResolveCommand(
   runtime: OutputRuntimeEnv,
 ): Promise<void> {
   const mode = detectMode(options);
-  if (!requireArg(pathStr, "resolve: missing <oc-path> argument", runtime, mode)) return;
+  if (!requireArg(pathStr, "resolve: missing <oc-path> argument", runtime, mode)) {return;}
   const ocPath = tryParse(pathStr, runtime, mode);
-  if (ocPath === null) return;
+  if (ocPath === null) {return;}
   const ast = await loadAst(resolveFsPath(ocPath, options), ocPath.file);
   let match: OcMatch | null;
   try {
@@ -230,15 +230,15 @@ export async function pathSetCommand(
   runtime: OutputRuntimeEnv,
 ): Promise<void> {
   const mode = detectMode(options);
-  if (!requireArg(pathStr, "set: requires <oc-path> <value>", runtime, mode)) return;
-  if (!requireArg(value, "set: requires <oc-path> <value>", runtime, mode)) return;
+  if (!requireArg(pathStr, "set: requires <oc-path> <value>", runtime, mode)) {return;}
+  if (!requireArg(value, "set: requires <oc-path> <value>", runtime, mode)) {return;}
   const ocPath = tryParse(pathStr, runtime, mode);
-  if (ocPath === null) return;
+  if (ocPath === null) {return;}
   const fsPath = resolveFsPath(ocPath, options);
   const ast = await loadAst(fsPath, ocPath.file);
 
   const result = catchSentinel("set", runtime, mode, () => setOcPath(ast, ocPath, value));
-  if (result === null) return;
+  if (result === null) {return;}
   if (!result.ok) {
     const detail = "detail" in result ? result.detail : undefined;
     emit(
@@ -254,7 +254,7 @@ export async function pathSetCommand(
   const newBytes = catchSentinel("emit", runtime, mode, () =>
     emitForKind(result.ast, ocPath.file),
   );
-  if (newBytes === null) return;
+  if (newBytes === null) {return;}
 
   if (options.dryRun === true) {
     emit(
@@ -280,9 +280,9 @@ export async function pathFindCommand(
   runtime: OutputRuntimeEnv,
 ): Promise<void> {
   const mode = detectMode(options);
-  if (!requireArg(patternStr, "find: missing <pattern> argument", runtime, mode)) return;
+  if (!requireArg(patternStr, "find: missing <pattern> argument", runtime, mode)) {return;}
   const pattern = tryParse(patternStr, runtime, mode);
-  if (pattern === null) return;
+  if (pattern === null) {return;}
   // File-slot wildcards would silently ENOENT during readFile; reject.
   if (/[*?]/.test(pattern.file)) {
     emitError(
@@ -306,7 +306,7 @@ export async function pathFindCommand(
       matches: matches.map((m) => ({ path: formatOcPath(m.path), match: m.match })),
     },
     () => {
-      if (matches.length === 0) return `0 matches for ${patternStr}`;
+      if (matches.length === 0) {return `0 matches for ${patternStr}`;}
       const plural = matches.length === 1 ? "" : "es";
       const lines = [`${matches.length} match${plural} for ${patternStr}:`];
       for (const m of matches) {
@@ -315,7 +315,7 @@ export async function pathFindCommand(
       return lines.join("\n");
     },
   );
-  if (matches.length === 0) runtime.exit(1);
+  if (matches.length === 0) {runtime.exit(1);}
 }
 
 export function pathValidateCommand(
@@ -324,7 +324,7 @@ export function pathValidateCommand(
   runtime: OutputRuntimeEnv,
 ): void {
   const mode = detectMode(options);
-  if (!requireArg(pathStr, "validate: missing <oc-path> argument", runtime, mode)) return;
+  if (!requireArg(pathStr, "validate: missing <oc-path> argument", runtime, mode)) {return;}
   try {
     const ocPath = parseOcPath(pathStr);
     emit(
@@ -344,10 +344,10 @@ export function pathValidateCommand(
       },
       () => {
         const lines = [`valid: ${pathStr}`, `  file:    ${ocPath.file}`];
-        if (ocPath.section !== undefined) lines.push(`  section: ${ocPath.section}`);
-        if (ocPath.item !== undefined) lines.push(`  item:    ${ocPath.item}`);
-        if (ocPath.field !== undefined) lines.push(`  field:   ${ocPath.field}`);
-        if (ocPath.session !== undefined) lines.push(`  session: ${ocPath.session}`);
+        if (ocPath.section !== undefined) {lines.push(`  section: ${ocPath.section}`);}
+        if (ocPath.item !== undefined) {lines.push(`  item:    ${ocPath.item}`);}
+        if (ocPath.field !== undefined) {lines.push(`  field:   ${ocPath.field}`);}
+        if (ocPath.session !== undefined) {lines.push(`  session: ${ocPath.session}`);}
         return lines.join("\n");
       },
     );
@@ -372,7 +372,7 @@ export async function pathEmitCommand(
   runtime: OutputRuntimeEnv,
 ): Promise<void> {
   const mode = detectMode(options);
-  if (!requireArg(fileArg, "emit: missing <file> argument", runtime, mode)) return;
+  if (!requireArg(fileArg, "emit: missing <file> argument", runtime, mode)) {return;}
   const fsPath =
     options.file !== undefined
       ? resolvePath(options.file)
@@ -380,7 +380,7 @@ export async function pathEmitCommand(
   const fileName = fsPath.split(/[\\/]/).pop() ?? fileArg;
   const ast = await loadAst(fsPath, fileName);
   const bytes = catchSentinel("emit", runtime, mode, () => emitForKind(ast, fileName));
-  if (bytes === null) return;
+  if (bytes === null) {return;}
   if (mode === "json") {
     runtime.writeStdout(scrubSentinel(JSON.stringify({ ok: true, kind: ast.kind, bytes })));
     return;

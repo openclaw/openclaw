@@ -18,7 +18,6 @@ import type {
   AstItem,
   Diagnostic,
   FrontmatterEntry,
-  MdAst,
   ParseResult,
 } from "./ast.js";
 import { slugify } from "./slug.js";
@@ -154,7 +153,7 @@ function extractItems(tokens: readonly Token[], bodyFileLine: number): AstItem[]
   const items: AstItem[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
-    if (t.type !== "list_item_open" || t.map === null) continue;
+    if (t.type !== "list_item_open" || t.map === null) {continue;}
     // First inline at the item's own depth is the item text.
     let nestedDepth = 0;
     let text = "";

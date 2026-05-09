@@ -24,7 +24,7 @@ const BOM = "﻿";
 function hasControlChar(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
     const cc = s.charCodeAt(i);
-    if (cc <= 0x1f || cc === 0x7f) return true;
+    if (cc <= 0x1f || cc === 0x7f) {return true;}
   }
   return false;
 }
@@ -206,9 +206,9 @@ export function formatOcPath(path: OcPath): string {
   // (quoted, predicate, union, sentinel). Plain concatenation would
   // silently split a raw `foo/bar` slot into two segments at parse.
   const formatSubSegment = (sub: string): string => {
-    if (isQuotedSeg(sub)) return sub;
-    if (sub.startsWith("[") && sub.endsWith("]")) return sub;
-    if (sub.startsWith("{") && sub.endsWith("}")) return sub;
+    if (isQuotedSeg(sub)) {return sub;}
+    if (sub.startsWith("[") && sub.endsWith("]")) {return sub;}
+    if (sub.startsWith("{") && sub.endsWith("}")) {return sub;}
     return quoteSeg(sub);
   };
   const validateSubForFormat = (sub: string, slotName: string): void => {
@@ -241,10 +241,10 @@ export function formatOcPath(path: OcPath): string {
   const fileNeedsQuote = /[/[\]{}?&%"\s]/.test(path.file);
   const formattedFile = fileNeedsQuote ? quoteSeg(path.file) : path.file;
   let out = OC_SCHEME + formattedFile;
-  if (path.section !== undefined) out += "/" + formatSlot(path.section, "section");
-  if (path.item !== undefined) out += "/" + formatSlot(path.item, "item");
-  if (path.field !== undefined) out += "/" + formatSlot(path.field, "field");
-  if (path.session !== undefined) out += "?session=" + path.session;
+  if (path.section !== undefined) {out += "/" + formatSlot(path.section, "section");}
+  if (path.item !== undefined) {out += "/" + formatSlot(path.item, "item");}
+  if (path.field !== undefined) {out += "/" + formatSlot(path.field, "field");}
+  if (path.session !== undefined) {out += "?session=" + path.session;}
 
   if (out.length > MAX_PATH_LENGTH) {
     fail(
@@ -263,7 +263,7 @@ export function formatOcPath(path: OcPath): string {
 
 /** True iff `input` is a string `parseOcPath` would accept. */
 export function isValidOcPath(input: unknown): input is string {
-  if (typeof input !== "string") return false;
+  if (typeof input !== "string") {return false;}
   try {
     parseOcPath(input);
     return true;
@@ -305,8 +305,8 @@ export interface PositionalContainer {
 
 // Resolve `$last` against a container; null when empty.
 export function resolvePositionalSeg(seg: string, container: PositionalContainer): string | null {
-  if (seg !== POS_LAST || container.size === 0) return null;
-  if (!container.indexable) return container.keys?.[container.keys.length - 1] ?? null;
+  if (seg !== POS_LAST || container.size === 0) {return null;}
+  if (!container.indexable) {return container.keys?.[container.keys.length - 1] ?? null;}
   return String(container.size - 1);
 }
 
@@ -325,13 +325,13 @@ export const WILDCARD_RECURSIVE = "**";
  */
 export function isPattern(path: OcPath): boolean {
   for (const slot of [path.section, path.item, path.field]) {
-    if (slot === undefined) continue;
+    if (slot === undefined) {continue;}
     // Quote-aware split — `slot.split('.')` would shred quoted keys
     // containing literal `*` and falsely flag them as wildcards.
     for (const sub of splitRespectingBrackets(slot, ".")) {
-      if (sub === WILDCARD_SINGLE || sub === WILDCARD_RECURSIVE) return true;
-      if (isUnionSeg(sub)) return true;
-      if (isPredicateSeg(sub)) return true;
+      if (sub === WILDCARD_SINGLE || sub === WILDCARD_RECURSIVE) {return true;}
+      if (isUnionSeg(sub)) {return true;}
+      if (isPredicateSeg(sub)) {return true;}
     }
   }
   return false;
@@ -346,11 +346,11 @@ export function isUnionSeg(seg: string): boolean {
 }
 
 export function parseUnionSeg(seg: string): readonly string[] | null {
-  if (!isUnionSeg(seg)) return null;
+  if (!isUnionSeg(seg)) {return null;}
   const inner = seg.slice(1, -1);
-  if (inner.length === 0) return null;
+  if (inner.length === 0) {return null;}
   const alts = inner.split(",");
-  if (alts.some((a) => a.length === 0)) return null;
+  if (alts.some((a) => a.length === 0)) {return null;}
   return alts;
 }
 
@@ -363,7 +363,7 @@ export type PredicateOp = "=" | "!=" | "<" | "<=" | ">" | ">=";
 const PREDICATE_OPS: readonly PredicateOp[] = ["!=", "<=", ">=", "<", ">", "="];
 
 export function isPredicateSeg(seg: string): boolean {
-  if (seg.length < 4 || !seg.startsWith("[") || !seg.endsWith("]")) return false;
+  if (seg.length < 4 || !seg.startsWith("[") || !seg.endsWith("]")) {return false;}
   const inner = new Set(seg.slice(1, -1));
   return PREDICATE_OPS.some((op) => inner.has(op));
 }
@@ -375,14 +375,14 @@ export interface PredicateSpec {
 }
 
 export function parsePredicateSeg(seg: string): PredicateSpec | null {
-  if (seg.length < 4 || !seg.startsWith("[") || !seg.endsWith("]")) return null;
+  if (seg.length < 4 || !seg.startsWith("[") || !seg.endsWith("]")) {return null;}
   const inner = seg.slice(1, -1);
   // Leftmost operator wins; at each position, multi-char beats single
   // (so `[a<=b]` parses as op=`<=`, not op=`<`).
   for (let i = 1; i < inner.length; i++) {
     for (const op of PREDICATE_OPS) {
-      if (!inner.startsWith(op, i)) continue;
-      if (i + op.length >= inner.length) continue; // empty value
+      if (!inner.startsWith(op, i)) {continue;}
+      if (i + op.length >= inner.length) {continue;} // empty value
       return { key: inner.slice(0, i), op, value: inner.slice(i + op.length) };
     }
   }
@@ -391,7 +391,7 @@ export function parsePredicateSeg(seg: string): PredicateSpec | null {
 
 // Numeric ops require both sides to coerce to finite numbers.
 export function evaluatePredicate(actual: string | null, pred: PredicateSpec): boolean {
-  if (actual === null) return false;
+  if (actual === null) {return false;}
   switch (pred.op) {
     case "=":
       return actual === pred.value;
@@ -403,10 +403,10 @@ export function evaluatePredicate(actual: string | null, pred: PredicateSpec): b
     case ">=": {
       const a = Number(actual);
       const b = Number(pred.value);
-      if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
-      if (pred.op === "<") return a < b;
-      if (pred.op === "<=") return a <= b;
-      if (pred.op === ">") return a > b;
+      if (!Number.isFinite(a) || !Number.isFinite(b)) {return false;}
+      if (pred.op === "<") {return a < b;}
+      if (pred.op === "<=") {return a <= b;}
+      if (pred.op === ">") {return a > b;}
       return a >= b;
     }
   }
@@ -464,13 +464,13 @@ export function repackPath(pattern: OcPath, subs: readonly string[]): OcPath {
 }
 
 function extractSession(queryPart: string): string | undefined {
-  if (queryPart.length === 0) return undefined;
+  if (queryPart.length === 0) {return undefined;}
   for (const pair of queryPart.split("&")) {
     const eqIndex = pair.indexOf("=");
-    if (eqIndex === -1) continue;
+    if (eqIndex === -1) {continue;}
     const key = pair.slice(0, eqIndex);
     const value = pair.slice(eqIndex + 1);
-    if (key === "session" && value.length > 0) return value;
+    if (key === "session" && value.length > 0) {return value;}
   }
   return undefined;
 }
@@ -486,23 +486,23 @@ function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => n
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (inQuote) {
-      if (c === '"') inQuote = false;
-      if (onChar(c, i, false) === "stop") return;
+      if (c === '"') {inQuote = false;}
+      if (onChar(c, i, false) === "stop") {return;}
       continue;
     }
     if (c === '"') {
       inQuote = true;
-      if (onChar(c, i, false) === "stop") return;
+      if (onChar(c, i, false) === "stop") {return;}
       continue;
     }
-    if (c === "[") depthBracket++;
-    else if (c === "]") depthBracket--;
-    else if (c === "{") depthBrace++;
-    else if (c === "}") depthBrace--;
-    if (depthBracket < 0 || depthBrace < 0) onUnbalanced();
-    if (onChar(c, i, depthBracket === 0 && depthBrace === 0) === "stop") return;
+    if (c === "[") {depthBracket++;}
+    else if (c === "]") {depthBracket--;}
+    else if (c === "{") {depthBrace++;}
+    else if (c === "}") {depthBrace--;}
+    if (depthBracket < 0 || depthBrace < 0) {onUnbalanced();}
+    if (onChar(c, i, depthBracket === 0 && depthBrace === 0) === "stop") {return;}
   }
-  if (depthBracket !== 0 || depthBrace !== 0 || inQuote) onUnbalanced();
+  if (depthBracket !== 0 || depthBrace !== 0 || inQuote) {onUnbalanced();}
 }
 
 /** First top-level occurrence of `ch` in `s`; -1 when absent. */
@@ -563,7 +563,7 @@ export function unquoteSeg(seg: string): string {
 
 // Refuses values with `"` or `\` — no escape mechanism.
 export function quoteSeg(value: string): string {
-  if (value.length === 0) return '""';
+  if (value.length === 0) {return '""';}
   if (value.includes('"') || value.includes("\\")) {
     fail(
       `Cannot quote value containing '"' or '\\\\': ${printable(value)}`,
@@ -607,8 +607,8 @@ function validateSubSegment(sub: string, input: string): void {
   }
   // Quoted content is byte-literal but can't contain `"` or `\`.
   if (isQuotedSeg(sub)) {
-    const inner = sub.slice(1, -1);
-    if (inner.includes('"') || inner.includes("\\")) {
+    const inner = new Set(sub.slice(1, -1));
+    if (inner.has('"') || inner.has("\\")) {
       fail(
         `Quoted segment cannot contain '"' or '\\\\': ${printable(sub)}`,
         input,
