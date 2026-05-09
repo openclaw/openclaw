@@ -7,7 +7,10 @@ import {
 } from "./auth-profiles/credential-state.js";
 import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { findNormalizedProviderValue } from "./provider-id.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 type AuthProfileSource = "store";
@@ -256,9 +259,50 @@ export function buildAuthHealthSummary(params: {
     }
   }
 
+  const resolveExplicitAuthOrder = (provider: string): string[] | undefined => {
+    const authProvider = resolveProviderIdForAuth(provider, { config: params.cfg });
+    return (
+      findNormalizedProviderValue(params.store.order, authProvider) ??
+      findNormalizedProviderValue(params.store.order, provider) ??
+      findNormalizedProviderValue(params.cfg?.auth?.order, authProvider) ??
+      findNormalizedProviderValue(params.cfg?.auth?.order, provider)
+    );
+  };
+
+  const resolveProviderStatusProfiles = (provider: AuthProviderHealth): AuthProfileHealth[] => {
+    const explicitOrder = resolveExplicitAuthOrder(provider.provider);
+    if (explicitOrder && explicitOrder.length === 0) {
+      return [];
+    }
+
+    const ordered = resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store: params.store,
+      provider: provider.provider,
+    });
+    const orderedProfiles = ordered
+      .map((profileId) => provider.profiles.find((profile) => profile.profileId === profileId))
+      .filter((profile): profile is AuthProfileHealth => Boolean(profile));
+
+    if (orderedProfiles.length > 0) {
+      return orderedProfiles;
+    }
+
+    if (explicitOrder) {
+      return explicitOrder
+        .map((profileId) => provider.profiles.find((profile) => profile.profileId === profileId))
+        .filter((profile): profile is AuthProfileHealth => Boolean(profile));
+    }
+
+    return provider.profiles;
+  };
+
   for (const provider of providersMap.values()) {
-    if (provider.profiles.length === 0) {
+    const statusProfiles = resolveProviderStatusProfiles(provider);
+    if (statusProfiles.length === 0) {
       provider.status = "missing";
+      provider.expiresAt = undefined;
+      provider.remainingMs = undefined;
       continue;
     }
 
@@ -267,7 +311,7 @@ export function buildAuthHealthSummary(params: {
     let hasExpiredOrMissing = false;
     let hasExpiring = false;
     let earliestExpiry: number | undefined;
-    for (const profile of provider.profiles) {
+    for (const profile of statusProfiles) {
       if (profile.type === "api_key") {
         hasApiKeyProfile = true;
         continue;
