@@ -1674,7 +1674,7 @@
                   },
                   {
                     "group": "Plugins and skills",
-                    "pages": ["cli/plugins", "cli/skills"]
+                    "pages": ["cli/plugins", "cli/path", "cli/skills"]
                   },
                   {
                     "group": "Interfaces",

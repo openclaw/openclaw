@@ -15,6 +15,13 @@ files (markdown, jsonc, jsonl). Self-hosters and editor extensions use
 it to read or write a single leaf inside a workspace file without scripting
 against the SDK directly.
 
+`path` is provided by the bundled optional `oc-path` plugin. Enable it before
+first use:
+
+```bash
+openclaw plugins enable oc-path
+```
+
 ## Subcommands
 
 | Subcommand              | Purpose                                                                      |

@@ -612,6 +612,14 @@
     "target": "插件路径所有权"
   },
   {
+    "source": "Path",
+    "target": "路径"
+  },
+  {
+    "source": "CLI reference",
+    "target": "CLI 参考"
+  },
+  {
     "source": "Docker permissions",
     "target": "Docker 权限"
   },
