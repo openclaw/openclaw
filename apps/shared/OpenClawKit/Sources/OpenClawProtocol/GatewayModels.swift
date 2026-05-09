@@ -5058,6 +5058,7 @@ public struct CronRunsParams: Codable, Sendable {
     public let scope: AnyCodable?
     public let id: String?
     public let jobid: String?
+    public let agentid: String?
     public let limit: Int?
     public let offset: Int?
     public let statuses: [AnyCodable]?
@@ -5071,6 +5072,7 @@ public struct CronRunsParams: Codable, Sendable {
         scope: AnyCodable?,
         id: String?,
         jobid: String?,
+        agentid: String?,
         limit: Int?,
         offset: Int?,
         statuses: [AnyCodable]?,
@@ -5083,6 +5085,7 @@ public struct CronRunsParams: Codable, Sendable {
         self.scope = scope
         self.id = id
         self.jobid = jobid
+        self.agentid = agentid
         self.limit = limit
         self.offset = offset
         self.statuses = statuses
@@ -5097,6 +5100,7 @@ public struct CronRunsParams: Codable, Sendable {
         case scope
         case id
         case jobid = "jobId"
+        case agentid = "agentId"
         case limit
         case offset
         case statuses
