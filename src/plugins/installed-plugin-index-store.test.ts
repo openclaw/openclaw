@@ -1,10 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveLegacyInstalledPluginIndexStorePath } from "../commands/doctor/legacy/installed-plugin-index-path.js";
-import { importLegacyInstalledPluginIndexFileToSqlite } from "../commands/doctor/legacy/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import { readOpenClawStateKvJson, writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   inspectPersistedInstalledPluginIndex,
@@ -24,6 +22,10 @@ afterEach(() => {
 
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-installed-plugin-index-store", tempDirs);
+}
+
+function obsoleteIndexPath(stateDir: string): string {
+  return path.join(stateDir, "plugins", "installs.json");
 }
 
 function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPluginIndex {
@@ -144,17 +146,9 @@ async function expectPersistedIndex(
 }
 
 describe("installed plugin index persistence", () => {
-  it("resolves the persisted index path under the state plugins directory", () => {
-    const stateDir = makeTempDir();
-
-    expect(resolveLegacyInstalledPluginIndexStorePath({ stateDir })).toBe(
-      path.join(stateDir, "plugins", "installs.json"),
-    );
-  });
-
   it("writes and reads the installed plugin index from SQLite", async () => {
     const stateDir = makeTempDir();
-    const filePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
+    const filePath = obsoleteIndexPath(stateDir);
     const index = createIndex();
 
     await writePersistedInstalledPluginIndex(index, { stateDir });
@@ -171,72 +165,18 @@ describe("installed plugin index persistence", () => {
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject(index);
   });
 
-  it("imports legacy JSON without preserving prototype poison keys", async () => {
-    const stateDir = makeTempDir();
-    const filePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    const index = createIndex({
-      installRecords: {
-        demo: {
-          source: "npm",
-          spec: "demo@1.0.0",
-        },
-      },
-    });
-    Object.defineProperty(index, "__proto__", {
-      enumerable: true,
-      value: { polluted: true },
-    });
-    Object.defineProperty(index.installRecords, "__proto__", {
-      enumerable: true,
-      value: { polluted: true },
-    });
-    fs.writeFileSync(filePath, JSON.stringify(index), "utf8");
-
-    expect(importLegacyInstalledPluginIndexFileToSqlite({ stateDir })).toMatchObject({
-      imported: true,
-      plugins: 1,
-      installRecords: 1,
-      removedSource: true,
-    });
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-
-    const persistedIndex = requirePersisted(persisted);
-    expectPluginIds(persistedIndex, ["demo"]);
-    expectInstallRecord(persistedIndex, "demo", { source: "npm" });
-    expect(Object.prototype.hasOwnProperty.call(persisted as object, "__proto__")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(persisted?.installRecords ?? {}, "__proto__")).toBe(
-      false,
-    );
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-    expect(fs.existsSync(filePath)).toBe(false);
-  });
-
   it("returns null for missing or invalid persisted indexes", async () => {
     const stateDir = makeTempDir();
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
 
-    const filePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify({ version: 999 }), "utf8");
-
-    expect(importLegacyInstalledPluginIndexFileToSqlite({ stateDir })).toMatchObject({
-      imported: false,
-    });
-    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
-  });
-
-  it("rejects pre-migration legacy indexes so update can rebuild them", async () => {
-    const stateDir = makeTempDir();
-    const filePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    const legacyIndex = createIndex();
-    delete (legacyIndex as unknown as Record<string, unknown>).migrationVersion;
-    fs.writeFileSync(filePath, JSON.stringify(legacyIndex), "utf8");
-
-    expect(importLegacyInstalledPluginIndexFileToSqlite({ stateDir })).toMatchObject({
-      imported: false,
-    });
+    writeOpenClawStateKvJson(
+      "installed_plugin_index",
+      "current",
+      { version: 999 },
+      {
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      },
+    );
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
   });
 
