@@ -41,11 +41,6 @@ export interface RunArtifacts {
   run_id: string;
 }
 
-export interface SchemaMigrations {
-  applied_at: number;
-  version: Generated<number>;
-}
-
 export interface SessionEntries {
   entry_json: string;
   session_key: string;
@@ -111,7 +106,6 @@ export interface DB {
   cache_entries: CacheEntries;
   kv: Kv;
   run_artifacts: RunArtifacts;
-  schema_migrations: SchemaMigrations;
   session_entries: SessionEntries;
   tool_artifacts: ToolArtifacts;
   trajectory_runtime_events: TrajectoryRuntimeEvents;

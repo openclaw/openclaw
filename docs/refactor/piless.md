@@ -360,7 +360,6 @@ Create one shared state layer for agent and gateway state. Suggested path:
 Suggested tables:
 
 ```text
-schema_migrations(version, applied_at)
 kv(scope, key, value_json, updated_at)
 agents(agent_id, config_json, created_at, updated_at)
 session_entries(agent_id, session_key, entry_json, updated_at)

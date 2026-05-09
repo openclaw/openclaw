@@ -3,12 +3,7 @@
  * Please do not edit it manually.
  */
 
-export const OPENCLAW_AGENT_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS schema_migrations (
-  version INTEGER NOT NULL PRIMARY KEY,
-  applied_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS kv (
+export const OPENCLAW_AGENT_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS kv (
   scope TEXT NOT NULL,
   key TEXT NOT NULL,
   value_json TEXT NOT NULL,

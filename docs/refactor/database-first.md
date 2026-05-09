@@ -99,8 +99,8 @@ The branch already has a real shared SQLite base:
   remains limited to schema application, pragmas, and migration-only DDL.
 - The SQLite schemas are collapsed to `user_version = 1` because this database
   layout has not shipped yet. Runtime openers create the current schema only;
-  file-to-database import remains in doctor/migrate code, not in branch-local
-  database upgrade helpers.
+  file-to-database import remains in doctor/migrate code, and branch-local
+  database upgrade helpers have been deleted.
 - Relational ownership is enforced where the ownership boundary is canonical:
   transcript-file mappings cascade from `agent_databases`, source migration
   rows cascade from `migration_runs`, task delivery state cascades from
@@ -515,7 +515,7 @@ The remaining cleanup is mostly consolidation and deletion:
   legacy metadata. It no longer scans or synthesizes `workspace/sessions`
   directories.
 - `migration_runs` records legacy-state migration executions with status,
-  timestamps, target schema version, and JSON reports.
+  timestamps, and JSON reports.
 - `migration_sources` records each imported legacy file source with hash, size,
   record count, target table, run id, status, and source-removal state.
 - `backup_runs` records backup archive paths, status, and JSON manifests.
@@ -535,7 +535,6 @@ configuration-shaped state.
 Global database:
 
 ```text
-schema_migrations(version, applied_at)
 kv(scope, key, value_json, updated_at)
 agents(agent_id, config_fingerprint, created_at, updated_at, agent_db_path)
 agent_databases(agent_id, path, schema_version, last_seen_at, size_bytes)
@@ -551,7 +550,7 @@ media_blobs(subdir, id, content_type, size_bytes, blob, created_at, updated_at)
 sandbox_registry_entries(registry_kind, container_name, entry_json, updated_at)
 cron_run_logs(...)
 commitments(id, agent_id, session_key, channel, status, due_earliest_ms, due_latest_ms, updated_at_ms, record_json)
-migration_runs(id, started_at, finished_at, status, source_version, target_version, report_json)
+migration_runs(id, started_at, finished_at, status, report_json)
 migration_sources(source_key, migration_kind, source_path, target_table, source_sha256, source_size_bytes, source_record_count, last_run_id, status, imported_at, removed_source, report_json)
 backup_runs(id, created_at, archive_path, status, manifest_json)
 ```
@@ -559,7 +558,6 @@ backup_runs(id, created_at, archive_path, status, manifest_json)
 Agent database:
 
 ```text
-schema_migrations(version, applied_at)
 kv(scope, key, value_json, updated_at)
 session_entries(session_key, entry_json, updated_at)
 transcript_events(session_id, seq, event_json, created_at)

@@ -42,8 +42,6 @@ export type RecordOpenClawStateMigrationRunOptions = OpenClawStateDatabaseOption
   startedAt: number;
   finishedAt?: number;
   status: OpenClawMigrationRunStatus;
-  sourceVersion?: number;
-  targetVersion?: number;
   report: Record<string, unknown>;
 };
 
@@ -161,8 +159,6 @@ export function recordOpenClawStateMigrationRun(
         started_at: options.startedAt,
         finished_at: options.finishedAt ?? null,
         status: options.status,
-        source_version: options.sourceVersion ?? null,
-        target_version: options.targetVersion ?? OPENCLAW_STATE_SCHEMA_VERSION,
         report_json: JSON.stringify(options.report),
       }),
     );

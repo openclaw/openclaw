@@ -1,8 +1,3 @@
-CREATE TABLE IF NOT EXISTS schema_migrations (
-  version INTEGER NOT NULL PRIMARY KEY,
-  applied_at INTEGER NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS kv (
   scope TEXT NOT NULL,
   key TEXT NOT NULL,
