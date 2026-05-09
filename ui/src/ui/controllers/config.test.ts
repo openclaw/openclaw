@@ -43,6 +43,7 @@ function createState(): ConfigState {
     pendingUpdateExpectedVersion: null,
     updateStatusBanner: null,
     updateRunning: false,
+    updateProgress: null,
   };
 }
 

@@ -1578,6 +1578,52 @@ export function renderApp(state: AppViewState) {
               >
                 ${icons.x}
               </button>
+              ${state.updateRunning && state.updateProgress
+                ? html`<div class="update-progress">
+                    ${state.updateProgress.phase === "step-start" ||
+                    state.updateProgress.phase === "step-complete"
+                      ? html`
+                          <div class="update-progress__bar">
+                            <div
+                              class="update-progress__bar-fill"
+                              style="width: ${state.updateProgress.total
+                                ? ((state.updateProgress.index ?? 0) /
+                                    state.updateProgress.total) *
+                                  100
+                                : 0}%"
+                            ></div>
+                          </div>
+                          <div class="update-progress__step">
+                            Step ${(state.updateProgress.index ?? 0) + 1}/${state.updateProgress.total ?? "?"}:
+                            ${state.updateProgress.step ?? ""}
+                            ${state.updateProgress.phase === "step-complete" &&
+                            state.updateProgress.durationMs
+                              ? html`<span class="update-progress__duration"
+                                  >(${(state.updateProgress.durationMs / 1000).toFixed(1)}s)</span
+                                >`
+                              : nothing}
+                            ${state.updateProgress.phase === "step-complete" &&
+                            state.updateProgress.exitCode !== 0
+                              ? html`<span class="update-progress__error"
+                                  >⚠ exit ${state.updateProgress.exitCode}</span
+                                >`
+                              : nothing}
+                          </div>
+                          ${state.updateProgress.command
+                            ? html`<div class="update-progress__command">
+                                ${state.updateProgress.command}
+                              </div>`
+                            : nothing}
+                        `
+                      : state.updateProgress.phase === "complete"
+                        ? html`<div class="update-progress__step">
+                            ✅ Update complete. Restarting gateway…
+                          </div>`
+                        : html`<div class="update-progress__step">
+                            Preparing update…
+                          </div>`}
+                  </div>`
+                : nothing}
             </div>`
           : nothing}
         ${state.tab === "config"

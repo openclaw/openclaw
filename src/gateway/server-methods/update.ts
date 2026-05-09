@@ -70,6 +70,12 @@ export const updateHandlers: GatewayRequestHandlers = {
         argv1: process.argv[1],
       });
       const supervisor = detectRespawnSupervisor(process.env, process.platform);
+      // Broadcast update start to connected UI clients
+      try {
+        context.broadcast("update.progress", { phase: "start", ts: Date.now() });
+      } catch {
+        /* ignore broadcast failures */
+      }
       if (!isRestartEnabled(config) && !supervisor) {
         const beforeVersion = installSurface.root
           ? await readPackageVersion(installSurface.root)
@@ -89,6 +95,39 @@ export const updateHandlers: GatewayRequestHandlers = {
           cwd: root,
           argv1: process.argv[1],
           channel: configChannel ?? undefined,
+          progress: {
+            onStepStart: (stepInfo) => {
+              try {
+                context.broadcast("update.progress", {
+                  phase: "step-start",
+                  step: stepInfo.name,
+                  command: stepInfo.command,
+                  index: stepInfo.index,
+                  total: stepInfo.total,
+                  ts: Date.now(),
+                });
+              } catch {
+                /* ignore broadcast failures */
+              }
+            },
+            onStepComplete: (stepResult) => {
+              try {
+                context.broadcast("update.progress", {
+                  phase: "step-complete",
+                  step: stepResult.name,
+                  command: stepResult.command,
+                  index: stepResult.index,
+                  total: stepResult.total,
+                  durationMs: stepResult.durationMs,
+                  exitCode: stepResult.exitCode,
+                  stderrTail: stepResult.stderrTail ?? null,
+                  ts: Date.now(),
+                });
+              } catch {
+                /* ignore broadcast failures */
+              }
+            },
+          },
         });
       }
     } catch {
@@ -99,6 +138,18 @@ export const updateHandlers: GatewayRequestHandlers = {
         steps: [],
         durationMs: 0,
       };
+    }
+
+    // Broadcast update completion to connected UI clients
+    try {
+      context.broadcast("update.progress", {
+        phase: "complete",
+        status: result.status,
+        durationMs: result.durationMs,
+        ts: Date.now(),
+      });
+    } catch {
+      /* ignore broadcast failures */
     }
 
     const continuation =

@@ -1,4 +1,16 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+export interface UpdateProgress {
+  phase: "start" | "step-start" | "step-complete" | "complete";
+  step?: string;
+  command?: string;
+  index?: number;
+  total?: number;
+  durationMs?: number;
+  exitCode?: number;
+  stderrTail?: string | null;
+  status?: string;
+  ts?: number;
+}
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type {

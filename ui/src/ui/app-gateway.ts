@@ -67,6 +67,7 @@ import type {
   HealthSummary,
   StatusSummary,
   UpdateAvailable,
+  UpdateProgress,
 } from "./types.ts";
 
 function isGenericBrowserFetchFailure(message: string): boolean {
@@ -109,6 +110,7 @@ type GatewayHost = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  updateProgress: UpdateProgress | null;
   reconcileWebPushState?: () => Promise<void> | void;
 };
 
@@ -851,6 +853,19 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   if (evt.event === GATEWAY_EVENT_UPDATE_AVAILABLE) {
     const payload = evt.payload as GatewayUpdateAvailableEventPayload | undefined;
     host.updateAvailable = payload?.updateAvailable ?? null;
+  }
+
+  if (evt.event === "update.progress") {
+    const progressPayload = evt.payload as UpdateProgress | undefined;
+    host.updateProgress = progressPayload ?? null;
+    // Auto-clear progress after completion
+    if (progressPayload?.phase === "complete") {
+      setTimeout(() => {
+        if (host.updateProgress?.phase === "complete") {
+          host.updateProgress = null;
+        }
+      }, 5000);
+    }
   }
 }
 

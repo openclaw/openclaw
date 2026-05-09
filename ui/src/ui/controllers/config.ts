@@ -1,6 +1,6 @@
 import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
+import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints, UpdateProgress } from "../types.ts";
 import type { JsonSchema } from "../views/config-form.shared.ts";
 import { coerceFormValues } from "./config/form-coerce.ts";
 import {
@@ -22,6 +22,7 @@ export type ConfigState = {
   configSaving: boolean;
   configApplying: boolean;
   updateRunning: boolean;
+  updateProgress: UpdateProgress | null;
   configSnapshot: ConfigSnapshot | null;
   configDraftBaseHash?: string | null;
   configSchema: unknown;
@@ -246,6 +247,7 @@ export async function runUpdate(state: ConfigState) {
     return;
   }
   state.updateRunning = true;
+  state.updateProgress = null;
   state.lastError = null;
   state.updateStatusBanner = null;
   try {

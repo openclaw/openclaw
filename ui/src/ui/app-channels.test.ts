@@ -75,6 +75,7 @@ function createHost(request: ReturnType<typeof vi.fn> = vi.fn()): ChannelsAction
     settings: {},
     updateStatusBanner: null,
     updateRunning: false,
+    updateProgress: null,
     whatsappBusy: false,
     whatsappLoginConnected: null,
     whatsappLoginMessage: null,
