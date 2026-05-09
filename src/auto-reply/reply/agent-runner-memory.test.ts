@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { appendSqliteSessionTranscriptEvent } from "../../config/sessions/transcript-store.sqlite.js";
 import {
   clearMemoryPluginState,
@@ -42,7 +43,8 @@ function createReplyOperation() {
 }
 
 function resolveMainTranscriptPath(rootDir: string, sessionId: string): string {
-  return path.join(rootDir, "agents", "main", "sessions", `${sessionId}.jsonl`);
+  void rootDir;
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
 }
 
 describe("runMemoryFlushIfNeeded", () => {
@@ -327,7 +329,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("passes runtime policy session key to preflight compaction sandbox resolution", async () => {
-    const sessionFile = path.join(rootDir, "session.jsonl");
+    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -380,8 +382,8 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("updates the active preflight run after transcript rotation", async () => {
-    const sessionFile = path.join(rootDir, "session.jsonl");
-    const successorFile = path.join(rootDir, "session-rotated.jsonl");
+    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
+    const successorFile = resolveMainTranscriptPath(rootDir, "session-rotated");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -454,7 +456,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("includes recent output tokens when deciding preflight compaction", async () => {
-    const sessionFile = path.join(rootDir, "session-usage.jsonl");
+    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -507,7 +509,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("uses the active run sessionFile when the session entry has no transcript path", async () => {
-    const sessionFile = path.join(rootDir, "active-run-session.jsonl");
+    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -555,13 +557,13 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedPiSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session",
-        sessionFile: expect.stringContaining("active-run-session.jsonl"),
+        sessionFile,
       }),
     );
   });
 
   it("keeps preflight compaction conservative for content appended after latest usage", async () => {
-    const sessionFile = path.join(rootDir, "post-usage-tail-session.jsonl");
+    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -627,7 +629,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("combines latest usage with post-usage tail pressure for preflight compaction", async () => {
-    const sessionFile = path.join(rootDir, "combined-tail-pressure-session.jsonl");
+    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -693,7 +695,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("does not count bytes from a large latest usage record as post-usage tail pressure", async () => {
-    const sessionFile = path.join(rootDir, "large-usage-record-session.jsonl");
+    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -753,7 +755,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("does not treat raw transcript metadata bytes as token pressure", async () => {
-    const sessionFile = path.join(rootDir, "metadata-heavy-session.jsonl");
+    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -832,7 +834,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("triggers preflight compaction when the active transcript exceeds the configured byte threshold", async () => {
-    const sessionFile = path.join(rootDir, "large-session.jsonl");
+    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -898,11 +900,11 @@ describe("runMemoryFlushIfNeeded", () => {
         currentTokenCount: 10,
       }),
     );
-    expect(compactCall.sessionFile).toContain("large-session.jsonl");
+    expect(compactCall.sessionFile).toBe(sessionFile);
   });
 
   it("keeps the active transcript byte threshold inactive unless transcript rotation is enabled", async () => {
-    const sessionFile = path.join(rootDir, "large-session-no-rotation.jsonl");
+    const sessionFile = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
