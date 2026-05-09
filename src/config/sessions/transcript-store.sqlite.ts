@@ -14,10 +14,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
-import {
-  createSqliteSessionTranscriptLocator,
-  parseSqliteSessionTranscriptLocator,
-} from "./paths.js";
+import { parseSqliteSessionTranscriptLocator } from "./paths.js";
 
 export type SqliteSessionTranscriptEvent = {
   seq: number;
@@ -54,13 +51,7 @@ export type SqliteSessionTranscriptScope = {
   sessionId: string;
 };
 
-export type SqliteSessionTranscriptLocator = SqliteSessionTranscriptScope & {
-  locator: string;
-  updatedAt: number;
-};
-
 export type SqliteSessionTranscript = SqliteSessionTranscriptScope & {
-  locator?: string;
   updatedAt: number;
   eventCount: number;
 };
@@ -249,22 +240,6 @@ export function resolveSqliteSessionTranscriptScope(
   return undefined;
 }
 
-export function listSqliteSessionTranscriptLocators(
-  options: OpenClawStateDatabaseOptions = {},
-): SqliteSessionTranscriptLocator[] {
-  return listSqliteSessionTranscripts(options).map((transcript) => ({
-    agentId: transcript.agentId,
-    sessionId: transcript.sessionId,
-    locator:
-      transcript.locator ??
-      createSqliteSessionTranscriptLocator({
-        agentId: transcript.agentId,
-        sessionId: transcript.sessionId,
-      }),
-    updatedAt: transcript.updatedAt,
-  }));
-}
-
 export function listSqliteSessionTranscripts(
   options: OpenClawStateDatabaseOptions & { agentId?: string } = {},
 ): SqliteSessionTranscript[] {
@@ -313,10 +288,6 @@ export function listSqliteSessionTranscripts(
           {
             agentId: agentDatabase.agentId,
             sessionId: normalizeSessionId(record.session_id),
-            locator: createSqliteSessionTranscriptLocator({
-              agentId: agentDatabase.agentId,
-              sessionId: normalizeSessionId(record.session_id),
-            }),
             updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
             eventCount: Number.isFinite(eventCount) ? eventCount : 0,
           },
