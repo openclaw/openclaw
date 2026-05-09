@@ -1,4 +1,3 @@
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
@@ -60,10 +59,10 @@ export async function compactEmbeddedPiSession(
     agentId: params.agentId,
     config: params.config,
   });
-  const transcriptLocator = createSqliteSessionTranscriptLocator({
+  const transcriptScope = {
     agentId: agentIds.sessionAgentId,
     sessionId: params.sessionId,
-  });
+  };
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
   const contextEngine = await resolveContextEngine(params.config, {
@@ -171,7 +170,7 @@ export async function compactEmbeddedPiSession(
         const result = await contextEngine.compact({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
-          transcriptLocator,
+          transcriptScope,
           tokenBudget: contextTokenBudget,
           currentTokenCount: params.currentTokenCount,
           compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
@@ -183,13 +182,10 @@ export async function compactEmbeddedPiSession(
         const delegatedRotatedTranscript =
           typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId;
         let postCompactionSessionId = delegatedSessionId ?? params.sessionId;
-        let postCompactionTranscriptLocator =
-          postCompactionSessionId !== params.sessionId
-            ? createSqliteSessionTranscriptLocator({
-                agentId: agentIds.sessionAgentId,
-                sessionId: postCompactionSessionId,
-              })
-            : transcriptLocator;
+        let postCompactionTranscriptScope = {
+          agentId: agentIds.sessionAgentId,
+          sessionId: postCompactionSessionId,
+        };
         let postCompactionLeafId: string | undefined;
         if (result.ok && result.compacted) {
           if (shouldRotateCompactionTranscript(params.config) && !delegatedRotatedTranscript) {
@@ -200,10 +196,10 @@ export async function compactEmbeddedPiSession(
               });
               if (rotation.rotated) {
                 postCompactionSessionId = rotation.sessionId ?? postCompactionSessionId;
-                postCompactionTranscriptLocator = createSqliteSessionTranscriptLocator({
+                postCompactionTranscriptScope = {
                   agentId: agentIds.sessionAgentId,
                   sessionId: postCompactionSessionId,
-                });
+                };
                 postCompactionLeafId = rotation.leafId;
                 log.info(
                   `[compaction] rotated active transcript after context-engine compaction ` +
@@ -252,7 +248,7 @@ export async function compactEmbeddedPiSession(
             sessionAgentId: agentIds.sessionAgentId,
             sessionId: postCompactionSessionId,
             sessionKey: params.sessionKey,
-            transcriptLocator: postCompactionTranscriptLocator,
+            transcriptScope: postCompactionTranscriptScope,
             reason: "compaction",
             runtimeContext,
             config: params.config,

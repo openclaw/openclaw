@@ -35,10 +35,6 @@ let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.j
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
-const TEST_TRANSCRIPT_LOCATOR = createSqliteSessionTranscriptLocator({
-  agentId: "main",
-  sessionId: TEST_SESSION_ID,
-});
 const TEST_ROTATED_SESSION_FILE = createSqliteSessionTranscriptLocator({
   agentId: "main",
   sessionId: "rotated-session",
@@ -1269,7 +1265,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     expect(maintain).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: TEST_SESSION_KEY,
-        transcriptLocator: TEST_TRANSCRIPT_LOCATOR,
+        transcriptScope: { agentId: "main", sessionId: TEST_SESSION_ID },
         runtimeContext: expect.objectContaining({
           workspaceDir: TEST_WORKSPACE_DIR,
         }),
@@ -1408,10 +1404,6 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       rewrittenEntries: 0,
     }));
     const delegatedSessionId = "delegated-session";
-    const delegatedTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: delegatedSessionId,
-    });
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
@@ -1450,7 +1442,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     expect(maintain).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: delegatedSessionId,
-        transcriptLocator: delegatedTranscriptLocator,
+        transcriptScope: { agentId: "main", sessionId: delegatedSessionId },
       }),
     );
   });
@@ -1499,7 +1491,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     expect(maintain).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: TEST_SESSION_ID,
-        transcriptLocator: TEST_TRANSCRIPT_LOCATOR,
+        transcriptScope: { agentId: "main", sessionId: TEST_SESSION_ID },
       }),
     );
   });

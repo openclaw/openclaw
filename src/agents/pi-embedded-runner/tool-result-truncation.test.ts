@@ -452,7 +452,6 @@ describe("truncateOversizedToolResultsInSession", () => {
     sm.appendMessage(makeToolResult(medium, "call_2"));
     sm.appendMessage(makeToolResult(medium, "call_3"));
     const scope = transcriptScopeForSessionManager(sm);
-    const transcriptLocator = sm.getTranscriptLocator()!;
 
     const beforeBranch = await loadBranch(scope);
     const beforeLengths = beforeBranch
@@ -481,7 +480,6 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(result.truncatedCount).toBeGreaterThan(0);
     expect(listener).toHaveBeenCalledWith({
       ...scope,
-      transcriptLocator,
       sessionKey: "agent:main:test",
     });
 

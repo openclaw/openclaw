@@ -1,4 +1,3 @@
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -619,7 +618,6 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   agentId?: string;
-  transcriptLocator?: string;
   sessionId?: string;
   sessionKey?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
@@ -655,7 +653,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     sessionManager,
     replacements: plan.replacements,
   });
-  if (rewriteResult.changed && params.transcriptLocator) {
+  if (rewriteResult.changed) {
     emitSessionTranscriptUpdate({
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
@@ -679,7 +677,6 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
 
 async function truncateOversizedToolResultsInTranscriptState(params: {
   state: TranscriptState;
-  transcriptLocator: string;
   contextWindowTokens: number;
   maxCharsOverride?: number;
   agentId: string;
@@ -752,7 +749,6 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   agentId?: string;
-  transcriptLocator?: string;
   sessionId?: string;
   sessionKey?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
@@ -774,11 +770,6 @@ export async function truncateOversizedToolResultsInSession(params: {
   config?: unknown;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { contextWindowTokens } = params;
-  const transcriptLocator = createSqliteSessionTranscriptLocator({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-  });
-
   try {
     const state = await readTranscriptStateForSession({
       agentId: params.agentId,
@@ -789,7 +780,6 @@ export async function truncateOversizedToolResultsInSession(params: {
       contextWindowTokens,
       maxCharsOverride: params.maxCharsOverride,
       agentId: params.agentId,
-      transcriptLocator,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
     });

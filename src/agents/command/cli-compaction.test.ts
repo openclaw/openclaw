@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { upsertSessionEntry } from "../../config/sessions/store.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -97,10 +96,6 @@ describe("runCliTurnCompactionLifecycle", () => {
   it("compacts over-budget CLI transcripts and clears external CLI resume state", async () => {
     const sessionKey = "agent:main:cli";
     const sessionId = "session-cli";
-    const sqliteTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId,
-    });
     seedSqliteTranscript({ sessionId, cwd: tmpDir });
 
     const sessionEntry: SessionEntry = {
@@ -159,7 +154,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCalls[0]).toMatchObject({
       sessionId,
       sessionKey,
-      transcriptLocator: sqliteTranscriptLocator,
+      transcriptScope: { agentId: "main", sessionId },
       tokenBudget: 1_000,
       currentTokenCount: 950,
       force: true,
@@ -170,7 +165,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         reason: "compaction",
         sessionId,
         sessionKey,
-        transcriptLocator: sqliteTranscriptLocator,
+        transcriptScope: { agentId: "main", sessionId },
       }),
     );
     expect(updatedEntry?.compactionCount).toBe(1);

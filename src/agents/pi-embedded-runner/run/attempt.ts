@@ -5,7 +5,6 @@ import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { createSqliteSessionTranscriptLocator } from "../../../config/sessions/paths.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -1442,7 +1441,6 @@ export async function runEmbeddedAttempt(
           `SQLite transcript manager did not expose a runtime transcript scope: agentId=${sessionAgentId} sessionId=${params.sessionId}`,
         );
       }
-      const sessionTranscriptLocator = createSqliteSessionTranscriptLocator(sessionTranscriptScope);
       await runAttemptContextEngineBootstrap({
         hadTranscript: hadTranscriptEvents,
         contextEngine: activeContextEngine,
@@ -1465,7 +1463,6 @@ export async function runEmbeddedAttempt(
             sessionId: contextParams.sessionId,
             sessionKey: contextParams.sessionKey,
             transcriptScope: contextParams.transcriptScope,
-            transcriptLocator: contextParams.transcriptLocator,
             reason: contextParams.reason,
             sessionManager: contextParams.sessionManager as never,
             runtimeContext: contextParams.runtimeContext,
@@ -1737,7 +1734,6 @@ export async function runEmbeddedAttempt(
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
-          transcriptLocator: sessionTranscriptLocator,
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
           getPrePromptMessageCount: () => prePromptMessageCount,
@@ -2552,7 +2548,7 @@ export async function runEmbeddedAttempt(
               `effectiveReserveTokens=${request.effectiveReserveTokens} ` +
               `prePromptMessageCount=${prePromptMessageCount} ` +
               (extra ? `${extra} ` : "") +
-              `transcriptLocator=${sessionTranscriptLocator}`,
+              `transcriptScope=${sessionTranscriptScope.agentId}/${sessionTranscriptScope.sessionId}`,
           );
         };
         if (request.route === "truncate_tool_results_only") {
@@ -2567,7 +2563,6 @@ export async function runEmbeddedAttempt(
             contextWindowTokens: contextTokenBudget,
             maxCharsOverride: toolResultMaxChars,
             agentId: sessionAgentId,
-            transcriptLocator: sessionTranscriptLocator,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
           });
@@ -3039,7 +3034,8 @@ export async function runEmbeddedAttempt(
                 `historyImageBlocks=${sessionSummary.totalImageBlocks} ` +
                 `systemPromptChars=${systemLen} promptChars=${promptLen} ` +
                 `promptImages=${imageResult.images.length} ` +
-                `provider=${params.provider}/${params.modelId} transcriptLocator=${sessionTranscriptLocator}`,
+                `provider=${params.provider}/${params.modelId} ` +
+                `transcriptScope=${sessionTranscriptScope.agentId}/${sessionTranscriptScope.sessionId}`,
             );
           }
 
@@ -3102,7 +3098,6 @@ export async function runEmbeddedAttempt(
               contextWindowTokens: contextTokenBudget,
               maxCharsOverride: toolResultMaxChars,
               agentId: sessionAgentId,
-              transcriptLocator: sessionTranscriptLocator,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
             });
@@ -3121,7 +3116,7 @@ export async function runEmbeddedAttempt(
                   `overflowTokens=${preemptiveCompaction.overflowTokens} ` +
                   `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +
                   `effectiveReserveTokens=${preemptiveCompaction.effectiveReserveTokens} ` +
-                  `transcriptLocator=${sessionTranscriptLocator}`,
+                  `transcriptScope=${sessionTranscriptScope.agentId}/${sessionTranscriptScope.sessionId}`,
               );
               skipPromptSubmission = true;
             }
@@ -3129,7 +3124,8 @@ export async function runEmbeddedAttempt(
               log.warn(
                 `[context-overflow-precheck] early tool-result truncation did not help for ` +
                   `${params.provider}/${params.modelId}; falling back to compaction ` +
-                  `reason=${truncationResult.reason ?? "unknown"} transcriptLocator=${sessionTranscriptLocator}`,
+                  `reason=${truncationResult.reason ?? "unknown"} ` +
+                  `transcriptScope=${sessionTranscriptScope.agentId}/${sessionTranscriptScope.sessionId}`,
               );
               preflightRecovery = { route: "compact_only" };
               promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
@@ -3154,7 +3150,7 @@ export async function runEmbeddedAttempt(
                 `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +
                 `reserveTokens=${reserveTokens} ` +
                 `effectiveReserveTokens=${preemptiveCompaction.effectiveReserveTokens} ` +
-                `transcriptLocator=${sessionTranscriptLocator}`,
+                `transcriptScope=${sessionTranscriptScope.agentId}/${sessionTranscriptScope.sessionId}`,
             );
             skipPromptSubmission = true;
           }
@@ -3423,7 +3419,6 @@ export async function runEmbeddedAttempt(
             sessionIdUsed,
             sessionKey: params.sessionKey,
             transcriptScope: sessionTranscriptScope,
-            transcriptLocator: sessionTranscriptLocator,
             messagesSnapshot,
             prePromptMessageCount,
             tokenBudget: params.contextTokenBudget,
@@ -3435,7 +3430,6 @@ export async function runEmbeddedAttempt(
                 sessionId: contextParams.sessionId,
                 sessionKey: contextParams.sessionKey,
                 transcriptScope: contextParams.transcriptScope,
-                transcriptLocator: contextParams.transcriptLocator,
                 reason: contextParams.reason,
                 sessionManager: contextParams.sessionManager as never,
                 runtimeContext: contextParams.runtimeContext,
