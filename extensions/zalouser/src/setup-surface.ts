@@ -19,7 +19,6 @@ import {
   checkZcaAuthenticated,
 } from "./accounts.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
-import { zalouserSetupAdapter } from "./setup-core.js";
 import {
   logoutZaloProfile,
   resolveZaloAllowFromEntries,

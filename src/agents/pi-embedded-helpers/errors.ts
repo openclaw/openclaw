@@ -4,8 +4,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
-  isCloudflareOrHtmlErrorPage,
-  parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -37,17 +35,14 @@ import {
   matchesProviderContextOverflow,
 } from "./provider-error-patterns.js";
 import {
-  BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatDiskSpaceErrorCopy,
   formatRateLimitOrOverloadedErrorCopy,
   formatTransportErrorCopy,
-  getApiErrorPayloadFingerprint,
   isInvalidStreamingEventOrderError,
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
   isStreamingJsonParseError,
-  sanitizeUserFacingText,
 } from "./sanitize-user-facing-text.js";
 import type { FailoverReason } from "./types.js";
 

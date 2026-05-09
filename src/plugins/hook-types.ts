@@ -9,10 +9,6 @@ import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
-import {
-  PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
-  stripPromptMutationFieldsFromLegacyHookResult,
-} from "./hook-before-agent-start.types.js";
 import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,

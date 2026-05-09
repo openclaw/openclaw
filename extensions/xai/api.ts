@@ -3,10 +3,6 @@ import {
   normalizeNativeXaiModelId,
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  applyXaiModelCompat,
-  resolveXaiModelCompatPatch,
-} from "openclaw/plugin-sdk/provider-tools";
 import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 
 export { buildXaiProvider } from "./provider-catalog.js";
