@@ -609,12 +609,15 @@ async function requestWebSocketUpgrade(
 }
 
 describe("VoiceCallWebhookServer realtime WebSocket routing", () => {
-  it("does not route sibling paths through the realtime stream handler", async () => {
+  function createRealtimeRoutingServer(streamPathPattern: string): {
+    server: VoiceCallWebhookServer;
+    handleWebSocketUpgrade: ReturnType<typeof vi.fn<RealtimeCallHandler["handleWebSocketUpgrade"]>>;
+  } {
     const { manager } = createManager([]);
     const config = createConfig({
       realtime: {
         enabled: true,
-        streamPath: "/voice/stream/realtime",
+        streamPath: streamPathPattern,
         instructions: "Be helpful.",
         toolPolicy: "safe-read-only",
         tools: [],
@@ -634,11 +637,17 @@ describe("VoiceCallWebhookServer realtime WebSocket routing", () => {
         headers: { "Content-Type": "text/xml" },
         body: "<Response />",
       }),
-      getStreamPathPattern: () => "/voice/stream/realtime",
+      getStreamPathPattern: () => streamPathPattern,
       handleWebSocketUpgrade,
       registerToolHandler: () => {},
       setPublicUrl: () => {},
     } as unknown as RealtimeCallHandler);
+    return { server, handleWebSocketUpgrade };
+  }
+
+  it("does not route sibling paths through the realtime stream handler", async () => {
+    const { server, handleWebSocketUpgrade } =
+      createRealtimeRoutingServer("/voice/stream/realtime");
 
     try {
       const baseUrl = await server.start();
@@ -647,6 +656,19 @@ describe("VoiceCallWebhookServer realtime WebSocket routing", () => {
       expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
 
       await requestWebSocketUpgrade(server, baseUrl, "/voice/stream/realtime-extra/token");
+      expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("routes root stream child paths through the realtime stream handler", async () => {
+    const { server, handleWebSocketUpgrade } = createRealtimeRoutingServer("/");
+
+    try {
+      const baseUrl = await server.start();
+      const valid = await requestWebSocketUpgrade(server, baseUrl, "/token");
+      expect(valid).toMatchObject({ kind: "response", statusCode: 401 });
       expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
     } finally {
       await server.stop();

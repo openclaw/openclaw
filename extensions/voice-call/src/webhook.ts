@@ -180,7 +180,7 @@ function buildRealtimeRejectedTwiML(): WebhookResponsePayload {
 function isRealtimeStreamPath(pathname: string, pattern: string): boolean {
   const normalizedPattern = pattern.replace(/\/+$/u, "") || "/";
   if (normalizedPattern === "/") {
-    return pathname === "/";
+    return pathname.startsWith("/");
   }
   return pathname === normalizedPattern || pathname.startsWith(`${normalizedPattern}/`);
 }
