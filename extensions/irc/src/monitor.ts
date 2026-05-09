@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
-export type IrcMonitorOptions = {
+type IrcMonitorOptions = {
   accountId?: string;
   config?: CoreConfig;
   runtime?: RuntimeEnv;
@@ -35,7 +35,7 @@ export function resolveIrcInboundTarget(params: { target: string; senderNick: st
 
 export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ stop: () => void }> {
   const core = getIrcRuntime();
-  const cfg = opts.config ?? (core.config.loadConfig() as CoreConfig);
+  const cfg = opts.config ?? (core.config.current() as CoreConfig);
   const account = resolveIrcAccount({
     cfg,
     accountId: opts.accountId,

@@ -1,4 +1,5 @@
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
+import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -26,6 +27,20 @@ function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   return trimmed as CronMessageChannel;
 }
 
+function resolveAnnounceChannel(params: {
+  channel?: CronMessageChannel;
+  to?: string;
+}): CronMessageChannel {
+  if (params.channel && params.channel !== "last") {
+    return params.channel;
+  }
+  return (
+    (resolveTargetPrefixedChannel(params.to) as CronMessageChannel | undefined) ??
+    params.channel ??
+    "last"
+  );
+}
+
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
@@ -50,18 +65,21 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const deliveryThreadId = normalizeOptionalThreadValue(
     (delivery as { threadId?: unknown } | undefined)?.threadId,
   );
-  const channel = deliveryChannel ?? "last";
   const to = deliveryTo;
   const deliveryAccountId = normalizeOptionalString(
     (delivery as { accountId?: unknown } | undefined)?.accountId,
   );
   if (hasDelivery) {
     const resolvedMode = mode ?? "announce";
+    const channel =
+      resolvedMode === "announce"
+        ? resolveAnnounceChannel({ channel: deliveryChannel, to })
+        : deliveryChannel;
     return {
       mode: resolvedMode,
-      channel: resolvedMode === "announce" ? channel : undefined,
+      channel: resolvedMode === "webhook" ? undefined : channel,
       to,
-      threadId: resolvedMode === "announce" ? deliveryThreadId : undefined,
+      threadId: resolvedMode === "webhook" ? undefined : deliveryThreadId,
       accountId: deliveryAccountId,
       source: "delivery",
       requested: resolvedMode === "announce",
@@ -70,6 +88,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
 
   const isIsolatedAgentTurn =
     job.payload.kind === "agentTurn" &&
+    typeof job.sessionTarget === "string" &&
     (job.sessionTarget === "isolated" ||
       job.sessionTarget === "current" ||
       job.sessionTarget.startsWith("session:"));
@@ -167,7 +186,7 @@ export function resolveFailureDestination(
 
   const result: CronFailureDeliveryPlan = {
     mode: resolvedMode,
-    channel: resolvedMode === "announce" ? (channel ?? "last") : undefined,
+    channel: resolvedMode === "announce" ? resolveAnnounceChannel({ channel, to }) : undefined,
     to,
     accountId,
   };
@@ -188,15 +207,17 @@ function isSameDeliveryTarget(
     return false;
   }
 
-  const primaryChannel = delivery.channel;
-  const primaryTo = delivery.to;
-  const primaryAccountId = delivery.accountId;
+  const primaryTo = normalizeOptionalString(delivery.to);
+  const primaryAccountId = normalizeOptionalString(delivery.accountId);
 
   if (failurePlan.mode === "webhook") {
     return primaryMode === "webhook" && primaryTo === failurePlan.to;
   }
 
-  const primaryChannelNormalized = primaryChannel ?? "last";
+  const primaryChannelNormalized = resolveAnnounceChannel({
+    channel: normalizeChannel(delivery.channel),
+    to: primaryTo,
+  });
   const failureChannelNormalized = failurePlan.channel ?? "last";
 
   return (

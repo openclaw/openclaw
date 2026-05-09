@@ -8,9 +8,23 @@ import {
   browserPdfSave,
   browserScreenshotAction,
 } from "./client-actions.js";
-import { browserOpenTab, browserSnapshot, browserStatus, browserTabs } from "./client.js";
+import {
+  browserDoctor,
+  browserOpenTab,
+  browserSnapshot,
+  browserStatus,
+  browserTabs,
+} from "./client.js";
 
 describe("browser client", () => {
+  function requireSnapshotCall(calls: string[]): string {
+    const call = calls.find((url) => url.includes("/snapshot?"));
+    if (!call) {
+      throw new Error("expected browser snapshot request");
+    }
+    return call;
+  }
+
   function stubSnapshotFetch(calls: string[]) {
     vi.stubGlobal(
       "fetch",
@@ -47,9 +61,9 @@ describe("browser client", () => {
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/sandboxed session/i);
   });
 
-  it("adds useful timeout messaging for abort-like failures", async () => {
+  it("adds useful cancellation messaging for abort-like failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
-    await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/timed out/i);
+    await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/cancelled/i);
   });
 
   it("surfaces non-2xx responses with body text", async () => {
@@ -79,9 +93,7 @@ describe("browser client", () => {
       }),
     ).resolves.toMatchObject({ ok: true, format: "ai" });
 
-    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
-    expect(snapshotCall).toBeTruthy();
-    const parsed = new URL(snapshotCall as string);
+    const parsed = new URL(requireSnapshotCall(calls));
     expect(parsed.searchParams.get("labels")).toBe("1");
     expect(parsed.searchParams.get("mode")).toBe("efficient");
   });
@@ -95,9 +107,7 @@ describe("browser client", () => {
       refs: "aria",
     });
 
-    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
-    expect(snapshotCall).toBeTruthy();
-    const parsed = new URL(snapshotCall as string);
+    const parsed = new URL(requireSnapshotCall(calls));
     expect(parsed.searchParams.get("refs")).toBe("aria");
   });
 
@@ -109,19 +119,17 @@ describe("browser client", () => {
       profile: "chrome",
     });
 
-    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
-    expect(snapshotCall).toBeTruthy();
-    const parsed = new URL(snapshotCall as string);
+    const parsed = new URL(requireSnapshotCall(calls));
     expect(parsed.searchParams.get("format")).toBeNull();
     expect(parsed.searchParams.get("profile")).toBe("chrome");
   });
 
   it("uses the expected endpoints + methods for common calls", async () => {
-    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
         calls.push({ url, init });
         if (url.endsWith("/tabs") && (!init || init.method === undefined)) {
           return {
@@ -220,6 +228,22 @@ describe("browser client", () => {
             }),
           } as unknown as Response;
         }
+        if (url.includes("/doctor")) {
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              profile: "openclaw",
+              transport: "cdp",
+              checks: [],
+              status: {
+                enabled: true,
+                running: true,
+                cdpPort: 18792,
+              },
+            }),
+          } as unknown as Response;
+        }
         return {
           ok: true,
           json: async () => ({
@@ -243,6 +267,16 @@ describe("browser client", () => {
     await expect(browserStatus("http://127.0.0.1:18791")).resolves.toMatchObject({
       running: true,
       cdpPort: 18792,
+    });
+    await expect(browserDoctor("http://127.0.0.1:18791")).resolves.toMatchObject({
+      ok: true,
+      profile: "openclaw",
+    });
+    await expect(
+      browserDoctor("http://127.0.0.1:18791", { profile: "openclaw", deep: true }),
+    ).resolves.toMatchObject({
+      ok: true,
+      profile: "openclaw",
     });
 
     await expect(browserTabs("http://127.0.0.1:18791")).resolves.toHaveLength(1);
@@ -276,14 +310,67 @@ describe("browser client", () => {
       path: "/tmp/a.pdf",
     });
     await expect(
-      browserScreenshotAction("http://127.0.0.1:18791", { fullPage: true }),
+      browserScreenshotAction("http://127.0.0.1:18791", { fullPage: true, timeoutMs: 12_345 }),
+    ).resolves.toMatchObject({ ok: true, path: "/tmp/a.png" });
+    await expect(
+      browserScreenshotAction("http://127.0.0.1:18791", { targetId: "t-default" }),
     ).resolves.toMatchObject({ ok: true, path: "/tmp/a.png" });
 
-    expect(calls.some((c) => c.url.endsWith("/tabs"))).toBe(true);
+    expect(calls.map((call) => call.url)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/\/tabs$/),
+        expect.stringMatching(/\/doctor$/),
+        expect.stringMatching(/\/doctor\?profile=openclaw&deep=true$/),
+      ]),
+    );
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
 
-    const screenshot = calls.find((c) => c.url.endsWith("/screenshot"));
+    const screenshotCalls = calls.filter((c) => c.url.endsWith("/screenshot"));
+    const screenshot = screenshotCalls[0];
     expect(screenshot?.init?.method).toBe("POST");
+    expect(screenshot?.init?.timeoutMs).toBe(12_345);
+    expect(
+      JSON.parse(typeof screenshot?.init?.body === "string" ? screenshot.init.body : "{}"),
+    ).toMatchObject({
+      fullPage: true,
+      timeoutMs: 12_345,
+    });
+    const defaultScreenshot = screenshotCalls[1];
+    expect(defaultScreenshot?.init?.timeoutMs).toBe(20_000);
+    expect(
+      JSON.parse(
+        typeof defaultScreenshot?.init?.body === "string" ? defaultScreenshot.init.body : "{}",
+      ),
+    ).toMatchObject({
+      targetId: "t-default",
+      timeoutMs: 20_000,
+    });
+  });
+
+  it("gives browser act requests enough client timeout for long waits", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          json: async () => ({ ok: true, targetId: "t1" }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" });
+    await browserAct("http://127.0.0.1:18791", {
+      kind: "wait",
+      timeMs: 70_000,
+    });
+    await browserAct("http://127.0.0.1:18791", {
+      kind: "wait",
+      timeoutMs: 45_000,
+    });
+
+    expect(calls.map((call) => call.init?.timeoutMs)).toEqual([60_000, 75_000, 50_000]);
   });
 });

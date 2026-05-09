@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import {
   coerceSecretRef,
-  resolveDefaultSecretProviderAlias,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -13,7 +13,7 @@ import {
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 
-export type XaiFallbackAuth = {
+type XaiFallbackAuth = {
   apiKey: string;
   source: string;
 };
@@ -23,22 +23,6 @@ type ConfiguredRuntimeApiKeyResolution =
   | { status: "available"; value: string }
   | { status: "missing" }
   | { status: "blocked" };
-
-function canResolveEnvSecretRefInReadOnlyPath(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  id: string;
-}): boolean {
-  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
-  if (!providerConfig) {
-    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
-  }
-  if (providerConfig.source !== "env") {
-    return false;
-  }
-  const allowlist = providerConfig.allowlist;
-  return !allowlist || allowlist.includes(params.id);
-}
 
 function readConfiguredOrManagedApiKey(value: unknown): string | undefined {
   const literal = normalizeSecretInputString(value);
@@ -111,11 +95,6 @@ function readLegacyGrokApiKeyResult(cfg?: OpenClawConfig): ConfiguredRuntimeApiK
   );
 }
 
-export function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
-  const resolved = readLegacyGrokApiKeyResult(cfg);
-  return resolved.status === "available" ? resolved.value : undefined;
-}
-
 function readPluginXaiWebSearchApiKeyResult(
   cfg?: OpenClawConfig,
 ): ConfiguredRuntimeApiKeyResolution {
@@ -124,11 +103,6 @@ function readPluginXaiWebSearchApiKeyResult(
     "plugins.entries.xai.config.webSearch.apiKey",
     cfg,
   );
-}
-
-export function readPluginXaiWebSearchApiKey(cfg?: OpenClawConfig): string | undefined {
-  const resolved = readPluginXaiWebSearchApiKeyResult(cfg);
-  return resolved.status === "available" ? resolved.value : undefined;
 }
 
 export function resolveFallbackXaiAuth(cfg?: OpenClawConfig): XaiFallbackAuth | undefined {

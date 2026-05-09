@@ -63,6 +63,10 @@ async function waitForAssertion(
   }
 }
 
+vi.mock("./context-engine-capabilities.js", () => ({
+  resolveContextEngineCapabilities: () => ({ llm: undefined }),
+}));
+
 vi.mock("./transcript-rewrite.js", () => ({
   rewriteTranscriptEntriesInSessionManager: (params: unknown) =>
     rewriteTranscriptEntriesInSessionManagerMock(params),
@@ -98,9 +102,11 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     });
 
     expect(runtimeContext.workspaceDir).toBe("/tmp/workspace");
-    expect(typeof runtimeContext.rewriteTranscriptEntries).toBe("function");
+    if (!runtimeContext.rewriteTranscriptEntries) {
+      throw new Error("expected transcript rewrite helper");
+    }
 
-    const result = await runtimeContext.rewriteTranscriptEntries?.({
+    const result = await runtimeContext.rewriteTranscriptEntries({
       replacements: [
         { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
       ],
@@ -115,6 +121,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       sessionFile: "/tmp/session.jsonl",
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
+      config: undefined,
       request: {
         replacements: [
           { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
@@ -161,7 +168,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       const sessionKey = "agent:main:session-rewrite-handoff";
       const sessionLane = resolveSessionLane(sessionKey);
       const events: string[] = [];
-      let releaseForeground!: () => void;
+      let releaseForeground: (() => void) | undefined;
       const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
         events.push("foreground-start");
         await new Promise<void>((resolve) => {
@@ -194,11 +201,14 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
           { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
         ],
       });
-      expect(rewritePromise).toBeDefined();
+      expect(rewritePromise?.then).toBeTypeOf("function");
 
       await flushAsyncWork();
       expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
 
+      if (!releaseForeground) {
+        throw new Error("Expected foreground turn release callback to be initialized");
+      }
       releaseForeground();
       await expect(rewritePromise!).resolves.toEqual({
         changed: true,
@@ -314,7 +324,19 @@ describe("runContextEngineMaintenance", () => {
     )?.runtimeContext as
       | { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> }
       | undefined;
-    expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");
+    if (!runtimeContext?.rewriteTranscriptEntries) {
+      throw new Error("expected maintain runtime context rewrite helper");
+    }
+    const rewriteResult = await runtimeContext.rewriteTranscriptEntries({
+      replacements: [
+        { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
+      ],
+    });
+    expect(rewriteResult).toEqual({
+      changed: true,
+      bytesFreed: 123,
+      rewrittenEntries: 2,
+    });
   });
 
   it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {
@@ -357,6 +379,7 @@ describe("runContextEngineMaintenance", () => {
       reason: "turn",
       executionMode: "background",
       sessionManager,
+      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
     });
 
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
@@ -364,6 +387,7 @@ describe("runContextEngineMaintenance", () => {
       sessionFile: "/tmp/session-background-file-rewrite.jsonl",
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
+      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
       request: {
         replacements: [
           {
@@ -389,7 +413,7 @@ describe("runContextEngineMaintenance", () => {
 
         const sessionKey = "agent:main:session-1";
         const sessionLane = resolveSessionLane(sessionKey);
-        let releaseForeground!: () => void;
+        let releaseForeground: (() => void) | undefined;
         const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
           await new Promise<void>((resolve) => {
             releaseForeground = resolve;
@@ -397,11 +421,27 @@ describe("runContextEngineMaintenance", () => {
         });
         await Promise.resolve();
 
-        const maintain = vi.fn(async (_params?: unknown) => ({
-          changed: false,
-          bytesFreed: 0,
-          rewrittenEntries: 0,
-        }));
+        const maintain = vi.fn(async (params?: unknown) => {
+          await (
+            params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
+          )?.runtimeContext?.rewriteTranscriptEntries?.({
+            replacements: [
+              {
+                entryId: "entry-1",
+                message: castAgentMessage({
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  timestamp: 2,
+                }),
+              },
+            ],
+          });
+          return {
+            changed: false,
+            bytesFreed: 0,
+            rewrittenEntries: 0,
+          };
+        });
 
         const backgroundEngine = {
           info: {
@@ -429,6 +469,7 @@ describe("runContextEngineMaintenance", () => {
             tokenBudget: 2048,
             currentTokenCount: 1536,
           },
+          config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
         });
 
         expect(result).toBeUndefined();
@@ -448,6 +489,9 @@ describe("runContextEngineMaintenance", () => {
           deliveryStatus: "pending",
         });
 
+        if (!releaseForeground) {
+          throw new Error("Expected foreground turn release callback to be initialized");
+        }
         releaseForeground();
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
         expect(maintain.mock.calls[0]?.[0]).toMatchObject({
@@ -460,6 +504,24 @@ describe("runContextEngineMaintenance", () => {
             tokenBudget: 2048,
             currentTokenCount: 1536,
           }),
+        });
+        expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
+          sessionFile: "/tmp/session.jsonl",
+          sessionId: "session-1",
+          sessionKey,
+          config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
+          request: {
+            replacements: [
+              {
+                entryId: "entry-1",
+                message: castAgentMessage({
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  timestamp: 2,
+                }),
+              },
+            ],
+          },
         });
 
         const completedTask = getTaskById(queuedTasks[0].taskId);
@@ -485,7 +547,7 @@ describe("runContextEngineMaintenance", () => {
 
         const sessionKey = "agent:main:session-2";
         const sessionLane = resolveSessionLane(sessionKey);
-        let releaseForeground!: () => void;
+        let releaseForeground: (() => void) | undefined;
         const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
           await new Promise<void>((resolve) => {
             releaseForeground = resolve;
@@ -536,13 +598,16 @@ describe("runContextEngineMaintenance", () => {
         );
         expect(queuedTasks).toHaveLength(1);
 
+        if (!releaseForeground) {
+          throw new Error("Expected foreground turn release callback to be initialized");
+        }
         releaseForeground();
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(2));
         const completedTasks = listTasksForOwnerKey(sessionKey).filter(
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(completedTasks).toHaveLength(2);
-        expect(completedTasks.every((task) => task.status === "succeeded")).toBe(true);
+        expect(completedTasks.filter((task) => task.status !== "succeeded")).toEqual([]);
 
         await foregroundTurn;
       } finally {
@@ -560,7 +625,7 @@ describe("runContextEngineMaintenance", () => {
         resetTaskFlowRegistryForTests({ persist: false });
 
         const sessionKey = "agent:main:session-rerun";
-        let releaseFirstMaintenance!: () => void;
+        let releaseFirstMaintenance: (() => void) | undefined;
         let maintenanceCalls = 0;
         const maintain = vi.fn(async () => {
           maintenanceCalls += 1;
@@ -609,6 +674,9 @@ describe("runContextEngineMaintenance", () => {
           reason: "turn",
         });
 
+        if (!releaseFirstMaintenance) {
+          throw new Error("Expected first maintenance release callback to be initialized");
+        }
         releaseFirstMaintenance();
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(2));
 
@@ -616,7 +684,7 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(2);
-        expect(tasks.every((task) => task.status === "succeeded")).toBe(true);
+        expect(tasks.filter((task) => task.status !== "succeeded")).toEqual([]);
       } finally {
         vi.useRealTimers();
       }
@@ -684,7 +752,9 @@ describe("runContextEngineMaintenance", () => {
           status: "cancelled",
           notifyPolicy: "silent",
         });
-        expect(tasks.some((task) => task.runId?.startsWith("turn-maint:"))).toBe(true);
+        expect(tasks.map((task) => task.runId)).toContainEqual(
+          expect.stringMatching(/^turn-maint:/),
+        );
       } finally {
         vi.useRealTimers();
       }
@@ -760,7 +830,7 @@ describe("runContextEngineMaintenance", () => {
         const sessionKey = "agent:main:session-3";
         const sessionLane = resolveSessionLane(sessionKey);
         const events: string[] = [];
-        let releaseFirstForeground!: () => void;
+        let releaseFirstForeground: (() => void) | undefined;
         const firstForeground = enqueueCommandInLane(sessionLane, async () => {
           events.push("foreground-1-start");
           await new Promise<void>((resolve) => {
@@ -807,6 +877,9 @@ describe("runContextEngineMaintenance", () => {
           events.push("foreground-2-end");
         });
 
+        if (!releaseFirstForeground) {
+          throw new Error("Expected first foreground release callback to be initialized");
+        }
         releaseFirstForeground();
         await waitForAssertion(() =>
           expect(events).toEqual([
@@ -837,7 +910,7 @@ describe("runContextEngineMaintenance", () => {
         const sessionKey = "agent:main:session-rewrite-priority";
         const sessionLane = resolveSessionLane(sessionKey);
         const events: string[] = [];
-        let allowRewrite!: () => void;
+        let allowRewrite: (() => void) | undefined;
         const maintain = vi.fn(async (params?: unknown) => {
           events.push("maintenance-start");
           await new Promise<void>((resolve) => {
@@ -907,6 +980,9 @@ describe("runContextEngineMaintenance", () => {
           events.push("foreground-end");
         });
 
+        if (!allowRewrite) {
+          throw new Error("Expected maintenance rewrite release callback to be initialized");
+        }
         allowRewrite();
 
         await waitForAssertion(() =>
@@ -989,7 +1065,7 @@ describe("runContextEngineMaintenance", () => {
 
         const sessionKey = "agent:main:session-long";
         const sessionLane = resolveSessionLane(sessionKey);
-        let releaseForeground!: () => void;
+        let releaseForeground: (() => void) | undefined;
         const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
           await new Promise<void>((resolve) => {
             releaseForeground = resolve;
@@ -1034,6 +1110,9 @@ describe("runContextEngineMaintenance", () => {
           ),
         );
 
+        if (!releaseForeground) {
+          throw new Error("Expected foreground turn release callback to be initialized");
+        }
         releaseForeground();
         await waitForAssertion(() =>
           expect(peekSystemEvents(sessionKey)).toEqual(
@@ -1061,7 +1140,7 @@ describe("runContextEngineMaintenance", () => {
 
         const sessionKey = "agent:main:session-throttle";
         const sessionLane = resolveSessionLane(sessionKey);
-        let releaseForeground!: () => void;
+        let releaseForeground: (() => void) | undefined;
         const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
           await new Promise<void>((resolve) => {
             releaseForeground = resolve;
@@ -1119,6 +1198,9 @@ describe("runContextEngineMaintenance", () => {
           ),
         ).toHaveLength(2);
 
+        if (!releaseForeground) {
+          throw new Error("Expected foreground turn release callback to be initialized");
+        }
         releaseForeground();
         await foregroundTurn;
       } finally {

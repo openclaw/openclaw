@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assertSafeWindowsShellArgs, shouldUseShellForCommand } from "../../scripts/ui.js";
+import {
+  assertSafeWindowsShellArgs,
+  prepareSpawnCommand,
+  shouldUseShellForCommand,
+} from "../../scripts/ui.js";
 
 describe("scripts/ui windows spawn behavior", () => {
   it("enables shell for Windows command launchers that require cmd.exe", () => {
@@ -14,10 +18,20 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(shouldUseShellForCommand("/usr/local/bin/pnpm", "linux")).toBe(false);
   });
 
+  it("quotes Windows shell launcher paths before passing them to spawn", () => {
+    expect(prepareSpawnCommand("C:\\Program Files\\nodejs\\pnpm.cmd", "win32")).toBe(
+      '"C:\\Program Files\\nodejs\\pnpm.cmd"',
+    );
+    expect(prepareSpawnCommand("C:\\Program Files\\nodejs\\pnpm.exe", "win32")).toBe(
+      "C:\\Program Files\\nodejs\\pnpm.exe",
+    );
+    expect(prepareSpawnCommand("/usr/local/bin/pnpm", "linux")).toBe("/usr/local/bin/pnpm");
+  });
+
   it("allows safe forwarded args when shell mode is required on Windows", () => {
-    expect(() =>
+    expect(
       assertSafeWindowsShellArgs(["run", "build", "--filter", "@openclaw/ui"], "win32"),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("rejects dangerous forwarded args when shell mode is required on Windows", () => {
@@ -30,6 +44,6 @@ describe("scripts/ui windows spawn behavior", () => {
   });
 
   it("does not reject args on non-windows platforms", () => {
-    expect(() => assertSafeWindowsShellArgs(["contains&metacharacters"], "linux")).not.toThrow();
+    expect(assertSafeWindowsShellArgs(["contains&metacharacters"], "linux")).toBeUndefined();
   });
 });

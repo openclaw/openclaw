@@ -4,7 +4,7 @@ import type { NodeListNode } from "../shared/node-list-types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { NodeSession } from "./node-registry.js";
 
-export type KnownNodeDevicePairingSource = {
+type KnownNodeDevicePairingSource = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -12,9 +12,11 @@ export type KnownNodeDevicePairingSource = {
   clientMode?: string;
   remoteIp?: string;
   approvedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
 };
 
-export type KnownNodeApprovedSource = {
+type KnownNodeApprovedSource = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -28,9 +30,12 @@ export type KnownNodeApprovedSource = {
   commands: string[];
   permissions?: Record<string, boolean>;
   approvedAtMs?: number;
+  lastConnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
 };
 
-export type KnownNodeEntry = {
+type KnownNodeEntry = {
   nodeId: string;
   devicePairing?: KnownNodeDevicePairingSource;
   nodePairing?: KnownNodeApprovedSource;
@@ -38,17 +43,20 @@ export type KnownNodeEntry = {
   effective: NodeListNode;
 };
 
-export type KnownNodeCatalog = {
+type KnownNodeCatalog = {
   entriesById: Map<string, KnownNodeEntry>;
 };
 
-function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
+function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
   const values = new Set<string>();
   for (const item of items) {
-    if (!item) {
+    if (!Array.isArray(item)) {
       continue;
     }
     for (const value of item) {
+      if (typeof value !== "string") {
+        continue;
+      }
       const trimmed = value.trim();
       if (trimmed) {
         values.add(trimmed);
@@ -67,6 +75,8 @@ function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSo
     clientMode: entry.clientMode,
     remoteIp: entry.remoteIp,
     approvedAtMs: entry.approvedAtMs,
+    lastSeenAtMs: entry.lastSeenAtMs,
+    lastSeenReason: entry.lastSeenReason,
   };
 }
 
@@ -85,6 +95,41 @@ function buildApprovedNodeSource(entry: NodePairingPairedNode): KnownNodeApprove
     commands: entry.commands ?? [],
     permissions: entry.permissions,
     approvedAtMs: entry.approvedAtMs,
+    lastConnectedAtMs: entry.lastConnectedAtMs,
+    lastSeenAtMs: entry.lastSeenAtMs,
+    lastSeenReason: entry.lastSeenReason,
+  };
+}
+
+function resolveEffectiveLastSeen(params: {
+  live?: NodeSession;
+  devicePairing?: KnownNodeDevicePairingSource;
+  nodePairing?: KnownNodeApprovedSource;
+}): { lastSeenAtMs?: number; lastSeenReason?: string } {
+  const candidates: Array<{ atMs: number; reason?: string }> = [
+    params.live?.connectedAtMs ? { atMs: params.live.connectedAtMs, reason: "connect" } : undefined,
+    params.nodePairing?.lastSeenAtMs
+      ? { atMs: params.nodePairing.lastSeenAtMs, reason: params.nodePairing.lastSeenReason }
+      : undefined,
+    params.nodePairing?.lastConnectedAtMs
+      ? { atMs: params.nodePairing.lastConnectedAtMs, reason: "connect" }
+      : undefined,
+    params.devicePairing?.lastSeenAtMs
+      ? { atMs: params.devicePairing.lastSeenAtMs, reason: params.devicePairing.lastSeenReason }
+      : undefined,
+  ].filter((entry) => entry !== undefined);
+  let newest: { atMs: number; reason?: string } | undefined;
+  for (const candidate of candidates) {
+    if (!newest || candidate.atMs > newest.atMs) {
+      newest = candidate;
+    }
+  }
+  if (!newest) {
+    return {};
+  }
+  return {
+    lastSeenAtMs: newest.atMs,
+    lastSeenReason: newest.reason,
   };
 }
 
@@ -95,6 +140,7 @@ function buildEffectiveKnownNode(entry: {
   live?: NodeSession;
 }): NodeListNode {
   const { nodeId, devicePairing, nodePairing, live } = entry;
+  const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
   return {
     nodeId,
     displayName: live?.displayName ?? nodePairing?.displayName ?? devicePairing?.displayName,
@@ -114,6 +160,8 @@ function buildEffectiveKnownNode(entry: {
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
+    lastSeenAtMs: lastSeen.lastSeenAtMs,
+    lastSeenReason: lastSeen.lastSeenReason,
     approvedAtMs: nodePairing?.approvedAtMs ?? devicePairing?.approvedAtMs,
     paired: Boolean(devicePairing ?? nodePairing),
     connected: Boolean(live),

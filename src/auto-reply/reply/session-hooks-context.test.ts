@@ -12,6 +12,11 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runSessionStart: vi.fn<HookRunner["runSessionStart"]>(),
   runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(),
 }));
+const sessionCleanupMocks = vi.hoisted(() => ({
+  closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
+  resetRegisteredAgentHarnessSessions: vi.fn(async () => undefined),
+  retireSessionMcpRuntime: vi.fn(async () => false),
+}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () =>
@@ -21,6 +26,39 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
       runSessionEnd: hookRunnerMocks.runSessionEnd,
     }) as unknown as HookRunner,
 }));
+
+vi.mock("../../agents/harness/registry.js", () => ({
+  resetRegisteredAgentHarnessSessions: sessionCleanupMocks.resetRegisteredAgentHarnessSessions,
+}));
+
+vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntime: sessionCleanupMocks.retireSessionMcpRuntime,
+}));
+
+vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
+  closeTrackedBrowserTabsForSessions: sessionCleanupMocks.closeTrackedBrowserTabsForSessions,
+}));
+
+vi.mock("../../agents/session-write-lock.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/session-write-lock.js")>(
+    "../../agents/session-write-lock.js",
+  );
+  return {
+    ...actual,
+    acquireSessionWriteLock: vi.fn(async () => ({ release: async () => {} })),
+    resolveSessionLockMaxHoldFromTimeout: vi.fn(
+      ({
+        timeoutMs,
+        graceMs = 2 * 60 * 1000,
+        minMs = 5 * 60 * 1000,
+      }: {
+        timeoutMs: number;
+        graceMs?: number;
+        minMs?: number;
+      }) => Math.max(minMs, timeoutMs + graceMs),
+    ),
+  };
+});
 
 async function createStorePath(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
@@ -53,11 +91,58 @@ async function writeTranscript(
   return transcriptPath;
 }
 
+async function createStoredSession(params: {
+  prefix: string;
+  sessionKey: string;
+  sessionId: string;
+  text?: string;
+  updatedAt?: number;
+}): Promise<{ storePath: string; transcriptPath: string }> {
+  const storePath = await createStorePath(params.prefix);
+  const transcriptPath = await writeTranscript(storePath, params.sessionId, params.text);
+  await writeStore(storePath, {
+    [params.sessionKey]: {
+      sessionId: params.sessionId,
+      sessionFile: transcriptPath,
+      updatedAt: params.updatedAt ?? Date.now(),
+    },
+  });
+  return { storePath, transcriptPath };
+}
+
+type SessionResetConfig = NonNullable<NonNullable<OpenClawConfig["session"]>["reset"]>;
+
+async function initStoredSessionState(params: {
+  prefix: string;
+  sessionKey: string;
+  sessionId: string;
+  text: string;
+  updatedAt: number;
+  reset?: SessionResetConfig;
+}): Promise<void> {
+  const { storePath } = await createStoredSession(params);
+  const cfg = {
+    session: {
+      store: storePath,
+      ...(params.reset ? { reset: params.reset } : {}),
+    },
+  } as OpenClawConfig;
+
+  await initSessionState({
+    ctx: { Body: "hello", SessionKey: params.sessionKey },
+    cfg,
+    commandAuthorized: true,
+  });
+}
+
 describe("session hook context wiring", () => {
   beforeEach(() => {
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runSessionStart.mockReset();
     hookRunnerMocks.runSessionEnd.mockReset();
+    sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockClear();
+    sessionCleanupMocks.resetRegisteredAgentHarnessSessions.mockClear();
+    sessionCleanupMocks.retireSessionMcpRuntime.mockClear();
     hookRunnerMocks.runSessionStart.mockResolvedValue(undefined);
     hookRunnerMocks.runSessionEnd.mockResolvedValue(undefined);
     hookRunnerMocks.hasHooks.mockImplementation(
@@ -90,14 +175,10 @@ describe("session hook context wiring", () => {
 
   it("passes sessionKey to session_end hook context on reset", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
-    const storePath = await createStorePath("openclaw-session-hook-end");
-    const transcriptPath = await writeTranscript(storePath, "old-session");
-    await writeStore(storePath, {
-      [sessionKey]: {
-        sessionId: "old-session",
-        sessionFile: transcriptPath,
-        updatedAt: Date.now(),
-      },
+    const { storePath } = await createStoredSession({
+      prefix: "openclaw-session-hook-end",
+      sessionKey,
+      sessionId: "old-session",
     });
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
@@ -127,14 +208,11 @@ describe("session hook context wiring", () => {
 
   it("marks explicit /reset rollovers with reason reset", async () => {
     const sessionKey = "agent:main:telegram:direct:456";
-    const storePath = await createStorePath("openclaw-session-hook-explicit-reset");
-    const transcriptPath = await writeTranscript(storePath, "reset-session", "reset me");
-    await writeStore(storePath, {
-      [sessionKey]: {
-        sessionId: "reset-session",
-        sessionFile: transcriptPath,
-        updatedAt: Date.now(),
-      },
+    const { storePath } = await createStoredSession({
+      prefix: "openclaw-session-hook-explicit-reset",
+      sessionKey,
+      sessionId: "reset-session",
+      text: "reset me",
     });
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
@@ -150,14 +228,11 @@ describe("session hook context wiring", () => {
 
   it("maps custom reset trigger aliases to the new-session reason", async () => {
     const sessionKey = "agent:main:telegram:direct:alias";
-    const storePath = await createStorePath("openclaw-session-hook-reset-alias");
-    const transcriptPath = await writeTranscript(storePath, "alias-session", "alias me");
-    await writeStore(storePath, {
-      [sessionKey]: {
-        sessionId: "alias-session",
-        sessionFile: transcriptPath,
-        updatedAt: Date.now(),
-      },
+    const { storePath } = await createStoredSession({
+      prefix: "openclaw-session-hook-reset-alias",
+      sessionKey,
+      sessionId: "alias-session",
+      text: "alias me",
     });
     const cfg = {
       session: {
@@ -181,21 +256,12 @@ describe("session hook context wiring", () => {
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
       const sessionKey = "agent:main:telegram:direct:daily";
-      const storePath = await createStorePath("openclaw-session-hook-daily");
-      const transcriptPath = await writeTranscript(storePath, "daily-session", "daily");
-      await writeStore(storePath, {
-        [sessionKey]: {
-          sessionId: "daily-session",
-          sessionFile: transcriptPath,
-          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-        },
-      });
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-      await initSessionState({
-        ctx: { Body: "hello", SessionKey: sessionKey },
-        cfg,
-        commandAuthorized: true,
+      await initStoredSessionState({
+        prefix: "openclaw-session-hook-daily",
+        sessionKey,
+        sessionId: "daily-session",
+        text: "daily",
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
       });
 
       const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
@@ -216,29 +282,16 @@ describe("session hook context wiring", () => {
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
       const sessionKey = "agent:main:telegram:direct:idle";
-      const storePath = await createStorePath("openclaw-session-hook-idle");
-      const transcriptPath = await writeTranscript(storePath, "idle-session", "idle");
-      await writeStore(storePath, {
-        [sessionKey]: {
-          sessionId: "idle-session",
-          sessionFile: transcriptPath,
-          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      await initStoredSessionState({
+        prefix: "openclaw-session-hook-idle",
+        sessionKey,
+        sessionId: "idle-session",
+        text: "idle",
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        reset: {
+          mode: "idle",
+          idleMinutes: 30,
         },
-      });
-      const cfg = {
-        session: {
-          store: storePath,
-          reset: {
-            mode: "idle",
-            idleMinutes: 30,
-          },
-        },
-      } as OpenClawConfig;
-
-      await initSessionState({
-        ctx: { Body: "hello", SessionKey: sessionKey },
-        cfg,
-        commandAuthorized: true,
       });
 
       const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
@@ -253,30 +306,17 @@ describe("session hook context wiring", () => {
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
       const sessionKey = "agent:main:telegram:direct:overlap";
-      const storePath = await createStorePath("openclaw-session-hook-overlap");
-      const transcriptPath = await writeTranscript(storePath, "overlap-session", "overlap");
-      await writeStore(storePath, {
-        [sessionKey]: {
-          sessionId: "overlap-session",
-          sessionFile: transcriptPath,
-          updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      await initStoredSessionState({
+        prefix: "openclaw-session-hook-overlap",
+        sessionKey,
+        sessionId: "overlap-session",
+        text: "overlap",
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+        reset: {
+          mode: "daily",
+          atHour: 4,
+          idleMinutes: 30,
         },
-      });
-      const cfg = {
-        session: {
-          store: storePath,
-          reset: {
-            mode: "daily",
-            atHour: 4,
-            idleMinutes: 30,
-          },
-        },
-      } as OpenClawConfig;
-
-      await initSessionState({
-        ctx: { Body: "hello", SessionKey: sessionKey },
-        cfg,
-        commandAuthorized: true,
       });
 
       const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import registerPhoneControl from "./index.js";
 import type {
   OpenClawPluginApi,
@@ -30,10 +30,11 @@ function createApi(params: {
         resolveStateDir: () => params.stateDir,
       },
       config: {
-        loadConfig: () => params.getConfig(),
-        writeConfigFile: (next: Record<string, unknown>) => params.writeConfig(next),
+        current: () => params.getConfig(),
+        replaceConfigFile: ({ nextConfig }: { nextConfig: unknown }) =>
+          params.writeConfig(nextConfig as Record<string, unknown>),
       },
-    } as OpenClawPluginApi["runtime"],
+    } as unknown as OpenClawPluginApi["runtime"],
     registerCommand: params.registerCommand,
   });
 }
@@ -80,7 +81,7 @@ async function withRegisteredPhoneControl(
     });
 
     let command: OpenClawPluginCommandDefinition | undefined;
-    void registerPhoneControl.register(
+    registerPhoneControl.register(
       createApi({
         stateDir,
         getConfig: () => config,

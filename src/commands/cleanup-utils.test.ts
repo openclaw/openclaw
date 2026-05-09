@@ -54,6 +54,18 @@ describe("applyAgentDefaultPrimaryModel", () => {
     expect(result.changed).toBe(false);
     expect(result.next).toBe(cfg);
   });
+
+  it("normalizes retired Google Gemini primary models before writing config", () => {
+    const cfg = { agents: { defaults: {} } } as OpenClawConfig;
+    const result = applyAgentDefaultPrimaryModel({
+      cfg,
+      model: "google/gemini-3-pro-preview",
+    });
+    expect(result.changed).toBe(true);
+    expect(result.next.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+    });
+  });
 });
 
 describe("cleanup path removals", () => {

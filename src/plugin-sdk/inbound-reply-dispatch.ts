@@ -7,17 +7,57 @@ import {
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import {
+  hasFinalChannelTurnDispatch,
+  hasVisibleChannelTurnDispatch,
+  deliverInboundReplyWithMessageSendContext,
+  isDurableInboundReplyDeliveryHandled,
+  resolveChannelTurnDispatchCounts,
+  runChannelTurn,
+  runPreparedChannelTurn,
+  throwIfDurableInboundReplyDeliveryFailed,
+} from "../channels/turn/kernel.js";
+import type { DurableInboundReplyDeliveryOptions } from "../channels/turn/kernel.js";
+import type { PreparedChannelTurn, RunChannelTurnParams } from "../channels/turn/types.js";
+export type { ChannelTurnRecordOptions } from "../channels/turn/types.js";
+export type { DurableInboundReplyDeliveryParams } from "../channels/turn/kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
-import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
+import { createChannelReplyPipeline } from "./channel-reply-core.js";
+import {
+  normalizeOutboundReplyPayload,
+  type OutboundReplyPayload,
+  type ReplyPayload,
+} from "./reply-payload.js";
 
 type ReplyOptionsWithoutModelSelected = Omit<
-  Omit<GetReplyOptions, "onToolResult" | "onBlockReply">,
+  Omit<GetReplyOptions, "onBlockReply">,
   "onModelSelected"
 >;
 type RecordInboundSessionFn = typeof import("../channels/session.js").recordInboundSession;
 
-type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onBlockReply">;
+
+/** Run an already assembled channel turn through shared session-record + dispatch ordering. */
+export async function runPreparedInboundReplyTurn<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+) {
+  return await runPreparedChannelTurn(params);
+}
+
+/** Run a channel turn through shared ingest, record, dispatch, and finalize ordering. */
+export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: RunChannelTurnParams<TRaw, TDispatchResult>,
+) {
+  return await runChannelTurn(params);
+}
+
+export {
+  hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch,
+  hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
+  deliverInboundReplyWithMessageSendContext as deliverDurableInboundReplyPayload,
+  deliverInboundReplyWithMessageSendContext,
+  resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
+};
 
 /** Run `dispatchReplyFromConfig` with a dispatcher that always gets its settled callback. */
 export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
@@ -79,30 +119,7 @@ export function buildInboundReplyDispatchBase(params: {
 }
 
 type BuildInboundReplyDispatchBaseParams = Parameters<typeof buildInboundReplyDispatchBase>[0];
-type RecordInboundSessionAndDispatchReplyParams = Parameters<
-  typeof recordInboundSessionAndDispatchReply
->[0];
-
-/** Resolve the shared dispatch base and immediately record + dispatch one inbound reply turn. */
-export async function dispatchInboundReplyWithBase(
-  params: BuildInboundReplyDispatchBaseParams &
-    Pick<
-      RecordInboundSessionAndDispatchReplyParams,
-      "deliver" | "onRecordError" | "onDispatchError" | "replyOptions"
-    >,
-): Promise<void> {
-  const dispatchBase = buildInboundReplyDispatchBase(params);
-  await recordInboundSessionAndDispatchReply({
-    ...dispatchBase,
-    deliver: params.deliver,
-    onRecordError: params.onRecordError,
-    onDispatchError: params.onDispatchError,
-    replyOptions: params.replyOptions,
-  });
-}
-
-/** Record the inbound session first, then dispatch the reply using normalized outbound delivery. */
-export async function recordInboundSessionAndDispatchReply(params: {
+type RecordChannelMessageReplyDispatchParams = {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string;
@@ -113,36 +130,123 @@ export async function recordInboundSessionAndDispatchReply(params: {
   recordInboundSession: RecordInboundSessionFn;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   deliver: (payload: OutboundReplyPayload) => Promise<void>;
+  durable?: false | DurableInboundReplyDeliveryOptions;
   onRecordError: (err: unknown) => void;
   onDispatchError: (err: unknown, info: { kind: string }) => void;
   replyOptions?: ReplyOptionsWithoutModelSelected;
-}): Promise<void> {
-  await params.recordInboundSession({
-    storePath: params.storePath,
-    sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
-    ctx: params.ctxPayload,
-    onRecordError: params.onRecordError,
-  });
+};
 
+/**
+ * Resolve the shared dispatch base and immediately record + dispatch one inbound reply turn.
+ */
+export async function dispatchChannelMessageReplyWithBase(
+  params: BuildInboundReplyDispatchBaseParams &
+    Pick<
+      RecordChannelMessageReplyDispatchParams,
+      "deliver" | "durable" | "onRecordError" | "onDispatchError" | "replyOptions"
+    >,
+): Promise<void> {
+  const dispatchBase = buildInboundReplyDispatchBase(params);
+  await recordChannelMessageReplyDispatch({
+    ...dispatchBase,
+    deliver: params.deliver,
+    durable: params.durable,
+    onRecordError: params.onRecordError,
+    onDispatchError: params.onDispatchError,
+    replyOptions: params.replyOptions,
+  });
+}
+
+/**
+ * Resolve the shared dispatch base and immediately record + dispatch one inbound reply turn.
+ *
+ * @deprecated Legacy inbound reply helper. New channel plugins should expose a
+ * `message` adapter via `defineChannelMessageAdapter(...)` and use
+ * `dispatchChannelMessageReplyWithBase` only for compatibility dispatchers that
+ * have not moved to the message lifecycle yet.
+ */
+export async function dispatchInboundReplyWithBase(
+  params: Parameters<typeof dispatchChannelMessageReplyWithBase>[0],
+): Promise<void> {
+  await dispatchChannelMessageReplyWithBase(params);
+}
+
+/** Record the inbound session first, then dispatch the reply using normalized outbound delivery. */
+export async function recordChannelMessageReplyDispatch(
+  params: RecordChannelMessageReplyDispatchParams,
+): Promise<void> {
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: params.channel,
     accountId: params.accountId,
   });
-  const deliver = createNormalizedOutboundDeliverer(params.deliver);
+  const deliver = async (payload: unknown, info: { kind: "tool" | "block" | "final" }) => {
+    const normalized =
+      payload && typeof payload === "object"
+        ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
+        : {};
+    if (params.durable) {
+      const durable = await deliverInboundReplyWithMessageSendContext({
+        cfg: params.cfg,
+        channel: params.channel,
+        accountId: params.accountId,
+        agentId: params.agentId,
+        ctxPayload: params.ctxPayload,
+        payload: normalized as ReplyPayload,
+        info,
+        ...params.durable,
+      });
+      throwIfDurableInboundReplyDeliveryFailed(durable);
+      if (isDurableInboundReplyDeliveryHandled(durable)) {
+        return;
+      }
+    }
+    await params.deliver(normalized);
+  };
 
-  await params.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: params.ctxPayload,
-    cfg: params.cfg,
-    dispatcherOptions: {
-      ...replyPipeline,
-      deliver,
-      onError: params.onDispatchError,
+  await runPreparedChannelTurn({
+    channel: params.channel,
+    accountId: params.accountId,
+    routeSessionKey: params.routeSessionKey,
+    storePath: params.storePath,
+    ctxPayload: params.ctxPayload,
+    recordInboundSession: params.recordInboundSession,
+    record: {
+      onRecordError: params.onRecordError,
     },
-    replyOptions: {
-      ...params.replyOptions,
-      onModelSelected,
-    },
+    runDispatch: async () =>
+      await params.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: params.ctxPayload,
+        cfg: params.cfg,
+        dispatcherOptions: {
+          ...replyPipeline,
+          deliver,
+          onError: params.onDispatchError,
+        },
+        replyOptions: {
+          ...params.replyOptions,
+          onModelSelected,
+        },
+      }),
   });
 }
+
+/**
+ * Record the inbound session first, then dispatch the reply using normalized outbound delivery.
+ *
+ * @deprecated Legacy inbound reply helper. New channel plugins should expose a
+ * `message` adapter via `defineChannelMessageAdapter(...)` and use
+ * `recordChannelMessageReplyDispatch` only for compatibility dispatchers that
+ * have not moved to the message lifecycle yet.
+ */
+export async function recordInboundSessionAndDispatchReply(
+  params: RecordChannelMessageReplyDispatchParams,
+): Promise<void> {
+  await recordChannelMessageReplyDispatch(params);
+}
+
+export const buildChannelMessageReplyDispatchBase = buildInboundReplyDispatchBase;
+export const hasFinalChannelMessageReplyDispatch = hasFinalChannelTurnDispatch;
+export const hasVisibleChannelMessageReplyDispatch = hasVisibleChannelTurnDispatch;
+export const resolveChannelMessageReplyDispatchCounts = resolveChannelTurnDispatchCounts;

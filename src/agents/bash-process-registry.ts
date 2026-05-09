@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { TerminationReason } from "../process/supervisor/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import { createSessionSlug as createSessionSlugId } from "./session-slug.js";
 
@@ -51,6 +52,7 @@ export interface ProcessSession {
   tail: string;
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
+  exitReason?: TerminationReason;
   exited: boolean;
   truncated: boolean;
   backgrounded: boolean;
@@ -68,6 +70,7 @@ export interface FinishedSession {
   status: ProcessStatus;
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
+  exitReason?: TerminationReason;
   aggregated: string;
   tail: string;
   truncated: boolean;
@@ -150,10 +153,12 @@ export function markExited(
   exitCode: number | null,
   exitSignal: NodeJS.Signals | number | null,
   status: ProcessStatus,
+  exitReason?: TerminationReason,
 ) {
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
+  session.exitReason = exitReason;
   session.tail = tail(session.aggregated, 2000);
   moveToFinished(session, status);
 }
@@ -209,6 +214,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     status,
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
+    exitReason: session.exitReason,
     aggregated: session.aggregated,
     tail: session.tail,
     truncated: session.truncated,
@@ -241,9 +247,17 @@ function capPendingBuffer(buffer: string[], pendingChars: number, cap: number) {
     buffer.push(last.slice(last.length - cap));
     return cap;
   }
-  while (buffer.length && pendingChars - buffer[0].length >= cap) {
-    pendingChars -= buffer[0].length;
-    buffer.shift();
+  let dropCount = 0;
+  while (dropCount < buffer.length) {
+    const chunk = buffer[dropCount];
+    if (chunk === undefined || pendingChars - chunk.length < cap) {
+      break;
+    }
+    pendingChars -= chunk.length;
+    dropCount += 1;
+  }
+  if (dropCount > 0) {
+    buffer.splice(0, dropCount);
   }
   if (buffer.length && pendingChars > cap) {
     const overflow = pendingChars - cap;

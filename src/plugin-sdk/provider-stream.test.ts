@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import { VERSION } from "../version.js";
 import {
   composeProviderStreamWrappers as composeProviderStreamWrappersShared,
   createMoonshotThinkingWrapper as createMoonshotThinkingWrapperShared,
@@ -47,7 +48,7 @@ describe("composeProviderStreamWrappers", () => {
     expect(createToolStreamWrapper).toBe(createToolStreamWrapperShared);
   });
 
-  it("applies wrappers left to right", async () => {
+  it("applies wrappers left to right", () => {
     const order: string[] = [];
     const baseStreamFn: StreamFn = (_model, _context, _options) => {
       order.push("base");
@@ -64,10 +65,11 @@ describe("composeProviderStreamWrappers", () => {
         return result;
       };
 
-    const composed = composeProviderStreamWrappers(baseStreamFn, wrap("a"), undefined, wrap("b"));
+    const composed = requireStreamFn(
+      composeProviderStreamWrappers(baseStreamFn, wrap("a"), undefined, wrap("b")),
+    );
 
-    expect(typeof composed).toBe("function");
-    void composed?.({} as never, {} as never, {});
+    void composed({} as never, {} as never, {});
 
     expect(order).toEqual(["b:before", "a:before", "base", "a:after", "b:after"]);
   });
@@ -83,13 +85,16 @@ describe("buildProviderStreamFamilyHooks", () => {
     let capturedPayload: Record<string, unknown> | undefined;
     let capturedModelId: string | undefined;
     let capturedHeaders: Record<string, string> | undefined;
+    let payloadSeed: Record<string, unknown> | undefined;
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
       capturedModelId = model.id;
-      const payload = { config: { thinkingConfig: { thinkingBudget: -1 } } } as Record<
-        string,
-        unknown
-      >;
+      const payload = {
+        model: model.id,
+        config: { thinkingConfig: { thinkingBudget: -1 } },
+        ...payloadSeed,
+      } as Record<string, unknown>;
+      payloadSeed = undefined;
       options?.onPayload?.(payload as never, model as never);
       capturedPayload = payload;
       capturedHeaders = options?.headers;
@@ -172,6 +177,47 @@ describe("buildProviderStreamFamilyHooks", () => {
       thinking: { type: "disabled" },
     });
 
+    const moonshotKeepStream = requireStreamFn(
+      requireWrapStreamFn(moonshotHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        thinkingLevel: "low",
+        extraParams: { thinking: { type: "enabled", keep: "all" } },
+      } as never),
+    );
+    await moonshotKeepStream(
+      { api: "openai-completions", id: "kimi-k2.6" } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+      thinking: { type: "enabled", keep: "all" },
+    });
+
+    await moonshotKeepStream(
+      { api: "openai-completions", id: "kimi-k2.5" } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+      thinking: { type: "enabled" },
+    });
+    expect((capturedPayload?.thinking as Record<string, unknown>) ?? {}).not.toHaveProperty("keep");
+
+    payloadSeed = { tool_choice: { type: "tool", name: "read" } };
+    await moonshotKeepStream(
+      { api: "openai-completions", id: "kimi-k2.6" } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+      tool_choice: { type: "tool", name: "read" },
+      thinking: { type: "disabled" },
+    });
+    expect((capturedPayload?.thinking as Record<string, unknown>) ?? {}).not.toHaveProperty("keep");
+
     const openAiHooks = OPENAI_RESPONSES_STREAM_HOOKS;
     void requireStreamFn(
       requireWrapStreamFn(openAiHooks.wrapStreamFn)({
@@ -194,7 +240,11 @@ describe("buildProviderStreamFamilyHooks", () => {
       config: { thinkingConfig: { thinkingBudget: -1 } },
       service_tier: "flex",
     });
-    expect(capturedHeaders).toBeDefined();
+    expect(capturedHeaders).toEqual({
+      "User-Agent": `openclaw/${VERSION}`,
+      originator: "openclaw",
+      version: VERSION,
+    });
 
     const openRouterHooks = OPENROUTER_THINKING_STREAM_HOOKS;
     void requireStreamFn(

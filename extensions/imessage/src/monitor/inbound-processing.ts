@@ -8,14 +8,14 @@ import {
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
-import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
-  resolveChannelContextVisibilityMode,
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/channel-policy";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
@@ -31,6 +31,7 @@ import {
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
+import { rememberIMessageReplyCache } from "../monitor-reply-cache.js";
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
@@ -90,28 +91,47 @@ function hasIMessageEchoMatch(params: {
       skipIdShortCircuit?: boolean,
     ) => boolean;
   };
-  scope: string;
+  scope: string | readonly string[];
   text?: string;
   messageIds: string[];
   skipIdShortCircuit?: boolean;
 }): boolean {
-  for (const messageId of params.messageIds) {
-    if (params.echoCache.has(params.scope, { messageId })) {
+  // Outbound sends persist echo scopes keyed by whichever target shape was
+  // used (chat_id, chat_guid, chat_identifier, or imessage:<handle>). Inbound
+  // messages from chat.db typically carry chat_id + chat_guid + chat_identifier
+  // for groups and just sender for DMs, so the same conversation can be
+  // echo-cached under one shape and re-encountered under another. Probe every
+  // candidate scope so a chat_guid-keyed send isn't surfaced back to the agent
+  // as a fresh inbound when chat.db only annotates it with chat_id (or
+  // vice-versa).
+  const scopes = typeof params.scope === "string" ? [params.scope] : params.scope;
+  for (const scope of scopes) {
+    if (!scope) {
+      continue;
+    }
+    for (const messageId of params.messageIds) {
+      if (params.echoCache.has(scope, { messageId })) {
+        return true;
+      }
+    }
+    const fallbackMessageId = params.messageIds[0];
+    if (!params.text && !fallbackMessageId) {
+      continue;
+    }
+    if (
+      params.echoCache.has(
+        scope,
+        { text: params.text, messageId: fallbackMessageId },
+        params.skipIdShortCircuit,
+      )
+    ) {
       return true;
     }
   }
-  const fallbackMessageId = params.messageIds[0];
-  if (!params.text && !fallbackMessageId) {
-    return false;
-  }
-  return params.echoCache.has(
-    params.scope,
-    { text: params.text, messageId: fallbackMessageId },
-    params.skipIdShortCircuit,
-  );
+  return false;
 }
 
-export type IMessageInboundDispatchDecision = {
+type IMessageInboundDispatchDecision = {
   kind: "dispatch";
   isGroup: boolean;
   chatId?: number;
@@ -132,7 +152,7 @@ export type IMessageInboundDispatchDecision = {
   effectiveGroupAllowFrom: string[];
 };
 
-export type IMessageInboundDecision =
+type IMessageInboundDecision =
   | { kind: "drop"; reason: string }
   | { kind: "pairing"; senderId: string }
   | IMessageInboundDispatchDecision;
@@ -237,6 +257,8 @@ export function resolveIMessageInboundDecision(params: {
         accountId: params.accountId,
         isGroup,
         chatId,
+        chatGuid,
+        chatIdentifier,
         sender,
       });
       if (
@@ -350,6 +372,8 @@ export function resolveIMessageInboundDecision(params: {
       accountId: params.accountId,
       isGroup,
       chatId,
+      chatGuid,
+      chatIdentifier,
       sender,
     });
     if (
@@ -550,6 +574,25 @@ export function buildIMessageInboundContext(params: {
   const chatId = decision.chatId;
   const chatTarget =
     decision.isGroup && chatId != null ? formatIMessageChatTarget(chatId) : undefined;
+  const messageGuid = normalizeReplyField(params.message.guid);
+  const rememberedMessage = messageGuid
+    ? rememberIMessageReplyCache({
+        accountId: decision.route.accountId,
+        messageId: messageGuid,
+        chatGuid: decision.chatGuid,
+        chatIdentifier: decision.chatIdentifier,
+        chatId: decision.chatId,
+        timestamp: Date.now(),
+        isFromMe: false,
+      })
+    : null;
+  // Only surface the gateway-allocated shortId — never the raw chat.db
+  // ROWID. Mixing the two namespaces means the agent can call back with a
+  // numeric id that the gateway will treat as a shortId but never issued
+  // (e.g. chat.db rowid 13 with shortIds only allocated 1..10), and the
+  // resolver throws "no longer available". When we have no guid we have
+  // no stable handle to expose, so drop the field rather than leak rowids.
+  const messageSid = rememberedMessage?.shortId || undefined;
 
   const replySuffix = decision.replyContext
     ? `\n\n[Replying to ${decision.replyContext.sender ?? "unknown sender"}${
@@ -629,7 +672,8 @@ export function buildIMessageInboundContext(params: {
     SenderId: decision.sender,
     Provider: "imessage",
     Surface: "imessage",
-    MessageSid: params.message.id ? String(params.message.id) : undefined,
+    MessageSid: messageSid,
+    MessageSidFull: messageGuid,
     ReplyToId: decision.replyContext?.id,
     ReplyToBody: decision.replyContext?.body,
     ReplyToSender: decision.replyContext?.sender,
@@ -653,13 +697,37 @@ export function buildIMessageInboundContext(params: {
   return { ctxPayload, fromLabel, chatTarget, imessageTo, inboundHistory };
 }
 
-export function buildIMessageEchoScope(params: {
+function buildIMessageEchoScope(params: {
   accountId: string;
   isGroup: boolean;
   chatId?: number;
+  chatGuid?: string;
+  chatIdentifier?: string;
   sender: string;
-}): string {
-  return `${params.accountId}:${params.isGroup ? formatIMessageChatTarget(params.chatId) : `imessage:${params.sender}`}`;
+}): string[] {
+  // Mirror every shape resolveOutboundEchoScope can persist (see send.ts).
+  // Inbound messages carry chat_id, chat_guid, and chat_identifier when
+  // available, but the outbound side only writes one of them — whichever
+  // shape the caller used. Returning all candidates lets hasIMessageEchoMatch
+  // cross-check, so a chat_guid-keyed send is suppressed even when chat.db
+  // annotates the inbound row with chat_id+chat_identifier (or any other
+  // permutation).
+  const scopes: string[] = [];
+  if (params.isGroup) {
+    const chatIdScope = formatIMessageChatTarget(params.chatId);
+    if (chatIdScope) {
+      scopes.push(`${params.accountId}:${chatIdScope}`);
+    }
+  } else {
+    scopes.push(`${params.accountId}:imessage:${params.sender}`);
+  }
+  if (params.chatGuid) {
+    scopes.push(`${params.accountId}:chat_guid:${params.chatGuid}`);
+  }
+  if (params.chatIdentifier) {
+    scopes.push(`${params.accountId}:chat_identifier:${params.chatIdentifier}`);
+  }
+  return scopes;
 }
 
 export function describeIMessageEchoDropLog(params: {

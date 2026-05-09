@@ -7,7 +7,7 @@ import type { SidebarContent } from "../sidebar-content.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
-import { isToolResultMessage } from "./message-normalizer.ts";
+import { isToolResultMessage } from "./role-normalizer.ts";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
@@ -47,6 +47,18 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   }
   if (typeof item.content === "string") {
     return item.content;
+  }
+  if (Array.isArray(item.content)) {
+    const parts = item.content.flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+      const text = (entry as { text?: unknown }).text;
+      return typeof text === "string" ? [text] : [];
+    });
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
   }
   return undefined;
 }
@@ -265,7 +277,7 @@ export function renderToolPreview(
   options?: {
     onOpenSidebar?: (content: SidebarContent) => void;
     rawText?: string | null;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
@@ -289,7 +301,7 @@ export function renderToolPreview(
           title: preview.title?.trim() || "Canvas",
           src: resolveCanvasIframeUrl(
             preview.url,
-            options?.canvasHostUrl,
+            options?.canvasPluginSurfaceUrl,
             options?.allowExternalEmbedUrls ?? false,
           ),
           height: preview.preferredHeight,
@@ -303,10 +315,14 @@ export function renderToolPreview(
   `;
 }
 
-export function buildSidebarContent(value: string): SidebarContent {
+export function buildSidebarContent(
+  value: string,
+  options?: { rawText?: string | null },
+): SidebarContent {
   return {
     kind: "markdown",
     content: value,
+    ...(options?.rawText ? { rawText: options.rawText } : {}),
   };
 }
 
@@ -401,7 +417,7 @@ export function renderToolCard(
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
     onOpenSidebar?: (content: SidebarContent) => void;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
@@ -427,7 +443,7 @@ export function renderToolCard(
               ${renderExpandedToolCardContent(
                 card,
                 opts.onOpenSidebar,
-                opts.canvasHostUrl,
+                opts.canvasPluginSurfaceUrl,
                 opts.embedSandboxMode ?? "scripts",
                 opts.allowExternalEmbedUrls ?? false,
               )}
@@ -441,7 +457,7 @@ export function renderToolCard(
 export function renderExpandedToolCardContent(
   card: ToolCard,
   onOpenSidebar?: (content: SidebarContent) => void,
-  canvasHostUrl?: string | null,
+  canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
   allowExternalEmbedUrls = false,
 ) {
@@ -460,7 +476,7 @@ export function renderExpandedToolCardContent(
     ? renderToolPreview(card.preview, "chat_tool", {
         onOpenSidebar,
         rawText: card.outputText,
-        canvasHostUrl,
+        canvasPluginSurfaceUrl,
         embedSandboxMode,
         allowExternalEmbedUrls,
       })
@@ -513,7 +529,7 @@ export function renderExpandedToolCardContent(
 export function renderToolCardSidebar(
   card: ToolCard,
   onOpenSidebar?: (content: SidebarContent) => void,
-  canvasHostUrl?: string | null,
+  canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
@@ -569,7 +585,7 @@ export function renderToolCardSidebar(
         ? html`${renderToolPreview(preview, "chat_tool", {
             onOpenSidebar,
             rawText: card.outputText,
-            canvasHostUrl,
+            canvasPluginSurfaceUrl,
             embedSandboxMode,
           })}`
         : nothing}

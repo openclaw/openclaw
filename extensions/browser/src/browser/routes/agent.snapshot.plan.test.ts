@@ -1,20 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { resolveBrowserConfig, resolveProfile } from "../config.js";
+import type { ResolvedBrowserProfile } from "../config.js";
 import { resolveSnapshotPlan } from "./agent.snapshot.plan.js";
+
+function profile(driver: "existing-session" | "openclaw"): ResolvedBrowserProfile {
+  return {
+    name: driver === "existing-session" ? "user" : "openclaw",
+    driver,
+    cdpPort: driver === "existing-session" ? 0 : 18792,
+    cdpUrl: driver === "existing-session" ? "" : "http://127.0.0.1:18792",
+    cdpHost: "127.0.0.1",
+    cdpIsLoopback: true,
+    color: "#00AA00",
+    headless: false,
+    attachOnly: driver === "existing-session",
+  };
+}
 
 describe("resolveSnapshotPlan", () => {
   it("defaults existing-session snapshots to ai when format is omitted", () => {
-    const resolved = resolveBrowserConfig({
-      profiles: {
-        user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
-      },
-    });
-    const profile = resolveProfile(resolved, "user");
-    expect(profile).toBeTruthy();
-    expect(profile?.driver).toBe("existing-session");
-
     const plan = resolveSnapshotPlan({
-      profile: profile as NonNullable<typeof profile>,
+      profile: profile("existing-session"),
       query: {},
       hasPlaywright: true,
     });
@@ -23,16 +28,23 @@ describe("resolveSnapshotPlan", () => {
   });
 
   it("keeps ai snapshots for managed browsers when Playwright is available", () => {
-    const resolved = resolveBrowserConfig({});
-    const profile = resolveProfile(resolved, "openclaw");
-    expect(profile).toBeTruthy();
-
     const plan = resolveSnapshotPlan({
-      profile: profile as NonNullable<typeof profile>,
+      profile: profile("openclaw"),
       query: {},
       hasPlaywright: true,
     });
 
     expect(plan.format).toBe("ai");
+  });
+
+  it("treats urls as a role snapshot feature", () => {
+    const plan = resolveSnapshotPlan({
+      profile: profile("openclaw"),
+      query: { urls: "1" },
+      hasPlaywright: true,
+    });
+
+    expect(plan.urls).toBe(true);
+    expect(plan.wantsRoleSnapshot).toBe(true);
   });
 });

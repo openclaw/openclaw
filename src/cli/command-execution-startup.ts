@@ -18,6 +18,7 @@ export function resolveCliExecutionStartupContext(params: {
     invocation,
     commandPath,
     startupPolicy: resolveCliStartupPolicy({
+      argv: params.argv,
       commandPath,
       jsonOutputMode: params.jsonOutputMode,
       env: params.env,
@@ -61,6 +62,7 @@ export async function ensureCliExecutionBootstrap(params: {
     suppressDoctorStdout: params.startupPolicy.suppressDoctorStdout,
     allowInvalid: params.allowInvalid,
     loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
+    pluginRegistry: params.startupPolicy.pluginRegistry,
     skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,
   });
 }

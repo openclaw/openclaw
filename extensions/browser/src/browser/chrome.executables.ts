@@ -538,7 +538,7 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
   return findFirstExecutable(candidates);
 }
 
-export function findGoogleChromeExecutableMac(): BrowserExecutable | null {
+function findGoogleChromeExecutableMac(): BrowserExecutable | null {
   return findFirstChromeExecutable([
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
@@ -555,26 +555,31 @@ export function findChromeExecutableLinux(): BrowserExecutable | null {
     { kind: "chrome", path: "/usr/bin/google-chrome" },
     { kind: "chrome", path: "/usr/bin/google-chrome-stable" },
     { kind: "chrome", path: "/usr/bin/chrome" },
+    { kind: "chrome", path: "/opt/google/chrome/chrome" },
     { kind: "brave", path: "/usr/bin/brave-browser" },
     { kind: "brave", path: "/usr/bin/brave-browser-stable" },
     { kind: "brave", path: "/usr/bin/brave" },
     { kind: "brave", path: "/snap/bin/brave" },
+    { kind: "brave", path: "/opt/brave.com/brave/brave-browser" },
     { kind: "edge", path: "/usr/bin/microsoft-edge" },
     { kind: "edge", path: "/usr/bin/microsoft-edge-stable" },
     { kind: "chromium", path: "/usr/bin/chromium" },
     { kind: "chromium", path: "/usr/bin/chromium-browser" },
+    { kind: "chromium", path: "/usr/lib/chromium/chromium" },
+    { kind: "chromium", path: "/usr/lib/chromium-browser/chromium-browser" },
     { kind: "chromium", path: "/snap/bin/chromium" },
   ];
 
   return findFirstExecutable(candidates);
 }
 
-export function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
+function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
   return findFirstChromeExecutable([
     "/usr/bin/google-chrome",
     "/usr/bin/google-chrome-stable",
     "/usr/bin/google-chrome-beta",
     "/usr/bin/google-chrome-unstable",
+    "/opt/google/chrome/chrome",
     "/snap/bin/google-chrome",
   ]);
 }
@@ -649,7 +654,7 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
   return findFirstExecutable(candidates);
 }
 
-export function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
+function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
   const localAppData = process.env.LOCALAPPDATA ?? "";
   const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
   const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";

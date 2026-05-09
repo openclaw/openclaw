@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listEnabledGoogleChatAccounts = vi.hoisted(() => vi.fn());
 const resolveGoogleChatAccount = vi.hoisted(() => vi.fn());
@@ -9,7 +10,6 @@ const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
 const uploadGoogleChatAttachment = vi.hoisted(() => vi.fn());
 const resolveGoogleChatOutboundSpace = vi.hoisted(() => vi.fn());
 const getGoogleChatRuntime = vi.hoisted(() => vi.fn());
-const loadOutboundMediaFromUrl = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
   listEnabledGoogleChatAccounts,
@@ -32,15 +32,6 @@ vi.mock("./targets.js", () => ({
   resolveGoogleChatOutboundSpace,
 }));
 
-vi.mock("../runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
-  return {
-    ...actual,
-    loadOutboundMediaFromUrl: (...args: Parameters<typeof actual.loadOutboundMediaFromUrl>) =>
-      (loadOutboundMediaFromUrl as unknown as typeof actual.loadOutboundMediaFromUrl)(...args),
-  };
-});
-
 let googlechatMessageActions: typeof import("./actions.js").googlechatMessageActions;
 
 describe("googlechat message actions", () => {
@@ -52,7 +43,15 @@ describe("googlechat message actions", () => {
     vi.clearAllMocks();
   });
 
-  it("describes send and reaction actions only when enabled accounts exist", async () => {
+  afterAll(() => {
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./api.js");
+    vi.doUnmock("./runtime.js");
+    vi.doUnmock("./targets.js");
+    vi.resetModules();
+  });
+
+  it("describes send and reaction actions only when enabled accounts exist", () => {
     listEnabledGoogleChatAccounts.mockReturnValueOnce([]);
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
 
@@ -161,11 +160,9 @@ describe("googlechat message actions", () => {
       config: { mediaMaxMb: 5 },
     });
     resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/BBB");
-    loadOutboundMediaFromUrl.mockResolvedValue({
-      buffer: Buffer.from("local-bytes"),
-      fileName: "local.txt",
-      contentType: "text/plain",
-    });
+    const localRoot = "/tmp/googlechat-action-test";
+    const localPath = path.join(localRoot, "local.md");
+    const readFile = vi.fn(async () => Buffer.from("local-bytes"));
     getGoogleChatRuntime.mockReturnValue({
       channel: {
         media: {
@@ -187,23 +184,22 @@ describe("googlechat message actions", () => {
       action: "upload-file",
       params: {
         to: "spaces/BBB",
-        path: "/tmp/local.txt",
+        path: localPath,
         message: "notes",
         filename: "renamed.txt",
       },
       cfg: {},
       accountId: "default",
-      mediaLocalRoots: ["/tmp"],
+      mediaLocalRoots: [localRoot],
+      mediaReadFile: readFile,
     } as never);
 
-    expect(loadOutboundMediaFromUrl).toHaveBeenCalledWith(
-      "/tmp/local.txt",
-      expect.objectContaining({ mediaLocalRoots: ["/tmp"] }),
-    );
+    expect(readFile).toHaveBeenCalledWith(localPath);
     expect(uploadGoogleChatAttachment).toHaveBeenCalledWith(
       expect.objectContaining({
         space: "spaces/BBB",
         filename: "renamed.txt",
+        buffer: Buffer.from("local-bytes"),
       }),
     );
     expect(sendGoogleChatMessage).toHaveBeenCalledWith(

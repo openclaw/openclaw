@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
@@ -85,6 +87,23 @@ describe("before_tool_call loop detection behavior", () => {
     }
   }
 
+  async function withToolExecutionEvents(
+    run: (emitted: DiagnosticEventPayload[], flush: () => Promise<void>) => Promise<void>,
+  ) {
+    const emitted: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((evt) => {
+      if (evt.type.startsWith("tool.execution.")) {
+        emitted.push(evt);
+      }
+    });
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    try {
+      await run(emitted, flush);
+    } finally {
+      stop();
+    }
+  }
+
   function createPingPongTools(options?: { withProgress?: boolean }) {
     const readExecute = options?.withProgress
       ? vi.fn().mockImplementation(async (toolCallId: string) => ({
@@ -162,16 +181,39 @@ describe("before_tool_call loop detection behavior", () => {
     expect(loopEvent?.toolName).toBe(params.toolName);
   }
 
+  function expectToolLoopBlockedResult(result: unknown, expectedReason: string) {
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: expect.stringContaining(expectedReason) }],
+      details: {
+        status: "blocked",
+        deniedReason: "tool-loop",
+        reason: expect.stringContaining(expectedReason),
+      },
+    });
+  }
+
+  async function expectUnblockedToolExecution(
+    tool: ReturnType<typeof createWrappedTool>,
+    toolCallId: string,
+    params: unknown,
+  ) {
+    const result = await tool.execute(toolCallId, params, undefined, undefined);
+    expect(result).toMatchObject({
+      content: expect.any(Array),
+      details: expect.any(Object),
+    });
+    return result;
+  }
+
   it("blocks known poll loops when no progress repeats", async () => {
     const { tool, params } = createNoProgressProcessFixture("sess-1");
 
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-      await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
 
-    await expect(
-      tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
-    ).rejects.toThrow("CRITICAL");
+    const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+    expectToolLoopBlockedResult(result, "CRITICAL");
   });
 
   it("does nothing when loopDetection.enabled is false", async () => {
@@ -185,7 +227,7 @@ describe("before_tool_call loop detection behavior", () => {
     const params = { action: "poll", sessionId: "sess-off" };
 
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-      await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
   });
 
@@ -200,9 +242,7 @@ describe("before_tool_call loop detection behavior", () => {
     const params = { action: "poll", sessionId: "sess-2" };
 
     for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
-      await expect(
-        tool.execute(`poll-progress-${i}`, params, undefined, undefined),
-      ).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `poll-progress-${i}`, params);
     }
   });
 
@@ -210,7 +250,7 @@ describe("before_tool_call loop detection behavior", () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
     for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
-      await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
   });
 
@@ -218,12 +258,38 @@ describe("before_tool_call loop detection behavior", () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
     for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
-      await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
 
-    await expect(
-      tool.execute(`read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`, params, undefined, undefined),
-    ).rejects.toThrow("global circuit breaker");
+    const result = await tool.execute(
+      `read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`,
+      params,
+      undefined,
+      undefined,
+    );
+    expectToolLoopBlockedResult(result, "global circuit breaker");
+  });
+
+  it("does not carry loop history across run ids", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "same output" }],
+      details: { ok: true },
+    });
+    const params = { path: "/tmp/file" };
+    const firstRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      ...enabledLoopDetectionContext,
+      runId: "heartbeat-1",
+    });
+    const secondRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      ...enabledLoopDetectionContext,
+      runId: "heartbeat-2",
+    });
+
+    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+      await expectUnblockedToolExecution(firstRunTool, `old-run-${i}`, params);
+    }
+
+    await expectUnblockedToolExecution(secondRunTool, "new-run-0", params);
   });
 
   it("coalesces repeated generic warning events into threshold buckets", async () => {
@@ -270,14 +336,13 @@ describe("before_tool_call loop detection behavior", () => {
       const { readTool, listTool } = createPingPongTools();
       await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
 
-      await expect(
-        listTool.execute(
-          `list-${CRITICAL_THRESHOLD - 1}`,
-          { dir: "/workspace" },
-          undefined,
-          undefined,
-        ),
-      ).rejects.toThrow("CRITICAL");
+      const result = await listTool.execute(
+        `list-${CRITICAL_THRESHOLD - 1}`,
+        { dir: "/workspace" },
+        undefined,
+        undefined,
+      );
+      expectToolLoopBlockedResult(result, "CRITICAL");
 
       const loopEvent = emitted.at(-1);
       expectCriticalLoopEvent(loopEvent, {
@@ -292,14 +357,9 @@ describe("before_tool_call loop detection behavior", () => {
       const { readTool, listTool } = createPingPongTools({ withProgress: true });
       await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
 
-      await expect(
-        listTool.execute(
-          `list-${CRITICAL_THRESHOLD - 1}`,
-          { dir: "/workspace" },
-          undefined,
-          undefined,
-        ),
-      ).resolves.toBeDefined();
+      await expectUnblockedToolExecution(listTool, `list-${CRITICAL_THRESHOLD - 1}`, {
+        dir: "/workspace",
+      });
 
       const criticalPingPong = emitted.find(
         (evt) => evt.level === "critical" && evt.detector === "ping_pong",
@@ -308,7 +368,12 @@ describe("before_tool_call loop detection behavior", () => {
       const warningPingPong = emitted.find(
         (evt) => evt.level === "warning" && evt.detector === "ping_pong",
       );
-      expect(warningPingPong).toBeTruthy();
+      expect(warningPingPong).toMatchObject({
+        type: "tool.loop",
+        level: "warning",
+        action: "warn",
+        detector: "ping_pong",
+      });
     });
   });
 
@@ -320,14 +385,232 @@ describe("before_tool_call loop detection behavior", () => {
         await tool.execute(`poll-${i}`, params, undefined, undefined);
       }
 
-      await expect(
-        tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
-      ).rejects.toThrow("CRITICAL");
+      const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+      expectToolLoopBlockedResult(result, "CRITICAL");
 
       const loopEvent = emitted.at(-1);
       expectCriticalLoopEvent(loopEvent, {
         detector: "known_poll_no_progress",
         toolName: "process",
+      });
+    });
+  });
+
+  it("emits diagnostic tool execution events without parameter values", async () => {
+    const trace = {
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    };
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "ok" }],
+    });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "bash", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      sessionId: "session-id",
+      runId: "run-1",
+      trace,
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await tool.execute(
+        "tool-call-1",
+        { command: "pwd", token: "sk-1234567890abcdef1234567890abcdef" },
+        undefined,
+        undefined,
+      );
+      await flush();
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "tool.execution.completed",
+      ]);
+      expect(emitted[0]).toMatchObject({
+        type: "tool.execution.started",
+        runId: "run-1",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        toolName: "exec",
+        toolCallId: "tool-call-1",
+        paramsSummary: {
+          kind: "object",
+        },
+        trace: {
+          traceId: trace.traceId,
+          parentSpanId: trace.spanId,
+          spanId: expect.any(String),
+          traceFlags: trace.traceFlags,
+        },
+      });
+      expect(emitted[0]?.trace).not.toBe(trace);
+      expect(Object.isFrozen(emitted[0]?.trace)).toBe(true);
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.completed",
+        durationMs: expect.any(Number),
+      });
+      expect(JSON.stringify(emitted)).not.toContain("sk-1234567890abcdef1234567890abcdef");
+      expect(JSON.stringify(emitted)).not.toContain("pwd");
+    });
+  });
+
+  it("emits diagnostic tool execution error events with redacted errors", async () => {
+    const execute = vi
+      .fn()
+      .mockRejectedValue(new Error("failed with key sk-1234567890abcdef1234567890abcdef"));
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("tool-call-error", { path: "/tmp/file" }, undefined, undefined),
+      ).rejects.toThrow("failed with key");
+      await flush();
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "tool.execution.error",
+      ]);
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.error",
+        toolName: "read",
+        toolCallId: "tool-call-error",
+        durationMs: expect.any(Number),
+        errorCategory: "Error",
+      });
+      expect(JSON.stringify(emitted[1])).not.toContain("sk-1234567890abcdef1234567890abcdef");
+    });
+  });
+
+  it("emits blocked diagnostics without error severity for intentional hook vetoes", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockReason: "blocked by policy",
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "nope" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      const result = await tool.execute("tool-call-blocked", { path: "/tmp/file" });
+      await flush();
+
+      expect(result).toEqual({
+        content: [{ type: "text", text: "blocked by policy" }],
+        details: {
+          status: "blocked",
+          deniedReason: "plugin-before-tool-call",
+          reason: "blocked by policy",
+        },
+      });
+      expect(execute).not.toHaveBeenCalled();
+      expect(emitted.map((evt) => evt.type)).toEqual(["tool.execution.blocked"]);
+      expect(emitted[0]).toMatchObject({
+        type: "tool.execution.blocked",
+        toolName: "read",
+        toolCallId: "tool-call-blocked",
+        deniedReason: "plugin-before-tool-call",
+        reason: "blocked by policy",
+      });
+    });
+  });
+
+  it("does not let hostile thrown values break diagnostic error emission", async () => {
+    const hostileError = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("diagnostic getter should not run");
+        },
+        getOwnPropertyDescriptor() {
+          throw new Error("diagnostic descriptor failed");
+        },
+      },
+    );
+    const execute = vi.fn().mockRejectedValue(hostileError);
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("tool-call-hostile-error", { path: "/tmp/file" }, undefined, undefined),
+      ).rejects.toBe(hostileError);
+      await flush();
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "tool.execution.error",
+      ]);
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.error",
+        toolName: "read",
+        toolCallId: "tool-call-hostile-error",
+        errorCategory: "object",
+      });
+      expect(emitted[1]).not.toHaveProperty("errorCode");
+    });
+  });
+
+  it("emits only numeric HTTP status codes as diagnostic tool error codes", async () => {
+    const error = Object.assign(new Error("rate limited"), {
+      code: "SECRET_TOKEN",
+      status: 429,
+    });
+    const execute = vi.fn().mockRejectedValue(error);
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("tool-call-status-code", { path: "/tmp/file" }, undefined, undefined),
+      ).rejects.toThrow("rate limited");
+      await flush();
+
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.error",
+        errorCode: "429",
+      });
+      expect(JSON.stringify(emitted[1])).not.toContain("SECRET_TOKEN");
+    });
+  });
+
+  it("summarizes hostile object params without enumerating keys", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "bash", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+    const params = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("should not enumerate params");
+        },
+      },
+    );
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await tool.execute("tool-call-proxy", params, undefined, undefined);
+      await flush();
+
+      expect(emitted[0]).toMatchObject({
+        type: "tool.execution.started",
+        paramsSummary: { kind: "object" },
       });
     });
   });
@@ -423,6 +706,39 @@ describe("before_tool_call requireApproval handling", () => {
       "reason",
       "Tool call blocked because before_tool_call hook failed",
     );
+  });
+
+  it("passes diagnostic trace context to before_tool_call hooks", async () => {
+    const trace = {
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    };
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "pwd" },
+      toolCallId: "tool-1",
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-1", trace },
+    });
+
+    expect(result.blocked).toBe(false);
+    const call = hookRunner.runBeforeToolCall.mock.calls[0];
+    expect(call?.[0]).toMatchObject({
+      toolName: "exec",
+      runId: "run-1",
+      toolCallId: "tool-1",
+    });
+    const toolContext = call?.[1] as { trace?: typeof trace } | undefined;
+    expect(toolContext).toMatchObject({
+      toolName: "exec",
+      runId: "run-1",
+      toolCallId: "tool-1",
+      trace,
+    });
+    expect(toolContext?.trace).not.toBe(trace);
+    expect(Object.isFrozen(toolContext?.trace)).toBe(true);
   });
 
   it("calls gateway RPC and unblocks on allow-once", async () => {
@@ -625,7 +941,7 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(removeListenerSpy.mock.calls.some(([type]) => type === "abort")).toBe(true);
+    expect(removeListenerSpy.mock.calls.map(([type]) => type)).toContain("abort");
   });
 
   it("calls onResolution with allow-once on approval", async () => {
@@ -649,6 +965,33 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(onResolution).toHaveBeenCalledWith("allow-once");
+  });
+
+  it("allows allow-always decisions for tool approvals", async () => {
+    const onResolution = vi.fn();
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Needs durable approval",
+        description: "Check this durable approval",
+        onResolution,
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-allow-always", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-allow-always",
+      decision: "allow-always",
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "echo ok" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toEqual({ blocked: false, params: { command: "echo ok" } });
+    expect(onResolution).toHaveBeenCalledWith("allow-always");
   });
 
   it("does not await onResolution before returning approval outcome", async () => {

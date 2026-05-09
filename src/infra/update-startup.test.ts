@@ -66,7 +66,12 @@ describe("update-startup", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
     tempDir = await suiteRootTracker.make("case");
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "NODE_ENV", "VITEST"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_NO_AUTO_UPDATE",
+      "OPENCLAW_STATE_DIR",
+      "NODE_ENV",
+      "VITEST",
+    ]);
     process.env.OPENCLAW_STATE_DIR = tempDir;
 
     process.env.NODE_ENV = "test";
@@ -366,6 +371,30 @@ describe("update-startup", () => {
     expect(runAutoUpdate).toHaveBeenCalledTimes(1);
   });
 
+  it("honors OPENCLAW_NO_AUTO_UPDATE for configured auto-updates", async () => {
+    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
+    process.env.OPENCLAW_NO_AUTO_UPDATE = "1";
+    const log = { info: vi.fn() };
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: createBetaAutoUpdateConfig(),
+      log,
+      isNixMode: false,
+      allowInTests: true,
+      runAutoUpdate,
+    });
+
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "auto-update disabled by OPENCLAW_NO_AUTO_UPDATE",
+      expect.objectContaining({
+        version: "2.0.0-beta.1",
+        tag: "beta",
+      }),
+    );
+  });
+
   it("uses current runtime + entrypoint for default auto-update command execution", async () => {
     mockPackageInstallStatus();
     mockNpmChannelTag("beta", "2.0.0-beta.1");
@@ -407,7 +436,7 @@ describe("update-startup", () => {
     );
   });
 
-  it("scheduleGatewayUpdateCheck returns a cleanup function", async () => {
+  it("scheduleGatewayUpdateCheck returns a cleanup function", () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 
     const stop = scheduleGatewayUpdateCheck({
@@ -415,7 +444,6 @@ describe("update-startup", () => {
       log: { info: vi.fn() },
       isNixMode: false,
     });
-    expect(typeof stop).toBe("function");
     stop();
   });
 });

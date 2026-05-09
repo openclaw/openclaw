@@ -1,9 +1,14 @@
-import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import { Type } from "typebox";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
@@ -24,20 +29,29 @@ import type {
   VideoGenerationResolution,
   VideoGenerationSourceAsset,
 } from "../../video-generation/types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
+import { withMediaGenerationTaskKeepalive } from "./media-generate-background-shared.js";
 import {
   applyVideoGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
+  hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
+  readGenerationTimeoutMs,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
+  resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -63,26 +77,6 @@ const log = createSubsystemLogger("agents/tools/video-generate");
 const MAX_INPUT_IMAGES = 9;
 const MAX_INPUT_VIDEOS = 4;
 const MAX_INPUT_AUDIOS = 3;
-const SUPPORTED_ASPECT_RATIOS = new Set([
-  "1:1",
-  "2:3",
-  "3:2",
-  "3:4",
-  "4:3",
-  "4:5",
-  "5:4",
-  "9:16",
-  "16:9",
-  "21:9",
-  // Provider-specific sentinel: accepted at the tool boundary, then forwarded
-  // to the active provider only if that provider declares "adaptive" in its
-  // capabilities.aspectRatios list. Providers that do not declare it see the
-  // value pushed into `ignoredOverrides` in the normalization layer so the
-  // tool surfaces a user-visible "ignored override" warning rather than
-  // silently dropping the request. Seedance uses this to auto-detect the
-  // ratio from input image dimensions.
-  "adaptive",
-]);
 
 const VideoGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -170,12 +164,13 @@ const VideoGenerateToolSchema = Type.Object({
   aspectRatio: Type.Optional(
     Type.String({
       description:
-        'Optional aspect ratio hint: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, or "adaptive".',
+        'Optional aspect ratio hint such as 1:1, 16:9, 9:16, "adaptive", or a provider-specific value. OpenClaw normalizes or ignores unsupported values per provider.',
     }),
   ),
   resolution: Type.Optional(
     Type.String({
-      description: "Optional resolution hint: 480P, 720P, 768P, or 1080P.",
+      description:
+        "Optional resolution hint such as 480P, 720P, 768P, 1080P, 4K, or a provider-specific value. OpenClaw normalizes or ignores unsupported values per provider.",
     }),
   ),
   durationSeconds: Type.Optional(
@@ -205,18 +200,30 @@ const VideoGenerateToolSchema = Type.Object({
         "keys each provider accepts.",
     }),
   ),
+  timeoutMs: Type.Optional(
+    Type.Number({
+      description: "Optional provider request timeout in milliseconds.",
+      minimum: 1,
+    }),
+  ),
 });
 
 export function resolveVideoGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
-    providers: listRuntimeVideoGenerationProviders({ config: params.cfg }),
+    providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
+}
+
+function hasExplicitVideoGenerationModelConfig(cfg?: OpenClawConfig): boolean {
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.videoGenerationModel));
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
@@ -228,19 +235,15 @@ function resolveAction(args: Record<string, unknown>): "generate" | "list" | "st
 }
 
 function normalizeResolution(raw: string | undefined): VideoGenerationResolution | undefined {
-  const normalized = raw?.trim().toUpperCase();
+  const normalized = raw?.trim();
   if (!normalized) {
     return undefined;
   }
-  if (
-    normalized === "480P" ||
-    normalized === "720P" ||
-    normalized === "768P" ||
-    normalized === "1080P"
-  ) {
-    return normalized;
+  const uppercase = normalized.toUpperCase();
+  if (/^\d+P$/.test(uppercase) || /^\d+K$/.test(uppercase)) {
+    return uppercase;
   }
-  throw new ToolInputError("resolution must be one of 480P, 720P, 768P, or 1080P");
+  return normalized;
 }
 
 function normalizeAspectRatio(raw: string | undefined): string | undefined {
@@ -248,12 +251,7 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  if (SUPPORTED_ASPECT_RATIOS.has(normalized)) {
-    return normalized;
-  }
-  throw new ToolInputError(
-    "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, or adaptive",
-  );
+  return normalized;
 }
 
 /**
@@ -337,6 +335,7 @@ function validateVideoGenerationCapabilities(params: {
   });
   const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
     provider,
+    model: params.model,
     inputImageCount: params.inputImageCount,
     inputVideoCount: params.inputVideoCount,
   });
@@ -419,6 +418,7 @@ async function loadReferenceAssets(params: {
   maxBytes?: number;
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<
   Array<{
     sourceAsset: VideoGenerationSourceAsset;
@@ -434,16 +434,15 @@ async function loadReferenceAssets(params: {
 
   for (const rawInput of params.inputs) {
     const trimmed = rawInput.trim();
-    const inputRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
+    const inputRaw = normalizeMediaReferenceSource(
+      trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed,
+    );
     if (!inputRaw) {
       throw new ToolInputError(`${params.expectedKind} required (empty string in array)`);
     }
-    const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(inputRaw);
-    const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(inputRaw);
-    const isFileUrl = /^file:/i.test(inputRaw);
-    const isHttpUrl = /^https?:\/\//i.test(inputRaw);
-    const isDataUrl = /^data:/i.test(inputRaw);
-    if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
+    const refInfo = classifyMediaReferenceSource(inputRaw);
+    const { isDataUrl, isHttpUrl } = refInfo;
+    if (refInfo.hasUnsupportedScheme) {
       throw new ToolInputError(
         `Unsupported ${params.expectedKind} reference: ${rawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
       );
@@ -510,6 +509,7 @@ async function loadReferenceAssets(params: {
         : await loadWebMedia(resolvedPath ?? resolvedInput, {
             maxBytes: params.maxBytes,
             localRoots,
+            ssrfPolicy: params.ssrfPolicy,
           });
     if (media.kind !== params.expectedKind) {
       throw new ToolInputError(`Unsupported media type: ${media.kind ?? "unknown"}`);
@@ -545,6 +545,10 @@ type ExecutedVideoGeneration = {
   wakeResult: string;
 };
 
+function isGeneratedMediaSizeLimitError(error: unknown): boolean {
+  return error instanceof Error && /^Media exceeds \d+MB limit$/.test(error.message);
+}
+
 async function executeVideoGenerationJob(params: {
   effectiveCfg: OpenClawConfig;
   prompt: string;
@@ -562,6 +566,8 @@ async function executeVideoGenerationJob(params: {
   loadedReferenceAudios: LoadedReferenceAsset[];
   taskHandle?: VideoGenerationTaskHandle | null;
   providerOptions?: Record<string, unknown>;
+  autoProviderFallback?: boolean;
+  timeoutMs?: number;
 }): Promise<ExecutedVideoGeneration> {
   if (params.taskHandle) {
     recordVideoGenerationTaskProgress({
@@ -583,7 +589,9 @@ async function executeVideoGenerationJob(params: {
     inputImages: params.loadedReferenceImages.map((entry) => entry.sourceAsset),
     inputVideos: params.loadedReferenceVideos.map((entry) => entry.sourceAsset),
     inputAudios: params.loadedReferenceAudios.map((entry) => entry.sourceAsset),
+    autoProviderFallback: params.autoProviderFallback,
     providerOptions: params.providerOptions,
+    timeoutMs: params.timeoutMs,
   });
   if (params.taskHandle) {
     recordVideoGenerationTaskProgress({
@@ -612,18 +620,30 @@ async function executeVideoGenerationJob(params: {
     );
   }
 
-  const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(params.effectiveCfg);
-  const savedVideos = await Promise.all(
-    bufferVideos.map((video) =>
-      saveMediaBuffer(
+  const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "video");
+  const savedVideos: Array<Awaited<ReturnType<typeof saveMediaBuffer>>> = [];
+  for (const video of bufferVideos) {
+    try {
+      const saved = await saveMediaBuffer(
         video.buffer,
         video.mimeType,
         "tool-video-generation",
-        configuredMediaMaxBytes,
+        mediaMaxBytes,
         params.filename || video.fileName,
-      ),
-    ),
-  );
+      );
+      savedVideos.push(saved);
+    } catch (error) {
+      if (video.url && isGeneratedMediaSizeLimitError(error)) {
+        urlOnlyVideos.push({
+          url: video.url,
+          mimeType: video.mimeType,
+          fileName: video.fileName,
+        });
+        continue;
+      }
+      throw error;
+    }
+  }
   const totalCount = savedVideos.length + urlOnlyVideos.length;
   const requestedDurationSeconds =
     result.normalization?.durationSeconds?.requested ??
@@ -747,6 +767,7 @@ async function executeVideoGenerationJob(params: {
         ? { watermark: params.watermark }
         : {}),
       ...(params.filename ? { filename: params.filename } : {}),
+      ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
       attempts: result.attempts,
       ...(result.normalization ? { normalization: result.normalization } : {}),
       metadata: result.metadata,
@@ -759,6 +780,7 @@ async function executeVideoGenerationJob(params: {
 export function createVideoGenerateTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
@@ -766,12 +788,17 @@ export function createVideoGenerateTool(options?: {
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: VideoGenerateBackgroundScheduler;
 }): AnyAgentTool | null {
-  const cfg: OpenClawConfig = options?.config ?? loadConfig();
-  const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
-    cfg,
-    agentDir: options?.agentDir,
-  });
-  if (!videoGenerationModelConfig) {
+  const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
+  if (
+    !hasGenerationToolAvailability({
+      cfg,
+      agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
+      modelConfig: cfg.agents?.defaults?.videoGenerationModel,
+      providerKey: "videoGenerationProviders",
+    })
+  ) {
     return null;
   }
 
@@ -795,16 +822,27 @@ export function createVideoGenerateTool(options?: {
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
       const action = resolveAction(args);
-      const effectiveCfg =
-        applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
 
       if (action === "list") {
-        return createVideoGenerateListActionResult(effectiveCfg);
+        return createVideoGenerateListActionResult(cfg);
       }
 
       if (action === "status") {
         return createVideoGenerateStatusActionResult(options?.agentSessionKey);
       }
+
+      const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
+        cfg,
+        agentDir: options?.agentDir,
+        authStore: options?.authProfileStore,
+      });
+      if (!videoGenerationModelConfig) {
+        throw new ToolInputError("No video-generation model configured.");
+      }
+      const explicitModelConfig = hasExplicitVideoGenerationModelConfig(cfg);
+      const effectiveCfg =
+        applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
+      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
 
       const duplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
@@ -825,6 +863,7 @@ export function createVideoGenerateTool(options?: {
       });
       const audio = readBooleanToolParam(args, "audio");
       const watermark = readBooleanToolParam(args, "watermark");
+      const timeoutMs = readGenerationTimeoutMs(args);
       // providerOptions must be a plain object. Arrays are objects in JS, so
       // exclude them explicitly — a bogus call like `providerOptions: ["seed", 42]`
       // would otherwise be cast to `Record<string, unknown>` with numeric-string
@@ -886,6 +925,7 @@ export function createVideoGenerateTool(options?: {
         expectedKind: "image",
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
+        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       // Attach roles to the loaded image assets (positional, by index into images[]).
       for (let i = 0; i < loadedReferenceImages.length; i++) {
@@ -899,6 +939,7 @@ export function createVideoGenerateTool(options?: {
         expectedKind: "video",
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
+        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       for (let i = 0; i < loadedReferenceVideos.length; i++) {
         const role = videoRoles[i];
@@ -911,6 +952,7 @@ export function createVideoGenerateTool(options?: {
         expectedKind: "audio",
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
+        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       for (let i = 0; i < loadedReferenceAudios.length; i++) {
         const role = audioRoles[i];
@@ -943,23 +985,30 @@ export function createVideoGenerateTool(options?: {
       if (shouldDetach) {
         scheduleBackgroundWork(async () => {
           try {
-            const executed = await executeVideoGenerationJob({
-              effectiveCfg,
-              prompt,
-              agentDir: options?.agentDir,
-              model,
-              size,
-              aspectRatio,
-              resolution,
-              durationSeconds,
-              audio,
-              watermark,
-              filename,
-              loadedReferenceImages,
-              loadedReferenceVideos,
-              loadedReferenceAudios,
-              taskHandle,
-              providerOptions,
+            const executed = await withMediaGenerationTaskKeepalive({
+              handle: taskHandle,
+              progressSummary: "Generating video",
+              run: () =>
+                executeVideoGenerationJob({
+                  effectiveCfg,
+                  prompt,
+                  agentDir: options?.agentDir,
+                  model,
+                  size,
+                  aspectRatio,
+                  resolution,
+                  durationSeconds,
+                  audio,
+                  watermark,
+                  filename,
+                  loadedReferenceImages,
+                  loadedReferenceVideos,
+                  loadedReferenceAudios,
+                  taskHandle,
+                  providerOptions,
+                  autoProviderFallback: explicitModelConfig ? false : undefined,
+                  timeoutMs,
+                }),
             });
             completeVideoGenerationTaskRun({
               handle: taskHandle,
@@ -1032,6 +1081,7 @@ export function createVideoGenerateTool(options?: {
             ...(typeof audio === "boolean" ? { audio } : {}),
             ...(typeof watermark === "boolean" ? { watermark } : {}),
             ...(filename ? { filename } : {}),
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
           },
         };
       }
@@ -1054,6 +1104,8 @@ export function createVideoGenerateTool(options?: {
           loadedReferenceAudios,
           taskHandle,
           providerOptions,
+          autoProviderFallback: explicitModelConfig ? false : undefined,
+          timeoutMs,
         });
         completeVideoGenerationTaskRun({
           handle: taskHandle,

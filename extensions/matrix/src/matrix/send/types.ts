@@ -1,9 +1,6 @@
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 import type { CoreConfig } from "../../types.js";
-import {
-  MATRIX_ANNOTATION_RELATION_TYPE,
-  MATRIX_REACTION_EVENT_TYPE,
-  type MatrixReactionEventContent,
-} from "../reaction-common.js";
+import { MATRIX_ANNOTATION_RELATION_TYPE, MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
 import type {
   DimensionalFileInfo,
   EncryptedFile,
@@ -55,7 +52,7 @@ export type MatrixThreadRelation = {
 
 export type MatrixRelation = MatrixReplyRelation | MatrixThreadRelation;
 
-export type MatrixReplyMeta = {
+type MatrixReplyMeta = {
   "m.relates_to"?: MatrixRelation;
 };
 
@@ -79,18 +76,16 @@ export type MatrixMediaContent = MessageEventContent &
 
 export type MatrixOutboundContent = MatrixTextContent | MatrixMediaContent;
 
-export type ReactionEventContent = MatrixReactionEventContent;
-
 export type MatrixSendResult = {
   messageId: string;
   roomId: string;
   primaryMessageId?: string;
-  messageIds?: string[];
+  receipt: MessageReceipt;
 };
 
 export type MatrixSendOpts = {
+  cfg: CoreConfig;
   client?: import("../sdk.js").MatrixClient;
-  cfg?: CoreConfig;
   mediaUrl?: string;
   mediaAccess?: {
     localRoots?: readonly string[];
@@ -102,6 +97,8 @@ export type MatrixSendOpts = {
   replyToId?: string;
   threadId?: string | number | null;
   timeoutMs?: number;
+  /** Additional Matrix event content fields to merge into the first sent event. */
+  extraContent?: MatrixExtraContentFields;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
 };

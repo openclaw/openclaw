@@ -11,7 +11,9 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
 import {
+  buildBlockedToolResult,
   isToolWrappedWithBeforeToolCallHook,
+  isBeforeToolCallBlockedError,
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -38,6 +40,14 @@ type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => u
   : ToolExecuteArgsCurrent;
 type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
 const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
+
+export type ClientToolCallRecorder =
+  | ((toolName: string, params: Record<string, unknown>) => void)
+  | {
+      reserve?: (toolCallId: string, toolName: string) => void;
+      complete: (toolCallId: string, toolName: string, params: Record<string, unknown>) => void;
+      discard?: (toolCallId: string, toolName: string) => void;
+    };
 
 function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
@@ -234,6 +244,12 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               toolCallId,
             });
             if (hookOutcome.blocked) {
+              if (hookOutcome.kind === "veto") {
+                return buildBlockedToolResult({
+                  reason: hookOutcome.reason,
+                  deniedReason: hookOutcome.deniedReason,
+                });
+              }
               throw new Error(hookOutcome.reason);
             }
             executeParams = hookOutcome.params;
@@ -248,12 +264,11 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (signal?.aborted) {
             throw err;
           }
-          const name =
-            err && typeof err === "object" && "name" in err
-              ? String((err as { name?: unknown }).name)
-              : "";
-          if (name === "AbortError") {
-            throw err;
+          if (isBeforeToolCallBlockedError(err)) {
+            logDebug(`tools: ${normalizedName} blocked by before_tool_call: ${err.reason}`);
+            return buildBlockedToolResult({
+              reason: err.reason,
+            });
           }
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
@@ -311,7 +326,7 @@ function coerceParamsRecord(value: unknown): Record<string, unknown> {
 // These tools are intercepted to return a "pending" result instead of executing
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
-  onClientToolCall?: (toolName: string, params: Record<string, unknown>) => void,
+  onClientToolCall?: ClientToolCallRecorder,
   hookContext?: HookContext,
 ): ToolDefinition[] {
   return tools.map((tool) => {
@@ -323,20 +338,44 @@ export function toClientToolDefinitions(
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
-        const outcome = await runBeforeToolCallHook({
-          toolName: func.name,
-          params,
-          toolCallId,
-          ctx: hookContext,
-        });
-        if (outcome.blocked) {
-          throw new Error(outcome.reason);
+        if (onClientToolCall && typeof onClientToolCall !== "function") {
+          onClientToolCall.reserve?.(toolCallId, func.name);
         }
-        const adjustedParams = outcome.params;
-        const paramsRecord = coerceParamsRecord(adjustedParams);
-        // Notify handler that a client tool was called
-        if (onClientToolCall) {
-          onClientToolCall(func.name, paramsRecord);
+        const initialParamsRecord = coerceParamsRecord(params);
+        try {
+          const outcome = await runBeforeToolCallHook({
+            toolName: func.name,
+            params: initialParamsRecord,
+            toolCallId,
+            ctx: hookContext,
+          });
+          if (outcome.blocked) {
+            if (onClientToolCall && typeof onClientToolCall !== "function") {
+              onClientToolCall.discard?.(toolCallId, func.name);
+            }
+            if (outcome.kind === "veto") {
+              return buildBlockedToolResult({
+                reason: outcome.reason,
+                deniedReason: outcome.deniedReason,
+              });
+            }
+            throw new Error(outcome.reason);
+          }
+          const adjustedParams = outcome.params;
+          const paramsRecord = coerceParamsRecord(adjustedParams);
+          // Notify handler that a client tool was called.
+          if (onClientToolCall) {
+            if (typeof onClientToolCall === "function") {
+              onClientToolCall(func.name, paramsRecord);
+            } else {
+              onClientToolCall.complete(toolCallId, func.name, paramsRecord);
+            }
+          }
+        } catch (err) {
+          if (onClientToolCall && typeof onClientToolCall !== "function") {
+            onClientToolCall.discard?.(toolCallId, func.name);
+          }
+          throw err;
         }
         // Return a pending result - the client will execute this tool
         return jsonResult({

@@ -12,19 +12,21 @@ const taskRuntimeInternalMocks = vi.hoisted(() => ({
 
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 
+function resetMusicStatusMocks() {
+  vi.restoreAllMocks();
+  vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+}
+
 describe("createMusicGenerateTool status actions", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-  });
+  beforeEach(resetMusicStatusMocks);
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it("returns active task status instead of starting a duplicate generation", async () => {
+  it("returns active task status instead of starting a duplicate generation", () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
         taskId: "task-active",
@@ -47,7 +49,7 @@ describe("createMusicGenerateTool status actions", () => {
     const result = createMusicGenerateDuplicateGuardResult("agent:main:discord:direct:123");
     const text = (result?.content?.[0] as { text: string } | undefined)?.text ?? "";
 
-    expect(result).not.toBeNull();
+    expect(result?.content).toHaveLength(1);
     expect(text).toContain("Music generation task task-active is already running with google.");
     expect(text).toContain("Do not call music_generate again for this request.");
     expect(result?.details).toMatchObject({
@@ -66,7 +68,7 @@ describe("createMusicGenerateTool status actions", () => {
     });
   });
 
-  it("reports active task status when action=status is requested", async () => {
+  it("reports active task status when action=status is requested", () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
         taskId: "task-active",

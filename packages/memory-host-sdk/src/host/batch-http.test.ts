@@ -1,30 +1,39 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../../../src/infra/retry.js", () => ({
-  retryAsync: vi.fn(async (run: () => Promise<unknown>) => await run()),
-}));
-
 vi.mock("./post-json.js", () => ({
   postJson: vi.fn(),
 }));
 
+type RetryOptions = {
+  attempts: number;
+  minDelayMs: number;
+  maxDelayMs: number;
+  shouldRetry: (err: unknown) => boolean;
+};
+
+function requireRetryOptions(call: unknown[] | undefined): RetryOptions {
+  const options = call?.[1] as RetryOptions | undefined;
+  expect(options).toBeDefined();
+  if (!options) {
+    throw new Error("expected retry options");
+  }
+  return options;
+}
+
 describe("postJsonWithRetry", () => {
-  let retryAsyncMock: ReturnType<
-    typeof vi.mocked<typeof import("../../../../src/infra/retry.js").retryAsync>
-  >;
   let postJsonMock: ReturnType<typeof vi.mocked<typeof import("./post-json.js").postJson>>;
   let postJsonWithRetry: typeof import("./batch-http.js").postJsonWithRetry;
+  let retryAsyncMock: ReturnType<typeof vi.fn>;
 
   beforeAll(async () => {
     ({ postJsonWithRetry } = await import("./batch-http.js"));
-    const retryModule = await import("../../../../src/infra/retry.js");
     const postJsonModule = await import("./post-json.js");
-    retryAsyncMock = vi.mocked(retryModule.retryAsync);
     postJsonMock = vi.mocked(postJsonModule.postJson);
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    retryAsyncMock = vi.fn(async (run: () => Promise<unknown>) => await run());
   });
 
   it("posts JSON and returns parsed response payload", async () => {
@@ -37,6 +46,7 @@ describe("postJsonWithRetry", () => {
       headers: { Authorization: "Bearer test" },
       body: { chunks: ["a", "b"] },
       errorPrefix: "memory batch failed",
+      retryImpl: retryAsyncMock as typeof import("./retry-utils.js").retryAsync,
     });
 
     expect(result).toEqual({ ok: true, ids: [1, 2] });
@@ -50,20 +60,13 @@ describe("postJsonWithRetry", () => {
       }),
     );
 
-    const retryOptions = retryAsyncMock.mock.calls[0]?.[1] as
-      | {
-          attempts: number;
-          minDelayMs: number;
-          maxDelayMs: number;
-          shouldRetry: (err: unknown) => boolean;
-        }
-      | undefined;
-    expect(retryOptions?.attempts).toBe(3);
-    expect(retryOptions?.minDelayMs).toBe(300);
-    expect(retryOptions?.maxDelayMs).toBe(2000);
-    expect(retryOptions?.shouldRetry({ status: 429 })).toBe(true);
-    expect(retryOptions?.shouldRetry({ status: 503 })).toBe(true);
-    expect(retryOptions?.shouldRetry({ status: 400 })).toBe(false);
+    const retryOptions = requireRetryOptions(retryAsyncMock.mock.calls[0]);
+    expect(retryOptions.attempts).toBe(3);
+    expect(retryOptions.minDelayMs).toBe(300);
+    expect(retryOptions.maxDelayMs).toBe(2000);
+    expect(retryOptions.shouldRetry({ status: 429 })).toBe(true);
+    expect(retryOptions.shouldRetry({ status: 503 })).toBe(true);
+    expect(retryOptions.shouldRetry({ status: 400 })).toBe(false);
   });
 
   it("attaches status to non-ok errors", async () => {
@@ -77,6 +80,7 @@ describe("postJsonWithRetry", () => {
         headers: {},
         body: { chunks: [] },
         errorPrefix: "memory batch failed",
+        retryImpl: retryAsyncMock as typeof import("./retry-utils.js").retryAsync,
       }),
     ).rejects.toMatchObject({
       message: expect.stringContaining("memory batch failed: 503 backend down"),

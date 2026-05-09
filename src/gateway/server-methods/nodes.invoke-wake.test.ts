@@ -14,11 +14,14 @@ type MockNodeCommandPolicyParams = {
 };
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   resolveNodeCommandAllowlist: vi.fn<() => Set<string>>(() => new Set()),
   isNodeCommandAllowed: vi.fn<
     (params: MockNodeCommandPolicyParams) => { ok: true } | { ok: false; reason: string }
   >(() => ({ ok: true })),
+  isForegroundRestrictedPluginNodeCommand: vi.fn((command: string) =>
+    command.startsWith("canvas."),
+  ),
   sanitizeNodeInvokeParamsForForwarding: vi.fn(({ rawParams }: { rawParams: unknown }) => ({
     ok: true,
     params: rawParams,
@@ -32,13 +35,14 @@ const mocks = vi.hoisted(() => ({
   shouldClearStoredApnsRegistration: vi.fn(() => false),
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+vi.mock("../../config/io.js", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 vi.mock("../node-command-policy.js", () => ({
   resolveNodeCommandAllowlist: mocks.resolveNodeCommandAllowlist,
   isNodeCommandAllowed: mocks.isNodeCommandAllowed,
+  isForegroundRestrictedPluginNodeCommand: mocks.isForegroundRestrictedPluginNodeCommand,
 }));
 
 vi.mock("../node-invoke-sanitize.js", () => ({
@@ -134,7 +138,7 @@ function mockDirectWakeConfig(nodeId: string, overrides: WakeResultOverrides = {
 }
 
 function mockRelayWakeConfig(nodeId: string, overrides: WakeResultOverrides = {}) {
-  mocks.loadConfig.mockReturnValue({
+  mocks.getRuntimeConfig.mockReturnValue({
     gateway: {
       push: {
         apns: {
@@ -200,6 +204,7 @@ async function invokeNode(params: {
       nodeRegistry: params.nodeRegistry,
       execApprovalManager: undefined,
       logGateway,
+      getRuntimeConfig: () => mocks.getRuntimeConfig(),
     } as never,
     client: null,
     req: { type: "req", id: "req-node-invoke", method: "node.invoke" },
@@ -229,7 +234,7 @@ async function pullPending(nodeId: string, commands?: string[]) {
   await nodeHandlers["node.pending.pull"]({
     params: {},
     respond: respond as never,
-    context: {} as never,
+    context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
     client: createNodeClient(nodeId, commands) as never,
     req: { type: "req", id: "req-node-pending", method: "node.pending.pull" },
     isWebchatConnect: () => false,
@@ -242,7 +247,7 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   await nodeHandlers["node.pending.ack"]({
     params: { ids },
     respond: respond as never,
-    context: {} as never,
+    context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
     client: createNodeClient(nodeId, commands) as never,
     req: { type: "req", id: "req-node-pending-ack", method: "node.pending.ack" },
     isWebchatConnect: () => false,
@@ -250,14 +255,59 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   return respond;
 }
 
+describe("node plugin surface refresh", () => {
+  it("refreshes generic plugin surface capability urls", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const respond = vi.fn();
+    const client = {
+      connect: {
+        client: { id: "node-1", mode: "node" },
+      },
+      pluginSurfaceUrls: {
+        canvas: "http://127.0.0.1:18789/__openclaw__/cap/old-token",
+      },
+      pluginNodeCapabilitySurfaces: {
+        canvas: { surface: "canvas", ttlMs: 100 },
+      },
+    };
+
+    await nodeHandlers["node.pluginSurface.refresh"]({
+      req: { type: "req", id: "r1", method: "node.pluginSurface.refresh", params: {} },
+      params: { surface: "canvas" },
+      client: client as never,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        surface: "canvas",
+        pluginSurfaceUrls: {
+          canvas: expect.stringContaining("/__openclaw__/cap/"),
+        },
+        expiresAtMs: 1_100,
+      },
+      undefined,
+    );
+    expect(client.pluginSurfaceUrls.canvas).not.toContain("old-token");
+  });
+});
+
 describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
-    mocks.loadConfig.mockClear();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockClear();
+    mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveNodeCommandAllowlist.mockClear();
     mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set());
     mocks.isNodeCommandAllowed.mockClear();
     mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
+    mocks.isForegroundRestrictedPluginNodeCommand.mockClear();
+    mocks.isForegroundRestrictedPluginNodeCommand.mockImplementation((command: string) =>
+      command.startsWith("canvas."),
+    );
     mocks.sanitizeNodeInvokeParamsForForwarding.mockClear();
     mocks.sanitizeNodeInvokeParamsForForwarding.mockImplementation(
       ({ rawParams }: { rawParams: unknown }) => ({ ok: true, params: rawParams }),
@@ -404,6 +454,66 @@ describe("node.invoke APNs wake path", () => {
     expect(call?.[1]).toMatchObject({ ok: true, nodeId: "ios-node-reconnect" });
   });
 
+  it("broadcasts canonical Talk capture events for successful PTT node commands", async () => {
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "android-talk-node",
+        commands: ["talk.ptt.start"],
+        capabilities: ["talk"],
+        platform: "android",
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payloadJSON: '{"captureId":"capture-1"}',
+      }),
+    };
+
+    await nodeHandlers["node.invoke"]({
+      params: {
+        nodeId: "android-talk-node",
+        command: "talk.ptt.start",
+        idempotencyKey: "idem-talk-ptt-start",
+      },
+      respond: respond as never,
+      context: {
+        nodeRegistry,
+        execApprovalManager: undefined,
+        logGateway: { info: vi.fn(), warn: vi.fn() },
+        getRuntimeConfig: () => mocks.getRuntimeConfig(),
+        broadcast,
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-talk-ptt", method: "node.invoke" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(broadcast).toHaveBeenCalledWith(
+      "talk.event",
+      expect.objectContaining({
+        nodeId: "android-talk-node",
+        command: "talk.ptt.start",
+        talkEvent: expect.objectContaining({
+          type: "capture.started",
+          sessionId: "node:android-talk-node:talk:capture-1",
+          captureId: "capture-1",
+          seq: expect.any(Number),
+          mode: "stt-tts",
+          transport: "managed-room",
+          brain: "agent-consult",
+          final: false,
+          payload: expect.objectContaining({
+            nodeId: "android-talk-node",
+            command: "talk.ptt.start",
+          }),
+        }),
+      }),
+      { dropIfSlow: true },
+    );
+  });
+
   it("clears stale registrations after an invalid device token wake failure", async () => {
     const registration = directRegistration("ios-node-stale");
     mocks.loadApnsRegistration.mockResolvedValue(registration);
@@ -548,9 +658,16 @@ describe("node.invoke APNs wake path", () => {
 
     const queuedActionId = (pullCall?.[1] as { actions?: Array<{ id?: string }> } | undefined)
       ?.actions?.[0]?.id;
-    expect(queuedActionId).toBeTruthy();
+    expect(queuedActionId).toEqual(
+      expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      ),
+    );
+    if (queuedActionId === undefined) {
+      throw new Error("expected queued action id");
+    }
 
-    const ackRespond = await ackPending("ios-node-queued", [queuedActionId!], ["canvas.navigate"]);
+    const ackRespond = await ackPending("ios-node-queued", [queuedActionId], ["canvas.navigate"]);
     const ackCall = ackRespond.mock.calls[0] as RespondCall | undefined;
     expect(ackCall?.[0]).toBe(true);
     expect(ackCall?.[1]).toMatchObject({

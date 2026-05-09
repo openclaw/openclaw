@@ -23,14 +23,17 @@ import { normalizeUsage } from "./usage.js";
 
 type AnyMessage = Message & { role: string; content: unknown };
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
-export type ReplayModelInfo = { input?: ReadonlyArray<string> };
+type ReplayModelInfo = { input?: ReadonlyArray<string>; api?: string };
 type ReplayableReasoningItem = Extract<InputItem, { type: "reasoning" }>;
 type ReplayableReasoningSignature = {
   type: "reasoning" | `reasoning.${string}`;
   id?: string;
+  content?: unknown;
+  encrypted_content?: string;
+  summary?: unknown;
 };
 type ToolCallReplayId = { callId: string; itemId?: string };
-export type PlannedTurnInput = {
+type PlannedTurnInput = {
   inputItems: InputItem[];
   previousResponseId?: string;
   mode: "incremental_tool_results" | "full_context_initial" | "full_context_restart";
@@ -46,6 +49,14 @@ function toNonEmptyString(value: unknown): string | null {
 
 function supportsImageInput(modelOverride?: ReplayModelInfo): boolean {
   return !Array.isArray(modelOverride?.input) || modelOverride.input.includes("image");
+}
+
+function usesOpenAICompletionsImageParts(modelOverride?: ReplayModelInfo): boolean {
+  return modelOverride?.api === "openai-completions";
+}
+
+function toImageUrlFromBase64(params: { mediaType?: string; data: string }): string {
+  return `data:${params.mediaType ?? "image/jpeg"};base64,${params.data}`;
 }
 
 function contentToText(content: unknown): string {
@@ -77,6 +88,7 @@ function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo)
   }
 
   const includeImages = supportsImageInput(modelOverride);
+  const useImageUrl = usesOpenAICompletionsImageParts(modelOverride);
   const parts: ContentPart[] = [];
   for (const part of content as Array<{
     type?: string;
@@ -98,6 +110,15 @@ function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo)
     }
 
     if (part.type === "image" && typeof part.data === "string") {
+      if (useImageUrl) {
+        parts.push({
+          type: "image_url",
+          image_url: {
+            url: toImageUrlFromBase64({ mediaType: part.mimeType, data: part.data }),
+          },
+        });
+        continue;
+      }
       parts.push({
         type: "input_image",
         source: {
@@ -115,11 +136,24 @@ function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo)
       typeof part.source === "object" &&
       typeof (part.source as { type?: unknown }).type === "string"
     ) {
+      const source = part.source as
+        | { type: "url"; url: string }
+        | { type: "base64"; media_type: string; data: string };
+      if (useImageUrl) {
+        parts.push({
+          type: "image_url",
+          image_url: {
+            url:
+              source.type === "url"
+                ? source.url
+                : toImageUrlFromBase64({ mediaType: source.media_type, data: source.data }),
+          },
+        });
+        continue;
+      }
       parts.push({
         type: "input_image",
-        source: part.source as
-          | { type: "url"; url: string }
-          | { type: "base64"; media_type: string; data: string },
+        source,
       });
     }
   }
@@ -135,26 +169,10 @@ function toReplayableReasoningId(value: unknown): string | null {
   return id && id.startsWith("rs_") ? id : null;
 }
 
-function toReasoningSignature(value: unknown): ReplayableReasoningSignature | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const record = value as { type?: unknown; id?: unknown };
-  if (!isReplayableReasoningType(record.type)) {
-    return null;
-  }
-  const reasoningId = toReplayableReasoningId(record.id);
-  return {
-    type: record.type,
-    ...(reasoningId ? { id: reasoningId } : {}),
-  };
-}
-
-function encodeThinkingSignature(signature: ReplayableReasoningSignature): string {
-  return JSON.stringify(signature);
-}
-
-function parseReasoningItem(value: unknown): ReplayableReasoningItem | null {
+function toReasoningSignature(
+  value: unknown,
+  options?: { requireReplayableId?: boolean },
+): ReplayableReasoningSignature | null {
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -169,14 +187,37 @@ function parseReasoningItem(value: unknown): ReplayableReasoningItem | null {
     return null;
   }
   const reasoningId = toReplayableReasoningId(record.id);
+  if (options?.requireReplayableId && !reasoningId) {
+    return null;
+  }
   return {
-    type: "reasoning",
+    type: record.type,
     ...(reasoningId ? { id: reasoningId } : {}),
-    ...(typeof record.content === "string" ? { content: record.content } : {}),
+    ...(record.content !== undefined ? { content: record.content } : {}),
     ...(typeof record.encrypted_content === "string"
       ? { encrypted_content: record.encrypted_content }
       : {}),
-    ...(typeof record.summary === "string" ? { summary: record.summary } : {}),
+    ...(record.summary !== undefined ? { summary: record.summary } : {}),
+  };
+}
+
+function encodeThinkingSignature(signature: ReplayableReasoningSignature): string {
+  return JSON.stringify(signature);
+}
+
+function parseReasoningItem(value: unknown): ReplayableReasoningItem | null {
+  const signature = toReasoningSignature(value);
+  if (!signature) {
+    return null;
+  }
+  return {
+    type: "reasoning",
+    ...(signature.id ? { id: signature.id } : {}),
+    ...(signature.content !== undefined ? { content: signature.content } : {}),
+    ...(signature.encrypted_content !== undefined
+      ? { encrypted_content: signature.encrypted_content }
+      : {}),
+    ...(signature.summary !== undefined ? { summary: signature.summary } : {}),
   };
 }
 
@@ -185,8 +226,7 @@ function parseThinkingSignature(value: unknown): ReplayableReasoningItem | null 
     return null;
   }
   try {
-    const signature = toReasoningSignature(JSON.parse(value));
-    return signature ? parseReasoningItem(signature) : null;
+    return parseReasoningItem(JSON.parse(value));
   } catch {
     return null;
   }
@@ -240,7 +280,25 @@ function extractResponseReasoningText(item: unknown): string {
   if (summaryText) {
     return summaryText;
   }
-  return normalizeOptionalString(record.content) ?? "";
+  if (typeof record.content === "string") {
+    return normalizeOptionalString(record.content) ?? "";
+  }
+  if (Array.isArray(record.content)) {
+    return record.content
+      .map((part) => {
+        if (typeof part === "string") {
+          return part.trim();
+        }
+        if (!part || typeof part !== "object") {
+          return "";
+        }
+        return normalizeOptionalString((part as { text?: unknown }).text) ?? "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  return "";
 }
 
 export function convertTools(
@@ -441,7 +499,9 @@ export function convertMessagesToInputItems(
     }
     const parts = Array.isArray(m.content) ? contentToOpenAIParts(m.content, modelOverride) : [];
     const textOutput = contentToText(m.content);
-    const imageParts = parts.filter((part) => part.type === "input_image");
+    const imageParts = parts.filter(
+      (part) => part.type === "input_image" || part.type === "image_url",
+    );
     items.push({
       type: "function_call_output",
       call_id: replayId.callId,
@@ -540,21 +600,16 @@ export function buildAssistantMessageFromResponse(
       if (!isReplayableReasoningType(item.type)) {
         continue;
       }
+      const reasoningSignature = toReasoningSignature(item, { requireReplayableId: true });
       const reasoning = extractResponseReasoningText(item);
-      if (!reasoning) {
+      if (!reasoning && !reasoningSignature) {
         continue;
       }
-      const reasoningId = toReplayableReasoningId(item.id);
       content.push({
         type: "thinking",
         thinking: reasoning,
-        ...(reasoningId
-          ? {
-              thinkingSignature: encodeThinkingSignature({
-                id: reasoningId,
-                type: item.type,
-              }),
-            }
+        ...(reasoningSignature
+          ? { thinkingSignature: encodeThinkingSignature(reasoningSignature) }
           : {}),
       } as AssistantMessage["content"][number]);
     }
@@ -593,4 +648,14 @@ export function buildAssistantMessageFromResponse(
   return finalAssistantPhase
     ? ({ ...message, phase: finalAssistantPhase } as AssistantMessageWithPhase)
     : message;
+}
+
+export function convertResponseToInputItems(
+  response: ResponseObject,
+  modelInfo: { api: string; provider: string; id: string; input?: ReadonlyArray<string> },
+): InputItem[] {
+  return convertMessagesToInputItems(
+    [buildAssistantMessageFromResponse(response, modelInfo)] as Message[],
+    modelInfo,
+  );
 }

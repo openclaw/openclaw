@@ -1,3 +1,6 @@
+import path from "node:path";
+import { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
+export { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -6,20 +9,58 @@ import {
   buildProviderRequestDispatcherPolicy,
   normalizeBaseUrl,
   resolveProviderRequestPolicyConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
-import { hasEnvHttpProxyConfigured, matchesNoProxy } from "../infra/net/proxy-env.js";
+import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
-export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
+export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 
+const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
-const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
+
+export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
+  const trimmed = fileName?.trim();
+  const baseName = trimmed ? path.basename(trimmed) : "audio";
+  const lowerMime = mime?.trim().toLowerCase();
+
+  if (/\.aac$/i.test(baseName)) {
+    return `${baseName.slice(0, -4) || "audio"}.m4a`;
+  }
+  if (!path.extname(baseName) && lowerMime === "audio/aac") {
+    return `${baseName || "audio"}.m4a`;
+  }
+  return baseName;
+}
+
+export function buildAudioTranscriptionFormData(params: {
+  buffer: Buffer;
+  fileName?: string;
+  mime?: string;
+  fields?: Record<string, string | number | boolean | undefined>;
+}): FormData {
+  const form = new FormData();
+  const bytes = new Uint8Array(params.buffer);
+  const blob = new Blob([bytes], {
+    type: params.mime ?? "application/octet-stream",
+  });
+  form.append("file", blob, resolveAudioTranscriptionUploadFileName(params.fileName, params.mime));
+  for (const [name, value] of Object.entries(params.fields ?? {})) {
+    const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value);
+    if (text) {
+      form.append(name, text);
+    }
+  }
+  return form;
+}
 
 export type ProviderOperationDeadline = {
   deadlineAtMs?: number;
@@ -75,6 +116,49 @@ export async function waitProviderOperationPollInterval(params: {
     throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
   }
   await new Promise((resolve) => setTimeout(resolve, Math.min(params.pollIntervalMs, remainingMs)));
+}
+
+export async function pollProviderOperationJson<TPayload>(params: {
+  url: string;
+  headers: Headers;
+  deadline: ProviderOperationDeadline;
+  defaultTimeoutMs: number;
+  fetchFn: typeof fetch;
+  maxAttempts: number;
+  pollIntervalMs: number;
+  requestFailedMessage: string;
+  timeoutMessage: string;
+  isComplete: (payload: TPayload) => boolean;
+  getFailureMessage?: (payload: TPayload) => string | undefined;
+}): Promise<TPayload> {
+  for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
+    const response = await fetchWithTimeout(
+      params.url,
+      {
+        method: "GET",
+        headers: params.headers,
+      },
+      resolveProviderOperationTimeoutMs({
+        deadline: params.deadline,
+        defaultTimeoutMs: params.defaultTimeoutMs,
+      }),
+      params.fetchFn,
+    );
+    await assertOkOrThrowHttpError(response, params.requestFailedMessage);
+    const payload = (await response.json()) as TPayload;
+    if (params.isComplete(payload)) {
+      return payload;
+    }
+    const failureMessage = params.getFailureMessage?.(payload);
+    if (failureMessage) {
+      throw new Error(failureMessage);
+    }
+    await waitProviderOperationPollInterval({
+      deadline: params.deadline,
+      pollIntervalMs: params.pollIntervalMs,
+    });
+  }
+  throw new Error(params.timeoutMessage);
 }
 
 function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
@@ -174,29 +258,7 @@ function shouldAutoUpgradeToTrustedEnvProxy(params: {
     return false;
   }
 
-  let protocol: "http" | "https";
-  try {
-    const parsed = new URL(params.url);
-    if (parsed.protocol === "http:") {
-      protocol = "http";
-    } else if (parsed.protocol === "https:") {
-      protocol = "https";
-    } else {
-      return false;
-    }
-  } catch {
-    return false;
-  }
-
-  if (!hasEnvHttpProxyConfigured(protocol)) {
-    return false;
-  }
-
-  if (matchesNoProxy(params.url)) {
-    return false;
-  }
-
-  return true;
+  return shouldUseEnvHttpProxyForUrl(params.url);
 }
 
 export async function fetchWithTimeoutGuarded(
@@ -344,6 +406,36 @@ export async function postJsonRequest(params: {
   );
 }
 
+export async function postMultipartRequest(params: {
+  url: string;
+  headers: Headers;
+  body: BodyInit;
+  timeoutMs?: number;
+  fetchFn: typeof fetch;
+  pinDns?: boolean;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
+  /**
+   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
+   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
+   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+   */
+  mode?: GuardedFetchMode;
+}) {
+  return fetchWithTimeoutGuarded(
+    params.url,
+    {
+      method: "POST",
+      headers: params.headers,
+      body: params.body,
+    },
+    params.timeoutMs,
+    params.fetchFn,
+    resolveGuardedPostRequestOptions(params),
+  );
+}
+
 export async function readErrorResponse(res: Response): Promise<string | undefined> {
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
@@ -398,15 +490,6 @@ export async function readErrorResponse(res: Response): Promise<string | undefin
       // Ignore stream-cancel failures while reporting the original HTTP error.
     }
   }
-}
-
-export async function assertOkOrThrowHttpError(res: Response, label: string): Promise<void> {
-  if (res.ok) {
-    return;
-  }
-  const detail = await readErrorResponse(res);
-  const suffix = detail ? `: ${detail}` : "";
-  throw new Error(`${label} (HTTP ${res.status})${suffix}`);
 }
 
 export function requireTranscriptionText(

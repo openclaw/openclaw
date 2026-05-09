@@ -1,13 +1,14 @@
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   fetchWithTimeout,
+  pollProviderOperationJson,
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
-  waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
@@ -104,13 +105,8 @@ function resolveReferenceAsset(req: VideoGenerationRequest) {
   const mimeType =
     normalizeOptionalString(asset.mimeType) ||
     ((req.inputVideos?.length ?? 0) > 0 ? "video/mp4" : "image/png");
-  const extension = mimeType.includes("video")
-    ? "mp4"
-    : mimeType.includes("jpeg")
-      ? "jpg"
-      : mimeType.includes("webp")
-        ? "webp"
-        : "png";
+  const extension =
+    extensionForMime(mimeType)?.slice(1) ?? (mimeType.startsWith("video/") ? "mp4" : "png");
   const fileName =
     normalizeOptionalString(asset.fileName) ||
     `${(req.inputVideos?.length ?? 0) > 0 ? "reference-video" : "reference-image"}.${extension}`;
@@ -128,29 +124,22 @@ async function pollOpenAIVideo(params: {
     timeoutMs: params.timeoutMs,
     label: `OpenAI video generation task ${params.videoId}`,
   });
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchWithTimeout(
-      `${params.baseUrl}/videos/${params.videoId}`,
-      {
-        method: "GET",
-        headers: params.headers,
-      },
-      resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: DEFAULT_TIMEOUT_MS }),
-      params.fetchFn,
-    );
-    await assertOkOrThrowHttpError(response, "OpenAI video status request failed");
-    const payload = (await response.json()) as OpenAIVideoResponse;
-    if (payload.status === "completed") {
-      return payload;
-    }
-    if (payload.status === "failed") {
-      throw new Error(
-        normalizeOptionalString(payload.error?.message) || "OpenAI video generation failed",
-      );
-    }
-    await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-  }
-  throw new Error(`OpenAI video generation task ${params.videoId} did not finish in time`);
+  return await pollProviderOperationJson<OpenAIVideoResponse>({
+    url: `${params.baseUrl}/videos/${params.videoId}`,
+    headers: params.headers,
+    deadline,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    maxAttempts: MAX_POLL_ATTEMPTS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+    requestFailedMessage: "OpenAI video status request failed",
+    timeoutMessage: `OpenAI video generation task ${params.videoId} did not finish in time`,
+    isComplete: (payload) => payload.status === "completed",
+    getFailureMessage: (payload) =>
+      payload.status === "failed"
+        ? normalizeOptionalString(payload.error?.message) || "OpenAI video generation failed"
+        : undefined,
+  });
 }
 
 async function downloadOpenAIVideo(params: {
@@ -180,13 +169,14 @@ async function downloadOpenAIVideo(params: {
   return {
     buffer: Buffer.from(arrayBuffer),
     mimeType,
-    fileName: `video-1.${mimeType.includes("webm") ? "webm" : "mp4"}`,
+    fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
   };
 }
 
 export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "openai",
+    aliases: ["openai-codex"],
     label: "OpenAI",
     defaultModel: DEFAULT_OPENAI_VIDEO_MODEL,
     models: [DEFAULT_OPENAI_VIDEO_MODEL, "sora-2-pro"],

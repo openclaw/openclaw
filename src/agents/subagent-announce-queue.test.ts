@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { enqueueAnnounce, resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
+import {
+  type AnnounceQueueItem,
+  enqueueAnnounce,
+  resetAnnounceQueuesForTests,
+} from "./subagent-announce-queue.js";
 
 function createRetryingSend() {
   const prompts: string[] = [];
@@ -23,6 +27,14 @@ function createRetryingSend() {
   });
 
   return { send, prompts, waitForSecondAttempt };
+}
+
+function createCollectSendRecorder() {
+  const calls: AnnounceQueueItem[] = [];
+  const send = vi.fn(async (item: AnnounceQueueItem) => {
+    calls.push(item);
+  });
+  return { calls, send };
 }
 
 describe("subagent-announce-queue", () => {
@@ -116,6 +128,207 @@ describe("subagent-announce-queue", () => {
     expect(sender.prompts[1]).toContain("queued item one");
     expect(sender.prompts[1]).toContain("Queued #2");
     expect(sender.prompts[1]).toContain("queued item two");
+  });
+
+  it("splits collect-mode batches when target authorization context changes", async () => {
+    const sender = createCollectSendRecorder();
+    const settings = { mode: "collect", debounceMs: 0 } as const;
+    const origin = { channel: "slack", to: "channel:C123", accountId: "acct-1" };
+
+    enqueueAnnounce({
+      key: "announce:test:collect-auth-split",
+      item: {
+        prompt: "first child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:slack:thread:a",
+        origin,
+      },
+      settings,
+      send: sender.send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:collect-auth-split",
+      item: {
+        prompt: "second child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:slack:thread:b",
+        origin,
+      },
+      settings,
+      send: sender.send,
+    });
+
+    await vi.waitFor(() => {
+      expect(sender.send).toHaveBeenCalledTimes(2);
+    });
+    expect(sender.calls.map((call) => call.sessionKey)).toEqual([
+      "agent:main:slack:thread:a",
+      "agent:main:slack:thread:b",
+    ]);
+    expect(sender.calls[0]?.prompt).toContain("first child completed");
+    expect(sender.calls[0]?.prompt).not.toContain("second child completed");
+    expect(sender.calls[1]?.prompt).toContain("second child completed");
+  });
+
+  it("keeps one collect-mode batch when target authorization context matches", async () => {
+    const sender = createCollectSendRecorder();
+    const settings = { mode: "collect", debounceMs: 0 } as const;
+    const origin = { channel: "slack", to: "channel:C123", accountId: "acct-1" };
+
+    enqueueAnnounce({
+      key: "announce:test:collect-auth-match",
+      item: {
+        prompt: "first child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:slack:thread:a",
+        origin,
+      },
+      settings,
+      send: sender.send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:collect-auth-match",
+      item: {
+        prompt: "second child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:slack:thread:a",
+        origin,
+      },
+      settings,
+      send: sender.send,
+    });
+
+    await vi.waitFor(() => {
+      expect(sender.send).toHaveBeenCalledTimes(1);
+    });
+    expect(sender.calls[0]?.sessionKey).toBe("agent:main:slack:thread:a");
+    expect(sender.calls[0]?.prompt).toContain("first child completed");
+    expect(sender.calls[0]?.prompt).toContain("second child completed");
+  });
+
+  it("waits until a busy parent session becomes idle before draining", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+    let parentBusy = true;
+    const send = vi.fn(async (_item: AnnounceQueueItem) => {});
+
+    enqueueAnnounce({
+      key: "announce:test:busy-parent",
+      item: {
+        prompt: "child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0 },
+      send,
+      shouldDefer: () => parentBusy,
+    });
+
+    await vi.advanceTimersByTimeAsync(249);
+    expect(send).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(send).not.toHaveBeenCalled();
+
+    parentBusy = false;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[0]?.prompt).toBe("child completed");
+  });
+
+  it("preserves an existing defer hook when the same queue is reused without one", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+    let parentBusy = true;
+    const send = vi.fn(async (_item: AnnounceQueueItem) => {});
+
+    enqueueAnnounce({
+      key: "announce:test:reuse-keeps-defer",
+      item: {
+        prompt: "first child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0 },
+      send,
+      shouldDefer: () => parentBusy,
+    });
+
+    enqueueAnnounce({
+      key: "announce:test:reuse-keeps-defer",
+      item: {
+        prompt: "second child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0 },
+      send,
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(send).not.toHaveBeenCalled();
+
+    parentBusy = false;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("polls deferred items at the configured cadence after the first debounce", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+    let parentBusy = true;
+    const send = vi.fn(async (_item: AnnounceQueueItem) => {});
+
+    enqueueAnnounce({
+      key: "announce:test:defer-cadence",
+      item: {
+        prompt: "child completed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 1_000 },
+      send,
+      shouldDefer: () => parentBusy,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(send).not.toHaveBeenCalled();
+
+    parentBusy = false;
+    await vi.advanceTimersByTimeAsync(999);
+    expect(send).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to delivery when busy-parent deferral exceeds the safety cap", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+    const send = vi.fn(async (_item: AnnounceQueueItem) => {});
+
+    enqueueAnnounce({
+      key: "announce:test:busy-parent-timeout",
+      item: {
+        prompt: "child completed after stale busy state",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0 },
+      send,
+      shouldDefer: () => true,
+    });
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(send).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[0]?.prompt).toBe("child completed after stale busy state");
   });
 
   it("uses debounce floor for retries when debounce exceeds backoff", async () => {

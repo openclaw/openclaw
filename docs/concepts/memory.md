@@ -1,26 +1,24 @@
 ---
-title: "Memory Overview"
 summary: "How OpenClaw remembers things across sessions"
+title: "Memory overview"
 read_when:
   - You want to understand how memory works
   - You want to know what memory files to write
 ---
 
-# Memory Overview
-
 OpenClaw remembers things by writing **plain Markdown files** in your agent's
-workspace. The model only "remembers" what gets saved to disk -- there is no
+workspace. The model only "remembers" what gets saved to disk — there is no
 hidden state.
 
 ## How it works
 
 Your agent has three memory-related files:
 
-- **`MEMORY.md`** -- long-term memory. Durable facts, preferences, and
+- **`MEMORY.md`** — long-term memory. Durable facts, preferences, and
   decisions. Loaded at the start of every DM session.
-- **`memory/YYYY-MM-DD.md`** -- daily notes. Running context and observations.
+- **`memory/YYYY-MM-DD.md`** — daily notes. Running context and observations.
   Today and yesterday's notes are loaded automatically.
-- **`DREAMS.md`** (optional) -- Dream Diary and dreaming sweep
+- **`DREAMS.md`** (optional) — Dream Diary and dreaming sweep
   summaries for human review, including grounded historical backfill entries.
 
 These files live in the agent workspace (default `~/.openclaw/workspace`).
@@ -30,13 +28,24 @@ If you want your agent to remember something, just ask it: "Remember that I
 prefer TypeScript." It will write it to the appropriate file.
 </Tip>
 
+## Inferred commitments
+
+Some future follow-ups are not durable facts. If you mention an interview
+tomorrow, the useful memory may be "check in after the interview," not "store
+this forever in `MEMORY.md`."
+
+[Commitments](/concepts/commitments) are opt-in, short-lived follow-up memories
+for that case. OpenClaw infers them in a hidden background pass, scopes them to
+the same agent and channel, and delivers due check-ins through heartbeat.
+Explicit reminders still use [scheduled tasks](/automation/cron-jobs).
+
 ## Memory tools
 
 The agent has two tools for working with memory:
 
-- **`memory_search`** -- finds relevant notes using semantic search, even when
+- **`memory_search`** — finds relevant notes using semantic search, even when
   the wording differs from the original.
-- **`memory_get`** -- reads a specific memory file or line range.
+- **`memory_get`** — reads a specific memory file or line range.
 
 Both tools are provided by the active memory plugin (default: `memory-core`).
 
@@ -63,7 +72,7 @@ See [Memory Wiki](/plugins/memory-wiki).
 ## Memory search
 
 When an embedding provider is configured, `memory_search` uses **hybrid
-search** -- combining vector similarity (semantic meaning) with keyword matching
+search** — combining vector similarity (semantic meaning) with keyword matching
 (exact terms like IDs and code symbols). This works out of the box once you have
 an API key for any supported provider.
 
@@ -91,6 +100,10 @@ directories outside the workspace.
 AI-native cross-session memory with user modeling, semantic search, and
 multi-agent awareness. Plugin install.
 </Card>
+<Card title="LanceDB" icon="layers" href="/plugins/memory-lancedb">
+Bundled LanceDB-backed memory with OpenAI-compatible embeddings, auto-recall,
+auto-capture, and local Ollama embedding support.
+</Card>
 </CardGroup>
 
 ## Knowledge wiki layer
@@ -106,7 +119,27 @@ dashboards, bridge mode, and Obsidian-friendly workflows.
 
 Before [compaction](/concepts/compaction) summarizes your conversation, OpenClaw
 runs a silent turn that reminds the agent to save important context to memory
-files. This is on by default -- you do not need to configure anything.
+files. This is on by default — you do not need to configure anything.
+
+To keep that housekeeping turn on a local model, set an exact memory-flush model
+override:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "memoryFlush": {
+          "model": "ollama/qwen3:8b"
+        }
+      }
+    }
+  }
+}
+```
+
+The override applies only to the memory-flush turn and does not inherit the
+active session fallback chain.
 
 <Tip>
 The memory flush prevents context loss during compaction. If your agent has
@@ -178,13 +211,21 @@ openclaw memory index --force   # Rebuild the index
 
 ## Further reading
 
-- [Builtin Memory Engine](/concepts/memory-builtin) -- default SQLite backend
-- [QMD Memory Engine](/concepts/memory-qmd) -- advanced local-first sidecar
-- [Honcho Memory](/concepts/memory-honcho) -- AI-native cross-session memory
-- [Memory Wiki](/plugins/memory-wiki) -- compiled knowledge vault and wiki-native tools
-- [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
-  tuning
-- [Dreaming](/concepts/dreaming) -- background promotion
-  from short-term recall to long-term memory
-- [Memory configuration reference](/reference/memory-config) -- all config knobs
-- [Compaction](/concepts/compaction) -- how compaction interacts with memory
+- [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.
+- [QMD memory engine](/concepts/memory-qmd): advanced local-first sidecar.
+- [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.
+- [Memory LanceDB](/plugins/memory-lancedb): LanceDB-backed plugin with OpenAI-compatible embeddings.
+- [Memory Wiki](/plugins/memory-wiki): compiled knowledge vault and wiki-native tools.
+- [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
+- [Dreaming](/concepts/dreaming): background promotion from short-term recall to long-term memory.
+- [Memory configuration reference](/reference/memory-config): all config knobs.
+- [Compaction](/concepts/compaction): how compaction interacts with memory.
+
+## Related
+
+- [Active memory](/concepts/active-memory)
+- [Memory search](/concepts/memory-search)
+- [Builtin memory engine](/concepts/memory-builtin)
+- [Honcho memory](/concepts/memory-honcho)
+- [Memory LanceDB](/plugins/memory-lancedb)
+- [Commitments](/concepts/commitments)

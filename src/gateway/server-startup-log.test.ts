@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { logGatewayStartup } from "./server-startup-log.js";
+import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";
 
 describe("gateway startup log", () => {
   afterEach(() => {
@@ -49,7 +49,101 @@ describe("gateway startup log", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("logs a compact ready line with loaded plugin ids and duration", () => {
+  it("logs configured model thinking and fast mode defaults with the startup model", () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    logGatewayStartup({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.5",
+            models: {
+              "openai-codex/gpt-5.5": {
+                params: {
+                  fastMode: true,
+                  thinking: "medium",
+                },
+              },
+            },
+            reasoningDefault: "stream",
+          },
+        },
+      },
+      bindHost: "127.0.0.1",
+      loadedPluginIds: [],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    expect(info).toHaveBeenCalledWith(
+      "agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining(
+          "agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)",
+        ),
+      }),
+    );
+  });
+
+  it("defaults unset startup thinking to medium", () => {
+    expect(
+      formatAgentModelStartupDetails({
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai-codex/gpt-5.5",
+            },
+            list: [{ id: "main", default: true, fastModeDefault: true }],
+          },
+        },
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      }),
+    ).toBe("thinking=medium, fast=on");
+  });
+
+  it("preserves explicit startup thinking off", () => {
+    expect(
+      formatAgentModelStartupDetails({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai-codex/gpt-5.5": { params: { thinking: "off", fastMode: true } },
+              },
+            },
+          },
+        },
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      }),
+    ).toBe("thinking=off, fast=on");
+  });
+
+  it("uses default agent mode overrides in the startup model details", () => {
+    expect(
+      formatAgentModelStartupDetails({
+        cfg: {
+          agents: {
+            defaults: {
+              thinkingDefault: "low",
+              reasoningDefault: "off",
+              models: {
+                "openai/gpt-5.5": { params: { fastMode: false } },
+              },
+            },
+            list: [{ id: "alpha", default: true, thinkingDefault: "high", fastModeDefault: true }],
+          },
+        },
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+    ).toBe("thinking=high, fast=on");
+  });
+
+  it("logs a compact listening line with loaded plugin ids and duration", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-03T10:00:16.000Z"));
 
@@ -67,9 +161,11 @@ describe("gateway startup log", () => {
       isNixMode: false,
     });
 
-    const readyMessages = info.mock.calls
+    const listeningMessages = info.mock.calls
       .map((call) => call[0])
-      .filter((message) => message.startsWith("ready ("));
-    expect(readyMessages).toEqual(["ready (3 plugins: alpha, beta, delta; 16.0s)"]);
+      .filter((message) => message.startsWith("http server listening ("));
+    expect(listeningMessages).toEqual([
+      "http server listening (3 plugins: alpha, beta, delta; 16.0s)",
+    ]);
   });
 });

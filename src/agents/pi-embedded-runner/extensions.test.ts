@@ -12,6 +12,10 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
+vi.mock("../../plugins/provider-hook-runtime.js", () => ({
+  resolveProviderRuntimePlugin: () => undefined,
+}));
+
 function buildSafeguardFactories(cfg: OpenClawConfig) {
   const sessionManager = {} as SessionManager;
   const model = {
@@ -41,12 +45,30 @@ function expectSafeguardRuntime(
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
-  it("does not opt safeguard mode into quality-guard retries", () => {
+  it("enables quality-guard retries by default in safeguard mode", () => {
     const cfg = {
       agents: {
         defaults: {
           compaction: {
             mode: "safeguard",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expectSafeguardRuntime(cfg, {
+      qualityGuardEnabled: true,
+    });
+  });
+
+  it("honors explicit safeguard quality-guard disablement", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            qualityGuard: {
+              enabled: false,
+            },
           },
         },
       },

@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getSessionBindingService, __testing } from "openclaw/plugin-sdk/conversation-runtime";
+import { getSessionBindingService, __testing } from "openclaw/plugin-sdk/session-binding-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
@@ -74,6 +74,7 @@ describe("matrix thread bindings", () => {
     } = {},
   ) {
     return createMatrixThreadBindingManager({
+      cfg: {},
       accountId,
       auth: params.auth ?? auth,
       client: matrixClient,
@@ -142,18 +143,16 @@ describe("matrix thread bindings", () => {
       parentConversationId?: string;
     },
   ) {
-    await vi.waitFor(async () => {
-      const persistedRaw = await fs.readFile(bindingsPath, "utf-8");
-      expect(JSON.parse(persistedRaw)).toMatchObject({
-        version: 1,
-        bindings: [
-          expect.objectContaining({
-            conversationId: expected.conversationId,
-            parentConversationId: expected.parentConversationId ?? "!room:example",
-            targetSessionKey: expected.targetSessionKey,
-          }),
-        ],
-      });
+    const persistedRaw = await fs.readFile(bindingsPath, "utf-8");
+    expect(JSON.parse(persistedRaw)).toMatchObject({
+      version: 1,
+      bindings: [
+        expect.objectContaining({
+          conversationId: expected.conversationId,
+          parentConversationId: expected.parentConversationId ?? "!room:example",
+          targetSessionKey: expected.targetSessionKey,
+        }),
+      ],
     });
   }
 
@@ -172,6 +171,7 @@ describe("matrix thread bindings", () => {
 
   it("creates child Matrix thread bindings from a top-level room context", async () => {
     await createMatrixThreadBindingManager({
+      cfg: {},
       accountId,
       auth,
       client: matrixClient,
@@ -195,6 +195,7 @@ describe("matrix thread bindings", () => {
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", "intro root", {
+      cfg: {},
       client: {},
       accountId: "ops",
     });
@@ -216,6 +217,7 @@ describe("matrix thread bindings", () => {
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", "intro thread", {
+      cfg: {},
       client: {},
       accountId: "ops",
       threadId: "$thread",
@@ -238,6 +240,7 @@ describe("matrix thread bindings", () => {
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     try {
       await createMatrixThreadBindingManager({
+        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,
@@ -282,6 +285,7 @@ describe("matrix thread bindings", () => {
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     try {
       await createMatrixThreadBindingManager({
+        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,
@@ -313,15 +317,25 @@ describe("matrix thread bindings", () => {
       });
 
       await vi.advanceTimersByTimeAsync(61_000);
-      await Promise.resolve();
 
-      await vi.waitFor(async () => {
-        const persistedRaw = await fs.readFile(resolveBindingsFilePath(), "utf-8");
-        expect(JSON.parse(persistedRaw)).toMatchObject({
-          version: 1,
-          bindings: [],
-        });
-      });
+      await vi.waitFor(
+        () => expect(sendMessageMatrixMock.mock.calls.length).toBeGreaterThanOrEqual(2),
+        {
+          interval: 1,
+          timeout: 1_000,
+        },
+      );
+
+      await vi.waitFor(
+        async () => {
+          const persistedRaw = await fs.readFile(resolveBindingsFilePath(), "utf-8");
+          expect(JSON.parse(persistedRaw)).toMatchObject({
+            version: 1,
+            bindings: [],
+          });
+        },
+        { interval: 1, timeout: 100 },
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -333,6 +347,7 @@ describe("matrix thread bindings", () => {
     const logVerboseMessage = vi.fn();
     try {
       await createMatrixThreadBindingManager({
+        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,
@@ -355,23 +370,22 @@ describe("matrix thread bindings", () => {
 
       renameMock.mockRejectedValueOnce(new Error("disk full"));
       await vi.advanceTimersByTimeAsync(61_000);
-      await Promise.resolve();
 
-      await vi.waitFor(() => {
-        expect(
-          logVerboseMessage.mock.calls.some(
-            ([message]) =>
-              typeof message === "string" &&
-              message.includes("failed auto-unbinding expired bindings"),
-          ),
-        ).toBe(true);
-      });
-
-      await vi.waitFor(() => {
-        expect(logVerboseMessage).toHaveBeenCalledWith(
-          expect.stringContaining("matrix: auto-unbinding $thread due to idle-expired"),
-        );
-      });
+      await vi.waitFor(
+        () => {
+          expect(
+            logVerboseMessage.mock.calls.some(
+              ([message]) =>
+                typeof message === "string" &&
+                message.includes("failed auto-unbinding expired bindings"),
+            ),
+          ).toBe(true);
+          expect(logVerboseMessage).toHaveBeenCalledWith(
+            expect.stringContaining("matrix: auto-unbinding $thread due to idle-expired"),
+          );
+        },
+        { interval: 1, timeout: 100 },
+      );
 
       expect(
         getSessionBindingService().resolveByConversation({
@@ -388,6 +402,7 @@ describe("matrix thread bindings", () => {
 
   it("sends threaded farewell messages when bindings are unbound", async () => {
     await createMatrixThreadBindingManager({
+      cfg: {},
       accountId: "ops",
       auth,
       client: {} as never,
@@ -421,6 +436,7 @@ describe("matrix thread bindings", () => {
       "room:!room:example",
       expect.stringContaining("Session ended automatically"),
       expect.objectContaining({
+        cfg: {},
         accountId: "ops",
         threadId: "$thread",
       }),
@@ -570,6 +586,7 @@ describe("matrix thread bindings", () => {
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
       const manager = await createMatrixThreadBindingManager({
+        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,
@@ -590,7 +607,9 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
       const original = manager.listBySessionKey("agent:ops:subagent:child")[0];
-      expect(original).toBeDefined();
+      if (original === undefined) {
+        throw new Error("expected original matrix thread binding");
+      }
 
       const idleUpdated = setMatrixThreadBindingIdleTimeoutBySessionKey({
         accountId: "ops",
@@ -608,7 +627,7 @@ describe("matrix thread bindings", () => {
       expect(idleUpdated[0]?.metadata?.idleTimeoutMs).toBe(2 * 60 * 60 * 1000);
       expect(maxAgeUpdated).toHaveLength(1);
       expect(maxAgeUpdated[0]?.metadata?.maxAgeMs).toBe(6 * 60 * 60 * 1000);
-      expect(maxAgeUpdated[0]?.boundAt).toBe(original?.boundAt);
+      expect(maxAgeUpdated[0]?.boundAt).toBe(original.boundAt);
       expect(maxAgeUpdated[0]?.metadata?.lastActivityAt).toBe(
         Date.parse("2026-03-06T12:00:00.000Z"),
       );
@@ -642,9 +661,12 @@ describe("matrix thread bindings", () => {
       expect(await readPersistedLastActivityAt(bindingsPath)).toBe(originalLastActivityAt);
 
       await vi.advanceTimersByTimeAsync(1_000);
-      await vi.waitFor(async () => {
-        expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
-      });
+      await vi.waitFor(
+        async () => {
+          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
+        },
+        { interval: 1, timeout: 100 },
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -663,9 +685,12 @@ describe("matrix thread bindings", () => {
       vi.useRealTimers();
 
       const bindingsPath = resolveBindingsFilePath();
-      await vi.waitFor(async () => {
-        expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
-      });
+      await vi.waitFor(
+        async () => {
+          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
+        },
+        { interval: 1, timeout: 1_000 },
+      );
     } finally {
       vi.useRealTimers();
     }

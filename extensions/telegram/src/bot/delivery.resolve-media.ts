@@ -1,6 +1,6 @@
 import path from "node:path";
 import { GrammyError } from "grammy";
-import { readFileWithinRoot } from "openclaw/plugin-sdk/infra-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type { TelegramTransport } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import {
@@ -151,6 +151,9 @@ function resolveRequiredTelegramTransport(transport?: TelegramTransport): Telegr
   return {
     fetch: resolvedFetch,
     sourceFetch: resolvedFetch,
+    // Caller-owned transport constructed from the globalThis fetch — it owns
+    // no dispatcher lifecycle of its own, so close() is a no-op.
+    close: async () => {},
   };
 }
 
@@ -200,9 +203,8 @@ async function downloadAndSaveTelegramFile(params: {
   if (trustedLocalFile) {
     let localFile;
     try {
-      localFile = await readFileWithinRoot({
-        rootDir: trustedLocalFile.rootDir,
-        relativePath: trustedLocalFile.relativePath,
+      const root = await fsRoot(trustedLocalFile.rootDir);
+      localFile = await root.read(trustedLocalFile.relativePath, {
         maxBytes: params.maxBytes,
       });
     } catch (err) {

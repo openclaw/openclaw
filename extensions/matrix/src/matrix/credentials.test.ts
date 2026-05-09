@@ -21,6 +21,20 @@ const DEFAULT_LEGACY_CREDENTIALS = {
   createdAt: "2026-03-01T10:00:00.000Z",
 };
 
+const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
+
+type MatrixCredentials = NonNullable<ReturnType<typeof loadMatrixCredentials>>;
+
+function expectMatrixCredentials(
+  credentials: ReturnType<typeof loadMatrixCredentials>,
+): MatrixCredentials {
+  expect(credentials).toEqual(expect.objectContaining({ createdAt: expect.any(String) }));
+  if (credentials === null) {
+    throw new Error("Expected Matrix credentials");
+  }
+  return credentials;
+}
+
 describe("matrix credentials storage", () => {
   const tempDirs: string[] = [];
 
@@ -74,7 +88,9 @@ describe("matrix credentials storage", () => {
     expect(fs.existsSync(credPath)).toBe(true);
     expect(credPath).toBe(path.join(stateDir, "credentials", "matrix", "credentials-ops.json"));
     const mode = fs.statSync(credPath).mode & 0o777;
-    expect(mode).toBe(0o600);
+    if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
+      expect(mode).toBe(0o600);
+    }
   });
 
   it("touch updates lastUsedAt while preserving createdAt", async () => {
@@ -92,15 +108,15 @@ describe("matrix credentials storage", () => {
         "default",
       );
       const initial = loadMatrixCredentials({}, "default");
-      expect(initial).not.toBeNull();
+      const initialCredentials = expectMatrixCredentials(initial);
 
       vi.setSystemTime(new Date("2026-03-01T10:05:00.000Z"));
       await touchMatrixCredentials({}, "default");
       const touched = loadMatrixCredentials({}, "default");
-      expect(touched).not.toBeNull();
+      const touchedCredentials = expectMatrixCredentials(touched);
 
-      expect(touched?.createdAt).toBe(initial?.createdAt);
-      expect(touched?.lastUsedAt).toBe("2026-03-01T10:05:00.000Z");
+      expect(touchedCredentials.createdAt).toBe(initialCredentials.createdAt);
+      expect(touchedCredentials.lastUsedAt).toBe("2026-03-01T10:05:00.000Z");
     } finally {
       vi.useRealTimers();
     }
@@ -182,13 +198,17 @@ describe("matrix credentials storage", () => {
     );
 
     let releaseFirstWrite: (() => void) | undefined;
-    let firstWriteStarted = false;
+    let resolveFirstWriteStarted: (() => void) | undefined;
+    const firstWriteStarted = new Promise<void>((resolve) => {
+      resolveFirstWriteStarted = resolve;
+    });
     const originalRename = fsPromises.rename.bind(fsPromises);
     const renameSpy = vi
       .spyOn(fsPromises, "rename")
       .mockImplementation(async (...args: Parameters<typeof fsPromises.rename>) => {
-        if (!firstWriteStarted) {
-          firstWriteStarted = true;
+        if (resolveFirstWriteStarted) {
+          resolveFirstWriteStarted();
+          resolveFirstWriteStarted = undefined;
           await new Promise<void>((resolve) => {
             releaseFirstWrite = resolve;
           });
@@ -208,9 +228,7 @@ describe("matrix credentials storage", () => {
         "default",
       );
 
-      await vi.waitFor(() => {
-        expect(firstWriteStarted).toBe(true);
-      });
+      await firstWriteStarted;
 
       const newerSavePromise = saveMatrixCredentials(
         {
@@ -235,7 +253,7 @@ describe("matrix credentials storage", () => {
     }
   });
 
-  it("migrates legacy matrix credential files on read", async () => {
+  it("migrates legacy matrix credential files on read", () => {
     const { legacyPath, currentPath } = setupLegacyCredentialsFile({
       cfg: {
         channels: {

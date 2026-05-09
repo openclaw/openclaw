@@ -3,7 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 
 export const MAX_CONCEPT_TAGS = 8;
 
-export type ConceptTagScriptFamily = "latin" | "cjk" | "mixed" | "other";
+type ConceptTagScriptFamily = "latin" | "cjk" | "mixed" | "other";
 
 export type ConceptTagScriptCoverage = {
   latinEntryCount: number;
@@ -19,6 +19,7 @@ const LANGUAGE_STOP_WORDS = {
     "agent",
     "again",
     "also",
+    "assistant",
     "because",
     "before",
     "being",
@@ -64,6 +65,8 @@ const LANGUAGE_STOP_WORDS = {
     "should",
     "since",
     "some",
+    "subagent",
+    "system",
     "than",
     "that",
     "their",
@@ -73,13 +76,14 @@ const LANGUAGE_STOP_WORDS = {
     "this",
     "through",
     "today",
+    "user",
     "using",
     "with",
     "work",
     "workspace",
     "year",
   ],
-  english: ["and", "are", "for", "into", "its", "our", "then", "were"],
+  english: ["and", "are", "for", "into", "its", "our", "the", "then", "were", "you", "your"],
   spanish: [
     "al",
     "con",
@@ -464,10 +468,3 @@ export function summarizeConceptTagScriptCoverage(
 
   return coverage;
 }
-
-export const __testing = {
-  normalizeConceptToken,
-  collectGlossaryMatches,
-  collectCompoundTokens,
-  collectSegmentTokens,
-};

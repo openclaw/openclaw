@@ -1,7 +1,8 @@
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
+import type { QaProviderMode } from "./model-selection.js";
 
 type QaLiveTimeoutEnv = {
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
 };
@@ -11,4 +12,3 @@ function liveTurnTimeoutMs(env: QaLiveTimeoutEnv, fallbackMs: number) {
 }
 
 export { liveTurnTimeoutMs };
-export type { QaLiveTimeoutEnv };

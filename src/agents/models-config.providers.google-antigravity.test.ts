@@ -1,9 +1,41 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { normalizeProviders } from "./models-config.providers.normalize.js";
+import { describe, expect, it, vi } from "vitest";
+import { normalizeProviderSpecificConfig } from "./models-config.providers.policy.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
+
+vi.mock("../plugins/provider-runtime.js", () => {
+  function normalizeGoogleModelIdForProvider(provider: string, modelId: string): string {
+    if (provider === "google-antigravity") {
+      return /^(gemini-3(?:[.-]1)?-pro)$/.test(modelId) ? `${modelId}-low` : modelId;
+    }
+    if (provider === "google-vertex" && modelId === "gemini-3.1-flash-lite") {
+      return "gemini-3.1-flash-lite-preview";
+    }
+    return modelId;
+  }
+
+  return {
+    applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
+    normalizeProviderConfigWithPlugin: (params: {
+      context: { provider: string; providerConfig?: ProviderConfig };
+    }) => {
+      const providerConfig = params.context.providerConfig;
+      if (!providerConfig?.models) {
+        return undefined;
+      }
+      let changed = false;
+      const models = providerConfig.models.map((model) => {
+        const normalizedId = normalizeGoogleModelIdForProvider(params.context.provider, model.id);
+        if (normalizedId === model.id) {
+          return model;
+        }
+        changed = true;
+        return { ...model, id: normalizedId, name: normalizedId };
+      });
+      return changed ? { ...providerConfig, models } : undefined;
+    },
+    resolveProviderConfigApiKeyWithPlugin: () => undefined,
+  };
+});
 
 function buildModel(id: string): NonNullable<ProviderConfig["models"]>[number] {
   return {
@@ -30,9 +62,21 @@ function buildProvider(
   };
 }
 
+function normalizeProviderMap(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  let changed = false;
+  const next: Record<string, ProviderConfig> = {};
+  for (const [providerKey, provider] of Object.entries(providers)) {
+    const normalized = normalizeProviderSpecificConfig(providerKey, provider);
+    next[providerKey] = normalized;
+    changed ||= normalized !== provider;
+  }
+  return changed ? next : providers;
+}
+
 describe("google-antigravity provider normalization", () => {
   it("normalizes bare gemini pro IDs only for google-antigravity providers", () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = {
       "google-antigravity": buildProvider([
         "gemini-3-pro",
@@ -44,7 +88,7 @@ describe("google-antigravity provider normalization", () => {
       openai: buildProvider(["gpt-5"]),
     };
 
-    const normalized = normalizeProviders({ providers, agentDir });
+    const normalized = normalizeProviderMap(providers);
 
     expect(normalized).not.toBe(providers);
     expect(normalized?.["google-antigravity"]?.models.map((model) => model.id)).toEqual([
@@ -58,12 +102,11 @@ describe("google-antigravity provider normalization", () => {
   });
 
   it("returns original providers object when no antigravity IDs need normalization", () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = {
       "google-antigravity": buildProvider(["gemini-3-pro-low", "claude-opus-4-6-thinking"]),
     };
 
-    const normalized = normalizeProviders({ providers, agentDir });
+    const normalized = normalizeProviderMap(providers);
 
     expect(normalized).toBe(providers);
   });
@@ -71,7 +114,6 @@ describe("google-antigravity provider normalization", () => {
 
 describe("google-vertex provider normalization", () => {
   it("normalizes gemini flash-lite IDs for google-vertex providers", () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = {
       "google-vertex": buildProvider(["gemini-3.1-flash-lite", "gemini-3-flash-preview"], {
         api: undefined,
@@ -79,7 +121,7 @@ describe("google-vertex provider normalization", () => {
       openai: buildProvider(["gpt-5"]),
     };
 
-    const normalized = normalizeProviders({ providers, agentDir });
+    const normalized = normalizeProviderMap(providers);
 
     expect(normalized).not.toBe(providers);
     expect(normalized?.["google-vertex"]?.models.map((model) => model.id)).toEqual([
@@ -90,14 +132,13 @@ describe("google-vertex provider normalization", () => {
   });
 
   it("returns original providers object when no google-vertex IDs need normalization", () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = {
       "google-vertex": buildProvider(["gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"], {
         api: undefined,
       }),
     };
 
-    const normalized = normalizeProviders({ providers, agentDir });
+    const normalized = normalizeProviderMap(providers);
 
     expect(normalized).toBe(providers);
   });

@@ -2,10 +2,10 @@ import { z } from "zod";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
 import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
 import {
-  normalizeTelegramCommandDescription,
-  normalizeTelegramCommandName,
-  resolveTelegramCustomCommands,
-} from "../plugin-sdk/telegram-command-config.js";
+  normalizeCommandDescription,
+  normalizeSlashCommandName,
+  resolveCustomCommands,
+} from "../shared/custom-command-config.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
@@ -59,6 +59,7 @@ const DiscordIdSchema = z
   })
   .pipe(z.string());
 const DiscordIdListSchema = z.array(DiscordIdSchema);
+const DiscordSnowflakeStringSchema = z.string().regex(/^\d+$/, "Discord user ID must be numeric");
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
 const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
@@ -82,6 +83,18 @@ const ChannelStreamingBlockSchema = z
 const ChannelStreamingPreviewSchema = z
   .object({
     chunk: BlockStreamingChunkSchema.optional(),
+    toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
+  })
+  .strict();
+const ChannelStreamingProgressSchema = z
+  .object({
+    label: z.union([z.string(), z.literal(false)]).optional(),
+    labels: z.array(z.string()).optional(),
+    maxLines: z.number().int().positive().optional(),
+    render: z.enum(["text", "rich"]).optional(),
+    toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
 const ChannelPreviewStreamingConfigSchema = z
@@ -89,6 +102,7 @@ const ChannelPreviewStreamingConfigSchema = z
     mode: UnifiedStreamingModeSchema.optional(),
     chunkMode: TextChunkModeSchema.optional(),
     preview: ChannelStreamingPreviewSchema.optional(),
+    progress: ChannelStreamingProgressSchema.optional(),
     block: ChannelStreamingBlockSchema.optional(),
   })
   .strict();
@@ -105,6 +119,12 @@ const SlackCapabilitiesSchema = z.union([
 ]);
 
 const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
+const TelegramCommandNamePattern = /^[a-z0-9_]{1,32}$/;
+const TelegramCustomCommandConfig = {
+  label: "Telegram",
+  pattern: TelegramCommandNamePattern,
+  patternDescription: "use a-z, 0-9, underscore; max 32 chars",
+} as const;
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -139,6 +159,14 @@ export const TelegramGroupSchema = z
   })
   .strict();
 
+const TelegramDmThreadRepliesSchema = z.enum(["off", "inbound", "always"]);
+
+const TelegramDmSchema = z
+  .object({
+    threadReplies: TelegramDmThreadRepliesSchema.optional(),
+  })
+  .strict();
+
 const AutoTopicLabelSchema = z
   .union([
     z.boolean(),
@@ -154,6 +182,7 @@ const AutoTopicLabelSchema = z
 export const TelegramDirectSchema = z
   .object({
     dmPolicy: DmPolicySchema.optional(),
+    threadReplies: z.enum(["off", "inbound", "always"]).optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
@@ -170,8 +199,8 @@ export const TelegramDirectSchema = z
 
 const TelegramCustomCommandSchema = z
   .object({
-    command: z.string().overwrite(normalizeTelegramCommandName),
-    description: z.string().overwrite(normalizeTelegramCommandDescription),
+    command: z.string().overwrite(normalizeSlashCommandName),
+    description: z.string().overwrite(normalizeCommandDescription),
   })
   .strict();
 
@@ -182,10 +211,11 @@ const validateTelegramCustomCommands = (
   if (!value.customCommands || value.customCommands.length === 0) {
     return;
   }
-  const { issues } = resolveTelegramCustomCommands({
+  const { issues } = resolveCustomCommands({
     commands: value.customCommands,
     checkReserved: false,
     checkDuplicates: false,
+    config: TelegramCustomCommandConfig,
   });
   for (const issue of issues) {
     ctx.addIssue({
@@ -219,6 +249,7 @@ export const TelegramAccountSchemaBase = z
     botToken: SecretInputSchema.optional().register(sensitive),
     tokenFile: z.string().optional(),
     replyToMode: ReplyToModeSchema.optional(),
+    dm: TelegramDmSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     defaultTo: z.union([z.string(), z.number()]).optional(),
@@ -233,6 +264,16 @@ export const TelegramAccountSchemaBase = z
     streaming: ChannelPreviewStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    mediaGroupFlushMs: z
+      .number()
+      .int()
+      .min(10)
+      .max(60_000)
+      .optional()
+      .describe(
+        "Buffer window in milliseconds for Telegram media groups/albums before dispatching them as one inbound message. Default: 500.",
+      ),
+    pollingStallThresholdMs: z.number().int().min(30_000).max(600_000).optional(),
     retry: RetryConfigSchema,
     network: z
       .object({
@@ -303,6 +344,8 @@ export const TelegramAccountSchemaBase = z
         enabled: z.boolean().optional(),
         idleHours: z.number().nonnegative().optional(),
         maxAgeHours: z.number().nonnegative().optional(),
+        spawnSessions: z.boolean().optional(),
+        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
         spawnSubagentSessions: z.boolean().optional(),
         spawnAcpSessions: z.boolean().optional(),
       })
@@ -430,6 +473,12 @@ export const DiscordDmSchema = z
   })
   .strict();
 
+export const DiscordThreadSchema = z
+  .object({
+    inheritParent: z.boolean().optional(),
+  })
+  .strict();
+
 export const DiscordGuildChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -491,12 +540,33 @@ const DiscordVoiceAutoJoinSchema = z
   })
   .strict();
 
+const DiscordVoiceRealtimeToolPolicySchema = z.enum(["safe-read-only", "owner", "none"]);
+const DiscordVoiceRealtimeConsultPolicySchema = z.enum(["auto", "always"]);
+const DiscordVoiceRealtimeSchema = z
+  .object({
+    provider: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    voice: z.string().min(1).optional(),
+    instructions: z.string().min(1).optional(),
+    toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
+    consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
+    debounceMs: z.number().int().positive().max(10_000).optional(),
+    providers: z.record(z.string(), z.record(z.string(), z.unknown()).optional()).optional(),
+  })
+  .strict();
+
 const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
+    mode: z.enum(["stt-tts", "talk-buffer", "bidi"]).optional(),
+    model: z.string().min(1).optional(),
+    realtime: DiscordVoiceRealtimeSchema.optional(),
     autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
     daveEncryption: z.boolean().optional(),
     decryptionFailureTolerance: z.number().int().min(0).optional(),
+    connectTimeoutMs: z.number().int().positive().max(120_000).optional(),
+    reconnectGraceMs: z.number().int().positive().max(120_000).optional(),
+    captureSilenceGraceMs: z.number().int().positive().max(30_000).optional(),
     tts: TtsConfigSchema.optional(),
   })
   .strict()
@@ -511,9 +581,14 @@ export const DiscordAccountSchema = z
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
     token: SecretInputSchema.optional().register(sensitive),
+    applicationId: DiscordIdSchema.optional(),
     proxy: z.string().optional(),
+    gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
+    gatewayReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
+    gatewayRuntimeReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
+    mentionAliases: z.record(z.string(), DiscordSnowflakeStringSchema).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     contextVisibility: ContextVisibilityModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
@@ -549,6 +624,7 @@ export const DiscordAccountSchema = z
       .strict()
       .optional(),
     replyToMode: ReplyToModeSchema.optional(),
+    thread: DiscordThreadSchema.optional(),
     // Aliases for channels.discord.dm.policy / channels.discord.dm.allowFrom. Prefer these for
     // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
     dmPolicy: DmPolicySchema.optional(),
@@ -587,6 +663,8 @@ export const DiscordAccountSchema = z
         enabled: z.boolean().optional(),
         idleHours: z.number().nonnegative().optional(),
         maxAgeHours: z.number().nonnegative().optional(),
+        spawnSessions: z.boolean().optional(),
+        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
         spawnSubagentSessions: z.boolean().optional(),
         spawnAcpSessions: z.boolean().optional(),
       })
@@ -596,6 +674,7 @@ export const DiscordAccountSchema = z
       .object({
         presence: z.boolean().optional(),
         guildMembers: z.boolean().optional(),
+        voiceStates: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -878,10 +957,19 @@ const SlackReplyToModeByChatTypeSchema = z
   })
   .strict();
 
+export const SlackSocketModeSchema = z
+  .object({
+    clientPingTimeout: z.number().int().positive().optional(),
+    serverPingTimeout: z.number().int().positive().optional(),
+    pingPongLoggingEnabled: z.boolean().optional(),
+  })
+  .strict();
+
 export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
     mode: z.enum(["socket", "http"]).optional(),
+    socketMode: SlackSocketModeSchema.optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
     capabilities: SlackCapabilitiesSchema.optional(),
@@ -1279,6 +1367,23 @@ export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   }
 });
 
+const IMessageActionSchema = z
+  .object({
+    reactions: z.boolean().optional(),
+    edit: z.boolean().optional(),
+    unsend: z.boolean().optional(),
+    reply: z.boolean().optional(),
+    sendWithEffect: z.boolean().optional(),
+    renameGroup: z.boolean().optional(),
+    setGroupIcon: z.boolean().optional(),
+    addParticipant: z.boolean().optional(),
+    removeParticipant: z.boolean().optional(),
+    leaveGroup: z.boolean().optional(),
+    sendAttachment: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const IMessageAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -1292,6 +1397,7 @@ export const IMessageAccountSchemaBase = z
       .string()
       .refine(isSafeScpRemoteHost, "expected SSH host or user@host (no spaces/options)")
       .optional(),
+    actions: IMessageActionSchema,
     service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
     region: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
@@ -1311,10 +1417,13 @@ export const IMessageAccountSchemaBase = z
       .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
       .optional(),
     mediaMaxMb: z.number().int().positive().optional(),
+    probeTimeoutMs: z.number().int().positive().optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    sendReadReceipts: z.boolean().optional(),
+    coalesceSameSenderDms: z.boolean().optional(),
     groups: z
       .record(
         z.string(),
@@ -1388,127 +1497,6 @@ export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
   }
 });
 
-const BlueBubblesAllowFromEntry = z.union([z.string(), z.number()]);
-
-const BlueBubblesActionSchema = z
-  .object({
-    reactions: z.boolean().optional(),
-    edit: z.boolean().optional(),
-    unsend: z.boolean().optional(),
-    reply: z.boolean().optional(),
-    sendWithEffect: z.boolean().optional(),
-    renameGroup: z.boolean().optional(),
-    setGroupIcon: z.boolean().optional(),
-    addParticipant: z.boolean().optional(),
-    removeParticipant: z.boolean().optional(),
-    leaveGroup: z.boolean().optional(),
-    sendAttachment: z.boolean().optional(),
-  })
-  .strict()
-  .optional();
-
-const BlueBubblesGroupConfigSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-  })
-  .strict();
-
-export const BlueBubblesAccountSchemaBase = z
-  .object({
-    name: z.string().optional(),
-    capabilities: z.array(z.string()).optional(),
-    markdown: MarkdownConfigSchema,
-    configWrites: z.boolean().optional(),
-    enabled: z.boolean().optional(),
-    serverUrl: z.string().optional(),
-    password: SecretInputSchema.optional().register(sensitive),
-    webhookPath: z.string().optional(),
-    dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(BlueBubblesAllowFromEntry).optional(),
-    groupAllowFrom: z.array(BlueBubblesAllowFromEntry).optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    contextVisibility: ContextVisibilityModeSchema.optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    mediaMaxMb: z.number().int().positive().optional(),
-    mediaLocalRoots: z.array(z.string()).optional(),
-    sendReadReceipts: z.boolean().optional(),
-    network: z
-      .object({
-        dangerouslyAllowPrivateNetwork: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
-    enrichGroupParticipantsFromContacts: z.boolean().optional(),
-    heartbeat: ChannelHeartbeatVisibilitySchema,
-    healthMonitor: ChannelHealthMonitorSchema,
-    responsePrefix: z.string().optional(),
-  })
-  .strict();
-
-// Account-level schemas skip allowFrom validation because accounts inherit
-// allowFrom from the parent channel config at runtime.
-// Validation is enforced at the top-level BlueBubblesConfigSchema instead.
-export const BlueBubblesAccountSchema = BlueBubblesAccountSchemaBase;
-
-export const BlueBubblesConfigSchema = BlueBubblesAccountSchemaBase.extend({
-  accounts: z.record(z.string(), BlueBubblesAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-  actions: BlueBubblesActionSchema,
-}).superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.bluebubbles.dmPolicy="open" requires channels.bluebubbles.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.bluebubbles.dmPolicy="allowlist" requires channels.bluebubbles.allowFrom to contain at least one sender ID',
-  });
-
-  if (!value.accounts) {
-    return;
-  }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) {
-      continue;
-    }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.bluebubbles.accounts.*.dmPolicy="open" requires channels.bluebubbles.accounts.*.allowFrom (or channels.bluebubbles.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.bluebubbles.accounts.*.dmPolicy="allowlist" requires channels.bluebubbles.accounts.*.allowFrom (or channels.bluebubbles.allowFrom) to contain at least one sender ID',
-    });
-  }
-});
-
 export const MSTeamsChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -1558,6 +1546,7 @@ export const MSTeamsConfigSchema = z
     contextVisibility: ContextVisibilityModeSchema.optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    streaming: ChannelPreviewStreamingConfigSchema.optional(),
     typingIndicator: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),

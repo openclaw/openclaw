@@ -4,14 +4,7 @@ import { URL } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import {
-  appendFileWithinRoot,
-  mkdirPathWithinRoot,
-  SafeOpenError,
-  openFileWithinRoot,
-  readFileWithinRoot,
-  writeFileWithinRoot,
-} from "../infra/fs-safe.js";
+import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
@@ -127,10 +120,7 @@ function withToolResultText(
       (block as { type?: unknown }).type === "text"
     ) {
       replaced = true;
-      return {
-        ...(block as TextContentBlock),
-        text,
-      };
+      return Object.assign({}, block as TextContentBlock, { text });
     }
     return block;
   });
@@ -333,7 +323,7 @@ async function normalizeReadImageResult(
   const nextContent = content.map((block) => {
     if (block && typeof block === "object" && (block as { type?: unknown }).type === "image") {
       const b = block as ImageContentBlock & { mimeType: string };
-      return { ...b, mimeType: sniffed } satisfies ImageContentBlock;
+      return Object.assign({}, b, { mimeType: sniffed }) satisfies ImageContentBlock;
     }
     if (
       block &&
@@ -342,10 +332,9 @@ async function normalizeReadImageResult(
       typeof (block as { text?: unknown }).text === "string"
     ) {
       const b = block as TextContentBlock & { text: string };
-      return {
-        ...b,
+      return Object.assign({}, b, {
         text: rewriteReadImageHeader(b.text, sniffed),
-      } satisfies TextContentBlock;
+      }) satisfies TextContentBlock;
     }
     return block;
   });
@@ -496,10 +485,8 @@ async function appendMemoryFlushContent(params: {
   signal?: AbortSignal;
 }) {
   if (!params.sandbox) {
-    await appendFileWithinRoot({
-      rootDir: params.root,
-      relativePath: params.relativePath,
-      data: params.content,
+    const root = await fsRoot(params.root);
+    await root.append(params.relativePath, params.content, {
       mkdir: true,
       prependNewlineIfNeeded: true,
     });
@@ -664,7 +651,7 @@ function readEditReplacements(params: unknown): { path?: string; edits: EditRepl
         const replacement = entry as Record<string, unknown>;
         if (
           typeof replacement.oldText !== "string" ||
-          replacement.oldText.trim().length === 0 ||
+          replacement.oldText.length === 0 ||
           typeof replacement.newText !== "string"
         ) {
           return [];
@@ -946,10 +933,7 @@ async function readHostEditRecoveryFile(
     candidate: absolutePath,
     allowedRoots: options?.allowedRoots,
   });
-  const safeRead = await readFileWithinRoot({
-    rootDir: target.rootDir,
-    relativePath: target.relativePath,
-  });
+  const safeRead = await (await fsRoot(target.rootDir)).read(target.relativePath);
   return safeRead.buffer.toString("utf-8");
 }
 
@@ -998,11 +982,12 @@ function createHostWriteOperations(
         allowedRoots: options?.allowedRoots,
         allowRoot: true,
       });
-      await mkdirPathWithinRoot({
-        rootDir: target.rootDir,
-        relativePath: target.relativePath,
-        allowRoot: true,
-      });
+      const rootHandle = await fsRoot(target.rootDir);
+      if (target.relativePath === "" || target.relativePath === ".") {
+        await rootHandle.ensureRoot();
+        return;
+      }
+      await runHostBoundaryOperation(dir, () => rootHandle.mkdir(target.relativePath));
     },
     writeFile: async (absolutePath: string, content: string) => {
       const target = resolveHostBoundaryTarget({
@@ -1010,12 +995,11 @@ function createHostWriteOperations(
         candidate: absolutePath,
         allowedRoots: options?.allowedRoots,
       });
-      await writeFileWithinRoot({
-        rootDir: target.rootDir,
-        relativePath: target.relativePath,
-        data: content,
-        mkdir: true,
-      });
+      await runHostBoundaryOperation(absolutePath, () =>
+        fsRoot(target.rootDir).then((rootHandle) =>
+          rootHandle.write(target.relativePath, content, { mkdir: true }),
+        ),
+      );
     },
   } as const;
 }
@@ -1049,10 +1033,9 @@ function createHostEditOperations(
         candidate: absolutePath,
         allowedRoots: options?.allowedRoots,
       });
-      const safeRead = await readFileWithinRoot({
-        rootDir: target.rootDir,
-        relativePath: target.relativePath,
-      });
+      const safeRead = await runHostBoundaryOperation(absolutePath, () =>
+        fsRoot(target.rootDir).then((rootHandle) => rootHandle.read(target.relativePath)),
+      );
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
@@ -1061,12 +1044,11 @@ function createHostEditOperations(
         candidate: absolutePath,
         allowedRoots: options?.allowedRoots,
       });
-      await writeFileWithinRoot({
-        rootDir: target.rootDir,
-        relativePath: target.relativePath,
-        data: content,
-        mkdir: true,
-      });
+      await runHostBoundaryOperation(absolutePath, () =>
+        fsRoot(target.rootDir).then((rootHandle) =>
+          rootHandle.write(target.relativePath, content, { mkdir: true }),
+        ),
+      );
     },
     access: async (absolutePath: string) => {
       let target: { rootDir: string; relativePath: string };
@@ -1085,16 +1067,13 @@ function createHostEditOperations(
         return;
       }
       try {
-        const opened = await openFileWithinRoot({
-          rootDir: target.rootDir,
-          relativePath: target.relativePath,
-        });
+        const opened = await (await fsRoot(target.rootDir)).open(target.relativePath);
         await opened.handle.close().catch(() => {});
       } catch (error) {
-        if (error instanceof SafeOpenError && error.code === "not-found") {
+        if (isFsSafeErrorCode(error, "not-found")) {
           throw createFsAccessError("ENOENT", absolutePath);
         }
-        if (error instanceof SafeOpenError && error.code === "outside-workspace") {
+        if (isFsSafeErrorCode(error, "outside-workspace") || isFsSafeErrorCode(error, "not-file")) {
           // Don't throw here – see the comment above about the upstream
           // library swallowing access errors as "File not found".
           return;
@@ -1103,6 +1082,24 @@ function createHostEditOperations(
       }
     },
   } as const;
+}
+
+async function runHostBoundaryOperation<T>(
+  filePath: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (isFsSafeErrorCode(error, "outside-workspace") || isFsSafeErrorCode(error, "not-file")) {
+      throw new Error(`Path alias escape blocked: ${filePath}`, { cause: error });
+    }
+    throw error;
+  }
+}
+
+function isFsSafeErrorCode(error: unknown, code: string): boolean {
+  return error instanceof FsSafeError && (error as { code?: unknown }).code === code;
 }
 
 function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {

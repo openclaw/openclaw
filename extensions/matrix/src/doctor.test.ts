@@ -35,6 +35,28 @@ describe("matrix doctor", () => {
     vi.clearAllMocks();
   });
 
+  function runMatrixCompatibilityNormalize(
+    params: Parameters<NonNullable<typeof matrixDoctor.normalizeCompatibilityConfig>>[0],
+  ) {
+    const normalize = matrixDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected Matrix doctor compatibility normalizer");
+    }
+    return normalize(params);
+  }
+
+  function normalizeMatrixDmConfig(dm: Record<string, unknown>) {
+    return runMatrixCompatibilityNormalize({
+      cfg: {
+        channels: {
+          matrix: {
+            dm,
+          },
+        },
+      } as never,
+    });
+  }
+
   it("formats state and crypto previews", () => {
     expect(
       formatMatrixLegacyStatePreview({
@@ -138,13 +160,7 @@ describe("matrix doctor", () => {
   });
 
   it("normalizes legacy Matrix room allow aliases to enabled", () => {
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
-
-    const result = normalize({
+    const result = runMatrixCompatibilityNormalize({
       cfg: {
         channels: {
           matrix: {
@@ -196,13 +212,7 @@ describe("matrix doctor", () => {
   });
 
   it("normalizes legacy Matrix private-network aliases", () => {
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
-
-    const result = normalize({
+    const result = runMatrixCompatibilityNormalize({
       cfg: {
         channels: {
           matrix: {
@@ -244,13 +254,7 @@ describe("matrix doctor", () => {
   });
 
   it("migrates legacy channels.matrix.dm.policy 'trusted' with allowFrom to 'allowlist'", () => {
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
-
-    const result = normalize({
+    const result = runMatrixCompatibilityNormalize({
       cfg: {
         channels: {
           matrix: {
@@ -283,24 +287,10 @@ describe("matrix doctor", () => {
     // so they must not count toward the allowFrom population check — otherwise
     // the migration would emit policy="allowlist" with an effectively empty
     // allowlist, silently blocking all DMs.
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          matrix: {
-            dm: {
-              enabled: true,
-              policy: "trusted",
-              allowFrom: ["   ", "\t", ""],
-            },
-          },
-        },
-      } as never,
+    const result = normalizeMatrixDmConfig({
+      enabled: true,
+      policy: "trusted",
+      allowFrom: ["   ", "\t", ""],
     });
 
     const matrixDm = (result.config.channels?.matrix as { dm?: { policy?: string } })?.dm;
@@ -313,23 +303,9 @@ describe("matrix doctor", () => {
   });
 
   it("migrates legacy channels.matrix.dm.policy 'trusted' without allowFrom to 'pairing'", () => {
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          matrix: {
-            dm: {
-              enabled: true,
-              policy: "trusted",
-            },
-          },
-        },
-      } as never,
+    const result = normalizeMatrixDmConfig({
+      enabled: true,
+      policy: "trusted",
     });
 
     const matrixDm = (result.config.channels?.matrix as { dm?: { policy?: string } })?.dm;
@@ -342,13 +318,7 @@ describe("matrix doctor", () => {
   });
 
   it("migrates legacy per-account channels.matrix.accounts.<id>.dm.policy 'trusted'", () => {
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
-
-    const result = normalize({
+    const result = runMatrixCompatibilityNormalize({
       cfg: {
         channels: {
           matrix: {
@@ -394,13 +364,7 @@ describe("matrix doctor", () => {
   });
 
   it("leaves modern dm.policy values untouched", () => {
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
-
-    const result = normalize({
+    const result = runMatrixCompatibilityNormalize({
       cfg: {
         channels: {
           matrix: {

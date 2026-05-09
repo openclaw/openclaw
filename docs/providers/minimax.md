@@ -6,25 +6,23 @@ read_when:
 title: "MiniMax"
 ---
 
-# MiniMax
-
 OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 
 MiniMax also provides:
 
 - Bundled speech synthesis via T2A v2
 - Bundled image understanding via `MiniMax-VL-01`
-- Bundled music generation via `music-2.5+`
-- Bundled `web_search` through the MiniMax Coding Plan search API
+- Bundled music generation via `music-2.6`
+- Bundled `web_search` through the MiniMax Token Plan search API
 
 Provider split:
 
-| Provider ID      | Auth    | Capabilities                                                    |
-| ---------------- | ------- | --------------------------------------------------------------- |
-| `minimax`        | API key | Text, image generation, image understanding, speech, web search |
-| `minimax-portal` | OAuth   | Text, image generation, image understanding                     |
+| Provider ID      | Auth    | Capabilities                                                                                        |
+| ---------------- | ------- | --------------------------------------------------------------------------------------------------- |
+| `minimax`        | API key | Text, image generation, music generation, video generation, image understanding, speech, web search |
+| `minimax-portal` | OAuth   | Text, image generation, music generation, video generation, image understanding, speech             |
 
-## Model lineup
+## Built-in catalog
 
 | Model                    | Type             | Description                              |
 | ------------------------ | ---------------- | ---------------------------------------- |
@@ -32,7 +30,7 @@ Provider split:
 | `MiniMax-M2.7-highspeed` | Chat (reasoning) | Faster M2.7 reasoning tier               |
 | `MiniMax-VL-01`          | Vision           | Image understanding model                |
 | `image-01`               | Image generation | Text-to-image and image-to-image editing |
-| `music-2.5+`             | Music generation | Default music model                      |
+| `music-2.6`              | Music generation | Default music model                      |
 | `music-2.5`              | Music generation | Previous music generation tier           |
 | `music-2.0`              | Music generation | Legacy music generation tier             |
 | `MiniMax-Hailuo-2.3`     | Video generation | Text-to-video and image reference flows  |
@@ -146,7 +144,7 @@ Choose your preferred auth method and follow the setup steps.
                 id: "MiniMax-M2.7",
                 name: "MiniMax M2.7",
                 reasoning: true,
-                input: ["text", "image"],
+                input: ["text"],
                 cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
                 contextWindow: 204800,
                 maxTokens: 131072,
@@ -155,7 +153,7 @@ Choose your preferred auth method and follow the setup steps.
                 id: "MiniMax-M2.7-highspeed",
                 name: "MiniMax M2.7 Highspeed",
                 reasoning: true,
-                input: ["text", "image"],
+                input: ["text"],
                 cost: { input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0.375 },
                 contextWindow: 204800,
                 maxTokens: 131072,
@@ -237,24 +235,62 @@ Both `minimax` and `minimax-portal` register `image_generate` with the same
 `image-01` model. API-key setups use `MINIMAX_API_KEY`; OAuth setups can use
 the bundled `minimax-portal` auth path instead.
 
+Image generation always uses MiniMax's dedicated image endpoint
+(`/v1/image_generation`) and ignores `models.providers.minimax.baseUrl`,
+since that field configures the chat/Anthropic-compatible base URL. Set
+`MINIMAX_API_HOST=https://api.minimaxi.com` to route image generation
+through the CN endpoint; the default global endpoint is
+`https://api.minimax.io`.
+
 When onboarding or API-key setup writes explicit `models.providers.minimax`
 entries, OpenClaw materializes `MiniMax-M2.7` and
-`MiniMax-M2.7-highspeed` with `input: ["text", "image"]`.
-
-The built-in bundled MiniMax text catalog itself stays text-only metadata until
-that explicit provider config exists. Image understanding is exposed separately
-through the plugin-owned `MiniMax-VL-01` media provider.
+`MiniMax-M2.7-highspeed` as text-only chat models. Image understanding is
+exposed separately through the plugin-owned `MiniMax-VL-01` media provider.
 
 <Note>
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.
 </Note>
 
+### Text-to-speech
+
+The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for
+`messages.tts`.
+
+- Default TTS model: `speech-2.8-hd`
+- Default voice: `English_expressive_narrator`
+- Supported bundled model ids include `speech-2.8-hd`, `speech-2.8-turbo`,
+  `speech-2.6-hd`, `speech-2.6-turbo`, `speech-02-hd`,
+  `speech-02-turbo`, `speech-01-hd`, and `speech-01-turbo`.
+- Auth resolution is `messages.tts.providers.minimax.apiKey`, then
+  `minimax-portal` OAuth/token auth profiles, then Token Plan environment
+  keys (`MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`,
+  `MINIMAX_CODING_API_KEY`), then `MINIMAX_API_KEY`.
+- If no TTS host is configured, OpenClaw reuses the configured
+  `minimax-portal` OAuth host and strips Anthropic-compatible path suffixes
+  such as `/anthropic`.
+- Normal audio attachments stay MP3.
+- Voice-note targets such as Feishu and Telegram are transcoded from MiniMax
+  MP3 to 48kHz Opus with `ffmpeg`, because the Feishu/Lark file API only
+  accepts `file_type: "opus"` for native audio messages.
+- MiniMax T2A accepts fractional `speed` and `vol`, but `pitch` is sent as an
+  integer; OpenClaw truncates fractional `pitch` values before the API request.
+
+| Setting                                  | Env var                | Default                       | Description                      |
+| ---------------------------------------- | ---------------------- | ----------------------------- | -------------------------------- |
+| `messages.tts.providers.minimax.baseUrl` | `MINIMAX_API_HOST`     | `https://api.minimax.io`      | MiniMax T2A API host.            |
+| `messages.tts.providers.minimax.model`   | `MINIMAX_TTS_MODEL`    | `speech-2.8-hd`               | TTS model id.                    |
+| `messages.tts.providers.minimax.voiceId` | `MINIMAX_TTS_VOICE_ID` | `English_expressive_narrator` | Voice id used for speech output. |
+| `messages.tts.providers.minimax.speed`   |                        | `1.0`                         | Playback speed, `0.5..2.0`.      |
+| `messages.tts.providers.minimax.vol`     |                        | `1.0`                         | Volume, `(0, 10]`.               |
+| `messages.tts.providers.minimax.pitch`   |                        | `0`                           | Integer pitch shift, `-12..12`.  |
+
 ### Music generation
 
-The bundled `minimax` plugin also registers music generation through the shared
-`music_generate` tool.
+The bundled MiniMax plugin registers music generation through the shared
+`music_generate` tool for both `minimax` and `minimax-portal`.
 
-- Default music model: `minimax/music-2.5+`
+- Default music model: `minimax/music-2.6`
+- OAuth music model: `minimax-portal/music-2.6`
 - Also supports `minimax/music-2.5` and `minimax/music-2.0`
 - Prompt controls: `lyrics`, `instrumental`, `durationSeconds`
 - Output format: `mp3`
@@ -267,7 +303,7 @@ To use MiniMax as the default music provider:
   agents: {
     defaults: {
       musicGenerationModel: {
-        primary: "minimax/music-2.5+",
+        primary: "minimax/music-2.6",
       },
     },
   },
@@ -280,10 +316,11 @@ See [Music Generation](/tools/music-generation) for shared tool parameters, prov
 
 ### Video generation
 
-The bundled `minimax` plugin also registers video generation through the shared
-`video_generate` tool.
+The bundled MiniMax plugin registers video generation through the shared
+`video_generate` tool for both `minimax` and `minimax-portal`.
 
 - Default video model: `minimax/MiniMax-Hailuo-2.3`
+- OAuth video model: `minimax-portal/MiniMax-Hailuo-2.3`
 - Modes: text-to-video and single-image reference flows
 - Supports `aspectRatio` and `resolution`
 
@@ -320,16 +357,16 @@ when the bundled text-provider catalog still shows text-only M2.7 chat refs.
 
 ### Web search
 
-The MiniMax plugin also registers `web_search` through the MiniMax Coding Plan
+The MiniMax plugin also registers `web_search` through the MiniMax Token Plan
 search API.
 
 - Provider id: `minimax`
 - Structured results: titles, URLs, snippets, related queries
 - Preferred env var: `MINIMAX_CODE_PLAN_KEY`
-- Accepted env alias: `MINIMAX_CODING_API_KEY`
-- Compatibility fallback: `MINIMAX_API_KEY` when it already points at a coding-plan token
+- Accepted env aliases: `MINIMAX_CODING_API_KEY`, `MINIMAX_OAUTH_TOKEN`
+- Compatibility fallback: `MINIMAX_API_KEY` when it already points at a token-plan credential
 - Region reuse: `plugins.entries.minimax.config.webSearch.region`, then `MINIMAX_API_HOST`, then MiniMax provider base URLs
-- Search stays on provider id `minimax`; OAuth CN/global setup can still steer region indirectly through `models.providers.minimax-portal.baseUrl`
+- Search stays on provider id `minimax`; OAuth CN/global setup can steer region indirectly through `models.providers.minimax-portal.baseUrl` and can provide bearer auth through `MINIMAX_OAUTH_TOKEN`
 
 Config lives under `plugins.entries.minimax.config.webSearch.*`.
 
@@ -386,10 +423,12 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
   </Accordion>
 
   <Accordion title="Coding Plan usage details">
-    - Coding Plan usage API: `https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains` (requires a coding plan key).
+    - Coding Plan usage API: `https://api.minimaxi.com/v1/token_plan/remains` or `https://api.minimax.io/v1/token_plan/remains` (requires a coding plan key).
+    - Usage polling derives the host from `models.providers.minimax-portal.baseUrl` or `models.providers.minimax.baseUrl` when configured, so global setups using `https://api.minimax.io/anthropic` poll `api.minimax.io`. Missing or malformed base URLs keep the CN fallback for compatibility.
     - OpenClaw normalizes MiniMax coding-plan usage to the same `% left` display used by other providers. MiniMax's raw `usage_percent` / `usagePercent` fields are remaining quota, not consumed quota, so OpenClaw inverts them. Count-based fields win when present.
     - When the API returns `model_remains`, OpenClaw prefers the chat-model entry, derives the window label from `start_time` / `end_time` when needed, and includes the selected model name in the plan label so coding-plan windows are easier to distinguish.
     - Usage snapshots treat `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota surface, and prefer stored MiniMax OAuth before falling back to Coding Plan key env vars.
+
   </Accordion>
 </AccordionGroup>
 
@@ -400,8 +439,8 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
   - OAuth setup: `minimax-portal/<model>`
 - Default chat model: `MiniMax-M2.7`
 - Alternate chat model: `MiniMax-M2.7-highspeed`
-- Onboarding and direct API-key setup write explicit model definitions with `input: ["text", "image"]` for both M2.7 variants
-- The bundled provider catalog currently exposes the chat refs as text-only metadata until explicit MiniMax provider config exists
+- Onboarding and direct API-key setup write text-only model definitions for both M2.7 variants
+- Image understanding uses the plugin-owned `MiniMax-VL-01` media provider
 - Update pricing values in `models.json` if you need exact cost tracking
 - Use `openclaw models list` to confirm the current provider id, then switch with `openclaw models set minimax/MiniMax-M2.7` or `openclaw models set minimax-portal/MiniMax-M2.7`
 
@@ -458,7 +497,7 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
     Shared video tool parameters and provider selection.
   </Card>
   <Card title="MiniMax Search" href="/tools/minimax-search" icon="magnifying-glass">
-    Web search configuration via MiniMax Coding Plan.
+    Web search configuration via MiniMax Token Plan.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">
     General troubleshooting and FAQ.

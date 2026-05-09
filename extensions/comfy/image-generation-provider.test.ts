@@ -1,29 +1,22 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _setComfyFetchGuardForTesting,
   buildComfyImageGenerationProvider,
 } from "./image-generation-provider.js";
+import {
+  buildComfyConfig,
+  buildLegacyComfyConfig,
+  mockComfyCloudJobResponses,
+  mockComfyProviderApiKey,
+  parseComfyJsonBody,
+} from "./test-helpers.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
 function parseJsonBody(call: number): Record<string, unknown> {
-  const request = fetchWithSsrFGuardMock.mock.calls[call - 1]?.[0];
-  expect(request?.init?.body).toBeTruthy();
-  return JSON.parse(String(request.init.body)) as Record<string, unknown>;
-}
-
-function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        comfy: config,
-      },
-    },
-  } as unknown as OpenClawConfig;
+  return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
 }
 
 describe("comfy image-generation provider", () => {
@@ -33,6 +26,7 @@ describe("comfy image-generation provider", () => {
 
   afterEach(() => {
     _setComfyFetchGuardForTesting(null);
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -45,6 +39,57 @@ describe("comfy image-generation provider", () => {
             "6": { inputs: { text: "" } },
           },
           promptNodeId: "6",
+        }),
+      }),
+    ).toBe(true);
+  });
+
+  it("falls back to legacy models.providers comfy config when plugin config is absent", () => {
+    const provider = buildComfyImageGenerationProvider();
+    expect(
+      provider.isConfigured?.({
+        cfg: buildLegacyComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+          },
+          promptNodeId: "6",
+        }),
+      }),
+    ).toBe(true);
+  });
+
+  it("treats cloud comfy workflows as configured with a plugin config API key", () => {
+    const provider = buildComfyImageGenerationProvider();
+    expect(
+      provider.isConfigured?.({
+        cfg: buildComfyConfig({
+          mode: "cloud",
+          apiKey: "comfy-test-key",
+          image: {
+            workflow: {
+              "6": { inputs: { text: "" } },
+            },
+            promptNodeId: "6",
+          },
+        }),
+      }),
+    ).toBe(true);
+  });
+
+  it("treats cloud comfy workflows as configured with a plugin config env SecretRef", () => {
+    vi.stubEnv("COMFY_TEST_API_KEY", "comfy-secret-ref-key");
+    const provider = buildComfyImageGenerationProvider();
+    expect(
+      provider.isConfigured?.({
+        cfg: buildComfyConfig({
+          mode: "cloud",
+          apiKey: { source: "env", provider: "default", id: "COMFY_TEST_API_KEY" },
+          image: {
+            workflow: {
+              "6": { inputs: { text: "" } },
+            },
+            promptNodeId: "6",
+          },
         }),
       }),
     ).toBe(true);
@@ -234,59 +279,16 @@ describe("comfy image-generation provider", () => {
   });
 
   it("uses cloud endpoints, auth headers, and partner-node extra_data", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "comfy-test-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockComfyProviderApiKey();
     _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ prompt_id: "cloud-job-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ status: "completed" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            "cloud-job-1": {
-              outputs: {
-                "9": {
-                  images: [{ filename: "cloud.png", subfolder: "", type: "output" }],
-                },
-              },
-            },
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(null, {
-          status: 302,
-          headers: { location: "https://cdn.example.com/cloud.png" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("cloud-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
+      body: Buffer.from("cloud-data"),
+      contentType: "image/png",
+      filename: "cloud.png",
+      outputKind: "images",
+      promptId: "cloud-job-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
+    });
 
     const provider = buildComfyImageGenerationProvider();
     const result = await provider.generateImage({
@@ -350,6 +352,84 @@ describe("comfy image-generation provider", () => {
     expect(result.metadata).toEqual({
       promptId: "cloud-job-1",
       outputNodeIds: ["9"],
+    });
+  });
+
+  it("uses plugin config env SecretRef auth for cloud workflows", async () => {
+    vi.stubEnv("COMFY_TEST_API_KEY", "comfy-secret-ref-key");
+    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
+      body: Buffer.from("cloud-data"),
+      contentType: "image/png",
+      filename: "cloud.png",
+      outputKind: "images",
+      promptId: "cloud-secret-ref-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "cloud workflow prompt",
+      cfg: buildComfyConfig({
+        mode: "cloud",
+        apiKey: { source: "env", provider: "default", id: "COMFY_TEST_API_KEY" },
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    const submitRequest = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    const submitHeaders = new Headers(submitRequest?.init?.headers);
+    expect(submitHeaders.get("x-api-key")).toBe("comfy-secret-ref-key");
+    expect(parseJsonBody(1)).toMatchObject({
+      extra_data: {
+        api_key_comfy_org: "comfy-secret-ref-key",
+      },
+    });
+  });
+
+  it("uses provider auth fallback for cloud workflows without plugin config API keys", async () => {
+    vi.stubEnv("COMFY_API_KEY", "stale-env-key");
+    mockComfyProviderApiKey("profile-key");
+    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
+      body: Buffer.from("cloud-data"),
+      contentType: "image/png",
+      filename: "cloud.png",
+      outputKind: "images",
+      promptId: "cloud-profile-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "cloud workflow prompt",
+      cfg: buildComfyConfig({
+        mode: "cloud",
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    const submitRequest = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    const submitHeaders = new Headers(submitRequest?.init?.headers);
+    expect(submitHeaders.get("x-api-key")).toBe("profile-key");
+    expect(parseJsonBody(1)).toMatchObject({
+      extra_data: {
+        api_key_comfy_org: "profile-key",
+      },
     });
   });
 });

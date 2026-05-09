@@ -7,12 +7,18 @@ import JSON5 from "json5";
 
 type RestoreEntry = { key: string; value: string | undefined };
 
-const LIVE_EXTERNAL_AUTH_DIRS = [".claude", ".codex", ".gemini", ".minimax"] as const;
-const LIVE_EXTERNAL_AUTH_FILES = [".claude.json"] as const;
+const LIVE_EXTERNAL_AUTH_DIRS = [".claude/backups", ".gemini", ".minimax"] as const;
+const LIVE_EXTERNAL_AUTH_FILES = [
+  ".claude.json",
+  ".claude/.credentials.json",
+  ".claude/settings.json",
+  ".claude/settings.local.json",
+  ".codex/auth.json",
+  ".codex/config.toml",
+] as const;
 const requireFromHere = createRequire(import.meta.url);
 
-type LegacyConfigCompatApi =
-  typeof import("../src/commands/doctor/shared/legacy-config-migrate.js");
+type LegacyConfigCompatApi = typeof import("../src/commands/doctor/shared/legacy-config-compat.js");
 type ConfigValidationApi = typeof import("../src/config/validation.js");
 
 let cachedLegacyConfigCompatApi: LegacyConfigCompatApi | undefined;
@@ -46,7 +52,7 @@ function restoreEnv(entries: RestoreEntry[]): void {
 
 function loadLegacyConfigCompatApi(): LegacyConfigCompatApi {
   cachedLegacyConfigCompatApi ??= requireFromHere(
-    "../src/commands/doctor/shared/legacy-config-migrate.js",
+    "../src/commands/doctor/shared/legacy-config-compat.js",
   ) as LegacyConfigCompatApi;
   return cachedLegacyConfigCompatApi;
 }
@@ -257,6 +263,15 @@ function copyDirIfExists(sourcePath: string, targetPath: string): void {
 
 function copyFileIfExists(sourcePath: string, targetPath: string): void {
   if (!fs.existsSync(sourcePath)) {
+    return;
+  }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(sourcePath);
+  } catch {
+    return;
+  }
+  if (!stat.isFile()) {
     return;
   }
   ensureParentDir(targetPath);

@@ -1,6 +1,7 @@
 import { listProfilesForProvider } from "../agents/auth-profiles.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import {
@@ -9,7 +10,8 @@ import {
 } from "../config/model-input.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
   MediaGenerationNormalizationMetadataInput,
@@ -27,6 +29,23 @@ export type {
   MediaNormalizationValue,
 } from "./normalization.types.js";
 
+export function recordCapabilityCandidateFailure(params: {
+  attempts: FallbackAttempt[];
+  provider: string;
+  model: string;
+  error: unknown;
+}): void {
+  const described = isFailoverError(params.error) ? describeFailoverError(params.error) : undefined;
+  params.attempts.push({
+    provider: params.provider,
+    model: params.model,
+    error: described?.message ?? formatErrorMessage(params.error),
+    reason: described?.reason,
+    status: described?.status,
+    code: described?.code,
+  });
+}
+
 export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
   entry: MediaNormalizationEntry<TValue> | undefined,
 ): entry is MediaNormalizationEntry<TValue> {
@@ -43,7 +62,9 @@ const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
 
 type CapabilityProviderCandidate = {
   id: string;
+  aliases?: readonly string[];
   defaultModel?: string | null;
+  models?: readonly string[];
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
@@ -103,7 +124,7 @@ function resolveAutoCapabilityFallbackRefs(params: {
   agentDir?: string;
   listProviders: (cfg?: OpenClawConfig) => CapabilityProviderCandidate[];
 }): string[] {
-  const providerDefaults = new Map<string, string>();
+  const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
   for (const provider of params.listProviders(params.cfg)) {
     const providerId = normalizeOptionalString(provider.id);
     const modelId = normalizeOptionalString(provider.defaultModel);
@@ -119,20 +140,42 @@ function resolveAutoCapabilityFallbackRefs(params: {
     ) {
       continue;
     }
-    providerDefaults.set(providerId, `${providerId}/${modelId}`);
+    const aliases = (provider.aliases ?? []).flatMap((alias) => {
+      const normalized = normalizeOptionalString(alias);
+      return normalized ? [normalized] : [];
+    });
+    providerDefaults.set(providerId, { ref: `${providerId}/${modelId}`, aliases });
   }
 
   const defaultProvider = resolveCurrentDefaultProviderId(params.cfg);
+  const providerIds = [...providerDefaults.keys()].toSorted();
+  const matchesDefaultProvider = (providerId: string): boolean => {
+    const entry = providerDefaults.get(providerId);
+    return providerId === defaultProvider || (entry?.aliases ?? []).includes(defaultProvider);
+  };
   const orderedProviders = [
-    defaultProvider,
-    ...[...providerDefaults.keys()]
-      .filter((providerId) => providerId !== defaultProvider)
-      .toSorted(),
+    ...providerIds.filter(matchesDefaultProvider),
+    ...providerIds.filter((providerId) => !matchesDefaultProvider(providerId)),
   ];
   return orderedProviders.flatMap((providerId) => {
-    const ref = providerDefaults.get(providerId);
-    return ref ? [ref] : [];
+    const entry = providerDefaults.get(providerId);
+    return entry ? [entry.ref] : [];
   });
+}
+
+function resolveProviderModelOnlyRef(params: {
+  raw: string;
+  providers: CapabilityProviderCandidate[];
+}): ParsedProviderModelRef | null {
+  const model = normalizeOptionalString(params.raw);
+  if (!model) {
+    return null;
+  }
+  const provider = params.providers.find((candidate) => {
+    const models = [candidate.defaultModel, ...(candidate.models ?? [])];
+    return models.some((entry) => normalizeOptionalString(entry) === model);
+  });
+  return provider ? { provider: provider.id, model } : null;
 }
 
 export function resolveCapabilityModelCandidates(params: {
@@ -146,34 +189,59 @@ export function resolveCapabilityModelCandidates(params: {
 }): ParsedProviderModelRef[] {
   const candidates: ParsedProviderModelRef[] = [];
   const seen = new Set<string>();
-  const add = (raw: string | undefined) => {
+  let providers: CapabilityProviderCandidate[] | undefined;
+  const getProviders = (): CapabilityProviderCandidate[] => {
+    providers ??= params.listProviders?.(params.cfg) ?? [];
+    return providers;
+  };
+  const resolveCandidate = (raw: string | undefined, options: { useProviderMetadata: boolean }) => {
+    const trimmed = normalizeOptionalString(raw);
+    if (!trimmed) {
+      return null;
+    }
     const parsed = params.parseModelRef(raw);
-    if (!parsed) {
+    if (!options.useProviderMetadata) {
+      return parsed;
+    }
+    return resolveProviderModelOnlyRef({ raw: trimmed, providers: getProviders() }) ?? parsed;
+  };
+  const add = (raw: string | undefined, options: { useProviderMetadata: boolean }) => {
+    const candidate = resolveCandidate(raw, options);
+    if (!candidate) {
       return;
     }
-    const key = `${parsed.provider}/${parsed.model}`;
+    const key = `${candidate.provider}/${candidate.model}`;
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    candidates.push(parsed);
+    candidates.push(candidate);
   };
 
-  add(params.modelOverride);
-  add(resolveAgentModelPrimaryValue(params.modelConfig));
-  for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {
-    add(fallback);
+  const override = (() => {
+    return resolveCandidate(params.modelOverride, { useProviderMetadata: true });
+  })();
+  if (override) {
+    return [override];
   }
+
   const autoProviderFallbackEnabled =
     params.autoProviderFallback ??
     params.cfg.agents?.defaults?.mediaGenerationAutoProviderFallback !== false;
+  add(params.modelOverride, { useProviderMetadata: true });
+  add(resolveAgentModelPrimaryValue(params.modelConfig), {
+    useProviderMetadata: autoProviderFallbackEnabled,
+  });
+  for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {
+    add(fallback, { useProviderMetadata: autoProviderFallbackEnabled });
+  }
   if (autoProviderFallbackEnabled && params.listProviders) {
     for (const candidate of resolveAutoCapabilityFallbackRefs({
       cfg: params.cfg,
       agentDir: params.agentDir,
-      listProviders: params.listProviders,
+      listProviders: () => getProviders(),
     })) {
-      add(candidate);
+      add(candidate, { useProviderMetadata: false });
     }
   }
   return candidates;
@@ -202,12 +270,15 @@ function compareScores(
   return next.tertiary.localeCompare(best.tertiary) < 0;
 }
 
-function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+function parsePositiveDimensionPair(
+  raw: string | null | undefined,
+  pattern: RegExp,
+): { width: number; height: number } | null {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
-  const match = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(trimmed);
+  const match = pattern.exec(trimmed);
   if (!match) {
     return null;
   }
@@ -216,32 +287,31 @@ function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return null;
   }
+  return { width, height };
+}
+
+function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+  const pair = parsePositiveDimensionPair(raw, /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+  if (!pair) {
+    return null;
+  }
   return {
-    width,
-    height,
-    value: width / height,
+    width: pair.width,
+    height: pair.height,
+    value: pair.width / pair.height,
   };
 }
 
 function parseSizeValue(raw?: string | null): ParsedSize | null {
-  const trimmed = normalizeOptionalString(raw);
-  if (!trimmed) {
-    return null;
-  }
-  const match = /^(\d+)\s*x\s*(\d+)$/i.exec(trimmed);
-  if (!match) {
-    return null;
-  }
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+  const pair = parsePositiveDimensionPair(raw, /^(\d+)\s*x\s*(\d+)$/i);
+  if (!pair) {
     return null;
   }
   return {
-    width,
-    height,
-    aspectRatio: width / height,
-    area: width * height,
+    width: pair.width,
+    height: pair.height,
+    aspectRatio: pair.width / pair.height,
+    area: pair.width * pair.height,
   };
 }
 
@@ -459,12 +529,7 @@ export function throwCapabilityGenerationFailure(params: {
   if (params.attempts.length <= 1 && params.lastError) {
     throw params.lastError;
   }
-  const summary =
-    params.attempts.length > 0
-      ? params.attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
+  const summary = formatCapabilityFailureAttempts(params.attempts);
   throw new Error(
     `All ${params.capabilityLabel} models failed (${params.attempts.length}): ${summary}`,
     {
@@ -473,12 +538,52 @@ export function throwCapabilityGenerationFailure(params: {
   );
 }
 
+function formatCapabilityFailureAttempts(attempts: FallbackAttempt[]): string {
+  if (attempts.length === 0) {
+    return "unknown";
+  }
+
+  const abortedAttempts = attempts.filter(isAbortLikeFallbackAttempt);
+  if (abortedAttempts.length === 0) {
+    return attempts.map(formatCapabilityFailureAttempt).join(" | ");
+  }
+  if (abortedAttempts.length === attempts.length) {
+    return `${abortedAttempts.length} fallback(s) aborted after the request was cancelled or timed out: ${abortedAttempts.map(formatCapabilityAttemptRef).join(", ")}`;
+  }
+
+  const primaryFailures = attempts.filter((attempt) => !isAbortLikeFallbackAttempt(attempt));
+  return [
+    primaryFailures.map(formatCapabilityFailureAttempt).join(" | "),
+    `${abortedAttempts.length} fallback(s) aborted after the request was cancelled or timed out: ${abortedAttempts.map(formatCapabilityAttemptRef).join(", ")}`,
+  ].join(" | ");
+}
+
+function formatCapabilityFailureAttempt(attempt: FallbackAttempt): string {
+  return `${formatCapabilityAttemptRef(attempt)}: ${attempt.error}`;
+}
+
+function formatCapabilityAttemptRef(attempt: FallbackAttempt): string {
+  return `${attempt.provider}/${attempt.model}`;
+}
+
+function isAbortLikeFallbackAttempt(attempt: FallbackAttempt): boolean {
+  const message = attempt.error.trim().toLowerCase();
+  return (
+    message === "this operation was aborted" ||
+    message === "operation was aborted" ||
+    message.includes("operation was aborted") ||
+    message.includes("request was aborted")
+  );
+}
+
 export function buildNoCapabilityModelConfiguredMessage(params: {
   capabilityLabel: string;
   modelConfigKey: string;
   providers: Array<{ id: string; defaultModel?: string | null }>;
   fallbackSampleRef?: string;
+  getProviderEnvVars?: typeof getDefaultProviderEnvVars;
 }): string {
+  const getProviderEnvVars = params.getProviderEnvVars ?? getDefaultProviderEnvVars;
   const sampleModel = params.providers.find(
     (provider) =>
       normalizeOptionalString(provider.id) && normalizeOptionalString(provider.defaultModel),

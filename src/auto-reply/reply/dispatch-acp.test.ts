@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { MediaUnderstandingSkipError } from "../../media-understanding/errors.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { resolveAcpAttachments } from "./dispatch-acp-attachments.js";
+import {
+  resolveAcpAttachments,
+  resolveAcpInlineImageAttachments,
+} from "./dispatch-acp-attachments.js";
 import { tryDispatchAcpReply } from "./dispatch-acp.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -31,7 +34,9 @@ const policyMocks = vi.hoisted(() => ({
 }));
 
 const routeMocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn<
+    (_params: unknown) => Promise<{ ok: true; messageId: string } | { ok: false; error: string }>
+  >(async () => ({ ok: true, messageId: "mock" })),
 }));
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -69,10 +74,18 @@ const mediaUnderstandingMocks = vi.hoisted(() => ({
   applyMediaUnderstanding: vi.fn(async (_params: unknown) => undefined),
 }));
 
+const diagnosticMocks = vi.hoisted(() => ({
+  markDiagnosticSessionProgress: vi.fn(),
+}));
+
 const sessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionEntry: vi.fn<
     (params: { sessionKey: string; cfg?: OpenClawConfig }) => AcpSessionStoreEntry | null
   >(() => null),
+}));
+
+const transcriptMocks = vi.hoisted(() => ({
+  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
 }));
 
 const bindingServiceMocks = vi.hoisted(() => ({
@@ -159,6 +172,15 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
     sessionMetaMocks.readAcpSessionEntry(params),
 }));
 
+vi.mock("../../logging/diagnostic.js", () => ({
+  markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
+}));
+
+vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
+  persistAcpDispatchTranscript: (params: unknown) =>
+    transcriptMocks.persistAcpDispatchTranscript(params),
+}));
+
 const sessionKey = "agent:codex-acp:session-1";
 const originalFetch = globalThis.fetch;
 type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
@@ -210,8 +232,12 @@ async function runDispatch(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => void;
+  images?: Array<{ data: string; mimeType: string }>;
   ctxOverrides?: Record<string, unknown>;
   sessionKeyOverride?: string;
+  suppressUserDelivery?: boolean;
+  suppressReplyLifecycle?: boolean;
+  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
   return tryDispatchAcpReply({
@@ -225,7 +251,11 @@ async function runDispatch(params: {
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     sessionKey: targetSessionKey,
+    images: params.images,
     inboundAudio: false,
+    suppressUserDelivery: params.suppressUserDelivery,
+    suppressReplyLifecycle: params.suppressReplyLifecycle,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
       ? {
@@ -347,13 +377,19 @@ describe("tryDispatchAcpReply", () => {
     channelPluginMocks.getChannelPlugin.mockClear();
     messageActionMocks.runMessageAction.mockReset();
     messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
-    ttsMocks.maybeApplyTtsToPayload.mockClear();
+    ttsMocks.maybeApplyTtsToPayload.mockReset();
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload: unknown };
+      return params.payload;
+    });
     ttsMocks.resolveTtsConfig.mockReset();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     mediaUnderstandingMocks.applyMediaUnderstanding.mockReset();
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
+    diagnosticMocks.markDiagnosticSessionProgress.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
+    transcriptMocks.persistAcpDispatchTranscript.mockClear();
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
     bindingServiceMocks.unbind.mockReset();
@@ -361,7 +397,7 @@ describe("tryDispatchAcpReply", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("routes ACP block output to originating channel", async () => {
+  it("routes default ACP output to the originating channel as a final reply", async () => {
     setReadyAcpResolution();
     mockRoutedTextTurn("hello");
 
@@ -372,13 +408,98 @@ describe("tryDispatchAcpReply", () => {
       shouldRouteToOriginating: true,
     });
 
-    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "telegram",
         to: "telegram:thread-1",
+        payload: expect.objectContaining({ text: "hello" }),
       }),
     );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("persists ACP transcript when routed delivery fails", async () => {
+    setReadyAcpResolution();
+    mockRoutedTextTurn("hello");
+    routeMocks.routeReply.mockResolvedValue({ ok: false, error: "missing channel adapter" });
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      shouldRouteToOriginating: true,
+    });
+
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        promptText: "reply",
+        finalText: "hello",
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(expect.objectContaining({ mirror: false }));
+  });
+
+  it("adds source delivery guidance to tool-only ACP turns", async () => {
+    setReadyAcpResolution();
+
+    await runDispatch({
+      bodyForAgent: "reply privately unless you send explicitly",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledTimes(1);
+    const call = managerMocks.runTurn.mock.calls[0]?.[0] as { text?: string } | undefined;
+    expect(call?.text).toContain("Source channel delivery is private by default");
+    expect(call?.text).toContain("message(action=send)");
+    expect(call?.text).toContain("The target defaults to the current source channel");
+    expect(call?.text).toContain("reply privately unless you send explicitly");
+  });
+
+  it("starts reply lifecycle for tool-only ACP turns while suppressing automatic delivery", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("hidden final");
+    const onReplyStart = vi.fn();
+    const { dispatcher } = createDispatcher();
+
+    const result = await runDispatch({
+      bodyForAgent: "reply via message tool if needed",
+      dispatcher,
+      onReplyStart,
+      suppressUserDelivery: true,
+      suppressReplyLifecycle: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(result?.queuedFinal).toBe(false);
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps same-provider tool-only ACP final replies private when an origin route exists", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("hidden final");
+    const onReplyStart = vi.fn();
+    const { dispatcher } = createDispatcher();
+
+    const result = await runDispatch({
+      bodyForAgent: "reply via message tool if needed",
+      dispatcher,
+      onReplyStart,
+      suppressUserDelivery: true,
+      suppressReplyLifecycle: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+      shouldRouteToOriginating: true,
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    });
+
+    expect(result?.queuedFinal).toBe(false);
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
@@ -465,6 +586,18 @@ describe("tryDispatchAcpReply", () => {
     expect(onReplyStart).toHaveBeenCalledTimes(1);
   });
 
+  it("does not mark ACP diagnostic progress when diagnostics are disabled", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn();
+
+    await runDispatch({
+      bodyForAgent: "visible",
+      cfg: createAcpTestConfig({ diagnostics: { enabled: false } }),
+    });
+
+    expect(diagnosticMocks.markDiagnosticSessionProgress).not.toHaveBeenCalled();
+  });
+
   it("does not start reply lifecycle for empty ACP prompt", async () => {
     setReadyAcpResolution();
     const onReplyStart = vi.fn();
@@ -489,6 +622,44 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+  });
+
+  it("passes the ACP agent directory to media understanding", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("image turn");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const agentDir = path.join(tempDir, "codex-agent");
+    const imagePath = path.join(tempDir, "inbound.png");
+    try {
+      await fs.mkdir(agentDir);
+      await fs.writeFile(imagePath, "image-bytes");
+
+      await runDispatch({
+        bodyForAgent: "describe image",
+        cfg: createAcpTestConfig({
+          agents: {
+            list: [{ id: "codex-acp", agentDir }],
+          },
+          channels: {
+            imessage: {
+              attachmentRoots: [tempDir],
+            },
+          },
+        }),
+        ctxOverrides: {
+          Provider: "imessage",
+          Surface: "imessage",
+          MediaPath: imagePath,
+          MediaType: "image/png",
+        },
+      });
+
+      expect(mediaUnderstandingMocks.applyMediaUnderstanding).toHaveBeenCalledWith(
+        expect.objectContaining({ agentDir }),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("forwards normalized image attachments into ACP turns", async () => {
@@ -543,6 +714,38 @@ describe("tryDispatchAcpReply", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("forwards chat.send inline image attachments into ACP turns", async () => {
+    setReadyAcpResolution();
+    const image = {
+      mimeType: "image/png",
+      data: Buffer.from("image-bytes").toString("base64"),
+    };
+
+    expect(resolveAcpInlineImageAttachments([image])).toEqual([
+      {
+        mediaType: "image/png",
+        data: image.data,
+      },
+    ]);
+
+    await runDispatch({
+      bodyForAgent: "describe image",
+      images: [image],
+    });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "describe image",
+        attachments: [
+          {
+            mediaType: "image/png",
+            data: image.data,
+          },
+        ],
+      }),
+    );
   });
 
   it("skips ACP attachments outside allowed inbound roots", async () => {
@@ -991,18 +1194,18 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("does not deliver final fallback text when routed block text was already visible", async () => {
+  it("does not add a fallback when routed ACP text was already delivered as final", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
     const { result } = await runRoutedAcpTextTurn("CODEX_OK");
 
-    expect(result?.counts.block).toBe(1);
-    expect(result?.counts.final).toBe(0);
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
   });
 
-  it("does not deliver final fallback text when routed discord block text was already visible", async () => {
+  it("routes default ACP text as one final reply to Discord", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies(
@@ -1020,8 +1223,8 @@ describe("tryDispatchAcpReply", () => {
       originatingTo: "channel:1478836151241412759",
     });
 
-    expect(result?.counts.block).toBe(1);
-    expect(result?.counts.final).toBe(0);
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
     expect(routeMocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1032,7 +1235,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("does not deliver final fallback text when routed Slack block text was already visible", async () => {
+  it("routes default ACP text as one final reply to Slack", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies(
@@ -1050,8 +1253,8 @@ describe("tryDispatchAcpReply", () => {
       originatingTo: "channel:C123",
     });
 
-    expect(result?.counts.block).toBe(1);
-    expect(result?.counts.final).toBe(0);
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
     expect(routeMocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1062,7 +1265,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("does not deliver final fallback text when direct block text was already visible", async () => {
+  it("delivers default Telegram ACP text directly as a final reply", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
@@ -1082,13 +1285,14 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.counts.final).toBe(0);
     expect(counts.block).toBe(0);
     expect(counts.final).toBe(0);
-    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+    expect(result?.queuedFinal).toBe(true);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "CODEX_OK" }),
     );
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("does not deliver final fallback text when direct discord block text was already visible", async () => {
+  it("delivers default Discord ACP text directly as a final reply", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies(
@@ -1111,13 +1315,14 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.counts.final).toBe(0);
     expect(counts.block).toBe(0);
     expect(counts.final).toBe(0);
-    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+    expect(result?.queuedFinal).toBe(true);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Received." }),
     );
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("does not deliver final fallback text when direct Slack block text was already visible", async () => {
+  it("delivers default Slack ACP text directly as a final reply", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies(
@@ -1140,13 +1345,14 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.counts.final).toBe(0);
     expect(counts.block).toBe(0);
     expect(counts.final).toBe(0);
-    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+    expect(result?.queuedFinal).toBe(true);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Slack says hi." }),
     );
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("treats visible telegram ACP block delivery as a successful final response", async () => {
+  it("treats Telegram ACP final delivery as a successful final response", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
@@ -1163,13 +1369,13 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(result?.queuedFinal).toBe(true);
-    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "CODEX_OK" }),
     );
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("preserves final fallback when direct block text is filtered by channels without a visibility override", async () => {
+  it("delivers default ACP text as final for channels without a visibility override", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
@@ -1189,9 +1395,8 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.counts.final).toBe(0);
     expect(counts.block).toBe(0);
     expect(counts.final).toBe(0);
-    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "CODEX_OK" }),
-    );
+    expect(result?.queuedFinal).toBe(true);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "CODEX_OK" }),
     );
@@ -1254,6 +1459,12 @@ describe("tryDispatchAcpReply", () => {
   it("honors the configured default account for ACP projector chunking when AccountId is omitted", async () => {
     setReadyAcpResolution();
     const cfg = createAcpTestConfig({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+        },
+      },
       channels: {
         discord: {
           defaultAccount: "work",
@@ -1293,7 +1504,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("does not add a second routed payload when routed block text was already visible", async () => {
+  it("does not add a second routed payload when routed final text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "Task completed" }, {
@@ -1302,21 +1513,21 @@ describe("tryDispatchAcpReply", () => {
     } as MockTtsReply);
     const { result } = await runRoutedAcpTextTurn("Task completed");
 
-    expect(result?.counts.block).toBe(1);
-    expect(result?.counts.final).toBe(0);
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
     expectRoutedPayload(1, {
       text: "Task completed",
     });
   });
 
-  it("skips fallback when TTS mode is all (blocks already processed with TTS)", async () => {
+  it("skips fallback when TTS mode is all and final delivery already succeeded", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "all" });
     const { result } = await runRoutedAcpTextTurn("Response");
 
-    expect(result?.counts.block).toBe(1);
-    expect(result?.counts.final).toBe(0);
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
   });
 

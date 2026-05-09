@@ -1,12 +1,38 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   getDefaultRedactPatterns,
+  redactSensitiveFieldValue,
   redactSensitiveLines,
   redactSensitiveText,
   resolveRedactOptions,
 } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
+const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+let tempDirs: string[] = [];
+
+function writeConfig(source: string): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-redact-config-"));
+  tempDirs.push(dir);
+  const configPath = path.join(dir, "openclaw.json");
+  fs.writeFileSync(configPath, source);
+  process.env.OPENCLAW_CONFIG_PATH = configPath;
+}
+
+afterEach(() => {
+  if (originalConfigPath === undefined) {
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  } else {
+    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+  }
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { force: true, recursive: true });
+  }
+  tempDirs = [];
+});
 
 describe("redactSensitiveText", () => {
   it("masks env assignments while keeping the key", () => {
@@ -36,6 +62,33 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("gog gmail watch serve --hook-token abcdef…ghij");
   });
 
+  it("masks sensitive URL query parameters", () => {
+    const input = "connect https://user.example/sync?access_token=abcdef1234567890ghij&safe=value";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("connect https://user.example/sync?access_token=abcdef…ghij&safe=value");
+  });
+
+  it("masks short URL query tokens fully", () => {
+    const input = "cdp=https://browserless.example.com/?token=supersecret123";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("cdp=https://browserless.example.com/?token=***");
+  });
+
+  it("masks standalone lowercase token assignments in diagnostic output", () => {
+    const input = "matrix access_token=abcdef1234567890ghij next";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("matrix access_token=abcdef…ghij next");
+  });
+
   it("masks JSON fields", () => {
     const input = '{"token":"abcdef1234567890ghij"}';
     const output = redactSensitiveText(input, {
@@ -43,6 +96,61 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe('{"token":"abcdef…ghij"}');
+  });
+
+  it("masks payment credential JSON fields without redacting unrelated amounts", () => {
+    const input =
+      '{"card_number":"4242424242424242","cvc":"123","sharedPaymentToken":"spt_abcdefghijklmnopqrstuvwxyz","payment_credential":"paycred_abcdefghijklmnopqrstuvwxyz","amount":"4200"}';
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe(
+      '{"card_number":"***","cvc":"***","sharedPaymentToken":"spt_ab…wxyz","payment_credential":"paycre…wxyz","amount":"4200"}',
+    );
+  });
+
+  it("masks payment credential assignments and flags", () => {
+    const input = [
+      "LINK_CARD_NUMBER=4242424242424242",
+      "LINK_CVC=123",
+      "shared_payment_token=spt_abcdefghijklmnopqrstuvwxyz",
+      "--payment-credential paycred_abcdefghijklmnopqrstuvwxyz",
+      "--card-number 4000056655665556",
+    ].join(" ");
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).not.toContain("4242424242424242");
+    expect(output).not.toContain("4000056655665556");
+    expect(output).not.toContain("spt_abcdefghijklmnopqrstuvwxyz");
+    expect(output).not.toContain("paycred_abcdefghijklmnopqrstuvwxyz");
+    expect(output).toContain("LINK_CARD_NUMBER=***");
+    expect(output).toContain("LINK_CVC=***");
+    expect(output).toContain("shared_payment_token=spt_ab…wxyz");
+    expect(output).toContain("--payment-credential paycre…wxyz");
+    expect(output).toContain("--card-number ***");
+  });
+
+  it("masks payment credential URL query parameters", () => {
+    const input =
+      "POST /authorize?shared_payment_token=spt_abcdefghijklmnopqrstuvwxyz&card_number=4242424242424242&amount=4200";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe(
+      "POST /authorize?shared_payment_token=spt_ab…wxyz&card_number=***&amount=4200",
+    );
+  });
+
+  it("masks structured payment credential field values by key", () => {
+    expect(redactSensitiveFieldValue("sharedPaymentToken", "spt_abcdefghijklmnopqrstuvwxyz")).toBe(
+      "spt_ab…wxyz",
+    );
+    expect(redactSensitiveFieldValue("cardNumber", "4242424242424242")).toBe("***");
+    expect(redactSensitiveFieldValue("amount", "4200")).toBe("4200");
   });
 
   it("masks bearer tokens", () => {
@@ -54,7 +162,16 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("Authorization: Bearer abcdef…ghij");
   });
 
-  it("masks Telegram-style tokens", () => {
+  it("masks URL query tokens", () => {
+    const input = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij");
+  });
+
+  it("masks bot-style tokens", () => {
     const input = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef";
     const output = redactSensitiveText(input, {
       mode: "tools",
@@ -63,14 +180,14 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("123456…cdef");
   });
 
-  it("masks Telegram Bot API URL tokens", () => {
+  it("masks bot API URL tokens", () => {
     const input =
-      "GET https://api.telegram.org/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef/getMe HTTP/1.1";
+      "GET https://api.example.test/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef/getMe HTTP/1.1";
     const output = redactSensitiveText(input, {
       mode: "tools",
       patterns: defaults,
     });
-    expect(output).toBe("GET https://api.telegram.org/bot123456…cdef/getMe HTTP/1.1");
+    expect(output).toBe("GET https://api.example.test/bot123456…cdef/getMe HTTP/1.1");
   });
 
   it("redacts short tokens fully", () => {
@@ -80,6 +197,33 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe("TOKEN=***");
+  });
+
+  it("does not redact lowercase key diagnostics", () => {
+    const input = 'agents.defaults: Unrecognized key: "llm"';
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe(input);
+  });
+
+  it("masks sensitive URL query params while preserving non-sensitive params", () => {
+    const input = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij&since=123";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij&since=123");
+  });
+
+  it("treats sensitive URL query param names case-insensitively", () => {
+    const input = "connect https://gateway.example/ws?Access-Token=short-token&ok=1";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("connect https://gateway.example/ws?Access-Token=***&ok=1");
   });
 
   it("redacts private key blocks", () => {
@@ -107,6 +251,16 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("token=abcdef…ghij");
   });
 
+  it("honors escaped character classes in custom patterns", () => {
+    const input = "contact peter@dc.io";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
+    });
+    expect(output).toBe("contact peter@d***.io");
+    expect(output).not.toContain("peter@dc.io");
+  });
+
   it("ignores unsafe nested-repetition custom patterns", () => {
     const input = `${"a".repeat(28)}!`;
     const output = redactSensitiveText(input, {
@@ -125,6 +279,51 @@ describe("redactSensitiveText", () => {
     expect(output).toContain("OPENAI_API_KEY=sk-123…cdef");
   });
 
+  it("masks Tencent Cloud SecretId (AKID prefix, uppercase-only)", () => {
+    const input = "SecretId is AKIDZ8EXAMPLEFAKE01KEY99TEST";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("SecretId is AKIDZ8…TEST");
+  });
+
+  it("masks Tencent Cloud SecretId with mixed-case characters", () => {
+    const input = "AKIDz8exampleFake01Key99Test";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("AKIDz8…Test");
+  });
+
+  it("masks Alibaba Cloud AccessKey ID (LTAI prefix)", () => {
+    const input = "AccessKeyId=LTAI5tExampleFakeKeyXyz9";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("AccessKeyId=LTAI5t…Xyz9");
+  });
+
+  it("masks HuggingFace tokens (hf_ prefix)", () => {
+    const input = "hf_ABCDEFghijklmnopqrstuv";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("hf_ABC…stuv");
+  });
+
+  it("masks Replicate tokens (r8_ prefix)", () => {
+    const input = "r8_ABCDEFghijklmnopqrstuv";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("r8_ABC…stuv");
+  });
+
   it("skips redaction when mode is off", () => {
     const input = "OPENAI_API_KEY=sk-1234567890abcdef";
     const output = redactSensitiveText(input, {
@@ -132,6 +331,18 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe(input);
+  });
+
+  it("honors logging redaction settings from the active config path", () => {
+    writeConfig(`{
+      logging: {
+        redactSensitive: "off",
+      },
+    }`);
+
+    expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
+      "OPENAI_API_KEY=sk-1234567890abcdef",
+    );
   });
 
   it("does not resolve patterns when mode is off", () => {

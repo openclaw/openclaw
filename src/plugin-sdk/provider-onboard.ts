@@ -1,9 +1,9 @@
 // Keep provider onboarding helpers dependency-light so bundled provider plugins
 // do not pull heavyweight runtime graphs at activation time.
 
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveStaticAllowlistModelKey } from "../agents/model-ref-shared.js";
+import { ensureStaticModelAllowlistEntry } from "../agents/model-allowlist-entry.js";
 import { findNormalizedProviderKey } from "../agents/provider-id.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type {
   ModelApi,
@@ -183,13 +183,17 @@ export function applyOnboardAuthAgentModelsAndProviders(
     providers: Record<string, ModelProviderConfig>;
   },
 ): OpenClawConfig {
+  const mergedAgentModels = {
+    ...cfg.agents?.defaults?.models,
+    ...params.agentModels,
+  };
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        models: params.agentModels,
+        models: mergedAgentModels,
       },
     },
     models: {
@@ -204,6 +208,9 @@ export function applyAgentDefaultModelPrimary(
   primary: string,
 ): OpenClawConfig {
   const existingFallbacks = extractAgentDefaultModelFallbacks(cfg.agents?.defaults?.model);
+  const normalizedFallbacks = existingFallbacks?.map((fallback) =>
+    normalizeAgentModelRefForConfig(fallback),
+  );
   return {
     ...cfg,
     agents: {
@@ -211,8 +218,8 @@ export function applyAgentDefaultModelPrimary(
       defaults: {
         ...cfg.agents?.defaults,
         model: {
-          ...(existingFallbacks ? { fallbacks: existingFallbacks } : undefined),
-          primary,
+          ...(normalizedFallbacks ? { fallbacks: normalizedFallbacks } : undefined),
+          primary: normalizeAgentModelRefForConfig(primary),
         },
       },
     },
@@ -453,35 +460,5 @@ export function ensureModelAllowlistEntry(params: {
   modelRef: string;
   defaultProvider?: string;
 }): OpenClawConfig {
-  const rawModelRef = params.modelRef.trim();
-  if (!rawModelRef) {
-    return params.cfg;
-  }
-
-  const models = { ...params.cfg.agents?.defaults?.models };
-  const keySet = new Set<string>([rawModelRef]);
-  const canonicalKey = resolveStaticAllowlistModelKey(
-    rawModelRef,
-    params.defaultProvider ?? DEFAULT_PROVIDER,
-  );
-  if (canonicalKey) {
-    keySet.add(canonicalKey);
-  }
-
-  for (const key of keySet) {
-    models[key] = {
-      ...models[key],
-    };
-  }
-
-  return {
-    ...params.cfg,
-    agents: {
-      ...params.cfg.agents,
-      defaults: {
-        ...params.cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
+  return ensureStaticModelAllowlistEntry(params);
 }

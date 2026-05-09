@@ -7,15 +7,31 @@ import {
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import { normalizeInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  normalizeInteractiveReply,
+  normalizeMessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
-import { buildDiscordInteractiveComponents } from "../shared-interactive.js";
+import {
+  buildDiscordInteractiveComponents,
+  buildDiscordPresentationComponents,
+} from "../shared-interactive.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
-import { readDiscordParentIdParam } from "./runtime.shared.js";
 
 const providerId = "discord";
+
+function readCurrentDiscordTarget(
+  toolContext: Pick<ChannelMessageActionContext, "toolContext">["toolContext"],
+): string | undefined {
+  const provider = toolContext?.currentChannelProvider?.trim().toLowerCase();
+  if (provider && provider !== providerId) {
+    return undefined;
+  }
+  const target = toolContext?.currentChannelId?.trim();
+  return target || undefined;
+}
 
 export async function handleDiscordMessageAction(
   ctx: Pick<
@@ -39,30 +55,48 @@ export async function handleDiscordMessageAction(
     mediaReadFile: ctx.mediaReadFile,
   } as const;
 
-  const resolveChannelId = () =>
-    resolveDiscordChannelId(
-      readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true }),
-    );
+  const readTarget = () => {
+    const target =
+      readStringParam(params, "channelId") ??
+      readStringParam(params, "to") ??
+      readCurrentDiscordTarget(ctx.toolContext);
+    if (!target) {
+      throw new Error("Discord channel target is required (use channel:<id>).");
+    }
+    return target;
+  };
+  const resolveChannelId = () => resolveDiscordChannelId(readTarget());
+  const readSendTarget = () => {
+    const target =
+      readStringParam(params, "to") ??
+      readStringParam(params, "target") ??
+      readCurrentDiscordTarget(ctx.toolContext);
+    if (!target) {
+      throw new Error("Discord channel target is required (use channel:<id>).");
+    }
+    return target;
+  };
 
   if (action === "send") {
-    const to = readStringParam(params, "to", { required: true });
+    const to = readSendTarget();
     const asVoice = readBooleanParam(params, "asVoice") === true;
     const rawComponents =
       params.components ??
+      buildDiscordPresentationComponents(normalizeMessagePresentation(params.presentation)) ??
       buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive));
     const hasComponents =
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
-    const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents,
-      allowEmpty: true,
-    });
     // Support media, path, and filePath for media URL
     const mediaUrl =
       readStringParam(params, "media", { trim: false }) ??
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
+    const content = readStringParam(params, "message", {
+      required: !asVoice && !hasComponents && !mediaUrl,
+      allowEmpty: true,
+    });
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const rawEmbeds = params.embeds;
@@ -75,13 +109,48 @@ export async function handleDiscordMessageAction(
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
-        content,
+        content: content ?? "",
         mediaUrl: mediaUrl ?? undefined,
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
         components,
         embeds,
         asVoice,
+        silent,
+        __sessionKey: sessionKey ?? undefined,
+        __agentId: agentId ?? undefined,
+      },
+      cfg,
+      actionOptions,
+    );
+  }
+
+  if (action === "upload-file") {
+    const to = readSendTarget();
+    const mediaUrl =
+      readStringParam(params, "filePath", { trim: false }) ??
+      readStringParam(params, "path", { trim: false }) ??
+      readStringParam(params, "media", { trim: false });
+    if (!mediaUrl) {
+      throw new Error("upload-file requires filePath, path, or media.");
+    }
+    const content =
+      readStringParam(params, "message", { allowEmpty: true }) ??
+      readStringParam(params, "content", { allowEmpty: true });
+    const filename = readStringParam(params, "filename");
+    const replyTo = readStringParam(params, "replyTo");
+    const silent = readBooleanParam(params, "silent") === true;
+    const sessionKey = readStringParam(params, "__sessionKey");
+    const agentId = readStringParam(params, "__agentId");
+    return await handleDiscordAction(
+      {
+        action: "sendMessage",
+        accountId: accountId ?? undefined,
+        to,
+        content: content ?? "",
+        mediaUrl,
+        filename: filename ?? undefined,
+        replyTo: replyTo ?? undefined,
         silent,
         __sessionKey: sessionKey ?? undefined,
         __agentId: agentId ?? undefined,
@@ -132,7 +201,7 @@ export async function handleDiscordMessageAction(
       {
         action: "react",
         accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
+        channelId: readTarget(),
         messageId,
         emoji,
         remove,
@@ -149,7 +218,7 @@ export async function handleDiscordMessageAction(
       {
         action: "reactions",
         accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
+        channelId: readTarget(),
         messageId,
         limit,
       },
@@ -294,7 +363,6 @@ export async function handleDiscordMessageAction(
   const adminResult = await tryHandleDiscordMessageActionGuildAdmin({
     ctx,
     resolveChannelId,
-    readParentIdParam: readDiscordParentIdParam,
   });
   if (adminResult !== undefined) {
     return adminResult;

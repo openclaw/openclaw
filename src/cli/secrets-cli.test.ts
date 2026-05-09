@@ -5,27 +5,9 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecretsCli } from "./secrets-cli.js";
 
-const mocks = vi.hoisted(() => {
-  const runtimeLogs: string[] = [];
-  const runtimeErrors: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const defaultRuntime = {
-    log: vi.fn((...args: unknown[]) => {
-      runtimeLogs.push(stringifyArgs(args));
-    }),
-    error: vi.fn((...args: unknown[]) => {
-      runtimeErrors.push(stringifyArgs(args));
-    }),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  const runtime = createCliRuntimeMock(vi);
   return {
     callGatewayFromCli: vi.fn(),
     runSecretsAudit: vi.fn(),
@@ -33,9 +15,7 @@ const mocks = vi.hoisted(() => {
     runSecretsConfigureInteractive: vi.fn(),
     runSecretsApply: vi.fn(),
     confirm: vi.fn(),
-    defaultRuntime,
-    runtimeLogs,
-    runtimeErrors,
+    ...runtime,
   };
 });
 
@@ -217,7 +197,7 @@ describe("secrets CLI", () => {
 
     await expect(
       createProgram().parseAsync(["secrets", "audit", "--check"], { from: "user" }),
-    ).rejects.toBeTruthy();
+    ).rejects.toThrow("__exit__:2");
     expect(runSecretsAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         allowExec: false,
@@ -348,9 +328,10 @@ describe("secrets CLI", () => {
       await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
         from: "user",
       });
-      expect(runtimeLogs.some((line) => line.includes("Secrets apply dry-run note: skipped"))).toBe(
-        false,
+      const skippedExecNotes = runtimeLogs.filter((line) =>
+        line.includes("Secrets apply dry-run note: skipped"),
       );
+      expect(skippedExecNotes).toEqual([]);
     });
   });
 
@@ -361,7 +342,10 @@ describe("secrets CLI", () => {
     confirm.mockResolvedValue(false);
 
     await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
-    expect(runtimeLogs.some((line) => line.includes("Preflight note: skipped"))).toBe(false);
+    const preflightSkippedExecNotes = runtimeLogs.filter((line) =>
+      line.includes("Preflight note: skipped"),
+    );
+    expect(preflightSkippedExecNotes).toEqual([]);
   });
 
   it("forwards --allow-exec to configure preflight and apply", async () => {

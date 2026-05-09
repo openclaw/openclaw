@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
-} from "../../../src/plugins/memory-state.js";
+} from "openclaw/plugin-sdk/memory-host-core";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   getMemorySearchManagerMockCalls,
   getReadAgentMemoryFileMockCalls,
@@ -70,6 +70,15 @@ beforeEach(() => {
 });
 
 describe("memory search citations", () => {
+  function expectFirstMemoryResult<T>(details: { results: T[] }): T {
+    expect(details.results).toHaveLength(1);
+    const [result] = details.results;
+    if (!result) {
+      throw new Error("Expected memory search result");
+    }
+    return result;
+  }
+
   it("appends source information when citations are enabled", async () => {
     setMemoryBackend("builtin");
     const cfg = asOpenClawConfig({
@@ -79,8 +88,9 @@ describe("memory search citations", () => {
     const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_on", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
-    expect(details.results[0]?.snippet).toMatch(/Source: MEMORY.md#L5-L7/);
-    expect(details.results[0]?.citation).toBe("MEMORY.md#L5-L7");
+    const firstResult = expectFirstMemoryResult(details);
+    expect(firstResult.snippet).toMatch(/Source: MEMORY.md#L5-L7/);
+    expect(firstResult.citation).toBe("MEMORY.md#L5-L7");
   });
 
   it("leaves snippet untouched when citations are off", async () => {
@@ -92,8 +102,9 @@ describe("memory search citations", () => {
     const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_off", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
-    expect(details.results[0]?.snippet).not.toMatch(/Source:/);
-    expect(details.results[0]?.citation).toBeUndefined();
+    const firstResult = expectFirstMemoryResult(details);
+    expect(firstResult.snippet).not.toMatch(/Source:/);
+    expect(firstResult.citation).toBeUndefined();
   });
 
   it("clamps decorated snippets to qmd injected budget", async () => {
@@ -105,7 +116,8 @@ describe("memory search citations", () => {
     const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_qmd", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
-    expect(details.results[0]?.snippet.length).toBeLessThanOrEqual(20);
+    const firstResult = expectFirstMemoryResult(details);
+    expect(firstResult.snippet.length).toBeLessThanOrEqual(20);
   });
 
   it("honors auto mode for direct chats", async () => {
@@ -113,7 +125,8 @@ describe("memory search citations", () => {
     const tool = createAutoCitationsMemorySearchTool("agent:main:discord:dm:u123");
     const result = await tool.execute("auto_mode_direct", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string }> };
-    expect(details.results[0]?.snippet).toMatch(/Source:/);
+    const firstResult = expectFirstMemoryResult(details);
+    expect(firstResult.snippet).toMatch(/Source:/);
   });
 
   it("suppresses citations for auto mode in group chats", async () => {
@@ -121,12 +134,13 @@ describe("memory search citations", () => {
     const tool = createAutoCitationsMemorySearchTool("agent:main:discord:group:c123");
     const result = await tool.execute("auto_mode_group", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string }> };
-    expect(details.results[0]?.snippet).not.toMatch(/Source:/);
+    const firstResult = expectFirstMemoryResult(details);
+    expect(firstResult.snippet).not.toMatch(/Source:/);
   });
 });
 
 describe("memory tools", () => {
-  it("does not throw when memory_search fails (e.g. embeddings 429)", async () => {
+  it("returns unavailable details when memory_search fails (e.g. embeddings 429)", async () => {
     setMemorySearchImpl(async () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");
     });
@@ -142,7 +156,7 @@ describe("memory tools", () => {
     });
   });
 
-  it("does not throw when memory_get fails", async () => {
+  it("returns disabled details when memory_get fails", async () => {
     setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
       throw new Error("path required");
     });
@@ -280,6 +294,84 @@ describe("memory tools", () => {
       ],
     });
     expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("includes memory results in corpus=all even when wiki scores are numerically higher (#77337)", async () => {
+    // Wiki uses integer point scores (up to ~100+); memory uses cosine similarity (0-1).
+    // Raw-score sort would starve memory hits when maxResults <= number of wiki hits.
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/note-a.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.9,
+        snippet: "Memory result A",
+        source: "memory" as const,
+      },
+    ]);
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [
+        {
+          corpus: "wiki",
+          path: "w1.md",
+          title: "W1",
+          kind: "entity",
+          score: 50,
+          snippet: "wiki 1",
+        },
+        {
+          corpus: "wiki",
+          path: "w2.md",
+          title: "W2",
+          kind: "entity",
+          score: 40,
+          snippet: "wiki 2",
+        },
+        {
+          corpus: "wiki",
+          path: "w3.md",
+          title: "W3",
+          kind: "entity",
+          score: 30,
+          snippet: "wiki 3",
+        },
+        {
+          corpus: "wiki",
+          path: "w4.md",
+          title: "W4",
+          kind: "entity",
+          score: 20,
+          snippet: "wiki 4",
+        },
+        {
+          corpus: "wiki",
+          path: "w5.md",
+          title: "W5",
+          kind: "entity",
+          score: 10,
+          snippet: "wiki 5",
+        },
+      ],
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_all_starvation", {
+      query: "note",
+      corpus: "all",
+      maxResults: 5,
+    });
+    const details = result.details as { results: Array<{ corpus: string; path: string }> };
+    const corpora = details.results.map((r) => r.corpus);
+
+    // Memory results must appear despite lower numeric scores, and the spare
+    // memory quota should be backfilled by the remaining wiki result.
+    expect(corpora).toContain("memory");
+    expect(corpora).toContain("wiki");
+    expect(details.results).toHaveLength(5);
+    expect(
+      details.results.filter((entry) => entry.corpus === "wiki").map((entry) => entry.path),
+    ).toEqual(["w1.md", "w2.md", "w3.md", "w4.md"]);
   });
 
   it("merges memory and wiki corpus search results for corpus=all", async () => {

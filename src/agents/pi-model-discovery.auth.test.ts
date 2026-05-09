@@ -1,13 +1,47 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 import {
   addEnvBackedPiCredentials,
-  normalizeDiscoveredPiModel,
   scrubLegacyStaticAuthJsonEntriesForDiscovery,
-} from "./pi-model-discovery.js";
+} from "./pi-auth-discovery-core.js";
+
+vi.mock("./model-auth-env-vars.js", () => ({
+  listProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
+  resolveProviderEnvApiKeyCandidates: () => ({
+    mistral: ["MISTRAL_API_KEY"],
+  }),
+  resolveProviderEnvAuthEvidence: () => ({
+    "workspace-cloud": [
+      {
+        type: "local-file-with-env",
+        credentialMarker: "workspace-cloud-local-credentials",
+        source: "workspace cloud credentials",
+      },
+    ],
+  }),
+}));
+
+vi.mock("./model-auth-env.js", () => ({
+  resolveEnvApiKey: (
+    provider: string,
+    env: NodeJS.ProcessEnv,
+    options?: { workspaceDir?: string },
+  ) => {
+    if (provider === "mistral" && env.MISTRAL_API_KEY?.trim()) {
+      return { apiKey: env.MISTRAL_API_KEY, source: "env: MISTRAL_API_KEY" };
+    }
+    if (provider === "workspace-cloud" && options?.workspaceDir === "/tmp/workspace") {
+      return {
+        apiKey: "workspace-cloud-local-credentials",
+        source: "workspace cloud credentials",
+      };
+    }
+    return null;
+  },
+}));
 
 async function createAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-auth-storage-"));
@@ -122,7 +156,7 @@ describe("discoverAuthStorage", () => {
     });
   });
 
-  it("includes env-backed provider auth when no auth profile exists", async () => {
+  it("includes env-backed provider auth when no auth profile exists", () => {
     const previousMistral = process.env.MISTRAL_API_KEY;
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     const previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
@@ -130,7 +164,7 @@ describe("discoverAuthStorage", () => {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     try {
-      const credentials = addEnvBackedPiCredentials({}, process.env);
+      const credentials = addEnvBackedPiCredentials({}, { env: process.env });
 
       expect(credentials.mistral).toEqual({
         type: "api_key",
@@ -155,56 +189,18 @@ describe("discoverAuthStorage", () => {
     }
   });
 
-  it("normalizes stale discovered openai-codex rows when api metadata is missing", () => {
-    const normalized = normalizeDiscoveredPiModel(
+  it("includes workspace-scoped auth evidence in pi discovery credentials", () => {
+    const credentials = addEnvBackedPiCredentials(
+      {},
       {
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-        provider: "openai-codex",
-        baseUrl: "https://chatgpt.com/backend-api",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1_050_000,
-        contextTokens: 272_000,
-        maxTokens: 128_000,
+        env: {},
+        workspaceDir: "/tmp/workspace",
       },
-      "/tmp/agent",
-    ) as {
-      api?: string;
-      baseUrl?: string;
-    };
+    );
 
-    expect(normalized).toMatchObject({
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-    });
-  });
-
-  it("canonicalizes stale discovered openai-codex backend-api/v1 rows", () => {
-    const normalized = normalizeDiscoveredPiModel(
-      {
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-        provider: "openai-codex",
-        api: "openai-codex-responses",
-        baseUrl: "https://chatgpt.com/backend-api/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1_050_000,
-        contextTokens: 272_000,
-        maxTokens: 128_000,
-      },
-      "/tmp/agent",
-    ) as {
-      api?: string;
-      baseUrl?: string;
-    };
-
-    expect(normalized).toMatchObject({
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+    expect(credentials["workspace-cloud"]).toEqual({
+      type: "api_key",
+      key: "workspace-cloud-local-credentials",
     });
   });
 });

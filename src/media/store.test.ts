@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -52,30 +52,97 @@ describe("media store", () => {
     segment: string;
     run: (store: typeof import("./store.js"), home: string) => Promise<{ path: string }>;
   }) {
-    await withTempStore(async (store, home) => {
-      const originalWriteFile = fs.writeFile.bind(fs);
-      let injectedEnoent = false;
-      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-        const [filePath] = args;
-        if (
-          !injectedEnoent &&
-          typeof filePath === "string" &&
-          filePath.includes(`${path.sep}${params.segment}${path.sep}`)
-        ) {
-          injectedEnoent = true;
-          await fs.rm(path.dirname(filePath), { recursive: true, force: true });
-          const err = new Error("missing dir") as NodeJS.ErrnoException;
-          err.code = "ENOENT";
-          throw err;
-        }
-        return await originalWriteFile(...args);
-      });
-
-      const saved = await params.run(store, home);
-      const savedStat = await fs.stat(saved.path);
-      expect(injectedEnoent).toBe(true);
-      expect(savedStat.isFile()).toBe(true);
+    const mockKey = `./store.js?scope=retry-pruned-write-${params.segment}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let injectedEnoent = false;
+    vi.doMock("../infra/file-store.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../infra/file-store.js")>();
+      return {
+        ...actual,
+        fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
+          const actualStore = actual.fileStore(options);
+          return {
+            ...actualStore,
+            write: async (...args: Parameters<typeof actualStore.write>) => {
+              const [relativePath] = args;
+              if (!injectedEnoent && relativePath.includes(`${params.segment}${path.sep}`)) {
+                injectedEnoent = true;
+                await fs.rm(path.dirname(actualStore.path(relativePath)), {
+                  recursive: true,
+                  force: true,
+                });
+                const err = new Error("missing dir") as NodeJS.ErrnoException;
+                err.code = "ENOENT";
+                throw err;
+              }
+              return await actualStore.write(...args);
+            },
+          };
+        },
+      };
     });
+
+    try {
+      const storeWithMock = await importFreshModule<typeof import("./store.js")>(
+        import.meta.url,
+        mockKey,
+      );
+      await withTempStore(async (_store, home) => {
+        const saved = await params.run(storeWithMock, home);
+        const savedStat = await fs.stat(saved.path);
+        expect(injectedEnoent).toBe(true);
+        expect(savedStat.isFile()).toBe(true);
+      });
+    } finally {
+      vi.doUnmock("../infra/file-store.js");
+    }
+  }
+
+  async function expectFailedBufferWriteCase() {
+    const mockKey = `./store.js?scope=failed-buffer-write-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const attemptedRelPaths: string[] = [];
+    vi.doMock("../infra/file-store.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../infra/file-store.js")>();
+      return {
+        ...actual,
+        fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
+          const actualStore = actual.fileStore(options);
+          return {
+            ...actualStore,
+            write: async (...args: Parameters<typeof actualStore.write>) => {
+              const [relativePath] = args;
+              if (relativePath.includes(`failed-buffer${path.sep}`)) {
+                attemptedRelPaths.push(relativePath);
+                const err = new Error("no space left on device") as NodeJS.ErrnoException;
+                err.code = "ENOSPC";
+                throw err;
+              }
+              return await actualStore.write(...args);
+            },
+          };
+        },
+      };
+    });
+
+    try {
+      const storeWithMock = await importFreshModule<typeof import("./store.js")>(
+        import.meta.url,
+        mockKey,
+      );
+      await withTempStore(async (_store) => {
+        const mediaDir = await storeWithMock.ensureMediaDir();
+        await expect(
+          storeWithMock.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "failed-buffer"),
+        ).rejects.toMatchObject({ code: "ENOSPC" });
+
+        const failedDir = path.join(mediaDir, "failed-buffer");
+        const entries = await fs.readdir(failedDir).catch(() => []);
+        expect(attemptedRelPaths).toHaveLength(1);
+        expect(path.basename(attemptedRelPaths[0] ?? "")).toMatch(/^[^/\\]+\.ogg$/);
+        expect(entries).toEqual([]);
+      });
+    } finally {
+      vi.doUnmock("../infra/file-store.js");
+    }
   }
 
   async function expectSavedOriginalFilenameCase(params: {
@@ -157,6 +224,7 @@ describe("media store", () => {
   async function expectSavedBufferCase(params: {
     buffer: Buffer;
     contentType?: string;
+    originalFilename?: string;
     expectedContentType: string;
     expectedExtension: string;
     assertSaved?: (
@@ -165,7 +233,13 @@ describe("media store", () => {
     ) => Promise<void> | void;
   }) {
     await withTempStore(async (store) => {
-      const saved = await store.saveMediaBuffer(params.buffer, params.contentType);
+      const saved = await store.saveMediaBuffer(
+        params.buffer,
+        params.contentType,
+        "inbound",
+        5 * 1024 * 1024,
+        params.originalFilename,
+      );
       expect(saved.contentType).toBe(params.expectedContentType);
       expect(saved.path.endsWith(params.expectedExtension)).toBe(true);
       await params.assertSaved?.(saved, params.buffer);
@@ -301,6 +375,112 @@ describe("media store", () => {
       },
     },
     {
+      name: "does not leave final media artifacts when buffer writes fail",
+      run: async () => {
+        await expectFailedBufferWriteCase();
+      },
+    },
+    {
+      name: "saves buffers when the best-effort fsync step reports EPERM",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const originalOpen = fs.open.bind(fs);
+          vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const handle = await originalOpen(...args);
+            const filePath = args[0];
+            if (
+              typeof filePath === "string" &&
+              filePath.includes(`${path.sep}fsync-eperm${path.sep}`)
+            ) {
+              vi.spyOn(handle, "sync").mockRejectedValueOnce(
+                Object.assign(new Error("operation not permitted"), { code: "EPERM" }),
+              );
+            }
+            return handle;
+          });
+
+          const saved = await store.saveMediaBuffer(
+            Buffer.from("docx"),
+            "application/zip",
+            "fsync-eperm",
+          );
+
+          await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("docx");
+        });
+      },
+    },
+    {
+      name: "rejects traversal media subdirs before saving buffers",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const mediaDir = await store.ensureMediaDir();
+          const outsideDir = path.join(home, "outside-media");
+          const traversalSubdir = path.relative(mediaDir, outsideDir);
+
+          await expect(
+            store.saveMediaBuffer(Buffer.from("escape"), "text/plain", traversalSubdir),
+          ).rejects.toThrow("unsafe media subdir");
+          await expect(fs.stat(outsideDir)).rejects.toThrow();
+        });
+      },
+    },
+    {
+      name: "rejects traversal media subdirs before resolving IDs",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const mediaDir = await store.ensureMediaDir();
+          const outsideDir = path.join(home, "outside-media-resolve");
+          await fs.mkdir(outsideDir, { recursive: true });
+          await fs.writeFile(path.join(outsideDir, "passwd"), "not media");
+
+          await expect(
+            store.resolveMediaBufferPath("passwd", path.relative(mediaDir, outsideDir)),
+          ).rejects.toThrow("unsafe media subdir");
+        });
+      },
+    },
+    {
+      name: "reads media IDs through the media root boundary",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const saved = await store.saveMediaBuffer(Buffer.from("source bytes"), "text/plain");
+
+          const read = await store.readMediaBuffer(saved.id, "inbound");
+
+          await expect(fs.realpath(read.path)).resolves.toBe(await fs.realpath(saved.path));
+          expect(read.size).toBe("source bytes".length);
+          expect(read.buffer.toString("utf8")).toBe("source bytes");
+        });
+      },
+    },
+    {
+      name: "rejects oversized media ID reads before materializing the file",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const saved = await store.saveMediaBuffer(Buffer.from("too large"), "text/plain");
+
+          await expect(store.readMediaBuffer(saved.id, "inbound", 3)).rejects.toThrow(
+            "maximum is 3 bytes",
+          );
+        });
+      },
+    },
+    {
+      name: "rejects traversal media subdirs before reading IDs",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const mediaDir = await store.ensureMediaDir();
+          const outsideDir = path.join(home, "outside-media-read");
+          await fs.mkdir(outsideDir, { recursive: true });
+          await fs.writeFile(path.join(outsideDir, "passwd"), "not media");
+
+          await expect(
+            store.readMediaBuffer("passwd", path.relative(mediaDir, outsideDir)),
+          ).rejects.toThrow("unsafe media subdir");
+        });
+      },
+    },
+    {
       name: "retries local-source writes when cleanup prunes the target directory",
       run: async () => {
         await expectRetryAfterPrunedWriteCase({
@@ -371,6 +551,14 @@ describe("media store", () => {
       expectedContentType: "image/jpeg",
       expectedExtension: ".jpg",
     },
+    {
+      name: "preserves original extension for generic file buffers",
+      buffer: Buffer.from("custom binary"),
+      contentType: "application/octet-stream",
+      originalFilename: "report.custom",
+      expectedContentType: "application/octet-stream",
+      expectedExtension: ".custom",
+    },
   ] as const)("$name", async (testCase) => {
     const buffer =
       "bufferFactory" in testCase && testCase.bufferFactory
@@ -379,8 +567,16 @@ describe("media store", () => {
     await expectSavedBufferCase({
       buffer,
       contentType: testCase.contentType,
+      ...("originalFilename" in testCase ? { originalFilename: testCase.originalFilename } : {}),
       expectedContentType: testCase.expectedContentType,
       expectedExtension: testCase.expectedExtension,
+      ...("originalFilename" in testCase
+        ? {
+            assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
+              expect(path.basename(saved.path)).toMatch(/^report---.+\.custom$/);
+            },
+          }
+        : {}),
       ...("assertSaved" in testCase ? { assertSaved: testCase.assertSaved } : {}),
     });
   });

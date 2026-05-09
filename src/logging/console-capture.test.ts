@@ -47,6 +47,8 @@ afterAll(async () => {
 });
 
 describe("enableConsoleCapture", () => {
+  const secret = "sk-testsecret1234567890abcd";
+
   it("swallows EIO from stderr writes", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     vi.spyOn(process.stderr, "write").mockImplementation(() => {
@@ -54,7 +56,7 @@ describe("enableConsoleCapture", () => {
     });
     routeLogsToStderr();
     enableConsoleCapture();
-    expect(() => console.log("hello")).not.toThrow();
+    expect(console.log("hello")).toBeUndefined();
   });
 
   it("swallows EIO from original console writes", () => {
@@ -63,7 +65,7 @@ describe("enableConsoleCapture", () => {
       throw eioError();
     };
     enableConsoleCapture();
-    expect(() => console.log("hello")).not.toThrow();
+    expect(console.log("hello")).toBeUndefined();
   });
 
   it("prefixes console output with timestamps when enabled", () => {
@@ -123,6 +125,50 @@ describe("enableConsoleCapture", () => {
     expect(stdoutWrite).toHaveBeenCalledWith('{\n  "ok": true\n}\n');
   });
 
+  it("redacts credentials before forwarding console output", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const log = vi.fn();
+    console.log = log;
+    enableConsoleCapture();
+
+    console.log("apiKey:", secret);
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const line = String(log.mock.calls[0]?.[0] ?? "");
+    expect(line).toContain("apiKey:");
+    expect(line).not.toContain(secret);
+  });
+
+  it("redacts credentials before writing forced stderr console output", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    routeLogsToStderr();
+    enableConsoleCapture();
+
+    console.error(`Authorization: Bearer ${secret}`);
+
+    expect(stderrWrite).toHaveBeenCalledTimes(1);
+    const line = String(stderrWrite.mock.calls[0]?.[0] ?? "");
+    expect(line).toContain("Authorization: Bearer");
+    expect(line).not.toContain(secret);
+  });
+
+  it("redacts credentials when timestamp prefixing console output", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const warn = vi.fn();
+    console.warn = warn;
+    setConsoleTimestampPrefix(true);
+    enableConsoleCapture();
+
+    console.warn(`token=${secret}`);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]?.[0] ?? "");
+    expect(line).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
+    expect(line).toContain("token=");
+    expect(line).not.toContain(secret);
+  });
+
   it.each([
     { name: "stdout", stream: process.stdout },
     { name: "stderr", stream: process.stderr },
@@ -131,7 +177,7 @@ describe("enableConsoleCapture", () => {
     enableConsoleCapture();
     const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
     epipe.code = "EPIPE";
-    expect(() => stream.emit("error", epipe)).not.toThrow();
+    expect(stream.emit("error", epipe)).toBe(true);
   });
 
   it("rethrows non-EPIPE errors on stdout", () => {

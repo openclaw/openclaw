@@ -6,6 +6,7 @@ import type {
 } from "../config/types.provider-request.js";
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
+import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   ProviderRequestCapabilities,
@@ -66,7 +67,7 @@ export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOve
   allowPrivateNetwork?: boolean;
 };
 
-export type ResolvedProviderRequestAuthConfig =
+type ResolvedProviderRequestAuthConfig =
   | {
       configured: false;
       mode: "provider-default" | "authorization-bearer";
@@ -88,7 +89,7 @@ export type ResolvedProviderRequestAuthConfig =
       injectAuthorizationHeader: false;
     };
 
-export type ResolvedProviderRequestProxyConfig =
+type ResolvedProviderRequestProxyConfig =
   | {
       configured: false;
     }
@@ -104,7 +105,7 @@ export type ResolvedProviderRequestProxyConfig =
       tls: ResolvedProviderRequestTlsConfig;
     };
 
-export type ResolvedProviderRequestTlsConfig =
+type ResolvedProviderRequestTlsConfig =
   | {
       configured: false;
     }
@@ -118,7 +119,7 @@ export type ResolvedProviderRequestTlsConfig =
       rejectUnauthorized?: boolean;
     };
 
-export type ResolvedProviderRequestExtraHeadersConfig = {
+type ResolvedProviderRequestExtraHeadersConfig = {
   configured: boolean;
   headers?: Record<string, string>;
 };
@@ -134,9 +135,9 @@ export type ResolvedProviderRequestConfig = {
   policy: ProviderRequestPolicyResolution;
 };
 
-export type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
+type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
 
-export type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
+type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
   allowPrivateNetwork: boolean;
   capabilities: ProviderRequestCapabilities;
 };
@@ -160,14 +161,35 @@ type ResolveProviderRequestPolicyConfigParams = {
   callerHeaders?: Record<string, string>;
   precedence?: ProviderRequestHeaderPrecedence;
   authHeader?: boolean;
-  compat?: {
-    supportsStore?: boolean;
-    supportsPromptCacheKey?: boolean;
-  } | null;
+  compat?: unknown;
   modelId?: string | null;
   allowPrivateNetwork?: boolean;
   request?: ModelProviderRequestTransportOverrides;
 };
+
+function isLoopbackProviderBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    const host = new URL(baseUrl).hostname.trim().toLowerCase().replace(/\.+$/, "");
+    return host === "localhost" || host.endsWith(".localhost") || isLoopbackIpAddress(host);
+  } catch {
+    return false;
+  }
+}
+
+function shouldAutoAllowLoopbackModelRequest(
+  params: ResolveProviderRequestPolicyConfigParams,
+): boolean {
+  return (
+    params.capability === "llm" &&
+    params.transport === "stream" &&
+    params.allowPrivateNetwork === undefined &&
+    params.request?.allowPrivateNetwork === undefined &&
+    isLoopbackProviderBaseUrl(params.baseUrl)
+  );
+}
 
 function sanitizeConfiguredRequestString(value: unknown, path: string): string | undefined {
   if (typeof value !== "string") {
@@ -378,7 +400,7 @@ export function normalizeBaseUrl(
   return raw.replace(/\/+$/, "");
 }
 
-export function mergeProviderRequestHeaders(
+function mergeProviderRequestHeaders(
   ...headerSets: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {
   let merged: Record<string, string> | undefined;
@@ -662,7 +684,10 @@ export function resolveProviderRequestPolicyConfig(
     tls: resolveTlsOverride(params.request?.tls),
     policy,
     capabilities,
-    allowPrivateNetwork: params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork ?? false,
+    allowPrivateNetwork:
+      params.allowPrivateNetwork ??
+      params.request?.allowPrivateNetwork ??
+      shouldAutoAllowLoopbackModelRequest(params),
   };
 }
 

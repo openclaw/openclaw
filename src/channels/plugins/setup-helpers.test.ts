@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
@@ -8,7 +8,6 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import {
   applySetupAccountConfigPatch,
-  clearSetupPromotionRuntimeModuleCache,
   createEnvPatchedAccountSetupAdapter,
   createPatchedAccountSetupAdapter,
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -53,7 +52,8 @@ function resolveMatrixSingleAccountPromotionTarget(params: {
   return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
 }
 
-beforeAll(() => {
+beforeEach(() => {
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -83,7 +83,6 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  clearSetupPromotionRuntimeModuleCache();
   resetPluginRuntimeStateForTest();
 });
 

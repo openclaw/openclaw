@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { isPathInside } from "../infra/path-guards.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -21,6 +24,7 @@ import {
   resolveAgentConfig,
   resolveAgentContextLimits,
   resolveAgentDir,
+  resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   type ResolvedAgentConfig,
@@ -32,6 +36,7 @@ export {
   resolveAgentConfig,
   resolveAgentContextLimits,
   resolveAgentDir,
+  resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   type ResolvedAgentConfig,
@@ -107,7 +112,43 @@ export function resolveAgentEffectiveModelPrimary(
   );
 }
 
-// Backward-compatible alias. Prefer explicit/effective helpers at new call sites.
+function findMutableAgentEntry(cfg: OpenClawConfig, agentId: string): AgentConfig | undefined {
+  const id = normalizeAgentId(agentId);
+  return cfg.agents?.list?.find((entry) => normalizeAgentId(entry?.id) === id);
+}
+
+function updateAgentModelPrimary(
+  existing: AgentModelConfig | undefined,
+  primary: string,
+): AgentModelConfig {
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    return { ...existing, primary };
+  }
+  return primary;
+}
+
+export type AgentModelPrimaryWriteTarget = "agent" | "defaults";
+
+export function setAgentEffectiveModelPrimary(
+  cfg: OpenClawConfig,
+  agentId: string,
+  primary: string,
+): AgentModelPrimaryWriteTarget {
+  const id = normalizeAgentId(agentId);
+  if (resolveAgentExplicitModelPrimary(cfg, id)) {
+    const entry = findMutableAgentEntry(cfg, id);
+    if (entry) {
+      entry.model = updateAgentModelPrimary(entry.model, primary);
+      return "agent";
+    }
+  }
+  cfg.agents ??= {};
+  cfg.agents.defaults ??= {};
+  cfg.agents.defaults.model = updateAgentModelPrimary(cfg.agents.defaults.model, primary);
+  return "defaults";
+}
+
+/** @deprecated Prefer explicit/effective helpers at new call sites. */
 export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
   return resolveAgentExplicitModelPrimary(cfg, agentId);
 }
@@ -117,12 +158,15 @@ export function resolveAgentModelFallbacksOverride(
   agentId: string,
 ): string[] | undefined {
   const raw = resolveAgentConfig(cfg, agentId)?.model;
-  if (!raw || typeof raw === "string") {
+  if (!raw) {
     return undefined;
+  }
+  if (typeof raw === "string") {
+    return resolvePrimaryStringValue(raw) ? [] : undefined;
   }
   // Important: treat an explicitly provided empty array as an override to disable global fallbacks.
   if (!Object.hasOwn(raw, "fallbacks")) {
-    return undefined;
+    return Object.hasOwn(raw, "primary") && resolvePrimaryStringValue(raw) ? [] : undefined;
   }
   return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }
@@ -166,10 +210,14 @@ export function resolveEffectiveModelFallbacks(params: {
   cfg: OpenClawConfig;
   agentId: string;
   hasSessionModelOverride: boolean;
+  modelOverrideSource?: "auto" | "user";
 }): string[] | undefined {
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
   if (!params.hasSessionModelOverride) {
     return agentFallbacksOverride;
+  }
+  if (params.modelOverrideSource !== "auto") {
+    return [];
   }
   const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
   return agentFallbacksOverride ?? defaultFallbacks;
@@ -189,6 +237,11 @@ export function resolveAgentIncludedWorkDirs(cfg: OpenClawConfig, agentId: strin
       continue;
     }
     const resolved = path.resolve(stripNullBytes(resolveUserPath(trimmed)));
+    if (isFilesystemRootPath(trimmed, resolved)) {
+      throw new Error(
+        `Invalid includedWorkDirs entry (refuses filesystem root): ${entry}. Pass a narrower directory.`,
+      );
+    }
     const key = normalizePathForComparison(resolved);
     if (seen.has(key)) {
       continue;
@@ -198,6 +251,27 @@ export function resolveAgentIncludedWorkDirs(cfg: OpenClawConfig, agentId: strin
   }
   return included;
 }
+
+function isFilesystemRootPath(rawPath: string, resolvedPath: string): boolean {
+  if (resolvedPath === path.parse(resolvedPath).root) {
+    return true;
+  }
+  const rawTrimmed = stripNullBytes(rawPath.trim());
+  if (isWindowsFilesystemRootPath(rawTrimmed)) {
+    return true;
+  }
+  const expanded = stripNullBytes(resolveUserPath(rawTrimmed));
+  return expanded !== rawTrimmed && isWindowsFilesystemRootPath(expanded);
+}
+
+function isWindowsFilesystemRootPath(input: string): boolean {
+  if (!path.win32.isAbsolute(input) && !/^[a-zA-Z]:[\\/]?$/.test(input)) {
+    return false;
+  }
+  const resolved = path.win32.resolve(input);
+  return resolved === path.win32.parse(resolved).root;
+}
+
 function normalizePathForComparison(input: string): string {
   const resolved = path.resolve(stripNullBytes(resolveUserPath(input)));
   let normalized = resolved;
@@ -212,11 +286,6 @@ function normalizePathForComparison(input: string): string {
     return lowercasePreservingWhitespace(normalized);
   }
   return normalized;
-}
-
-function isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
-  const relative = path.relative(rootPath, candidatePath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 export function resolveAgentIdsByWorkspacePath(
@@ -235,7 +304,7 @@ export function resolveAgentIdsByWorkspacePath(
     ].map((root) => normalizePathForComparison(root));
     let bestRoot: string | undefined;
     for (const rootDir of candidateRoots) {
-      if (!isPathWithinRoot(normalizedWorkspacePath, rootDir)) {
+      if (!isPathInside(rootDir, normalizedWorkspacePath)) {
         continue;
       }
       if (!bestRoot || rootDir.length > bestRoot.length) {

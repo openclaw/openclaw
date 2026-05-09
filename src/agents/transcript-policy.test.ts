@@ -1,4 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => {
   const replayHelpers = await vi.importActual<
@@ -13,6 +15,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
           "anthropic",
           "google",
           "github-copilot",
+          "env-sensitive",
           "kilocode",
           "kimi",
           "kimi-code",
@@ -38,9 +41,20 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
         return {};
       }
       return {
-        buildReplayPolicy: (context?: { modelId?: string; modelApi?: string }) => {
+        buildReplayPolicy: (context?: {
+          modelId?: string;
+          modelApi?: string;
+          env?: NodeJS.ProcessEnv;
+        }) => {
           const modelId = context?.modelId?.toLowerCase() ?? "";
           switch (provider) {
+            case "env-sensitive":
+              return {
+                sanitizeToolCallIds: context?.env?.OPENCLAW_TEST_TRANSCRIPT_POLICY === "strict",
+                ...(context?.env?.OPENCLAW_TEST_TRANSCRIPT_POLICY === "strict"
+                  ? { toolCallIdMode: "strict" as const }
+                  : {}),
+              };
             case "amazon-bedrock":
             case "anthropic":
               return {
@@ -190,6 +204,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
 
 let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 let shouldAllowProviderOwnedThinkingReplay: typeof import("./transcript-policy.js").shouldAllowProviderOwnedThinkingReplay;
+const mockResolveProviderRuntimePlugin = vi.mocked(resolveProviderRuntimePlugin);
 
 describe("resolveTranscriptPolicy", () => {
   beforeAll(async () => {
@@ -201,6 +216,20 @@ describe("resolveTranscriptPolicy", () => {
     vi.clearAllMocks();
   });
 
+  function expectStrictOpenAiCompatibleReplayDefaults(provider: string): void {
+    const policy = resolveTranscriptPolicy({
+      provider,
+      modelId: "demo-model",
+      modelApi: "openai-completions",
+    });
+
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  }
+
   it("enables sanitizeToolCallIds for Anthropic provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",
@@ -209,6 +238,56 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.toolCallIdMode).toBe("strict");
+  });
+
+  it("memoizes replay policy resolution for the same config and process env", () => {
+    const config = {} as OpenClawConfig;
+
+    resolveTranscriptPolicy({
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+      config,
+      env: process.env,
+    });
+    resolveTranscriptPolicy({
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+      config,
+      env: process.env,
+    });
+
+    expect(mockResolveProviderRuntimePlugin).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse cached replay policies across custom env objects", () => {
+    const config = {} as OpenClawConfig;
+    const strictEnv = {
+      ...process.env,
+      OPENCLAW_TEST_TRANSCRIPT_POLICY: "strict",
+    };
+    const looseEnv = {
+      ...process.env,
+      OPENCLAW_TEST_TRANSCRIPT_POLICY: "loose",
+    };
+
+    const strictPolicy = resolveTranscriptPolicy({
+      provider: "env-sensitive",
+      modelId: "env-demo",
+      config,
+      env: strictEnv,
+    });
+    const loosePolicy = resolveTranscriptPolicy({
+      provider: "env-sensitive",
+      modelId: "env-demo",
+      config,
+      env: looseEnv,
+    });
+
+    expect(strictPolicy.sanitizeToolCallIds).toBe(true);
+    expect(strictPolicy.toolCallIdMode).toBe("strict");
+    expect(loosePolicy.sanitizeToolCallIds).toBe(false);
+    expect(loosePolicy.toolCallIdMode).toBeUndefined();
+    expect(mockResolveProviderRuntimePlugin).toHaveBeenCalledTimes(2);
   });
 
   it("enables sanitizeToolCallIds for Google provider", () => {
@@ -267,18 +346,24 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
-  it("falls back to unowned transport defaults when no owning plugin exists", () => {
+  it("strips historical reasoning for Gemma 4 on OpenAI-compatible providers", () => {
     const policy = resolveTranscriptPolicy({
       provider: "custom-openai-proxy",
-      modelId: "demo-model",
+      modelId: "google/gemma-4-26b-a4b-it",
       modelApi: "openai-completions",
     });
+    expect(policy.dropReasoningFromHistory).toBe(true);
 
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
+    const gemma3Policy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "google/gemma-3-27b-it",
+      modelApi: "openai-completions",
+    });
+    expect(gemma3Policy.dropReasoningFromHistory).toBe(false);
+  });
+
+  it("falls back to unowned transport defaults when no owning plugin exists", () => {
+    expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
   });
 
   it("preserves thinking blocks for newer Claude models in unowned Anthropic transport fallback", () => {
@@ -308,17 +393,7 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "vllm",
-      modelId: "demo-model",
-      modelApi: "openai-completions",
-    });
-
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
+    expectStrictOpenAiCompatibleReplayDefaults("vllm");
   });
 
   it("uses provider-owned Anthropic replay policy for MiniMax transports", () => {

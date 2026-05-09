@@ -10,6 +10,7 @@ import {
   hasBundledPluginContractSnapshotCapabilities,
 } from "./contracts/inventory/bundled-capability-metadata.js";
 import { pluginTestRepoRoot as repoRoot } from "./generated-plugin-test-helpers.js";
+import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginManifest } from "./manifest.js";
 
 function readManifestRecords(): PluginManifest[] {
@@ -24,7 +25,7 @@ function readManifestRecords(): PluginManifest[] {
         return false;
       }
       const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf-8")) as {
-        openclaw?: { extensions?: unknown };
+        openclaw?: OpenClawPackageManifest;
       };
       return normalizeBundledPluginStringList(packageJson.openclaw?.extensions).length > 0;
     })
@@ -45,6 +46,14 @@ describe("bundled capability metadata", () => {
       .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 
     expect(BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS).toEqual(expected);
+    expect(BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "migrate-hermes",
+          migrationProviderIds: ["hermes"],
+        }),
+      ]),
+    );
   });
 
   it("keeps lightweight alias maps aligned with bundled plugin manifests", () => {

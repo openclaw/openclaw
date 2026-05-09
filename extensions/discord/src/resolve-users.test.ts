@@ -1,4 +1,4 @@
-import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { jsonResponse, urlToString } from "./test-http-helpers.js";
@@ -217,6 +217,6 @@ describe("resolveDiscordUserAllowlist", () => {
     });
 
     expect(results).toHaveLength(2);
-    expect(results.every((r) => !r.resolved)).toBe(true);
+    expect(results.map((result) => result.resolved)).toEqual([false, false]);
   });
 });

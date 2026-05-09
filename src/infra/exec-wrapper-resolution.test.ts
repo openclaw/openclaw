@@ -117,6 +117,22 @@ describe("unwrapEnvInvocation", () => {
       expected: ["pwsh", "-Command", "Get-Date"],
     },
     {
+      argv: ["env", "-P", "/usr/bin", "python3", "-c", "print(1)"],
+      expected: ["python3", "-c", "print(1)"],
+    },
+    {
+      argv: ["env", "-S", "python3 -c", "print(1)"],
+      expected: ["python3", "-c", "print(1)"],
+    },
+    {
+      argv: ["env", "--split-string=python3 -c", "print(1)"],
+      expected: ["python3", "-c", "print(1)"],
+    },
+    {
+      argv: ["env", "-Spython3 -c", "print(1)"],
+      expected: ["python3", "-c", "print(1)"],
+    },
+    {
       argv: ["env", "-", "bash", "-lc", "echo hi"],
       expected: ["bash", "-lc", "echo hi"],
     },
@@ -455,12 +471,12 @@ describe("extractShellWrapperCommand", () => {
     {
       argv: ["bash", "-lc", "echo hi"],
       expectedInline: "echo hi",
-      expectedCommand: { isWrapper: true, command: "echo hi" },
+      expectedCommand: { isWrapper: true, command: null },
     },
     {
       argv: ["busybox", "sh", "-lc", "echo hi"],
       expectedInline: "echo hi",
-      expectedCommand: { isWrapper: true, command: "echo hi" },
+      expectedCommand: { isWrapper: true, command: null },
     },
     {
       argv: ["env", "--", "pwsh", "-Command", "Get-Date"],
@@ -478,7 +494,7 @@ describe("extractShellWrapperCommand", () => {
   });
 
   test("prefers an explicit raw command override when provided", () => {
-    expect(extractShellWrapperCommand(["bash", "-lc", "echo hi"], "  run this instead  ")).toEqual({
+    expect(extractShellWrapperCommand(["bash", "-c", "echo hi"], "  run this instead  ")).toEqual({
       isWrapper: true,
       command: "run this instead",
     });

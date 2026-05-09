@@ -7,11 +7,12 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
+  mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
@@ -19,15 +20,22 @@ import {
 import {
   buildTelegramCommandsListChannelData,
   buildTelegramModelBrowseChannelData,
+  buildTelegramModelsAddProviderChannelData,
   buildTelegramModelsListChannelData,
+  buildTelegramModelsMenuChannelData,
   buildTelegramModelsProviderChannelData,
 } from "./command-ui.js";
 import { TelegramChannelConfigSchema } from "./config-schema.js";
 import { telegramDoctor } from "./doctor.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { telegramSecurityAdapter } from "./security.js";
 import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
 
-export const TELEGRAM_CHANNEL = "telegram" as const;
+const TELEGRAM_CHANNEL = "telegram" as const;
+
+type TelegramConfigAccessorAccount = {
+  config: TelegramAccountConfig;
+};
 
 export function findTelegramTokenOwnerAccountId(params: {
   cfg: OpenClawConfig;
@@ -96,17 +104,31 @@ function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boole
   return !resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId);
 }
 
-export const telegramConfigAdapter = createScopedChannelConfigAdapter<ResolvedTelegramAccount>({
+function resolveTelegramConfigAccessorAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): TelegramConfigAccessorAccount {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
+  );
+  return { config: mergeTelegramAccountConfig(params.cfg, accountId) };
+}
+
+export const telegramConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedTelegramAccount,
+  TelegramConfigAccessorAccount
+>({
   sectionKey: TELEGRAM_CHANNEL,
   listAccountIds: listTelegramAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveTelegramAccount),
+  resolveAccessorAccount: resolveTelegramConfigAccessorAccount,
   inspectAccount: adaptScopedAccountAccessor(inspectTelegramAccount),
   defaultAccountId: resolveDefaultTelegramAccountId,
   clearBaseFields: ["botToken", "tokenFile", "name"],
-  resolveAllowFrom: (account: ResolvedTelegramAccount) => account.config.allowFrom,
+  resolveAllowFrom: (account) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(telegram|tg):/i }),
-  resolveDefaultTo: (account: ResolvedTelegramAccount) => account.config.defaultTo,
+  resolveDefaultTo: (account) => account.config.defaultTo,
 });
 
 export function createTelegramPluginBase(params: {
@@ -120,6 +142,7 @@ export function createTelegramPluginBase(params: {
   | "capabilities"
   | "commands"
   | "doctor"
+  | "security"
   | "reload"
   | "configSchema"
   | "config"
@@ -138,6 +161,11 @@ export function createTelegramPluginBase(params: {
       reactions: true,
       threads: true,
       media: true,
+      tts: {
+        voice: {
+          synthesisTarget: "voice-note",
+        },
+      },
       polls: true,
       nativeCommands: true,
       blockStreaming: true,
@@ -146,11 +174,14 @@ export function createTelegramPluginBase(params: {
       nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: true,
       buildCommandsListChannelData: buildTelegramCommandsListChannelData,
+      buildModelsMenuChannelData: buildTelegramModelsMenuChannelData,
       buildModelsProviderChannelData: buildTelegramModelsProviderChannelData,
+      buildModelsAddProviderChannelData: buildTelegramModelsAddProviderChannelData,
       buildModelsListChannelData: buildTelegramModelsListChannelData,
       buildModelBrowseChannelData: buildTelegramModelBrowseChannelData,
     },
     doctor: telegramDoctor,
+    security: telegramSecurityAdapter,
     reload: { configPrefixes: ["channels.telegram"] },
     configSchema: TelegramChannelConfigSchema,
     config: {
@@ -240,6 +271,7 @@ export function createTelegramPluginBase(params: {
     | "capabilities"
     | "commands"
     | "doctor"
+    | "security"
     | "reload"
     | "configSchema"
     | "config"

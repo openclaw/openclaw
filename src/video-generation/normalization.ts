@@ -16,6 +16,13 @@ import type {
   VideoGenerationResolution,
 } from "./types.js";
 
+const VIDEO_RESOLUTION_ORDER: readonly VideoGenerationResolution[] = [
+  "480P",
+  "720P",
+  "768P",
+  "1080P",
+];
+
 export type ResolvedVideoGenerationOverrides = {
   size?: string;
   aspectRatio?: string;
@@ -42,6 +49,7 @@ export function resolveVideoGenerationOverrides(params: {
 }): ResolvedVideoGenerationOverrides {
   const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
     provider: params.provider,
+    model: params.model,
     inputImageCount: params.inputImageCount,
     inputVideoCount: params.inputVideoCount,
   });
@@ -137,12 +145,15 @@ export function resolveVideoGenerationOverrides(params: {
       const normalizedResolution = resolveClosestResolution({
         requestedResolution: resolution,
         supportedResolutions: caps.resolutions,
+        order: VIDEO_RESOLUTION_ORDER,
       });
       if (normalizedResolution && normalizedResolution !== resolution) {
         normalization.resolution = {
           requested: resolution,
           applied: normalizedResolution,
         };
+      } else if (!normalizedResolution) {
+        ignoredOverrides.push({ key: "resolution", value: resolution });
       }
       resolution = normalizedResolution;
     } else if (resolution && !caps.supportsResolution) {

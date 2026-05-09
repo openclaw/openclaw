@@ -51,6 +51,49 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
+  it("extracts audioAsVoice from text MEDIA directives", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "Generated audio\n[[audio_as_voice]]\nMEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps audioAsVoice when the tag and MEDIA path are in separate text blocks", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "[[audio_as_voice]]" },
+          { type: "text", text: "MEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
+  it("extracts structured media trust markers", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            trustedLocalMedia: true,
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      trustedLocalMedia: true,
+    });
+  });
+
   it("extracts MEDIA: path from text content block", () => {
     const result = {
       content: [
@@ -278,16 +321,11 @@ describe("extractToolResultMediaPaths", () => {
   });
 
   it("blocks trusted-media aliases that are not exact registered built-ins", () => {
-    expect(filterToolResultMediaUrls("bash", ["/etc/passwd"], undefined, new Set(["exec"]))).toEqual(
-      [],
-    );
     expect(
-      filterToolResultMediaUrls(
-        "Web_Search",
-        ["/etc/passwd"],
-        undefined,
-        new Set(["web_search"]),
-      ),
+      filterToolResultMediaUrls("bash", ["/etc/passwd"], undefined, new Set(["exec"])),
+    ).toEqual([]);
+    expect(
+      filterToolResultMediaUrls("Web_Search", ["/etc/passwd"], undefined, new Set(["web_search"])),
     ).toEqual([]);
   });
 
@@ -300,6 +338,24 @@ describe("extractToolResultMediaPaths", () => {
         new Set(["web_search"]),
       ),
     ).toEqual(["/tmp/screenshot.png"]);
+  });
+
+  it("keeps trusted TTS local media when the raw built-in name is absent", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "tts",
+        ["/tmp/reply.opus"],
+        {
+          details: {
+            media: {
+              mediaUrl: "/tmp/reply.opus",
+              trustedLocalMedia: true,
+            },
+          },
+        },
+        new Set(["web_search"]),
+      ),
+    ).toEqual(["/tmp/reply.opus"]);
   });
 
   it("keeps local media for bundled plugin tool names registered in this run", () => {
@@ -327,6 +383,24 @@ describe("extractToolResultMediaPaths", () => {
     ).toEqual([]);
   });
 
+  it("does not let non-TTS trustedLocalMedia bypass the exact-name gate", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "Web_Search",
+        ["/etc/passwd"],
+        {
+          details: {
+            media: {
+              mediaUrl: "/etc/passwd",
+              trustedLocalMedia: true,
+            },
+          },
+        },
+        new Set(["web_search"]),
+      ),
+    ).toEqual([]);
+  });
+
   it("still allows remote media for colliding aliases", () => {
     expect(
       filterToolResultMediaUrls(
@@ -344,6 +418,21 @@ describe("extractToolResultMediaPaths", () => {
         details: {
           mcpServer: "probe",
           mcpTool: "browser",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not trust external TTS results with trustedLocalMedia", () => {
+    expect(
+      filterToolResultMediaUrls("tts", ["/tmp/reply.opus"], {
+        details: {
+          mcpServer: "probe",
+          mcpTool: "tts",
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            trustedLocalMedia: true,
+          },
         },
       }),
     ).toEqual([]);

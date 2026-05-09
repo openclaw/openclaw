@@ -5,6 +5,15 @@ import {
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
 
+function requireFirstWarning(warn: ReturnType<typeof vi.fn>): unknown {
+  const message = warn.mock.calls[0]?.[0];
+  expect(message).toBeDefined();
+  if (message === undefined) {
+    throw new Error("expected package manager warning");
+  }
+  return message;
+}
+
 describe("detectLifecyclePackageManager", () => {
   it("prefers npm_config_user_agent when present", () => {
     expect(
@@ -54,7 +63,7 @@ describe("warnIfNonPnpmLifecycle", () => {
       ),
     ).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain("detected npm");
+    expect(requireFirstWarning(warn)).toContain("detected npm");
   });
 
   it("stays quiet for pnpm", () => {

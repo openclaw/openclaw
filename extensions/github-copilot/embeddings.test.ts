@@ -1,26 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFirstGithubTokenMock = vi.hoisted(() => vi.fn());
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredSecretInputStringMock = vi.hoisted(() => vi.fn());
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
-const createGitHubCopilotEmbeddingProviderMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./auth.js", () => ({
   resolveFirstGithubToken: resolveFirstGithubTokenMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   resolveConfiguredSecretInputString: resolveConfiguredSecretInputStringMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/github-copilot-token", () => ({
+vi.mock("./token.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
   resolveCopilotApiToken: resolveCopilotApiTokenMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
-  createGitHubCopilotEmbeddingProvider: createGitHubCopilotEmbeddingProviderMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -29,7 +24,23 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 
+afterAll(() => {
+  vi.doUnmock("./auth.js");
+  vi.doUnmock("openclaw/plugin-sdk/secret-input-runtime");
+  vi.doUnmock("./token.js");
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
+
 const TEST_BASE_URL = "https://api.githubcopilot.test";
+
+function shouldContinueAutoSelection(error: Error): boolean {
+  const shouldContinue = githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection;
+  if (!shouldContinue) {
+    throw new Error("GitHub Copilot embedding adapter did not expose auto-selection fallback");
+  }
+  return shouldContinue(error);
+}
 
 function buildModelsResponse(models: Array<{ id: string; supported_endpoints?: unknown }>) {
   return { data: models };
@@ -73,15 +84,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
       source: "test",
       baseUrl: TEST_BASE_URL,
     });
-    createGitHubCopilotEmbeddingProviderMock.mockImplementation(async (client) => ({
-      provider: {
-        id: "github-copilot",
-        model: client.model,
-        embedQuery: async () => [0.1, 0.2, 0.3],
-        embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3]),
-      },
-      client,
-    }));
   });
 
   afterEach(() => {
@@ -89,7 +91,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     resolveConfiguredSecretInputStringMock.mockReset();
     resolveFirstGithubTokenMock.mockReset();
     resolveCopilotApiTokenMock.mockReset();
-    createGitHubCopilotEmbeddingProviderMock.mockReset();
     fetchWithSsrFGuardMock.mockReset();
   });
 
@@ -113,12 +114,8 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
 
     expect(result.provider?.model).toBe("text-embedding-3-small");
-    expect(createGitHubCopilotEmbeddingProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: TEST_BASE_URL,
-        githubToken: "gh_test_token_123",
-        model: "text-embedding-3-small",
-      }),
+    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith(
+      expect.objectContaining({ githubToken: "gh_test_token_123" }),
     );
   });
 
@@ -217,14 +214,12 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     } as never);
 
     expect(resolveFirstGithubTokenMock).toHaveBeenCalled();
-    expect(createGitHubCopilotEmbeddingProviderMock).toHaveBeenCalledWith({
-      baseUrl: "https://proxy.example/v1",
-      env: process.env,
-      fetchImpl: fetch,
-      githubToken: "gh_remote_token",
-      headers: { "X-Proxy-Token": "proxy" },
-      model: "text-embedding-3-small",
-    });
+    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: process.env,
+        githubToken: "gh_remote_token",
+      }),
+    );
 
     const discoveryCall = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as {
       init: { headers: Record<string, string> };
@@ -255,25 +250,19 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   });
 
   it("treats token parsing and discovery failures as auto-fallback errors", () => {
+    expect(shouldContinueAutoSelection(new Error("Copilot token response missing token"))).toBe(
+      true,
+    );
     expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
-        new Error("Copilot token response missing token"),
-      ),
-    ).toBe(true);
-    expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
+      shouldContinueAutoSelection(
         new Error("Unexpected response from GitHub Copilot token endpoint"),
       ),
     ).toBe(true);
     expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
+      shouldContinueAutoSelection(
         new Error("GitHub Copilot model discovery returned invalid JSON"),
       ),
     ).toBe(true);
-    expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
-        new Error("Network timeout"),
-      ),
-    ).toBe(false);
+    expect(shouldContinueAutoSelection(new Error("Network timeout"))).toBe(false);
   });
 });

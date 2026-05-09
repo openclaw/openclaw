@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow,
   getTaskFlowById,
@@ -38,15 +38,32 @@ function createStoredFlow(): TaskFlowRecord {
 }
 
 async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Promise<T> {
-  return await withTempDir({ prefix: "openclaw-task-flow-store-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskFlowRegistryForTests();
-    try {
-      return await run(root);
-    } finally {
+  return await withOpenClawTestState(
+    {
+      layout: "state-only",
+      prefix: "openclaw-task-flow-store-",
+    },
+    async (state) => {
+      const root = state.stateDir;
+      process.env.OPENCLAW_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
-    }
-  });
+      try {
+        return await run(root);
+      } finally {
+        resetTaskFlowRegistryForTests();
+      }
+    },
+  );
+}
+
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+
+function restoreOriginalStateDir(): void {
+  if (ORIGINAL_STATE_DIR === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+  }
 }
 
 describe("task-flow-registry store runtime", () => {
@@ -56,7 +73,7 @@ describe("task-flow-registry store runtime", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    delete process.env.OPENCLAW_STATE_DIR;
+    restoreOriginalStateDir();
     resetTaskFlowRegistryForTests();
   });
 
@@ -93,11 +110,19 @@ describe("task-flow-registry store runtime", () => {
     });
 
     expect(saveSnapshot).toHaveBeenCalled();
-    const latestSnapshot = saveSnapshot.mock.calls.at(-1)?.[0] as {
+    const latestCall = saveSnapshot.mock.calls.at(-1);
+    if (!latestCall) {
+      throw new Error("Expected task flow snapshot save call");
+    }
+    const latestSnapshot = latestCall[0] as {
       flows: ReadonlyMap<string, TaskFlowRecord>;
     };
     expect(latestSnapshot.flows.size).toBe(2);
-    expect(latestSnapshot.flows.get("flow-restored")?.goal).toBe("Restored flow");
+    const restoredFlow = latestSnapshot.flows.get("flow-restored");
+    if (!restoredFlow) {
+      throw new Error("Expected restored task flow");
+    }
+    expect(restoredFlow.goal).toBe("Restored flow");
   });
 
   it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {
@@ -118,7 +143,7 @@ describe("task-flow-registry store runtime", () => {
         expectedRevision: created.revision,
         currentStep: "ask_user",
         stateJson: { phase: "ask_user" },
-        waitJson: { kind: "external_event", topic: "telegram" },
+        waitJson: { kind: "external_event", topic: "forum" },
       });
       expect(waiting).toMatchObject({
         applied: true,
@@ -142,7 +167,7 @@ describe("task-flow-registry store runtime", () => {
         status: "waiting",
         currentStep: "ask_user",
         stateJson: { phase: "ask_user" },
-        waitJson: { kind: "external_event", topic: "telegram" },
+        waitJson: { kind: "external_event", topic: "forum" },
         cancelRequestedAt: 444,
       });
     });

@@ -1,4 +1,4 @@
-import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/testing";
+import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
 
@@ -70,6 +70,30 @@ describe("chunkDiscordText", () => {
     const text = "    indented line with words that force splits";
     const chunks = chunkDiscordText(text, { maxChars: 14, maxLines: 50 });
     expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("uses CJK punctuation as a safe long-line split point", () => {
+    const text = "一二三四五。六七八九十。甲乙丙丁戊。";
+    const chunks = chunkDiscordText(text, { maxChars: 10, maxLines: 50 });
+
+    expect(chunks).toEqual(["一二三四五。", "六七八九十。", "甲乙丙丁戊。"]);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("still prefers whitespace before CJK punctuation", () => {
+    const text = "alpha beta。gamma delta";
+    const chunks = chunkDiscordText(text, { maxChars: 13, maxLines: 50 });
+
+    expect(chunks[0]).toBe("alpha");
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("does not split surrogate pairs at hard fallback boundaries", () => {
+    const text = "ab😀cd😀ef";
+    const chunks = chunkDiscordText(text, { maxChars: 3, maxLines: 50 });
+
+    expect(chunks).toEqual(["ab", "😀c", "d😀", "ef"]);
     expect(chunks.join("")).toBe(text);
   });
 

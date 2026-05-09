@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { buildQaImageGenerationConfigPatch } from "./providers/image-generation.js";
 import {
   fetchJson,
   patchConfig,
+  readConfigSnapshot,
   waitForGatewayHealthy,
   waitForTransportReady,
 } from "./suite-runtime-gateway.js";
@@ -10,6 +12,19 @@ import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 function extractMediaPathFromText(text: string | undefined): string | undefined {
   return /MEDIA:([^\n]+)/.exec(text ?? "")?.[1]?.trim();
+}
+
+function readPluginAllow(config: Record<string, unknown>) {
+  const plugins = config.plugins;
+  if (typeof plugins !== "object" || plugins === null || Array.isArray(plugins)) {
+    return [];
+  }
+  const allow = (plugins as { allow?: unknown }).allow;
+  return Array.isArray(allow)
+    ? allow.filter(
+        (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
+      )
+    : [];
 }
 
 async function resolveGeneratedImagePath(params: {
@@ -70,63 +85,15 @@ async function resolveGeneratedImagePath(params: {
 }
 
 async function ensureImageGenerationConfigured(env: QaSuiteRuntimeEnv) {
-  const imageModelRef = "openai/gpt-image-1";
+  const snapshot = await readConfigSnapshot(env);
   await patchConfig({
     env,
-    patch:
-      env.providerMode === "mock-openai"
-        ? {
-            plugins: {
-              allow: [...new Set(["memory-core", "openai", ...env.transport.requiredPluginIds])],
-              entries: {
-                openai: {
-                  enabled: true,
-                },
-              },
-            },
-            models: {
-              providers: {
-                openai: {
-                  baseUrl: `${env.mock?.baseUrl}/v1`,
-                  apiKey: "test",
-                  api: "openai-responses",
-                  models: [
-                    {
-                      id: "gpt-image-1",
-                      name: "gpt-image-1",
-                      api: "openai-responses",
-                      reasoning: false,
-                      input: ["text"],
-                      cost: {
-                        input: 0,
-                        output: 0,
-                        cacheRead: 0,
-                        cacheWrite: 0,
-                      },
-                      contextWindow: 128_000,
-                      maxTokens: 4096,
-                    },
-                  ],
-                },
-              },
-            },
-            agents: {
-              defaults: {
-                imageGenerationModel: {
-                  primary: imageModelRef,
-                },
-              },
-            },
-          }
-        : {
-            agents: {
-              defaults: {
-                imageGenerationModel: {
-                  primary: imageModelRef,
-                },
-              },
-            },
-          },
+    patch: buildQaImageGenerationConfigPatch({
+      providerMode: env.providerMode,
+      providerBaseUrl: env.mock ? `${env.mock.baseUrl}/v1` : undefined,
+      requiredPluginIds: env.transport.requiredPluginIds,
+      existingPluginIds: readPluginAllow(snapshot.config),
+    }),
   });
   await waitForGatewayHealthy(env);
   await waitForTransportReady(env, 60_000);

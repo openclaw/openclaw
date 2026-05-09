@@ -3,8 +3,8 @@ import { formatDocsLink } from "./links.js";
 
 describe("formatDocsLink", () => {
   it("prepends the docs root when given a relative path", () => {
-    const out = formatDocsLink("/channels/telegram", "telegram");
-    expect(out).toContain("https://docs.openclaw.ai/channels/telegram");
+    const out = formatDocsLink("/channels/quietchat", "quietchat");
+    expect(out).toContain("https://docs.openclaw.ai/channels/quietchat");
   });
 
   it("preserves an absolute http url", () => {
@@ -17,15 +17,13 @@ describe("formatDocsLink", () => {
     expect(out).toContain("https://docs.openclaw.ai");
   });
 
-  it("does not crash when path is undefined (regression: #67076, #67074)", () => {
-    expect(() =>
-      formatDocsLink(undefined as unknown as string, "label"),
-    ).not.toThrow();
+  it("falls back to docs root when path is undefined (regression: #67076, #67074)", () => {
     const out = formatDocsLink(undefined as unknown as string, "label");
     expect(out).toContain("https://docs.openclaw.ai");
   });
 
-  it("does not crash when path is null", () => {
-    expect(() => formatDocsLink(null as unknown as string)).not.toThrow();
+  it("falls back to docs root when path is null", () => {
+    const out = formatDocsLink(null as unknown as string);
+    expect(out).toContain("https://docs.openclaw.ai");
   });
 });

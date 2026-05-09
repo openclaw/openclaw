@@ -1,9 +1,9 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
-} from "../../test/helpers/media-generation/provider-http-mocks.js";
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
 
@@ -40,7 +40,7 @@ describe("runway video generation provider", () => {
       })
       .mockResolvedValueOnce({
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
-        headers: new Headers({ "content-type": "video/mp4" }),
+        headers: new Headers({ "content-type": "video/webm" }),
       });
 
     const provider = buildRunwayVideoGenerationProvider();
@@ -72,6 +72,12 @@ describe("runway video generation provider", () => {
       fetch,
     );
     expect(result.videos).toHaveLength(1);
+    const video = result.videos[0];
+    expect(video).toBeDefined();
+    if (!video) {
+      throw new Error("expected Runway generated video");
+    }
+    expect(video.fileName).toBe("video-1.webm");
     expect(result.metadata).toEqual(
       expect.objectContaining({
         taskId: "task-1",

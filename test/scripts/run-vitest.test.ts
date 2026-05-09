@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   installVitestNoOutputWatchdog,
+  resolveDirectNodeVitestArgs,
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestSpawnParams,
@@ -11,6 +12,18 @@ import {
 describe("scripts/run-vitest", () => {
   it("adds --no-maglev to vitest child processes by default", () => {
     expect(resolveVitestNodeArgs({ PATH: "/usr/bin" })).toEqual(["--no-maglev"]);
+  });
+
+  it("detects pnpm exec node wrappers that can be spawned directly", () => {
+    expect(
+      resolveDirectNodeVitestArgs([
+        "exec",
+        "node",
+        "--no-maglev",
+        "node_modules/vitest/vitest.mjs",
+      ]),
+    ).toEqual(["--no-maglev", "node_modules/vitest/vitest.mjs"]);
+    expect(resolveDirectNodeVitestArgs(["exec", "vitest", "run"])).toBeNull();
   });
 
   it("allows opting back into Maglev explicitly", () => {
@@ -42,6 +55,72 @@ describe("scripts/run-vitest", () => {
       env: { PATH: "/usr/bin" },
       detached: false,
       stdio: ["inherit", "pipe", "pipe"],
+    });
+  });
+
+  it("reenables local check policy for local Vitest children", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_LOCAL_CHECK: "0",
+          PATH: "/usr/bin",
+        },
+        "darwin",
+      ).env,
+    ).toMatchObject({
+      OPENCLAW_LOCAL_CHECK: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("preserves explicit local-check disablement in CI", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          CI: "true",
+          OPENCLAW_LOCAL_CHECK: "0",
+          PATH: "/usr/bin",
+        },
+        "linux",
+      ).env,
+    ).toMatchObject({
+      CI: "true",
+      OPENCLAW_LOCAL_CHECK: "0",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("caps native Rust worker pools for serial Vitest runs", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+          PATH: "/usr/bin",
+        },
+        "darwin",
+      ).env,
+    ).toMatchObject({
+      OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+      RAYON_NUM_THREADS: "1",
+      TOKIO_WORKER_THREADS: "1",
+    });
+  });
+
+  it("keeps explicit native Rust worker pool settings", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: "2",
+          PATH: "/usr/bin",
+          RAYON_NUM_THREADS: "8",
+          TOKIO_WORKER_THREADS: "6",
+        },
+        "darwin",
+      ).env,
+    ).toMatchObject({
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+      RAYON_NUM_THREADS: "8",
+      TOKIO_WORKER_THREADS: "6",
     });
   });
 

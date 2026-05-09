@@ -4,7 +4,7 @@ read_when:
   - You want to enqueue a system event without creating a cron job
   - You need to enable or disable heartbeats
   - You want to inspect system presence entries
-title: "system"
+title: "System"
 ---
 
 # `openclaw system`
@@ -69,3 +69,7 @@ Flags:
 
 - Requires a running Gateway reachable by your current config (local or remote).
 - System events are ephemeral and not persisted across restarts.
+
+## Related
+
+- [CLI reference](/cli)

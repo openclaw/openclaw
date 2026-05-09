@@ -116,7 +116,7 @@ describe("markdownToTelegramHtml", () => {
   it("splits long multiline html text without breaking balanced tags", () => {
     const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(chunks.filter((chunk) => chunk.length > 4000)).toEqual([]);
     expect(chunks[0]).toMatch(/^<b>[\s\S]*<\/b>$/);
     expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
   });
@@ -128,7 +128,7 @@ describe("markdownToTelegramHtml", () => {
   it("treats malformed leading ampersands as plain text when chunking html", () => {
     const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(chunks.filter((chunk) => chunk.length > 4000)).toEqual([]);
   });
 
   it("fails loudly when tag overhead leaves no room for text", () => {

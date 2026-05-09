@@ -1,9 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { generateSecureToken } from "../infra/secure-random.js";
-import { runExec } from "../process/exec.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+export { movePathToTrash, type MovePathToTrashOptions } from "./browser-trash.js";
 
 type CloseTrackedBrowserTabsParams = {
   sessionKeys: Array<string | undefined>;
@@ -15,15 +11,19 @@ type BrowserMaintenanceSurface = {
   closeTrackedBrowserTabsForSessions: (params: CloseTrackedBrowserTabsParams) => Promise<number>;
 };
 
+let cachedBrowserMaintenanceSurface: BrowserMaintenanceSurface | undefined;
+
 function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolean {
   return sessionKeys.some((key) => Boolean(key?.trim()));
 }
 
 function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface {
-  return loadBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>({
-    dirName: "browser",
-    artifactBasename: "browser-maintenance.js",
-  });
+  cachedBrowserMaintenanceSurface ??=
+    loadBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>({
+      dirName: "browser",
+      artifactBasename: "browser-maintenance.js",
+    });
+  return cachedBrowserMaintenanceSurface;
 }
 
 export async function closeTrackedBrowserTabsForSessions(
@@ -41,21 +41,4 @@ export async function closeTrackedBrowserTabsForSessions(
     return 0;
   }
   return await surface.closeTrackedBrowserTabsForSessions(params);
-}
-
-export async function movePathToTrash(targetPath: string): Promise<string> {
-  try {
-    await runExec("trash", [targetPath], { timeoutMs: 10_000 });
-    return targetPath;
-  } catch {
-    const trashDir = path.join(os.homedir(), ".Trash");
-    fs.mkdirSync(trashDir, { recursive: true });
-    const base = path.basename(targetPath);
-    let dest = path.join(trashDir, `${base}-${Date.now()}`);
-    if (fs.existsSync(dest)) {
-      dest = path.join(trashDir, `${base}-${Date.now()}-${generateSecureToken(6)}`);
-    }
-    fs.renameSync(targetPath, dest);
-    return dest;
-  }
 }

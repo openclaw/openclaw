@@ -10,6 +10,18 @@ import {
 } from "../test-utils/talk-test-provider.js";
 import { isSecretsApplyPlan, resolveValidatedPlanTarget } from "./plan.js";
 
+type ValidatedPlanTarget = NonNullable<ReturnType<typeof resolveValidatedPlanTarget>>;
+
+function requireValidatedPlanTarget(
+  resolved: ReturnType<typeof resolveValidatedPlanTarget>,
+): ValidatedPlanTarget {
+  expect(resolved).not.toBeNull();
+  if (!resolved) {
+    throw new Error("expected validated secrets plan target");
+  }
+  return resolved;
+}
+
 describe("secrets plan validation", () => {
   it("accepts legacy provider target types", () => {
     const resolved = resolveValidatedPlanTarget({
@@ -18,7 +30,12 @@ describe("secrets plan validation", () => {
       pathSegments: ["models", "providers", "openai", "apiKey"],
       providerId: "openai",
     });
-    expect(resolved?.pathSegments).toEqual(["models", "providers", "openai", "apiKey"]);
+    expect(requireValidatedPlanTarget(resolved).pathSegments).toEqual([
+      "models",
+      "providers",
+      "openai",
+      "apiKey",
+    ]);
   });
 
   it("accepts expanded target types beyond legacy surface", () => {
@@ -27,7 +44,11 @@ describe("secrets plan validation", () => {
       path: "channels.telegram.botToken",
       pathSegments: ["channels", "telegram", "botToken"],
     });
-    expect(resolved?.pathSegments).toEqual(["channels", "telegram", "botToken"]);
+    expect(requireValidatedPlanTarget(resolved).pathSegments).toEqual([
+      "channels",
+      "telegram",
+      "botToken",
+    ]);
   });
 
   it("accepts model provider header targets with wildcard-backed paths", () => {
@@ -37,7 +58,7 @@ describe("secrets plan validation", () => {
       pathSegments: ["models", "providers", "openai", "headers", "x-api-key"],
       providerId: "openai",
     });
-    expect(resolved?.pathSegments).toEqual([
+    expect(requireValidatedPlanTarget(resolved).pathSegments).toEqual([
       "models",
       "providers",
       "openai",

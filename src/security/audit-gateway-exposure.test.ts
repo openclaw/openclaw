@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectGatewayConfigFindings } from "./audit.js";
+import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
 
 function hasFinding(
   checkId: string,
@@ -60,22 +60,6 @@ describe("security audit gateway exposure findings", () => {
           "tools.exec.applyPatch.workspaceOnly=false",
         ],
       },
-      {
-        name: "acpx approve-all is treated as a dangerous break-glass flag",
-        cfg: {
-          plugins: {
-            entries: {
-              acpx: {
-                enabled: true,
-                config: {
-                  permissionMode: "approve-all",
-                },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        expectedDangerousDetails: ["plugins.entries.acpx.config.permissionMode=approve-all"],
-      },
     ] as const;
 
     for (const testCase of cases) {
@@ -88,7 +72,9 @@ describe("security audit gateway exposure findings", () => {
       const finding = findings.find(
         (entry) => entry.checkId === "config.insecure_or_dangerous_flags",
       );
-      expect(finding, testCase.name).toBeTruthy();
+      expect(finding, testCase.name).toMatchObject({
+        checkId: "config.insecure_or_dangerous_flags",
+      });
       expect(finding?.severity, testCase.name).toBe("warn");
       for (const snippet of testCase.expectedDangerousDetails) {
         expect(finding?.detail, `${testCase.name}:${snippet}`).toContain(snippet);
@@ -142,7 +128,7 @@ describe("security audit gateway exposure findings", () => {
     const findings = collectGatewayConfigFindings(cfg, cfg, {});
     expect(findings).toEqual(expect.arrayContaining([expect.objectContaining(expectedFinding)]));
     if (expectedNoFinding) {
-      expect(findings.some((finding) => finding.checkId === expectedNoFinding)).toBe(false);
+      expect(findings.map((finding) => finding.checkId)).not.toContain(expectedNoFinding);
     }
   });
 
@@ -396,6 +382,25 @@ describe("security audit gateway exposure findings", () => {
         expectedCheckId: "gateway.trusted_proxy_no_allowlist",
         expectedSeverity: "warn",
       },
+      {
+        name: "loopback proxy source explicitly allowed",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            trustedProxies: ["127.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowUsers: ["nick@example.com"],
+                allowLoopback: true,
+              },
+            },
+          },
+        },
+        expectedCheckId: "gateway.trusted_proxy_allow_loopback",
+        expectedSeverity: "warn",
+      },
     ];
 
     for (const testCase of cases) {
@@ -405,10 +410,9 @@ describe("security audit gateway exposure findings", () => {
         testCase.name,
       ).toBe(true);
       if (testCase.suppressesGenericSharedSecretFindings) {
-        expect(findings.some((finding) => finding.checkId === "gateway.bind_no_auth")).toBe(false);
-        expect(findings.some((finding) => finding.checkId === "gateway.auth_no_rate_limit")).toBe(
-          false,
-        );
+        const checkIds = findings.map((finding) => finding.checkId);
+        expect(checkIds).not.toContain("gateway.bind_no_auth");
+        expect(checkIds).not.toContain("gateway.auth_no_rate_limit");
       }
     }
   });

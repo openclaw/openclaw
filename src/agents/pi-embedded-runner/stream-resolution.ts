@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { getApiProvider, streamSimple } from "@mariozechner/pi-ai";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createOpenAIWebSocketStreamFn } from "../openai-ws-stream.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
@@ -25,6 +25,21 @@ export function resetEmbeddedAgentBaseStreamFnCacheForTest(): void {
   embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 }
 
+function isDefaultPiStreamFnForModel(
+  model: EmbeddedRunAttemptParams["model"],
+  streamFn: StreamFn | undefined,
+): boolean {
+  if (!streamFn || streamFn === streamSimple) {
+    return true;
+  }
+  const api = typeof model.api === "string" ? model.api.trim() : "";
+  if (!api) {
+    return false;
+  }
+  const provider = getApiProvider(api as never);
+  return streamFn === provider?.streamSimple || streamFn === provider?.stream;
+}
+
 export function describeEmbeddedAgentStreamStrategy(params: {
   currentStreamFn: StreamFn | undefined;
   providerStreamFn?: StreamFn;
@@ -41,7 +56,7 @@ export function describeEmbeddedAgentStreamStrategy(params: {
   if (params.model.provider === "anthropic-vertex") {
     return "anthropic-vertex";
   }
-  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
+  if (isDefaultPiStreamFnForModel(params.model, params.currentStreamFn)) {
     return createBoundaryAwareStreamFnForModel(params.model)
       ? `boundary-aware:${params.model.api}`
       : "stream-simple";
@@ -73,32 +88,19 @@ export function resolveEmbeddedAgentStreamFn(params: {
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
 }): StreamFn {
   if (params.providerStreamFn) {
-    const inner = params.providerStreamFn;
-    const normalizeContext = (context: Parameters<StreamFn>[1]) =>
-      context.systemPrompt
-        ? {
-            ...context,
-            systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
-          }
-        : context;
-    // Provider-owned transports bypass pi-coding-agent's default auth lookup,
-    // so keep injecting the resolved runtime apiKey for streamSimple-compatible
-    // transports that still read credentials from options.apiKey.
-    if (params.authStorage || params.resolvedApiKey) {
-      const { authStorage, model, resolvedApiKey } = params;
-      return async (m, context, options) => {
-        const apiKey = await resolveEmbeddedAgentApiKey({
-          provider: model.provider,
-          resolvedApiKey,
-          authStorage,
-        });
-        return inner(m, normalizeContext(context), {
-          ...options,
-          apiKey: apiKey ?? options?.apiKey,
-        });
-      };
-    }
-    return (m, context, options) => inner(m, normalizeContext(context), options);
+    return wrapEmbeddedAgentStreamFn(params.providerStreamFn, {
+      runSignal: params.signal,
+      resolvedApiKey: params.resolvedApiKey,
+      authStorage: params.authStorage,
+      providerId: params.model.provider,
+      transformContext: (context) =>
+        context.systemPrompt
+          ? {
+              ...context,
+              systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
+            }
+          : context,
+    });
   }
 
   const currentStreamFn = params.currentStreamFn ?? streamSimple;
@@ -117,12 +119,55 @@ export function resolveEmbeddedAgentStreamFn(params: {
     return createAnthropicVertexStreamFnForModel(params.model);
   }
 
-  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
+  if (isDefaultPiStreamFnForModel(params.model, params.currentStreamFn)) {
     const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
     if (boundaryAwareStreamFn) {
-      return boundaryAwareStreamFn;
+      // Boundary-aware transports read credentials from options.apiKey just
+      // like provider-owned streams, but the embedded run layer never gets to
+      // inject the resolved runtime key for them. Without this wrap, OAuth
+      // providers (e.g. openai-codex/gpt-5.5) hit the Responses API with an
+      // empty bearer and fail with 401 Missing bearer auth header.
+      return wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
+        runSignal: params.signal,
+        resolvedApiKey: params.resolvedApiKey,
+        authStorage: params.authStorage,
+        providerId: params.model.provider,
+      });
     }
   }
 
   return currentStreamFn;
+}
+
+function wrapEmbeddedAgentStreamFn(
+  inner: StreamFn,
+  params: {
+    runSignal: AbortSignal | undefined;
+    resolvedApiKey: string | undefined;
+    authStorage: { getApiKey(provider: string): Promise<string | undefined> } | undefined;
+    providerId: string;
+    transformContext?: (context: Parameters<StreamFn>[1]) => Parameters<StreamFn>[1];
+  },
+): StreamFn {
+  const transformContext =
+    params.transformContext ?? ((context: Parameters<StreamFn>[1]) => context);
+  const mergeRunSignal = (options: Parameters<StreamFn>[2]) => {
+    const signal = options?.signal ?? params.runSignal;
+    return signal ? { ...options, signal } : options;
+  };
+  if (!params.authStorage && !params.resolvedApiKey) {
+    return (m, context, options) => inner(m, transformContext(context), mergeRunSignal(options));
+  }
+  const { authStorage, providerId, resolvedApiKey } = params;
+  return async (m, context, options) => {
+    const apiKey = await resolveEmbeddedAgentApiKey({
+      provider: providerId,
+      resolvedApiKey,
+      authStorage,
+    });
+    return inner(m, transformContext(context), {
+      ...mergeRunSignal(options),
+      apiKey: apiKey ?? options?.apiKey,
+    });
+  };
 }

@@ -1,17 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  expectStopPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+  waitForStartedMocks,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createPluginSetupWizardAdapter,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   promptSetupWizardAllowFrom,
   runSetupWizardConfigure,
-  type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
-import {
-  expectStopPendingUntilAbort,
-  startAccountAndTrackLifecycle,
-  waitForStartedMocks,
-} from "../../../test/helpers/plugins/start-account-lifecycle.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,
@@ -41,6 +41,11 @@ vi.mock("./channel-runtime.js", () => {
     monitorIrcProvider: hoisted.monitorIrcProvider,
     sendMessageIrc: hoisted.sendMessageIrc,
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./channel-runtime.js");
+  vi.resetModules();
 });
 
 const ircSetupPlugin = {
@@ -273,21 +278,24 @@ describe("irc setup", () => {
     const applyAccountConfig = ircSetupAdapter.applyAccountConfig;
     expect(validateInput).toBeTypeOf("function");
     expect(applyAccountConfig).toBeTypeOf("function");
+    if (!validateInput) {
+      throw new Error("Expected IRC setup validateInput");
+    }
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "", nick: "openclaw" },
       } as never),
     ).toBe("IRC requires host.");
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "irc.libera.chat", nick: "" },
       } as never),
     ).toBe("IRC requires nick.");
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "irc.libera.chat", nick: "openclaw" },
       } as never),
     ).toBeNull();
@@ -409,12 +417,15 @@ describe("irc setup", () => {
       },
     };
 
-    const updated = (await promptSetupWizardAllowFrom({
+    const updated = await promptSetupWizardAllowFrom({
       promptAllowFrom,
       cfg,
       prompter,
       accountId: "work",
-    })) as CoreConfig;
+    });
+    if (!updated) {
+      throw new Error("expected IRC allowFrom setup to return updated config");
+    }
 
     expect(updated.channels?.irc?.allowFrom).toEqual(["alice", "bob!ident@example.org"]);
     expect(updated.channels?.irc?.accounts?.work?.allowFrom).toBeUndefined();

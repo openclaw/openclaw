@@ -20,7 +20,7 @@ vi.mock("./shared.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
@@ -48,7 +48,7 @@ vi.mock("./remote-media.js", () => ({
   downloadAndStoreMSTeamsRemoteMedia: vi.fn(),
 }));
 
-import { fetchWithSsrFGuard } from "../../runtime-api.js";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { downloadMSTeamsGraphMedia } from "./graph.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import { safeFetchWithPolicy } from "./shared.js";
@@ -126,8 +126,9 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     });
 
     // Verify the $value endpoint was fetched
-    const valueCall = fetchCalls.find((u) => u.includes("/hostedContents/hosted-123/$value"));
-    expect(valueCall).toBeDefined();
+    expect(fetchCalls).toContain(
+      "https://graph.microsoft.com/v1.0/chats/c/messages/msg-1/hostedContents/hosted-123/$value",
+    );
     expect(result.media.length).toBeGreaterThan(0);
     expect(result.hostedCount).toBe(1);
   });
@@ -173,8 +174,9 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     });
 
     // $value was fetched but skipped due to Content-Length exceeding maxBytes
-    const valueCall = fetchCalls.find((u) => u.includes("/hostedContents/hosted-big/$value"));
-    expect(valueCall).toBeDefined();
+    expect(fetchCalls).toContain(
+      "https://graph.microsoft.com/v1.0/chats/c/messages/msg-cl/hostedContents/hosted-big/$value",
+    );
     expect(result.media).toHaveLength(0);
   });
 

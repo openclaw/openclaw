@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "./helpers/import-fresh.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
 
@@ -97,6 +97,14 @@ describe("installTestEnv", () => {
       JSON.stringify({ version: 1, profiles: { default: { provider: "openai" } } }, null, 2),
     );
     writeFile(path.join(realHome, ".claude", ".credentials.json"), '{"accessToken":"token"}\n');
+    writeFile(path.join(realHome, ".claude", "projects", "old-session.jsonl"), "session\n");
+    fs.mkdirSync(path.join(realHome, ".claude", "settings.local.json"), { recursive: true });
+    writeFile(path.join(realHome, ".codex", "auth.json"), '{"OPENAI_API_KEY":"token"}\n');
+    writeFile(path.join(realHome, ".codex", "config.toml"), 'model = "gpt-5.4"\n');
+    writeFile(
+      path.join(realHome, ".codex", "sessions", "2026", "02", "26", "rollout.jsonl"),
+      "session\n",
+    );
 
     process.env.HOME = realHome;
     process.env.USERPROFILE = realHome;
@@ -132,12 +140,31 @@ describe("installTestEnv", () => {
         };
       };
     };
-    expect(copiedConfig.models?.providers?.custom).toEqual({ baseUrl: "https://example.test/v1" });
-    expect(copiedConfig.agents?.defaults?.workspace).toBeUndefined();
-    expect(copiedConfig.agents?.defaults?.agentDir).toBeUndefined();
-    expect(copiedConfig.agents?.list?.[0]?.workspace).toBeUndefined();
-    expect(copiedConfig.agents?.list?.[0]?.agentDir).toBeUndefined();
-    expect(copiedConfig.channels?.telegram?.streaming).toEqual({
+    const providers = copiedConfig.models?.providers;
+    expect(providers).toBeDefined();
+    if (!providers) {
+      throw new Error("expected copied model providers config");
+    }
+    expect(providers.custom).toEqual({ baseUrl: "https://example.test/v1" });
+
+    const agentDefaults = copiedConfig.agents?.defaults;
+    const agentConfig = copiedConfig.agents?.list?.[0];
+    expect(agentDefaults).toBeDefined();
+    expect(agentConfig).toBeDefined();
+    if (!agentDefaults || !agentConfig) {
+      throw new Error("expected copied agent config");
+    }
+    expect(agentDefaults.workspace).toBeUndefined();
+    expect(agentDefaults.agentDir).toBeUndefined();
+    expect(agentConfig.workspace).toBeUndefined();
+    expect(agentConfig.agentDir).toBeUndefined();
+
+    const telegramStreaming = copiedConfig.channels?.telegram?.streaming;
+    expect(telegramStreaming).toBeDefined();
+    if (!telegramStreaming) {
+      throw new Error("expected copied telegram streaming config");
+    }
+    expect(telegramStreaming).toEqual({
       mode: "block",
       chunkMode: "newline",
       block: { enabled: true },
@@ -164,6 +191,13 @@ describe("installTestEnv", () => {
       ),
     ).toBe(true);
     expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", ".credentials.json"))).toBe(true);
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", "projects"))).toBe(false);
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", "settings.local.json"))).toBe(
+      false,
+    );
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "auth.json"))).toBe(true);
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "config.toml"))).toBe(true);
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "sessions"))).toBe(false);
   });
 
   it("allows explicit live runs against the real HOME", () => {

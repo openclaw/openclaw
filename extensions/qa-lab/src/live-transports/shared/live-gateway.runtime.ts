@@ -1,16 +1,24 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { startQaGatewayChild, type QaCliBackendAuthMode } from "../../gateway-child.js";
-import { startQaMockOpenAiServer } from "../../mock-openai-server.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  startQaGatewayChild,
+  type QaCliBackendAuthMode,
+  type QaGatewayChildCommand,
+} from "../../gateway-child.js";
+import type { QaProviderMode } from "../../model-selection.js";
+import { startQaProviderServer } from "../../providers/server-runtime.js";
 import type { QaThinkingLevel } from "../../qa-gateway-config.js";
 import { appendLiveLaneIssue } from "./live-lane-helpers.js";
 
-async function stopQaLiveLaneResources(resources: {
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
-  mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | null;
-}) {
+async function stopQaLiveLaneResources(
+  resources: {
+    gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+    mock: { baseUrl: string; stop(): Promise<void> } | null;
+  },
+  opts?: { keepTemp?: boolean; preserveToDir?: string },
+) {
   const errors: string[] = [];
   try {
-    await resources.gateway.stop();
+    await resources.gateway.stop(opts);
   } catch (error) {
     appendLiveLaneIssue(errors, "gateway stop failed", error);
   }
@@ -26,8 +34,55 @@ async function stopQaLiveLaneResources(resources: {
   }
 }
 
+function omitMemoryCoreEntry<T extends Record<string, unknown> | undefined>(entries: T): T {
+  if (!entries || !Object.prototype.hasOwnProperty.call(entries, "memory-core")) {
+    return entries;
+  }
+  const { "memory-core": _memoryCore, ...rest } = entries;
+  return rest as T;
+}
+
+function prepareLiveTransportGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const defaults = cfg.agents?.defaults ?? {};
+  return {
+    ...cfg,
+    plugins: cfg.plugins
+      ? {
+          ...cfg.plugins,
+          allow: cfg.plugins.allow?.filter((pluginId) => pluginId !== "memory-core"),
+          entries: omitMemoryCoreEntry(cfg.plugins.entries),
+          slots: {
+            ...cfg.plugins.slots,
+            memory: "none",
+          },
+        }
+      : {
+          slots: {
+            memory: "none",
+          },
+        },
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...defaults,
+        memorySearch: {
+          ...defaults.memorySearch,
+          enabled: false,
+          sync: {
+            ...defaults.memorySearch?.sync,
+            onSearch: false,
+            onSessionStart: false,
+            watch: false,
+          },
+        },
+      },
+    },
+  };
+}
+
 export async function startQaLiveLaneGateway(params: {
   repoRoot: string;
+  command?: QaGatewayChildCommand;
   transport: {
     requiredPluginIds: readonly string[];
     createGatewayConfig: (params: {
@@ -36,7 +91,7 @@ export async function startQaLiveLaneGateway(params: {
   };
   transportBaseUrl: string;
   controlUiAllowedOrigins?: string[];
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode?: boolean;
@@ -45,16 +100,11 @@ export async function startQaLiveLaneGateway(params: {
   controlUiEnabled?: boolean;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 }) {
-  const mock =
-    params.providerMode === "mock-openai"
-      ? await startQaMockOpenAiServer({
-          host: "127.0.0.1",
-          port: 0,
-        })
-      : null;
+  const mock = await startQaProviderServer(params.providerMode);
   try {
     const gateway = await startQaGatewayChild({
       repoRoot: params.repoRoot,
+      command: params.command,
       providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
       transport: params.transport,
       transportBaseUrl: params.transportBaseUrl,
@@ -66,13 +116,14 @@ export async function startQaLiveLaneGateway(params: {
       thinkingDefault: params.thinkingDefault,
       claudeCliAuthMode: params.claudeCliAuthMode,
       controlUiEnabled: params.controlUiEnabled,
-      mutateConfig: params.mutateConfig,
+      mutateConfig: (cfg) =>
+        prepareLiveTransportGatewayConfig(params.mutateConfig ? params.mutateConfig(cfg) : cfg),
     });
     return {
       gateway,
       mock,
-      async stop() {
-        await stopQaLiveLaneResources({ gateway, mock });
+      async stop(opts?: { keepTemp?: boolean; preserveToDir?: string }) {
+        await stopQaLiveLaneResources({ gateway, mock }, opts);
       },
     };
   } catch (error) {

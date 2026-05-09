@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import {
+  defineBundledChannelEntry,
+  type OpenClawPluginApi,
+} from "../plugin-sdk/channel-entry-contract.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -549,7 +554,249 @@ module.exports = {
     );
   });
 
-  it("awaits async plugin registration when collecting CLI metadata", async () => {
+  it("collects channel CLI metadata during discovery plugin loads", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const modeMarker = path.join(pluginDir, "registration-mode.txt");
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+    const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discovery-cli-metadata-channel",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "discovery-cli-metadata-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["discovery-cli-metadata-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `${inlineChannelPluginEntryFactorySource()}
+module.exports = {
+  ...defineChannelPluginEntry({
+    id: "discovery-cli-metadata-channel",
+    name: "Discovery CLI Metadata Channel",
+    description: "discovery cli metadata channel",
+    setRuntime() {
+      require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded", "utf-8");
+    },
+    plugin: {
+      id: "discovery-cli-metadata-channel",
+      meta: {
+        id: "discovery-cli-metadata-channel",
+        label: "Discovery CLI Metadata Channel",
+        selectionLabel: "Discovery CLI Metadata Channel",
+        docsPath: "/channels/discovery-cli-metadata-channel",
+        blurb: "discovery cli metadata channel",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    },
+    registerCliMetadata(api) {
+      require("node:fs").writeFileSync(
+        ${JSON.stringify(modeMarker)},
+        String(api.registrationMode),
+        "utf-8",
+      );
+      api.registerCli(() => {}, {
+        descriptors: [
+          {
+            name: "discovery-cli-metadata-channel",
+            description: "Discovery-load channel CLI metadata",
+            hasSubcommands: true,
+          },
+        ],
+      });
+    },
+    registerFull() {
+      require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+    },
+  }),
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["discovery-cli-metadata-channel"],
+          entries: {
+            "discovery-cli-metadata-channel": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(fs.readFileSync(modeMarker, "utf-8")).toBe("discovery");
+    expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(fs.existsSync(runtimeMarker)).toBe(true);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
+      "discovery-cli-metadata-channel",
+    );
+  });
+
+  it("sets bundled channel runtime before discovery CLI metadata registration", () => {
+    const pluginDir = makeTempDir();
+    const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
+    const channelPluginPath = path.join(pluginDir, "channel.cjs");
+    const runtimePath = path.join(pluginDir, "runtime.cjs");
+    fs.writeFileSync(
+      channelPluginPath,
+      `exports.plugin = {
+  id: "bundled-discovery-cli",
+  meta: {
+    id: "bundled-discovery-cli",
+    label: "Bundled Discovery CLI",
+    selectionLabel: "Bundled Discovery CLI",
+    docsPath: "/channels/bundled-discovery-cli",
+    blurb: "bundled discovery cli",
+  },
+  capabilities: { chatTypes: ["direct"] },
+  config: {
+    listAccountIds: () => [],
+    resolveAccount: () => ({ accountId: "default" }),
+  },
+  outbound: { deliveryMode: "direct" },
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      runtimePath,
+      `exports.setRuntime = () => {
+  require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded", "utf-8");
+};`,
+      "utf-8",
+    );
+
+    const commands: string[] = [];
+    const channels: string[] = [];
+    const entry = defineBundledChannelEntry({
+      id: "bundled-discovery-cli",
+      name: "Bundled Discovery CLI",
+      description: "bundled discovery cli",
+      importMetaUrl: pathToFileURL(path.join(pluginDir, "index.cjs")).href,
+      plugin: {
+        specifier: "./channel.cjs",
+        exportName: "plugin",
+      },
+      runtime: {
+        specifier: "./runtime.cjs",
+        exportName: "setRuntime",
+      },
+      registerCliMetadata(api) {
+        api.registerCli(() => {}, {
+          descriptors: [
+            {
+              name: "bundled-discovery-cli",
+              description: "Bundled discovery CLI metadata",
+              hasSubcommands: true,
+            },
+          ],
+        });
+      },
+      registerFull() {
+        throw new Error("full registration should not run during discovery");
+      },
+    });
+
+    entry.register({
+      registrationMode: "discovery",
+      runtime: {} as OpenClawPluginApi["runtime"],
+      registerChannel: (registration) => {
+        const plugin = "plugin" in registration ? registration.plugin : registration;
+        channels.push(plugin.id);
+      },
+      registerCli: (_register, options) => {
+        commands.push(...(options?.descriptors ?? []).map((descriptor) => descriptor.name));
+      },
+    } as OpenClawPluginApi);
+
+    expect(channels).toEqual(["bundled-discovery-cli"]);
+    expect(fs.existsSync(runtimeMarker)).toBe(true);
+    expect(commands).toEqual(["bundled-discovery-cli"]);
+  });
+
+  it("sanitizes plugin CLI descriptor descriptions and rejects unsafe command names", async () => {
+    useNoBundledPlugins();
+    const unsafeDescription =
+      "Open \u001B]8;;https://example.test\u0007link\u001B]8;;\u0007 now\u001B[2J";
+    const plugin = writePlugin({
+      id: "unsafe-cli-descriptors",
+      filename: "unsafe-cli-descriptors.cjs",
+      body: `module.exports = {
+  id: "unsafe-cli-descriptors",
+  register(api) {
+    api.registerCli(() => {}, {
+      commands: ["bad\\ncommand"],
+      descriptors: [
+        {
+          name: "safe-command",
+          description: ${JSON.stringify(unsafeDescription)},
+          hasSubcommands: false,
+        },
+        {
+          name: "bad\\nname",
+          description: "Bad descriptor",
+          hasSubcommands: false,
+        },
+      ],
+    });
+  },
+};`,
+    });
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.dir] },
+          allow: ["unsafe-cli-descriptors"],
+        },
+      },
+    });
+
+    expect(registry.cliRegistrars).toHaveLength(1);
+    expect(registry.cliRegistrars[0]?.commands).toEqual(["safe-command"]);
+    expect(registry.cliRegistrars[0]?.descriptors).toEqual([
+      {
+        name: "safe-command",
+        description: "Open link now",
+        hasSubcommands: false,
+      },
+    ]);
+    expect(registry.diagnostics.map((diag) => diag.message)).toEqual([
+      'invalid cli descriptor name: "bad\\nname"',
+      'invalid cli command name: "bad\\ncommand"',
+    ]);
+  });
+
+  it("rejects async plugin registration when collecting CLI metadata", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "async-cli",
@@ -580,10 +827,11 @@ module.exports = {
       },
     });
 
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("async-cli");
-    expect(
-      registry.diagnostics.some((entry) => entry.message.includes("async registration is ignored")),
-    ).toBe(false);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain("async-cli");
+    const loaded = registry.plugins.find((entry) => entry.id === "async-cli");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.failurePhase).toBe("register");
+    expect(loaded?.error).toContain("plugin register must be synchronous");
   });
 
   it("applies memory slot gating to non-bundled CLI metadata loads", async () => {

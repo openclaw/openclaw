@@ -69,7 +69,9 @@ function getToolResultText(messages: AgentMessage[]): string {
   const toolResult = messages.find((m) => m.role === "toolResult") as {
     content: Array<{ type: string; text: string }>;
   };
-  expect(toolResult).toBeDefined();
+  if (toolResult === undefined) {
+    throw new Error("expected toolResult message");
+  }
   const textBlock = toolResult.content.find((b: { type: string }) => b.type === "text") as {
     text: string;
   };
@@ -109,6 +111,18 @@ describe("installSessionToolResultGuard", () => {
     guard.flushPendingToolResults();
 
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
+  });
+
+  it("uses configured text for synthetic tool results", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      missingToolResultText: "aborted",
+    });
+
+    sm.appendMessage(toolCallMessage);
+    guard.flushPendingToolResults();
+
+    expect(getToolResultText(getPersistedMessages(sm))).toBe("aborted");
   });
 
   it("clears pending tool calls without inserting synthetic tool results", () => {
@@ -484,6 +498,32 @@ describe("installSessionToolResultGuard", () => {
       kind: "inter_session",
       sourceTool: "sessions_send",
     });
+  });
+
+  it("suppresses only the next persisted user message when requested", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      suppressNextUserMessagePersistence: true,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "first",
+        timestamp: Date.now(),
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "second",
+        timestamp: Date.now() + 1,
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm);
+    expect(persisted.map((message) => message.role)).toEqual(["user"]);
+    expect(persisted[0]).toMatchObject({ content: "second" });
   });
 
   // When an assistant message with toolCalls is aborted, no synthetic toolResult

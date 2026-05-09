@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveMatrixAccountStorageRoot } from "../../../runtime-api.js";
+import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import {
   claimCurrentTokenStorageState,
@@ -34,15 +34,6 @@ const maybeCreateMatrixMigrationSnapshotMock = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../../../../../src/infra/backup-create.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../../../src/infra/backup-create.js")>(
-    "../../../../../src/infra/backup-create.js",
-  );
-  return {
-    ...actual,
-    createBackupArchive: (params: unknown) => createBackupArchiveMock(params),
-  };
-});
 vi.mock("./migration-snapshot.runtime.js", () => ({
   maybeCreateMatrixMigrationSnapshot: (params: unknown) =>
     maybeCreateMatrixMigrationSnapshotMock(params),

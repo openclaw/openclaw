@@ -16,6 +16,16 @@ export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
 export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
+export const MANAGED_MEMORY_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
+export const MANAGED_MEMORY_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
+export const MEMORY_DREAMING_SYSTEM_EVENT_TEXT =
+  "__openclaw_memory_core_short_term_promotion_dream__";
+export const LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME = "Memory Light Dreaming";
+export const LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG = "[managed-by=memory-core.dreaming.light]";
+export const LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
+export const LEGACY_MEMORY_REM_DREAMING_CRON_NAME = "Memory REM Dreaming";
+export const LEGACY_MEMORY_REM_DREAMING_CRON_TAG = "[managed-by=memory-core.dreaming.rem]";
+export const LEGACY_MEMORY_REM_DREAMING_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 
 export const DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR = "0 */6 * * *";
 export const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
@@ -134,6 +144,11 @@ export type MemoryDreamingConfig = {
 export type MemoryDreamingWorkspace = {
   workspaceDir: string;
   agentIds: string[];
+};
+
+export type MemoryDreamingWorkspaceOptions = {
+  primaryWorkspaceDir?: string | null;
+  primaryAgentId?: string | null;
 };
 
 const DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES: MemoryLightDreamingSource[] = [
@@ -291,14 +306,13 @@ function resolveExecutionConfig(
     typeof temperatureRaw === "number" && Number.isFinite(temperatureRaw) && temperatureRaw >= 0
       ? Math.min(2, temperatureRaw)
       : undefined;
+  const model = normalizeTrimmedString(record?.model) ?? fallback.model;
 
   return {
     speed: normalizeSpeed(record?.speed) ?? fallback.speed,
     thinking: normalizeThinking(record?.thinking) ?? fallback.thinking,
     budget: normalizeBudget(record?.budget) ?? fallback.budget,
-    ...(normalizeTrimmedString(record?.model)
-      ? { model: normalizeTrimmedString(record?.model) }
-      : {}),
+    ...(model ? { model } : {}),
     ...(typeof maxOutputTokens === "number" ? { maxOutputTokens } : {}),
     ...(typeof temperature === "number" ? { temperature } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
@@ -342,7 +356,7 @@ export function resolveMemoryDreamingPluginConfig(
   return asNullableRecord(memoryPlugin?.config) ?? undefined;
 }
 
-// Keep the legacy helper name exported until downstream memory plugins migrate.
+/** @deprecated Use resolveMemoryDreamingPluginConfig. */
 export const resolveMemoryCorePluginConfig = resolveMemoryDreamingPluginConfig;
 
 export function resolveMemoryDreamingConfig(params: {
@@ -359,11 +373,13 @@ export function resolveMemoryDreamingConfig(params: {
   const storage = asNullableRecord(dreaming?.storage);
   const execution = asNullableRecord(dreaming?.execution);
   const phases = asNullableRecord(dreaming?.phases);
+  const topLevelModel = normalizeTrimmedString(dreaming?.model);
 
   const defaultExecution = resolveExecutionConfig(execution?.defaults, {
     speed: DEFAULT_MEMORY_DREAMING_SPEED,
     thinking: DEFAULT_MEMORY_DREAMING_THINKING,
     budget: DEFAULT_MEMORY_DREAMING_BUDGET,
+    ...(topLevelModel ? { model: topLevelModel } : {}),
   });
 
   const light = asNullableRecord(phases?.light);
@@ -592,7 +608,10 @@ export function isSameMemoryDreamingDay(
   );
 }
 
-export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDreamingWorkspace[] {
+export function resolveMemoryDreamingWorkspaces(
+  cfg: OpenClawConfig,
+  options: MemoryDreamingWorkspaceOptions = {},
+): MemoryDreamingWorkspace[] {
   const configured = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const agentIds: string[] = [];
   const seenAgents = new Set<string>();
@@ -612,18 +631,29 @@ export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDrea
   }
 
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
-  for (const agentId of agentIds) {
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId)?.trim();
+  const addWorkspace = (workspaceDirRaw: string | undefined, agentIdRaw: string): void => {
+    const workspaceDir = workspaceDirRaw?.trim();
     if (!workspaceDir) {
-      continue;
+      return;
     }
+    const agentId = normalizeOptionalLowercaseString(agentIdRaw) || resolveDefaultAgentId(cfg);
     const key = normalizePathForComparison(workspaceDir);
     const existing = byWorkspace.get(key);
     if (existing) {
-      existing.agentIds.push(agentId);
-      continue;
+      if (!existing.agentIds.includes(agentId)) {
+        existing.agentIds.push(agentId);
+      }
+      return;
     }
     byWorkspace.set(key, { workspaceDir, agentIds: [agentId] });
+  };
+
+  for (const agentId of agentIds) {
+    addWorkspace(resolveAgentWorkspaceDir(cfg, agentId), agentId);
   }
+  addWorkspace(
+    options.primaryWorkspaceDir ?? undefined,
+    options.primaryAgentId ?? resolveDefaultAgentId(cfg),
+  );
   return [...byWorkspace.values()];
 }

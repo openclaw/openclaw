@@ -116,6 +116,33 @@ async function expectInlineActionSkipped(params: {
   expect(handleCommandsMock).not.toHaveBeenCalled();
 }
 
+async function runInlineStatusAction(storePath?: string) {
+  const typing = createTypingController();
+  const ctx = buildTestCtx({
+    Body: "/status",
+    CommandBody: "/status",
+  });
+  const result = await handleInlineActions(
+    createHandleInlineActionsInput({
+      ctx,
+      typing,
+      cleanedBody: stripInlineStatus("/status").cleaned,
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: "/status",
+        commandBodyNormalized: "/status",
+      },
+      overrides: {
+        allowTextCommands: true,
+        inlineStatusRequested: true,
+        ...(storePath ? { storePath } : {}),
+      },
+    }),
+  );
+
+  return { result, typing };
+}
+
 describe("handleInlineActions", () => {
   beforeEach(() => {
     handleCommandsMock.mockReset();
@@ -235,28 +262,7 @@ describe("handleInlineActions", () => {
   });
 
   it("does not run command handlers after replying to an inline status-only turn", async () => {
-    const typing = createTypingController();
-    const ctx = buildTestCtx({
-      Body: "/status",
-      CommandBody: "/status",
-    });
-
-    const result = await handleInlineActions(
-      createHandleInlineActionsInput({
-        ctx,
-        typing,
-        cleanedBody: stripInlineStatus("/status").cleaned,
-        command: {
-          isAuthorizedSender: true,
-          rawBodyNormalized: "/status",
-          commandBodyNormalized: "/status",
-        },
-        overrides: {
-          allowTextCommands: true,
-          inlineStatusRequested: true,
-        },
-      }),
-    );
+    const { result, typing } = await runInlineStatusAction();
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
@@ -270,29 +276,7 @@ describe("handleInlineActions", () => {
   });
 
   it("preserves storePath when routing inline status through the shared status builder", async () => {
-    const typing = createTypingController();
-    const ctx = buildTestCtx({
-      Body: "/status",
-      CommandBody: "/status",
-    });
-
-    const result = await handleInlineActions(
-      createHandleInlineActionsInput({
-        ctx,
-        typing,
-        cleanedBody: stripInlineStatus("/status").cleaned,
-        command: {
-          isAuthorizedSender: true,
-          rawBodyNormalized: "/status",
-          commandBodyNormalized: "/status",
-        },
-        overrides: {
-          allowTextCommands: true,
-          inlineStatusRequested: true,
-          storePath: "/tmp/inline-status-store.json",
-        },
-      }),
-    );
+    const { result } = await runInlineStatusAction("/tmp/inline-status-store.json");
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
     expect(buildStatusReplyMock).toHaveBeenCalledWith(
@@ -703,6 +687,112 @@ describe("handleInlineActions", () => {
         senderIsOwner: true,
       }),
     );
-    expect(toolExecute).toHaveBeenCalled();
+    expect(toolExecute).toHaveBeenCalledWith(
+      expect.stringMatching(/^cmd_/),
+      {
+        command: "display name",
+        commandName: "set_profile",
+        skillName: "matrix-profile",
+      },
+      undefined,
+    );
+  });
+
+  it("honors construction-time before-tool-call blocks for inline tool dispatch", async () => {
+    const typing = createTypingController();
+    const abortController = new AbortController();
+    const toolExecute = vi.fn(async () => ({
+      content: [{ type: "text", text: "denied by policy" }],
+      details: {
+        status: "blocked",
+        deniedReason: "plugin-before-tool-call",
+        reason: "denied by policy",
+      },
+    }));
+    createOpenClawToolsMock.mockReturnValue([
+      {
+        name: "message",
+        execute: toolExecute,
+      },
+    ]);
+
+    const ctx = buildTestCtx({
+      Body: "/set_profile display name",
+      CommandBody: "/set_profile display name",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "set_profile",
+        skillName: "matrix-profile",
+        description: "Set Matrix profile",
+        dispatch: {
+          kind: "tool",
+          toolName: "message",
+          argMode: "raw",
+        },
+        sourceFilePath: "/tmp/plugin/commands/set-profile.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/set_profile display name",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          senderIsOwner: true,
+          abortKey: "sender-1",
+          rawBodyNormalized: "/set_profile display name",
+          commandBodyNormalized: "/set_profile display name",
+        },
+        overrides: {
+          cfg: {
+            commands: { text: true },
+            tools: {
+              loopDetection: {
+                enabled: true,
+              },
+            },
+          },
+          agentId: "main",
+          allowTextCommands: true,
+          opts: { abortSignal: abortController.signal },
+          skillCommands,
+          sessionEntry: {
+            sessionId: "wrapper-session",
+            updatedAt: 0,
+          },
+          sessionStore: {
+            "s:main": {
+              sessionId: "target-session",
+              updatedAt: 0,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: "❌ Tool call blocked: denied by policy" },
+    });
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "target-session",
+        currentChannelId: "whatsapp",
+      }),
+    );
+    expect(toolExecute).toHaveBeenCalledWith(
+      expect.stringMatching(/^cmd_/),
+      {
+        command: "display name",
+        commandName: "set_profile",
+        skillName: "matrix-profile",
+      },
+      abortController.signal,
+    );
+    expect(typing.cleanup).toHaveBeenCalled();
   });
 });

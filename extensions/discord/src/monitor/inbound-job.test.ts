@@ -1,5 +1,6 @@
-import { Message } from "@buape/carbon";
 import { describe, expect, it } from "vitest";
+import { Message } from "../internal/discord.js";
+import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import {
   buildDiscordInboundJob,
   materializeDiscordInboundJob,
@@ -87,7 +88,53 @@ describe("buildDiscordInboundJob", () => {
       },
       ownerId: "user-1",
     });
-    expect(() => JSON.stringify(job.payload)).not.toThrow();
+    expect(JSON.parse(JSON.stringify(job.payload))).toEqual(
+      expect.objectContaining({
+        threadChannel: {
+          id: "thread-1",
+          name: "codex",
+          parentId: "forum-1",
+          parent: {
+            id: "forum-1",
+            name: "Forum",
+          },
+          ownerId: "user-1",
+        },
+      }),
+    );
+  });
+
+  it("normalizes partial thread channels without reading throwing getters", async () => {
+    const threadChannel = createPartialDiscordChannelWithThrowingGetters(
+      {
+        id: "thread-1",
+        name: "codex",
+        parentId: "forum-1",
+        parent: { id: "forum-1", name: "Forum" },
+        ownerId: "user-1",
+      },
+      ["name", "parentId", "parent", "ownerId"],
+    );
+    const ctx = await createBaseDiscordMessageContext({
+      threadChannel,
+    });
+
+    const job = buildDiscordInboundJob(ctx);
+
+    expect(job.payload.threadChannel).toEqual({
+      id: "thread-1",
+      name: undefined,
+      parentId: undefined,
+      parent: undefined,
+      ownerId: undefined,
+    });
+    expect(JSON.parse(JSON.stringify(job.payload))).toEqual(
+      expect.objectContaining({
+        threadChannel: {
+          id: "thread-1",
+        },
+      }),
+    );
   });
 
   it("re-materializes the process context with an overridden abort signal", async () => {
@@ -106,7 +153,7 @@ describe("buildDiscordInboundJob", () => {
     expect(job.replayKeys).toEqual(["default:ch-1:m-1"]);
   });
 
-  it("preserves Carbon message getters across queued jobs", async () => {
+  it("preserves Discord message getters across queued jobs", async () => {
     const ctx = await createBaseDiscordMessageContext();
     const message = new Message(
       ctx.client as never,

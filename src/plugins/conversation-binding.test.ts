@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ConversationRef,
   SessionBindingAdapter,
@@ -167,6 +167,21 @@ afterAll(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
 
+beforeAll(async () => {
+  ({
+    __testing,
+    buildPluginBindingApprovalCustomId,
+    detachPluginConversationBinding,
+    getCurrentPluginConversationBinding,
+    parsePluginBindingApprovalCustomId,
+    requestPluginConversationBinding,
+    resolvePluginConversationBindingApproval,
+  } = await import("./conversation-binding.js"));
+  ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
+    await import("../infra/outbound/session-binding-service.js"));
+  ({ setActivePluginRegistry } = await import("./runtime.js"));
+});
+
 function createDiscordCodexBindRequest(
   conversationId: string,
   summary: string,
@@ -218,6 +233,7 @@ function createCodexBindRequest(params: {
   parentConversationId?: string;
   threadId?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 }) {
   return {
     pluginId: params.pluginId ?? "codex",
@@ -234,6 +250,7 @@ function createCodexBindRequest(params: {
     binding: {
       summary: params.summary,
       ...(params.detachHint ? { detachHint: params.detachHint } : {}),
+      ...(params.data ? { data: params.data } : {}),
     },
   } satisfies PluginBindingRequestInput;
 }
@@ -387,44 +404,7 @@ async function expectResolutionDoesNotWait(params: {
 }
 
 describe("plugin conversation binding approvals", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("../infra/home-dir.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("../infra/home-dir.js")>("../infra/home-dir.js");
-      return {
-        ...actual,
-        expandHomePrefix: (value: string) => {
-          if (value === "~/.openclaw/plugin-binding-approvals.json") {
-            return approvalsPath;
-          }
-          return actual.expandHomePrefix(value);
-        },
-      };
-    });
-    vi.doMock("./runtime.js", async () => {
-      const actual = await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
-      return {
-        ...actual,
-        getActivePluginRegistry: () => pluginRuntimeState.registry,
-        getActivePluginChannelRegistry: () => pluginRuntimeState.registry,
-        setActivePluginRegistry: (registry: PluginRegistry) => {
-          pluginRuntimeState.registry = registry;
-        },
-      };
-    });
-    ({
-      __testing,
-      buildPluginBindingApprovalCustomId,
-      detachPluginConversationBinding,
-      getCurrentPluginConversationBinding,
-      parsePluginBindingApprovalCustomId,
-      requestPluginConversationBinding,
-      resolvePluginConversationBindingApproval,
-    } = await import("./conversation-binding.js"));
-    ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
-      await import("../infra/outbound/session-binding-service.js"));
-    ({ setActivePluginRegistry } = await import("./runtime.js"));
+  beforeEach(() => {
     sessionBindingState.reset();
     __testing.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -619,6 +599,37 @@ describe("plugin conversation binding approvals", () => {
     });
 
     expect(currentBinding?.detachHint).toBe("/codex_detach");
+  });
+
+  it("persists plugin-owned binding data on approved plugin bindings", async () => {
+    const data = {
+      kind: "codex-app-server-session",
+      version: 1,
+      sessionFile: "/tmp/openclaw/session.jsonl",
+      workspaceDir: "/workspace/openclaw",
+    };
+    const binding = await requestResolvedBinding(
+      createCodexBindRequest({
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:binding-data",
+        summary: "Bind this conversation to Codex thread 999.",
+        data,
+      }),
+    );
+
+    expect(binding.data).toEqual(data);
+
+    const currentBinding = await getCurrentPluginConversationBinding({
+      pluginRoot: "/plugins/codex-a",
+      conversation: {
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:binding-data",
+      },
+    });
+
+    expect(currentBinding?.data).toEqual(data);
   });
 
   it.each([

@@ -6,7 +6,7 @@ import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-tar
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
@@ -15,14 +15,23 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { buildMessageCliJson, formatMessageCliText } from "./message-format.js";
+
+function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
+  return {
+    action: result.action,
+    channel: result.channel,
+    dryRun: result.dryRun,
+    handledBy: result.handledBy,
+    payload: result.payload,
+  };
+}
 
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
   runtime: RuntimeEnv,
 ) {
-  const loadedRaw = loadConfig();
+  const loadedRaw = getRuntimeConfig();
   const scope = resolveMessageSecretScope({
     channel: opts.channel,
     target: opts.target,
@@ -90,6 +99,7 @@ export async function messageCommand(
     return;
   }
 
+  const { formatMessageCliText } = await import("./message-format.js");
   for (const line of formatMessageCliText(result)) {
     runtime.log(line);
   }

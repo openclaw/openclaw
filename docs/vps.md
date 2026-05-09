@@ -4,11 +4,9 @@ read_when:
   - You want to run the Gateway on a Linux server or cloud VPS
   - You need a quick map of hosting guides
   - You want generic Linux server tuning for OpenClaw
-title: "Linux Server"
+title: "Linux server"
 sidebarTitle: "Linux Server"
 ---
-
-# Linux Server
 
 Run the OpenClaw Gateway on any Linux server or cloud VPS. This page helps you
 pick a provider, explains how cloud deployments work, and covers generic Linux
@@ -44,6 +42,21 @@ A community video walkthrough is available at
   If you bind to `lan` or `tailnet`, require `gateway.auth.token` or `gateway.auth.password`.
 
 Related pages: [Gateway remote access](/gateway/remote), [Platforms hub](/platforms).
+
+## Harden admin access first
+
+Before you install OpenClaw on a public VPS, decide how you want to administer
+the box itself.
+
+- If you want Tailnet-only admin access, install Tailscale first, join the VPS
+  to your tailnet, verify a second SSH session over the Tailscale IP or
+  MagicDNS name, then restrict public SSH.
+- If you are not using Tailscale, apply the equivalent hardening for your SSH
+  path before exposing more services.
+- This is separate from Gateway access. You can still keep OpenClaw bound to
+  loopback and use an SSH tunnel or Tailscale Serve for the dashboard.
+
+Tailscale-specific Gateway options live in [Tailscale](/gateway/tailscale).
 
 ## Shared company agent on a VPS
 
@@ -114,3 +127,13 @@ If you deliberately installed a system unit instead, edit
 
 How `Restart=` policies help automated recovery:
 [systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
+
+For Linux OOM behavior, child process victim selection, and `exit 137`
+diagnostics, see [Linux memory pressure and OOM kills](/platforms/linux#memory-pressure-and-oom-kills).
+
+## Related
+
+- [Install overview](/install)
+- [DigitalOcean](/install/digitalocean)
+- [Fly.io](/install/fly)
+- [Hetzner](/install/hetzner)

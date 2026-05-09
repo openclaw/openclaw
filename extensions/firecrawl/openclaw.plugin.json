@@ -1,5 +1,8 @@
 {
   "id": "firecrawl",
+  "activation": {
+    "onStartup": false
+  },
   "providerAuthEnvVars": {
     "firecrawl": ["FIRECRAWL_API_KEY"]
   },
@@ -29,6 +32,9 @@
     "webFetchProviders": ["firecrawl"],
     "webSearchProviders": ["firecrawl"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

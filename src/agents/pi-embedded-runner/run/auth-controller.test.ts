@@ -29,12 +29,15 @@ vi.mock("../../model-auth.js", async () => {
 import { createEmbeddedRunAuthController } from "./auth-controller.js";
 
 function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected auth controller deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -88,6 +91,7 @@ function createMutableEmbeddedRunAuthController(params: {
   harness: MutableAuthControllerHarness;
   setRuntimeApiKey: RuntimeApiKeySetter;
   profileCandidates?: string[];
+  warn?: (message: string) => void;
 }) {
   return createEmbeddedRunAuthController({
     config: undefined,
@@ -135,7 +139,7 @@ function createMutableEmbeddedRunAuthController(params: {
     log: {
       debug: () => undefined,
       info: () => undefined,
-      warn: () => undefined,
+      warn: params.warn ?? (() => undefined),
     },
   });
 }
@@ -175,6 +179,12 @@ describe("createEmbeddedRunAuthController", () => {
 
     await controller.initializeAuthProfile();
 
+    expect(mocks.getApiKeyForModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
     expect(harness.runtimeModel.baseUrl).toBe("https://runtime.example.com/v1");
     expect(harness.runtimeModel.headers).toEqual({
       "api-key": "runtime-header-token",
@@ -337,7 +347,9 @@ describe("createEmbeddedRunAuthController", () => {
 
       vi.advanceTimersByTime(5_000);
       await Promise.resolve();
-      expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight).toBeTruthy();
+      expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight).toEqual(
+        expect.any(Promise),
+      );
 
       await controller.advanceAuthProfile();
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.profileId).toBe("backup");
@@ -371,5 +383,127 @@ describe("createEmbeddedRunAuthController", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("aws-sdk auth without explicit API key (IMDS / instance role)", () => {
+    it("injects runtime auth when prepareProviderRuntimeAuth resolves credentials", async () => {
+      const harness = createMutableAuthControllerHarness();
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+
+      mocks.getApiKeyForModel.mockResolvedValue({
+        apiKey: undefined,
+        mode: "aws-sdk",
+        source: "aws-sdk default chain",
+      });
+      mocks.prepareProviderRuntimeAuth.mockResolvedValue({
+        apiKey: "imds-runtime-token",
+        expiresAt: Date.now() + 3600_000,
+      });
+
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey,
+        profileCandidates: [undefined as unknown as string],
+      });
+
+      await controller.initializeAuthProfile();
+
+      expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "imds-runtime-token");
+      expect(harness.runtimeAuthState).toMatchObject({
+        sourceApiKey: "__aws_sdk_auth__",
+        authMode: "aws-sdk",
+      });
+      expect(harness.runtimeAuthState?.expiresAt).toBeGreaterThan(Date.now());
+      controller.stopRuntimeAuthRefreshTimer();
+    });
+
+    it("injects sentinel when prepareProviderRuntimeAuth returns no apiKey", async () => {
+      const harness = createMutableAuthControllerHarness();
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+
+      mocks.getApiKeyForModel.mockResolvedValue({
+        apiKey: undefined,
+        mode: "aws-sdk",
+        source: "aws-sdk default chain",
+      });
+      mocks.prepareProviderRuntimeAuth.mockResolvedValue(null);
+
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey,
+        profileCandidates: [undefined as unknown as string],
+      });
+
+      await controller.initializeAuthProfile();
+
+      expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "__aws_sdk_auth__");
+      expect(harness.runtimeAuthState).toBeNull();
+    });
+
+    it("clears any stale refresh timer before sentinel injection", async () => {
+      vi.useFakeTimers();
+      try {
+        const harness = createMutableAuthControllerHarness();
+        const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+
+        harness.runtimeAuthState = {
+          generation: 1,
+          sourceApiKey: "__aws_sdk_auth__",
+          authMode: "aws-sdk",
+          refreshTimer: setTimeout(() => undefined, 60_000),
+        };
+
+        mocks.getApiKeyForModel.mockResolvedValue({
+          apiKey: undefined,
+          mode: "aws-sdk",
+          source: "aws-sdk default chain",
+        });
+        mocks.prepareProviderRuntimeAuth.mockResolvedValue(null);
+
+        const controller = createMutableEmbeddedRunAuthController({
+          harness,
+          setRuntimeApiKey,
+          profileCandidates: [undefined as unknown as string],
+        });
+
+        await controller.initializeAuthProfile();
+
+        expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "__aws_sdk_auth__");
+        expect(harness.runtimeAuthState).toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("injects sentinel when prepareProviderRuntimeAuth throws", async () => {
+      const harness = createMutableAuthControllerHarness();
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+      const warn = vi.fn<(message: string) => void>();
+
+      mocks.getApiKeyForModel.mockResolvedValue({
+        apiKey: undefined,
+        mode: "aws-sdk",
+        source: "aws-sdk default chain",
+      });
+      mocks.prepareProviderRuntimeAuth.mockRejectedValue(new Error("No runtime auth plugin"));
+
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey,
+        profileCandidates: [undefined as unknown as string],
+        warn,
+      });
+
+      await controller.initializeAuthProfile();
+
+      expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "__aws_sdk_auth__");
+      expect(harness.runtimeAuthState).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "prepareProviderRuntimeAuth failed for custom-openai, falling back to sentinel: No runtime auth plugin",
+        ),
+      );
+    });
   });
 });

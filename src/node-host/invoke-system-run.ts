@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
+import {
+  describeInterpreterInlineEval,
+  type InterpreterInlineEvalHit,
+} from "../infra/command-analysis/inline-eval.js";
+import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
   addDurableCommandApproval,
   hasDurableExecApproval,
@@ -15,10 +19,6 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
-import {
-  describeInterpreterInlineEval,
-  detectInterpreterInlineEvalArgv,
-} from "../infra/exec-inline-eval.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
@@ -32,6 +32,7 @@ import {
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
@@ -106,7 +107,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
   durableApprovalSatisfied: boolean;
   strictInlineEval: boolean;
-  inlineEvalHit: ReturnType<typeof detectInterpreterInlineEvalArgv>;
+  inlineEvalHit: InterpreterInlineEvalHit | null;
   allowlistMatches: ExecAllowlistEntry[];
   analysisOk: boolean;
   allowlistSatisfied: boolean;
@@ -123,6 +124,7 @@ const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval missing script operand binding";
 const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval script operand changed before execution";
+type ExecToolConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.has(message)) {
@@ -144,6 +146,23 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
     default:
       return "approval-required";
   }
+}
+
+function resolveAgentExecConfig(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+): ExecToolConfig | undefined {
+  if (!agentId) {
+    return undefined;
+  }
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const entry = cfg.agents?.list?.find(
+    (candidate) =>
+      candidate !== null &&
+      typeof candidate === "object" &&
+      normalizeAgentId(candidate.id) === normalizedAgentId,
+  );
+  return entry?.tools?.exec;
 }
 
 export type HandleSystemRunInvokeOptions = {
@@ -171,7 +190,16 @@ export type HandleSystemRunInvokeOptions = {
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   sendExecFinishedEvent: (params: ExecFinishedEventParams) => Promise<void>;
   preferMacAppExecHost: boolean;
+  getRuntimeConfig?: () => OpenClawConfig;
 };
+
+async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<OpenClawConfig> {
+  if (opts.getRuntimeConfig) {
+    return opts.getRuntimeConfig();
+  }
+  const { getRuntimeConfig } = await import("../config/config.js");
+  return getRuntimeConfig();
+}
 
 async function sendSystemRunDenied(
   opts: Pick<
@@ -221,7 +249,6 @@ async function sendSystemRunCompleted(
   });
 }
 
-export { formatSystemRunAllowlistMissMessage } from "./exec-policy.js";
 export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 
 async function parseSystemRunPhase(
@@ -343,10 +370,8 @@ async function evaluateSystemRunPolicyPhase(
   opts: HandleSystemRunInvokeOptions,
   parsed: SystemRunParsePhase,
 ): Promise<SystemRunPolicyPhase | null> {
-  const cfg = loadConfig();
-  const agentExec = parsed.agentId
-    ? resolveAgentConfig(cfg, parsed.agentId)?.tools?.exec
-    : undefined;
+  const cfg = await loadSystemRunConfig(opts);
+  const agentExec = resolveAgentExecConfig(cfg, parsed.agentId);
   const configuredSecurity = opts.resolveExecSecurity(
     agentExec?.security ?? cfg.tools?.exec?.security,
   );
@@ -380,13 +405,7 @@ async function evaluateSystemRunPolicyPhase(
     });
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
-  const inlineEvalHit = strictInlineEval
-    ? (segments
-        .map((segment) =>
-          detectInterpreterInlineEvalArgv(segment.resolution?.effectiveArgv ?? segment.argv),
-        )
-        .find((entry) => entry !== null) ?? null)
-    : null;
+  const inlineEvalHit = strictInlineEval ? detectPolicyInlineEval(segments) : null;
   const isWindows = process.platform === "win32";
   // Detect Windows wrapper transport from the same shell-wrapper view used to
   // derive the inner payload. That keeps `cmd.exe /c` approval-gated even when

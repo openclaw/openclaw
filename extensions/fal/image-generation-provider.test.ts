@@ -12,14 +12,16 @@ import {
 
 function expectFalJsonPost(params: { call: number; url: string; body: Record<string, unknown> }) {
   const request = fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0];
-  expect(request).toBeTruthy();
-  expect(request?.url).toBe(params.url);
-  expect(request?.auditContext).toBe("fal-image-generate");
-  expect(request?.init?.method).toBe("POST");
-  const headers = new Headers(request?.init?.headers);
+  if (!request) {
+    throw new Error(`expected fal fetch request #${params.call}`);
+  }
+  expect(request.url).toBe(params.url);
+  expect(request.auditContext).toBe("fal-image-generate");
+  expect(request.init?.method).toBe("POST");
+  const headers = new Headers(request.init?.headers);
   expect(headers.get("authorization")).toBe("Key fal-test-key");
   expect(headers.get("content-type")).toBe("application/json");
-  expect(JSON.parse(String(request?.init?.body))).toEqual(params.body);
+  expect(JSON.parse(String(request.init?.body))).toEqual(params.body);
 }
 
 describe("fal image-generation provider", () => {
@@ -76,6 +78,7 @@ describe("fal image-generation provider", () => {
       cfg: {},
       count: 2,
       size: "1536x1024",
+      outputFormat: "jpeg",
     });
 
     expectFalJsonPost({
@@ -85,7 +88,7 @@ describe("fal image-generation provider", () => {
         prompt: "draw a cat",
         image_size: { width: 1536, height: 1024 },
         num_images: 2,
-        output_format: "png",
+        output_format: "jpeg",
       },
     });
     expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(

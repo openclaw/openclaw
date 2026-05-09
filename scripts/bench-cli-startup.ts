@@ -15,6 +15,8 @@ type Sample = {
   maxRssMb: number | null;
   exitCode: number | null;
   signal: string | null;
+  stdoutTail?: string;
+  stderrTail?: string;
 };
 
 type SummaryStats = {
@@ -79,6 +81,24 @@ const COMMAND_CASES: readonly CommandCase[] = [
     id: "sessionsJson",
     name: "sessions --json",
     args: ["sessions", "--json"],
+    presets: ["real"],
+  },
+  {
+    id: "tasksJson",
+    name: "tasks --json",
+    args: ["tasks", "--json"],
+    presets: ["real"],
+  },
+  {
+    id: "tasksListJson",
+    name: "tasks list --json",
+    args: ["tasks", "list", "--json"],
+    presets: ["real"],
+  },
+  {
+    id: "tasksAuditJson",
+    name: "tasks audit --json",
+    args: ["tasks", "audit", "--json"],
     presets: ["real"],
   },
   {
@@ -310,7 +330,7 @@ function runCase(params: {
         ...process.env,
         OPENCLAW_HIDE_BANNER: "1",
       },
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
       timeout: params.timeoutMs,
       maxBuffer: 32 * 1024 * 1024,
@@ -324,9 +344,19 @@ function runCase(params: {
       maxRssMb: parseMaxRssMb(proc.stderr ?? ""),
       exitCode: proc.status,
       signal: proc.signal,
+      ...(proc.status === 0
+        ? {}
+        : {
+            stdoutTail: tailLines(proc.stdout ?? "", 20),
+            stderrTail: tailLines(proc.stderr ?? "", 20),
+          }),
     });
   }
   return samples;
+}
+
+function tailLines(value: string, maxLines: number): string {
+  return value.split(/\r?\n/).filter(Boolean).slice(-maxLines).join("\n");
 }
 
 function printSuite(result: SuiteResult): void {

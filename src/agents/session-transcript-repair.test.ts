@@ -8,7 +8,14 @@ import {
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
-const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 function getAssistantToolCallBlocks(messages: AgentMessage[]) {
   const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
@@ -76,6 +83,68 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out[3]?.role).toBe("user");
   });
 
+  it("uses custom text for synthesized missing tool results", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      { role: "user", content: "user message that should come after tool use" },
+    ]);
+
+    const result = repairToolUseResultPairing(input, {
+      missingToolResultText: "aborted",
+    });
+
+    expect(result.added).toHaveLength(1);
+    expect(result.messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect(result.added[0]?.content).toEqual([{ type: "text", text: "aborted" }]);
+  });
+
+  it("keeps matched parallel tool results and synthesizes only missing siblings", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "checking" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
+          { type: "toolCall", id: "call_3", name: "write", arguments: {} },
+        ],
+      },
+      { role: "user", content: "user message that should come after tool use" },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ]);
+
+    const result = repairToolUseResultPairing(input, {
+      missingToolResultText: "aborted",
+    });
+
+    expect(result.added.map((message) => message.toolCallId)).toEqual(["call_1", "call_3"]);
+    expect(result.messages.map((m) => m.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "toolResult",
+      "user",
+    ]);
+    expect(getAssistantToolCallBlocks(result.messages)).toMatchObject([
+      { id: "call_1", name: "read" },
+      { id: "call_2", name: "exec" },
+      { id: "call_3", name: "write" },
+    ]);
+    expect((result.messages[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
+    expect((result.messages[2] as { toolCallId?: string }).toolCallId).toBe("call_2");
+    expect((result.messages[3] as { toolCallId?: string }).toolCallId).toBe("call_3");
+    expect(JSON.stringify(result.added)).not.toContain("missing tool result");
+  });
+
   it("repairs blank tool result names from matching tool calls", () => {
     const input = castAgentMessages([
       {
@@ -140,7 +209,7 @@ describe("sanitizeToolUseResultPairing", () => {
     ]);
 
     const out = sanitizeToolUseResultPairing(input);
-    expect(out.some((m) => m.role === "toolResult")).toBe(false);
+    expect(out.filter((m) => m.role === "toolResult")).toEqual([]);
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
@@ -248,14 +317,36 @@ describe("sanitizeToolUseResultPairing", () => {
     });
 
     expect(result.droppedOrphanCount).toBe(0);
-    expect(result.messages).toHaveLength(2);
-    expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("user");
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.role).toBe("user");
     expect(result.added).toHaveLength(0);
   });
 });
 
-describe("sanitizeToolCallInputs", () => {
+describe("sanitizeToolCallInputs legacy block filtering", () => {
+  it("drops malformed snake_case tool call blocks", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "before" },
+          { type: "tool_use", id: "tool_1", name: "read" },
+          { type: "tool_call", tool_call_id: "tool_2", name: "write", arguments: {} },
+          { type: "function_call", call_id: "tool_3", name: "exec", arguments: "{}" },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["write", "exec"] });
+
+    expect(getAssistantToolCallBlocks(out)).toMatchObject([
+      { type: "tool_call", name: "write" },
+      { type: "function_call", name: "exec" },
+    ]);
+  });
+});
+
+describe("sanitizeToolCallInputs allowed-name filtering", () => {
   function sanitizeAssistantContent(
     content: unknown[],
     options?: Parameters<typeof sanitizeToolCallInputs>[1],

@@ -16,7 +16,7 @@ let callGatewayImpl: (request: GatewayCall) => Promise<unknown> = async (request
   return {};
 };
 let sessionStore: Record<string, Record<string, unknown>> = {};
-let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
+let configOverride: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -82,7 +82,7 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
       }
       return await callGatewayImpl(typed);
     },
-    loadConfig: () => configOverride,
+    getRuntimeConfig: () => configOverride,
     loadSessionStore: () => sessionStore,
     resolveAgentIdFromSessionKey: () => "main",
     resolveMainSessionKey: () => "agent:main:main",
@@ -170,7 +170,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 }));
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: createGatewayCallModuleMock().callGateway,
-  loadConfig: () => configOverride,
+  getRuntimeConfig: () => configOverride,
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: () => "main",
   resolveStorePath: () => "/tmp/sessions-main.json",
@@ -451,6 +451,32 @@ describe("subagent announce timeout config", () => {
       (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
     expect(internalEvents[0]?.result).toContain("3 tool call(s)");
     expect(internalEvents[0]?.result).not.toContain("data");
+  });
+
+  it("does not announce cached reply text when the child run terminally failed", async () => {
+    chatHistoryMessages = [
+      { role: "assistant", content: [{ type: "text", text: "stale history output" }] },
+      { role: "toolResult", content: [{ type: "text", text: "stale tool output" }] },
+    ];
+
+    await runAnnounceFlowForTest("run-terminal-error-no-stale-output", {
+      outcome: { status: "error", error: "All models failed (2): timeout" },
+      roundOneReply: "stale frozen output",
+      fallbackReply: "older fallback output",
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        result?: string;
+        status?: string;
+        statusLabel?: string;
+      }>) ?? [];
+    expect(internalEvents[0]?.status).toBe("error");
+    expect(internalEvents[0]?.statusLabel).toContain("All models failed");
+    expect(internalEvents[0]?.result).toBe("(no output)");
+    expect(directAgentCall?.params?.message).not.toContain("stale");
+    expect(directAgentCall?.params?.message).not.toContain("older fallback");
   });
 
   it("preserves NO_REPLY when timeout history ends with silence after earlier progress", async () => {

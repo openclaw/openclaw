@@ -1,10 +1,12 @@
+import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import {
   resolveBundledInstallPlanForCatalogEntry,
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
+  resolveOfficialExternalInstallPlanBeforeNpm,
+  resolveOfficialExternalNpmPackageTrust,
 } from "./plugin-install-plan.js";
 
 describe("plugin install plan helpers", () => {
@@ -33,6 +35,85 @@ describe("plugin install plan helpers", () => {
     });
 
     expect(findBundledSource).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
+
+  it("resolves exact official external plugin ids before npm fallback", () => {
+    const findOfficialExternalPlugin = vi.fn().mockReturnValue({
+      pluginId: "brave",
+      npmSpec: "@openclaw/brave-plugin",
+      expectedIntegrity: "sha512-brave",
+    });
+
+    const result = resolveOfficialExternalInstallPlanBeforeNpm({
+      rawSpec: "brave",
+      findOfficialExternalPlugin,
+    });
+
+    expect(findOfficialExternalPlugin).toHaveBeenCalledWith("brave");
+    expect(result).toEqual({
+      pluginId: "brave",
+      npmSpec: "@openclaw/brave-plugin",
+      expectedIntegrity: "sha512-brave",
+    });
+  });
+
+  it("skips official external plan for explicit npm selectors", () => {
+    const findOfficialExternalPlugin = vi.fn();
+
+    expect(
+      resolveOfficialExternalInstallPlanBeforeNpm({
+        rawSpec: "brave@beta",
+        findOfficialExternalPlugin,
+      }),
+    ).toBeNull();
+    expect(
+      resolveOfficialExternalInstallPlanBeforeNpm({
+        rawSpec: "@openclaw/brave-plugin",
+        findOfficialExternalPlugin,
+      }),
+    ).toBeNull();
+    expect(findOfficialExternalPlugin).not.toHaveBeenCalled();
+  });
+
+  it("skips official external plan without an npm install spec", () => {
+    const result = resolveOfficialExternalInstallPlanBeforeNpm({
+      rawSpec: "brave",
+      findOfficialExternalPlugin: vi.fn().mockReturnValue({
+        pluginId: "brave",
+      }),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("trusts exact official external npm packages without remapping the spec", () => {
+    const findOfficialExternalPackage = vi.fn().mockReturnValue({
+      pluginId: "discord",
+      npmSpec: "@openclaw/discord",
+    });
+
+    const result = resolveOfficialExternalNpmPackageTrust({
+      npmSpec: "@openclaw/discord",
+      findOfficialExternalPackage,
+    });
+
+    expect(findOfficialExternalPackage).toHaveBeenCalledWith("@openclaw/discord");
+    expect(result).toEqual({
+      pluginId: "discord",
+      trustedSourceLinkedOfficialInstall: true,
+    });
+  });
+
+  it("does not trust npm package names outside the official external catalog", () => {
+    const findOfficialExternalPackage = vi.fn();
+
+    const result = resolveOfficialExternalNpmPackageTrust({
+      npmSpec: "brave",
+      findOfficialExternalPackage,
+    });
+
+    expect(findOfficialExternalPackage).toHaveBeenCalledWith("brave");
     expect(result).toBeNull();
   });
 

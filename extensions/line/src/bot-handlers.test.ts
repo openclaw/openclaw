@@ -1,6 +1,6 @@
 import type { webhook } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
 
 type MessageEvent = webhook.MessageEvent;
@@ -103,7 +103,7 @@ vi.mock("openclaw/plugin-sdk/command-auth", () => ({
       hasControlCommand && authorizers.some((entry) => entry.allowed || !entry.configured),
   }),
 }));
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-group-policy", () => ({
   resolveAllowlistProviderRuntimeGroupPolicy: ({
     groupPolicy,
     defaultGroupPolicy,
@@ -292,6 +292,7 @@ function createLineWebhookTestContext(params: {
   const lineConfig = {
     ...(params.groupPolicy ? { groupPolicy: params.groupPolicy } : {}),
     ...(params.dmPolicy ? { dmPolicy: params.dmPolicy } : {}),
+    ...(params.dmPolicy === "open" ? { allowFrom: ["*"] } : {}),
   };
   return {
     cfg: { channels: { line: lineConfig } },
@@ -370,6 +371,22 @@ describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
     ({ handleLineWebhookEvents, createLineWebhookReplayCache, LineRetryableWebhookError } =
       await import("./bot-handlers.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/channel-inbound");
+    vi.doUnmock("openclaw/plugin-sdk/channel-pairing");
+    vi.doUnmock("openclaw/plugin-sdk/command-auth");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-group-policy");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+    vi.doUnmock("openclaw/plugin-sdk/group-access");
+    vi.doUnmock("openclaw/plugin-sdk/reply-history");
+    vi.doUnmock("openclaw/plugin-sdk/routing");
+    vi.doUnmock("openclaw/plugin-sdk/conversation-runtime");
+    vi.doUnmock("./download.js");
+    vi.doUnmock("./send.js");
+    vi.doUnmock("./bot-message-context.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -830,14 +847,14 @@ describe("handleLineWebhookEvents", () => {
     } as PostbackEvent;
 
     const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { dmPolicy: "open" } } },
+      cfg: { channels: { line: { dmPolicy: "open", allowFrom: ["*"] } } },
       account: {
         accountId: "default",
         enabled: true,
         channelAccessToken: "token",
         channelSecret: "secret",
         tokenSource: "config",
-        config: { dmPolicy: "open" },
+        config: { dmPolicy: "open", allowFrom: ["*"] },
       },
       runtime: createRuntime(),
       mediaMaxBytes: 1,

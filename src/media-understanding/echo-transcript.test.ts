@@ -8,11 +8,16 @@ vi.mock("../infra/outbound/deliver-runtime.js", () => ({
   deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
 }));
 
+vi.mock("../utils/message-channel.js", () => ({
+  isDeliverableMessageChannel: (channel: string) =>
+    channel === "voicechat" || channel === "telegram",
+}));
+
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 
 function createCtx(overrides?: Partial<MsgContext>): MsgContext {
   return {
-    Provider: "whatsapp",
+    Provider: "voicechat",
     From: "+10000000001",
     AccountId: "acc1",
     ...overrides,
@@ -22,7 +27,7 @@ function createCtx(overrides?: Partial<MsgContext>): MsgContext {
 describe("sendTranscriptEcho", () => {
   beforeEach(() => {
     mockDeliverOutboundPayloads.mockReset();
-    mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "echo-1" }]);
+    mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "voicechat", messageId: "echo-1" }]);
   });
 
   it("sends the default formatted transcript to the resolved origin", async () => {
@@ -35,7 +40,7 @@ describe("sendTranscriptEcho", () => {
     expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
     expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith({
       cfg: {},
-      channel: "whatsapp",
+      channel: "voicechat",
       to: "+10000000001",
       accountId: "acc1",
       threadId: undefined,
@@ -89,6 +94,32 @@ describe("sendTranscriptEcho", () => {
     expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "+19999999999",
+      }),
+    );
+  });
+
+  it("forwards Telegram account and thread metadata to outbound delivery", async () => {
+    await sendTranscriptEcho({
+      ctx: createCtx({
+        Provider: "telegram",
+        From: undefined,
+        OriginatingTo: "telegram:42",
+        AccountId: "primary",
+        MessageThreadId: 77,
+      }),
+      cfg: {} as OpenClawConfig,
+      transcript: "threaded voice note",
+    });
+
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:42",
+        accountId: "primary",
+        threadId: 77,
+        payloads: [
+          { text: DEFAULT_ECHO_TRANSCRIPT_FORMAT.replace("{transcript}", "threaded voice note") },
+        ],
       }),
     );
   });

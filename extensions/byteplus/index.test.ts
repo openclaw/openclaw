@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
 import { BYTEPLUS_CODING_MODEL_CATALOG, BYTEPLUS_MODEL_CATALOG } from "./models.js";
 
@@ -43,5 +43,28 @@ describe("byteplus plugin", () => {
     expect(pluginJson.providerAuthAliases).toEqual({
       "byteplus-plan": "byteplus",
     });
+  });
+
+  it("keeps Kimi catalog metadata aligned with provider capabilities", () => {
+    const standardKimi = BYTEPLUS_MODEL_CATALOG.find((entry) => entry.id === "kimi-k2-5-260127");
+    const planKimi = BYTEPLUS_CODING_MODEL_CATALOG.find((entry) => entry.id === "kimi-k2.5");
+    const thinkingKimi = BYTEPLUS_CODING_MODEL_CATALOG.find(
+      (entry) => entry.id === "kimi-k2-thinking",
+    );
+
+    for (const entry of [standardKimi, planKimi, thinkingKimi]) {
+      expect(entry).toEqual(
+        expect.objectContaining({
+          reasoning: true,
+          maxTokens: 32768,
+          cost: expect.objectContaining({
+            input: 0.6,
+            output: 2.5,
+            cacheRead: 0.12,
+            cacheWrite: 0,
+          }),
+        }),
+      );
+    }
   });
 });

@@ -6,6 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
+function readRootPackageManager() {
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+  ) as {
+    packageManager?: string;
+  };
+  return packageJson.packageManager;
+}
+
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
@@ -92,7 +101,7 @@ describe("qa multipass runtime", () => {
 
     expect(script).toContain("pnpm install --frozen-lockfile");
     expect(script).toContain("pnpm build");
-    expect(script).toContain("corepack prepare 'pnpm@10.32.1' --activate");
+    expect(script).toContain(`corepack prepare '${readRootPackageManager()}' --activate`);
     expect(script).toContain("'pnpm' 'openclaw' 'qa' 'suite' '--transport' 'qa-channel'");
     expect(script).toContain("'--provider-mode' 'live-frontier'");
     expect(script).toContain("'--scenario' 'channel-chat-baseline'");
@@ -106,8 +115,8 @@ describe("qa multipass runtime", () => {
       repoRoot: process.cwd(),
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-live-test"),
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       fastMode: true,
       scenarioIds: ["channel-chat-baseline"],
     });
@@ -119,9 +128,9 @@ describe("qa multipass runtime", () => {
         "--provider-mode",
         "live-frontier",
         "--model",
-        "openai/gpt-5.4",
+        "openai/gpt-5.5",
         "--alt-model",
-        "openai/gpt-5.4",
+        "openai/gpt-5.5",
         "--fast",
       ]),
     );
@@ -129,6 +138,17 @@ describe("qa multipass runtime", () => {
     expect(script).toContain("OPENAI_API_KEY='test-openai-key'");
     expect(script).toContain("'pnpm' 'openclaw' 'qa' 'suite' '--transport' 'qa-channel'");
     expect(script).toContain("'--provider-mode' 'live-frontier'");
+  });
+
+  it("forwards --allow-failures into the guest qa suite command when requested", () => {
+    const plan = createQaMultipassPlan({
+      repoRoot: process.cwd(),
+      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-allow-failures-test"),
+      allowFailures: true,
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(plan.qaCommand).toEqual(expect.arrayContaining(["--allow-failures"]));
   });
 
   it("redacts forwarded live secrets in the persisted artifact script", () => {

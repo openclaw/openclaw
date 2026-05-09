@@ -11,6 +11,15 @@ import {
   resolveOpenClawManifestRequires,
 } from "./frontmatter.js";
 
+function expectInstallBase(
+  parsed: ReturnType<typeof parseOpenClawManifestInstallBase>,
+): NonNullable<ReturnType<typeof parseOpenClawManifestInstallBase>> {
+  if (parsed === undefined) {
+    throw new Error("Expected manifest install base");
+  }
+  return parsed;
+}
+
 describe("shared/frontmatter", () => {
   test("normalizeStringList handles strings, arrays, and non-list values", () => {
     expect(normalizeStringList("a, b,,c")).toEqual(["a", "b", "c"]);
@@ -47,6 +56,27 @@ describe("shared/frontmatter", () => {
         key: "pluginMeta",
       }),
     ).toEqual({ foo: 2 });
+  });
+
+  test("resolveOpenClawManifestBlock reads legacy manifest keys", () => {
+    expect(
+      resolveOpenClawManifestBlock({
+        frontmatter: {
+          metadata: "{ clawdbot: { requires: { bins: ['op'] }, install: [] } }",
+        },
+      }),
+    ).toEqual({ requires: { bins: ["op"] }, install: [] });
+  });
+
+  test("resolveOpenClawManifestBlock prefers current manifest keys over legacy keys", () => {
+    expect(
+      resolveOpenClawManifestBlock({
+        frontmatter: {
+          metadata:
+            "{ openclaw: { requires: { bins: ['current'] } }, clawdbot: { requires: { bins: ['legacy'] } } }",
+        },
+      }),
+    ).toEqual({ requires: { bins: ["current"] } });
   });
 
   test("resolveOpenClawManifestBlock returns undefined for invalid input", () => {
@@ -114,7 +144,7 @@ describe("shared/frontmatter", () => {
         id?: string;
         label?: string;
         bins?: string[];
-      }>({ extra: true }, parsed!),
+      }>({ extra: true }, expectInstallBase(parsed)),
     ).toEqual({
       extra: true,
       id: "brew.git",

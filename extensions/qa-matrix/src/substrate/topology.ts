@@ -1,8 +1,9 @@
 export type MatrixQaParticipantRole = "driver" | "observer" | "sut";
 
-export type MatrixQaRoomKind = "dm" | "group";
+type MatrixQaRoomKind = "dm" | "group";
 
 export type MatrixQaTopologyRoomSpec = {
+  encrypted?: boolean;
   key: string;
   kind: MatrixQaRoomKind;
   members: MatrixQaParticipantRole[];
@@ -15,7 +16,8 @@ export type MatrixQaTopologySpec = {
   rooms: MatrixQaTopologyRoomSpec[];
 };
 
-export type MatrixQaProvisionedRoom = {
+type MatrixQaProvisionedRoom = {
+  encrypted?: boolean;
   key: string;
   kind: MatrixQaRoomKind;
   memberRoles: MatrixQaParticipantRole[];
@@ -34,6 +36,7 @@ export type MatrixQaProvisionedTopology = {
 function matrixQaRoomSpecsEqual(left: MatrixQaTopologyRoomSpec, right: MatrixQaTopologyRoomSpec) {
   return (
     left.key === right.key &&
+    (left.encrypted === true) === (right.encrypted === true) &&
     left.kind === right.kind &&
     left.name === right.name &&
     left.requireMention === right.requireMention &&
@@ -49,6 +52,7 @@ export function buildDefaultMatrixQaTopologySpec(params: {
     defaultRoomKey: "main",
     rooms: [
       {
+        encrypted: false,
         key: "main",
         kind: "group",
         members: ["driver", "observer", "sut"],

@@ -10,7 +10,6 @@ import { sensitive } from "./zod-schema.sensitive.js";
 
 const { collectMatchingSchemaPaths, mapSensitivePaths } = __test__;
 const BUNDLED_CHANNEL_HINT_PREFIXES = [
-  "channels.bluebubbles",
   "channels.discord",
   "channels.imessage",
   "channels.irc",
@@ -170,6 +169,7 @@ describe("mapSensitivePaths", () => {
     expect(hints["models.providers.*.headers.*"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.request.headers.*"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.request.proxy.tls.cert"]?.sensitive).toBe(true);
+    expect(hints["proxy.proxyUrl"]?.sensitive).toBe(true);
     expect(hints["skills.entries.*.apiKey"]?.sensitive).toBe(true);
   });
 

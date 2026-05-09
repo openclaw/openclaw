@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   resolveOutboundTarget: vi.fn(),
   deliverOutboundPayloads: vi.fn(),
+  resolveOutboundDurableFinalDeliverySupport: vi.fn(),
   resolveRuntimePluginRegistry: vi.fn(),
 }));
 
@@ -43,7 +44,23 @@ vi.mock("./targets.js", () => ({
 
 vi.mock("./deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  resolveOutboundDurableFinalDeliverySupport: mocks.resolveOutboundDurableFinalDeliverySupport,
 }));
+
+vi.mock("../../utils/message-channel.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils/message-channel.js")>(
+    "../../utils/message-channel.js",
+  );
+  const deliverable = ["forum", "directchat"];
+  return {
+    ...actual,
+    listDeliverableMessageChannels: () => deliverable,
+    isDeliverableMessageChannel: (channel: string) => deliverable.includes(channel),
+    isGatewayMessageChannel: (channel: string) =>
+      [...deliverable, actual.INTERNAL_MESSAGE_CHANNEL].includes(channel),
+    normalizeMessageChannel: (value?: string | null) => value?.trim().toLowerCase() || undefined,
+  };
+});
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -63,19 +80,21 @@ describe("sendMessage", () => {
     mocks.getChannelPlugin.mockClear();
     mocks.resolveOutboundTarget.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
+    mocks.resolveOutboundDurableFinalDeliverySupport.mockClear();
     mocks.resolveRuntimePluginRegistry.mockClear();
 
     mocks.getChannelPlugin.mockReturnValue({
       outbound: { deliveryMode: "direct" },
     });
     mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));
-    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "mattermost", messageId: "m1" }]);
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "forum", messageId: "m1" }]);
+    mocks.resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
   });
 
   it("passes explicit agentId to outbound delivery for scoped media roots", async () => {
     await sendMessage({
       cfg: {},
-      channel: "telegram",
+      channel: "forum",
       to: "123456",
       content: "hi",
       agentId: "work",
@@ -84,7 +103,7 @@ describe("sendMessage", () => {
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({ agentId: "work" }),
-        channel: "telegram",
+        channel: "forum",
         to: "123456",
       }),
     );
@@ -93,19 +112,19 @@ describe("sendMessage", () => {
   it("forwards requesterSenderId into the outbound delivery session", async () => {
     await sendMessage({
       cfg: {},
-      channel: "telegram",
+      channel: "forum",
       to: "123456",
       content: "hi",
       requesterSenderId: "attacker",
       mirror: {
-        sessionKey: "agent:main:telegram:group:ops",
+        sessionKey: "agent:main:forum:group:ops",
       },
     });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({
-          key: "agent:main:telegram:group:ops",
+          key: "agent:main:forum:group:ops",
           requesterSenderId: "attacker",
         }),
       }),
@@ -115,21 +134,21 @@ describe("sendMessage", () => {
   it("forwards non-id requester sender fields into the outbound delivery session", async () => {
     await sendMessage({
       cfg: {},
-      channel: "telegram",
+      channel: "forum",
       to: "123456",
       content: "hi",
       requesterSenderName: "Alice",
       requesterSenderUsername: "alice_u",
       requesterSenderE164: "+15551234567",
       mirror: {
-        sessionKey: "agent:main:telegram:group:ops",
+        sessionKey: "agent:main:forum:group:ops",
       },
     });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({
-          key: "agent:main:telegram:group:ops",
+          key: "agent:main:forum:group:ops",
           requesterSenderName: "Alice",
           requesterSenderUsername: "alice_u",
           requesterSenderE164: "+15551234567",
@@ -141,26 +160,26 @@ describe("sendMessage", () => {
   it("uses requester session/account for outbound delivery policy context", async () => {
     await sendMessage({
       cfg: {},
-      channel: "telegram",
+      channel: "forum",
       to: "123456",
       content: "hi",
-      requesterSessionKey: "agent:main:whatsapp:group:ops",
+      requesterSessionKey: "agent:main:directchat:group:ops",
       requesterAccountId: "work",
       requesterSenderId: "attacker",
       mirror: {
-        sessionKey: "agent:main:telegram:dm:123456",
+        sessionKey: "agent:main:forum:dm:123456",
       },
     });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({
-          key: "agent:main:whatsapp:group:ops",
+          key: "agent:main:directchat:group:ops",
           requesterAccountId: "work",
           requesterSenderId: "attacker",
         }),
         mirror: expect.objectContaining({
-          sessionKey: "agent:main:telegram:dm:123456",
+          sessionKey: "agent:main:forum:dm:123456",
         }),
       }),
     );
@@ -169,24 +188,107 @@ describe("sendMessage", () => {
   it("propagates the send idempotency key into mirrored transcript delivery", async () => {
     await sendMessage({
       cfg: {},
-      channel: "telegram",
+      channel: "forum",
       to: "123456",
       content: "hi",
       idempotencyKey: "idem-send-1",
       mirror: {
-        sessionKey: "agent:main:telegram:dm:123456",
+        sessionKey: "agent:main:forum:dm:123456",
       },
     });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: expect.objectContaining({
-          sessionKey: "agent:main:telegram:dm:123456",
+          sessionKey: "agent:main:forum:dm:123456",
           text: "hi",
           idempotencyKey: "idem-send-1",
         }),
       }),
     );
+  });
+
+  it("maps voice media sends onto outbound audioAsVoice payloads", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "voice note",
+      mediaUrl: "file:///tmp/openclaw-voice.ogg",
+      asVoice: true,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            text: "voice note",
+            mediaUrl: "file:///tmp/openclaw-voice.ogg",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("forwards prepared payloads and required queue policy into outbound delivery", async () => {
+    const mediaAccess = {
+      localRoots: ["/tmp/media"],
+      readFile: vi.fn(async () => Buffer.from("media")),
+    };
+
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "fallback text",
+      payloads: [{ text: "prepared", channelData: { forum: { card: true } } }],
+      queuePolicy: "required",
+      mediaAccess,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            text: "prepared",
+            channelData: { forum: { card: true } },
+          }),
+        ],
+        queuePolicy: "required",
+        mediaAccess,
+      }),
+    );
+    expect(mocks.resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "forum",
+        requirements: expect.objectContaining({
+          payload: true,
+          reconcileUnknownSend: true,
+        }),
+      }),
+    );
+  });
+
+  it("rejects required durable sends before enqueue when replay safety is unsupported", async () => {
+    mocks.resolveOutboundDurableFinalDeliverySupport.mockResolvedValueOnce({
+      ok: false,
+      reason: "capability_mismatch",
+      capability: "reconcileUnknownSend",
+    });
+
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "fallback text",
+        payloads: [{ text: "prepared", channelData: { forum: { card: true } } }],
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("missing reconcileUnknownSend");
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
   it("applies mirror matrix semantics for MEDIA and silent token variants", async () => {
@@ -260,12 +362,12 @@ describe("sendMessage", () => {
 
       await sendMessage({
         cfg: {},
-        channel: "telegram",
+        channel: "forum",
         to: "123456",
         content: entry.content,
         ...(entry.mediaUrl ? { mediaUrl: entry.mediaUrl } : {}),
         mirror: {
-          sessionKey: "agent:main:telegram:dm:123456",
+          sessionKey: "agent:main:forum:dm:123456",
         },
       });
 
@@ -284,7 +386,7 @@ describe("sendMessage", () => {
       expect(payloadSummary, entry.name).toEqual(entry.expectedPayloads);
       expect(deliveryCall?.mirror, entry.name).toEqual(
         expect.objectContaining({
-          sessionKey: "agent:main:telegram:dm:123456",
+          sessionKey: "agent:main:forum:dm:123456",
           text: entry.expectedMirror.text,
           mediaUrls: entry.expectedMirror.mediaUrls,
         }),
@@ -292,28 +394,28 @@ describe("sendMessage", () => {
     }
   });
 
-  it("recovers telegram plugin resolution so message/send does not fail with Unknown channel: telegram", async () => {
-    const telegramPlugin = {
+  it("does not load registries while resolving outbound plugins", async () => {
+    const forumPlugin = {
       outbound: { deliveryMode: "direct" },
     };
     mocks.getChannelPlugin
       .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce(telegramPlugin)
-      .mockReturnValue(telegramPlugin);
+      .mockReturnValueOnce(forumPlugin)
+      .mockReturnValue(forumPlugin);
 
     await expect(
       sendMessage({
-        cfg: { channels: { telegram: { botToken: "test-token" } } },
-        channel: "telegram",
+        cfg: { channels: { forum: { token: "test-token" } } },
+        channel: "forum",
         to: "123456",
         content: "hi",
       }),
     ).resolves.toMatchObject({
-      channel: "telegram",
+      channel: "forum",
       to: "123456",
       via: "direct",
     });
 
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
   });
 });

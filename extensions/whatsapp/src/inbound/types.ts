@@ -1,7 +1,8 @@
-import type { AnyMessageContent } from "@whiskeysockets/baileys";
+import type { AnyMessageContent, MiscMessageGenerationOptions } from "@whiskeysockets/baileys";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
-import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
+import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
+import type { WhatsAppSendResult } from "./send-result.js";
 
 export type WebListenerCloseReason = {
   status?: number;
@@ -10,6 +11,13 @@ export type WebListenerCloseReason = {
 };
 
 export type ActiveWebSendOptions = {
+  quotedMessageKey?: {
+    id: string;
+    remoteJid: string;
+    fromMe: boolean;
+    participant?: string;
+    messageText?: string;
+  };
   gifPlayback?: boolean;
   accountId?: string;
   fileName?: string;
@@ -22,17 +30,26 @@ export type ActiveWebListener = {
     mediaBuffer?: Buffer,
     mediaType?: string,
     options?: ActiveWebSendOptions,
-  ) => Promise<{ messageId: string }>;
-  sendPoll: (to: string, poll: PollInput) => Promise<{ messageId: string }>;
+  ) => Promise<WhatsAppSendResult>;
+  sendPoll: (to: string, poll: PollInput) => Promise<WhatsAppSendResult>;
   sendReaction: (
     chatJid: string,
     messageId: string,
     emoji: string,
     fromMe: boolean,
     participant?: string,
-  ) => Promise<void>;
+  ) => Promise<WhatsAppSendResult>;
   sendComposingTo: (to: string) => Promise<void>;
   close?: () => Promise<void>;
+};
+
+export type WhatsAppStructuredContactContext = {
+  kind: "contact" | "contacts";
+  total: number;
+  contacts: Array<{
+    name?: string;
+    phones?: string[];
+  }>;
 };
 
 export type WebInboundMessage = {
@@ -41,6 +58,8 @@ export type WebInboundMessage = {
   conversationId: string; // alias for clarity (same as from)
   to: string;
   accountId: string;
+  /** Set by the real inbound monitor after access-control / pairing checks pass. */
+  accessControlPassed?: boolean;
   body: string;
   pushName?: string;
   timestamp?: number;
@@ -67,11 +86,21 @@ export type WebInboundMessage = {
   fromMe?: boolean;
   location?: NormalizedLocation;
   sendComposing: () => Promise<void>;
-  reply: (text: string) => Promise<void>;
-  sendMedia: (payload: AnyMessageContent) => Promise<void>;
+  reply: (text: string, options?: MiscMessageGenerationOptions) => Promise<WhatsAppSendResult>;
+  sendMedia: (
+    payload: AnyMessageContent,
+    options?: MiscMessageGenerationOptions,
+  ) => Promise<WhatsAppSendResult>;
   mediaPath?: string;
   mediaType?: string;
   mediaFileName?: string;
   mediaUrl?: string;
+  untrustedStructuredContext?: Array<{
+    label: string;
+    source?: string;
+    type?: string;
+    payload: unknown;
+  }>;
   wasMentioned?: boolean;
+  isBatched?: boolean;
 };

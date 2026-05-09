@@ -1,35 +1,58 @@
 import { describe, expect, it } from "vitest";
+import { validateConfigObject } from "./validation.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
 describe("agent defaults schema", () => {
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expect(
+      AgentDefaultsSchema.safeParse({
         subagents: {
           archiveAfterMinutes: 0,
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it("accepts videoGenerationModel", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expect(
+      AgentDefaultsSchema.safeParse({
         videoGenerationModel: {
           primary: "qwen/wan2.6-t2v",
           fallbacks: ["minimax/video-01"],
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
+  });
+
+  it("accepts imageGenerationModel timeoutMs", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      imageGenerationModel: {
+        primary: "openrouter/openai/gpt-5.4-image-2",
+        timeoutMs: 180_000,
+      },
+    })!;
+
+    expect(defaults.imageGenerationModel).toEqual({
+      primary: "openrouter/openai/gpt-5.4-image-2",
+      timeoutMs: 180_000,
+    });
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        imageGenerationModel: {
+          primary: "openrouter/openai/gpt-5.4-image-2",
+          timeoutMs: 0,
+        },
+      }),
+    ).toThrow();
   });
 
   it("accepts mediaGenerationAutoProviderFallback", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expect(
+      AgentDefaultsSchema.safeParse({
         mediaGenerationAutoProviderFallback: false,
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it("accepts experimental.localModelLean", () => {
@@ -51,8 +74,32 @@ describe("agent defaults schema", () => {
     expect(result.contextInjection).toBe("continuation-skip");
   });
 
+  it("accepts contextInjection: never", () => {
+    const result = AgentDefaultsSchema.parse({ contextInjection: "never" })!;
+    expect(result.contextInjection).toBe("never");
+  });
+
   it("rejects invalid contextInjection values", () => {
-    expect(() => AgentDefaultsSchema.parse({ contextInjection: "never" })).toThrow();
+    expect(() => AgentDefaultsSchema.parse({ contextInjection: "unknown" })).toThrow();
+  });
+
+  it("accepts supported optional bootstrap filenames", () => {
+    const result = AgentDefaultsSchema.parse({
+      skipOptionalBootstrapFiles: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"],
+    })!;
+    expect(result.skipOptionalBootstrapFiles).toEqual([
+      "SOUL.md",
+      "USER.md",
+      "HEARTBEAT.md",
+      "IDENTITY.md",
+    ]);
+  });
+
+  it("rejects unsupported optional bootstrap filenames", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({ skipOptionalBootstrapFiles: ["AGENTS.md"] }),
+    ).toThrow();
+    expect(() => AgentDefaultsSchema.parse({ skipOptionalBootstrapFiles: ["SOUL.MD"] })).toThrow();
   });
 
   it("accepts embeddedPi.executionContract", () => {
@@ -62,6 +109,30 @@ describe("agent defaults schema", () => {
       },
     })!;
     expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
+  });
+
+  it("accepts compaction.truncateAfterCompaction", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        truncateAfterCompaction: true,
+        maxActiveTranscriptBytes: "20mb",
+      },
+    })!;
+    expect(result.compaction?.truncateAfterCompaction).toBe(true);
+    expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
+  });
+
+  it("accepts compaction.midTurnPrecheck.enabled", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        mode: "safeguard",
+        midTurnPrecheck: {
+          enabled: true,
+        },
+      },
+    })!;
+
+    expect(result.compaction?.midTurnPrecheck?.enabled).toBe(true);
   });
 
   it("accepts focused contextLimits on defaults and agent entries", () => {
@@ -92,19 +163,69 @@ describe("agent defaults schema", () => {
 
   it("accepts positive heartbeat timeoutSeconds on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
-      heartbeat: { timeoutSeconds: 45 },
+      heartbeat: { timeoutSeconds: 45, skipWhenBusy: true },
     })!;
     const agent = AgentEntrySchema.parse({
       id: "ops",
-      heartbeat: { timeoutSeconds: 45 },
+      heartbeat: { timeoutSeconds: 45, skipWhenBusy: true },
     });
 
     expect(defaults.heartbeat?.timeoutSeconds).toBe(45);
+    expect(defaults.heartbeat?.skipWhenBusy).toBe(true);
     expect(agent.heartbeat?.timeoutSeconds).toBe(45);
+    expect(agent.heartbeat?.skipWhenBusy).toBe(true);
+  });
+
+  it("accepts per-agent TTS overrides", () => {
+    const agent = AgentEntrySchema.parse({
+      id: "reader",
+      tts: {
+        provider: "openai",
+        auto: "always",
+        providers: {
+          openai: {
+            voice: "nova",
+            apiKey: "${OPENAI_API_KEY}",
+          },
+        },
+      },
+    });
+
+    expect(agent.tts?.provider).toBe("openai");
+    expect(agent.tts?.providers?.openai?.voice).toBe("nova");
   });
 
   it("rejects zero heartbeat timeoutSeconds", () => {
     expect(() => AgentDefaultsSchema.parse({ heartbeat: { timeoutSeconds: 0 } })).toThrow();
     expect(() => AgentEntrySchema.parse({ id: "ops", heartbeat: { timeoutSeconds: 0 } })).toThrow();
+  });
+
+  it("preserves per-agent contextTokens through config validation", () => {
+    const result = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "ops",
+            contextTokens: 1_048_576,
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: {
+        agents: {
+          list: [{ contextTokens: 1_048_576 }],
+        },
+      },
+    });
+  });
+
+  it("rejects non-positive contextTokens on agent entries and defaults", () => {
+    expect(() => AgentEntrySchema.parse({ id: "ops", contextTokens: 0 })).toThrow();
+    expect(() => AgentEntrySchema.parse({ id: "ops", contextTokens: -1 })).toThrow();
+    expect(() => AgentEntrySchema.parse({ id: "ops", contextTokens: 1.5 })).toThrow();
+    expect(() => AgentDefaultsSchema.parse({ contextTokens: 0 })).toThrow();
   });
 });
