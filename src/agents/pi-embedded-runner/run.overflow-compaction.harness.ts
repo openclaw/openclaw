@@ -172,10 +172,10 @@ export const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
   return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
 });
 export const mockedFormatAssistantErrorText = vi.fn(() => "");
-export const mockedIsAuthAssistantError = vi.fn(() => false);
-export const mockedIsBillingAssistantError = vi.fn(() => false);
+export const mockedIsAuthAssistantError = vi.fn<(msg?: unknown) => boolean>(() => false);
+export const mockedIsBillingAssistantError = vi.fn<(msg?: unknown) => boolean>(() => false);
 export const mockedIsCompactionFailureError = vi.fn(() => false);
-export const mockedIsFailoverAssistantError = vi.fn(() => false);
+export const mockedIsFailoverAssistantError = vi.fn<(msg?: unknown) => boolean>(() => false);
 export const mockedIsFailoverErrorMessage = vi.fn(() => false);
 export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
   const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
@@ -187,8 +187,25 @@ export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
 });
 export const mockedParseImageSizeError = vi.fn(() => null);
 export const mockedParseImageDimensionError = vi.fn(() => null);
-export const mockedIsRateLimitAssistantError = vi.fn(() => false);
+export const mockedIsRateLimitAssistantError = vi.fn<(msg?: unknown) => boolean>(() => false);
 export const mockedIsTimeoutErrorMessage = vi.fn(() => false);
+export const mockedClassifyFailoverAssistantReason = vi.fn(
+  (msg?: { errorMessage?: string }): FailoverReason | null => {
+    if (!mockedIsFailoverAssistantError(msg)) {
+      return null;
+    }
+    if (mockedIsRateLimitAssistantError(msg)) {
+      return "rate_limit";
+    }
+    if (mockedIsBillingAssistantError(msg)) {
+      return "billing";
+    }
+    if (mockedIsAuthAssistantError(msg)) {
+      return "auth";
+    }
+    return mockedClassifyFailoverReason(msg?.errorMessage ?? "") ?? "unknown";
+  },
+);
 export const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(
   () => null,
 );
@@ -347,6 +364,24 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsCompactionFailureError.mockReturnValue(false);
   mockedIsFailoverAssistantError.mockReset();
   mockedIsFailoverAssistantError.mockReturnValue(false);
+  mockedClassifyFailoverAssistantReason.mockReset();
+  mockedClassifyFailoverAssistantReason.mockImplementation(
+    (msg?: { errorMessage?: string }): FailoverReason | null => {
+      if (!mockedIsFailoverAssistantError(msg)) {
+        return null;
+      }
+      if (mockedIsRateLimitAssistantError(msg)) {
+        return "rate_limit";
+      }
+      if (mockedIsBillingAssistantError(msg)) {
+        return "billing";
+      }
+      if (mockedIsAuthAssistantError(msg)) {
+        return "auth";
+      }
+      return mockedClassifyFailoverReason(msg?.errorMessage ?? "") ?? "unknown";
+    },
+  );
   mockedIsFailoverErrorMessage.mockReset();
   mockedIsFailoverErrorMessage.mockReturnValue(false);
   mockedIsLikelyContextOverflowError.mockReset();
@@ -486,6 +521,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../pi-embedded-helpers.js", () => ({
     formatBillingErrorMessage: mockedFormatBillingErrorMessage,
+    classifyFailoverAssistantReason: mockedClassifyFailoverAssistantReason,
     classifyFailoverReason: mockedClassifyFailoverReason,
     extractObservedOverflowTokenCount: mockedExtractObservedOverflowTokenCount,
     formatAssistantErrorText: mockedFormatAssistantErrorText,

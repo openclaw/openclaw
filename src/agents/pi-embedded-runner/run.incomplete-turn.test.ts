@@ -4,6 +4,7 @@ import { hasCommittedMessagingToolDeliveryEvidence } from "./delivery-evidence.j
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedClassifyFailoverAssistantReason,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedLog,
@@ -112,7 +113,8 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(mockedClassifyFailoverReason).toHaveBeenCalledTimes(1);
+    expect(mockedClassifyFailoverAssistantReason).toHaveBeenCalledTimes(1);
+    expect(mockedClassifyFailoverReason).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("verify before retrying");
   });
