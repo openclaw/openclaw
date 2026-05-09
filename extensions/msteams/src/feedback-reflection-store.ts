@@ -9,20 +9,12 @@ const lastReflectionBySession = new Map<string, number>();
 /** Maximum cooldown entries before pruning expired ones. */
 const MAX_COOLDOWN_ENTRIES = 500;
 
-function legacySanitizeSessionKey(sessionKey: string): string {
-  return sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-}
-
 function encodeSessionKey(sessionKey: string): string {
   return Buffer.from(sessionKey, "utf8").toString("base64url");
 }
 
 export function resolveLearningStoreKey(sessionKey: string): string {
   return encodeSessionKey(sessionKey);
-}
-
-export function resolveLegacyLearningStoreKey(sessionKey: string): string {
-  return legacySanitizeSessionKey(sessionKey);
 }
 
 const LEARNINGS_STORE = createPluginStateKeyedStore<{ learnings: string[]; updatedAt: number }>(
@@ -73,10 +65,7 @@ export async function storeSessionLearning(params: {
   learning: string;
 }): Promise<void> {
   const key = resolveLearningStoreKey(params.sessionKey);
-  const legacyKey = resolveLegacyLearningStoreKey(params.sessionKey);
-  const existing =
-    (await LEARNINGS_STORE.lookup(key)) ??
-    (legacyKey === key ? undefined : await LEARNINGS_STORE.lookup(legacyKey));
+  const existing = await LEARNINGS_STORE.lookup(key);
   let learnings = existing?.learnings ?? [];
 
   learnings.push(params.learning);
@@ -85,18 +74,10 @@ export async function storeSessionLearning(params: {
   }
 
   await LEARNINGS_STORE.register(key, { learnings, updatedAt: Date.now() });
-  if (legacyKey !== key) {
-    await LEARNINGS_STORE.delete(legacyKey);
-  }
 }
 
 /** Load session learnings for injection into extraSystemPrompt. */
 export async function loadSessionLearnings(sessionKey: string): Promise<string[]> {
   const key = resolveLearningStoreKey(sessionKey);
-  const legacyKey = resolveLegacyLearningStoreKey(sessionKey);
-  return (
-    (await LEARNINGS_STORE.lookup(key))?.learnings ??
-    (legacyKey === key ? undefined : (await LEARNINGS_STORE.lookup(legacyKey))?.learnings) ??
-    []
-  );
+  return (await LEARNINGS_STORE.lookup(key))?.learnings ?? [];
 }
