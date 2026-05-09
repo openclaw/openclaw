@@ -58,7 +58,7 @@ import {
 import {
   importLegacyUpdateCheckFileToSqlite,
   legacyUpdateCheckFileExists,
-} from "../infra/update-startup.js";
+} from "../infra/update-startup-legacy.js";
 import {
   importLegacyVoiceWakeConfigFileToSqlite,
   legacyVoiceWakeConfigFileExists,
@@ -92,7 +92,7 @@ import { note } from "../terminal/note.js";
 import {
   importLegacyTuiLastSessionStoreToSqlite,
   legacyTuiLastSessionFileExists,
-} from "../tui/tui-last-session.js";
+} from "../tui/tui-last-session-legacy.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type LegacyStateProbe = {

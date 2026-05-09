@@ -4,13 +4,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
+  importLegacyTuiLastSessionStoreToSqlite,
+  resolveLegacyTuiLastSessionStatePath,
+} from "./tui-last-session-legacy.js";
+import {
   buildTuiLastSessionScopeKey,
   clearTuiLastSessionPointers,
-  importLegacyTuiLastSessionStoreToSqlite,
   isHeartbeatLikeTuiSession,
   readTuiLastSessionKey,
   resolveRememberedTuiSessionKey,
-  resolveLegacyTuiLastSessionStatePath,
   writeTuiLastSessionKey,
 } from "./tui-last-session.js";
 
