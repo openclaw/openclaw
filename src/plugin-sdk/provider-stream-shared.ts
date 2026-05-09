@@ -314,6 +314,7 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
 
       payload.thinking = { type: "enabled" };
       payload.reasoning_effort = resolveReasoningEffort(params.thinkingLevel);
+      delete payload.reasoning;
       ensureDeepSeekV4AssistantReasoningContent(payload);
     });
   };
