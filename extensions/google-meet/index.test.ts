@@ -149,6 +149,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`Expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function requireFetchGuardCall(auditContext: string): Record<string, unknown> {
+  const call = (
+    fetchGuardMocks.fetchWithSsrFGuard.mock.calls as Array<[Record<string, unknown>]>
+  ).find(([params]) => params.auditContext === auditContext);
+  if (!call) {
+    throw new Error(`Expected fetchWithSsrFGuard call for ${auditContext}`);
+  }
+  return call[0];
+}
+
 function requestUrl(input: RequestInfo | URL): URL {
   if (typeof input === "string") {
     return new URL(input);
@@ -829,35 +846,44 @@ describe("google-meet plugin", () => {
 
     expect(tool.description).toContain("recover_current_tab");
     expect(JSON.stringify(tool.parameters)).not.toContain("anyOf");
-    expect(tool.parameters).toMatchObject({
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: [
-            "join",
-            "create",
-            "status",
-            "setup_status",
-            "resolve_space",
-            "preflight",
-            "latest",
-            "calendar_events",
-            "artifacts",
-            "attendance",
-            "export",
-            "recover_current_tab",
-            "leave",
-            "end_active_conference",
-            "speak",
-            "test_speech",
-            "test_listen",
-          ],
-          description: expect.stringContaining("recover_current_tab"),
-        },
-        transport: { type: "string", enum: ["chrome", "chrome-node", "twilio"] },
-        mode: { type: "string", enum: ["agent", "bidi", "transcribe"] },
-      },
+    const parameters = requireRecord(tool.parameters, "Google Meet tool parameters");
+    expect(parameters.type).toBe("object");
+    const properties = requireRecord(
+      parameters.properties,
+      "Google Meet tool parameter properties",
+    );
+    const action = requireRecord(properties.action, "Google Meet action parameter");
+    expect(action.type).toBe("string");
+    expect(action.enum).toEqual([
+      "join",
+      "create",
+      "status",
+      "setup_status",
+      "resolve_space",
+      "preflight",
+      "latest",
+      "calendar_events",
+      "artifacts",
+      "attendance",
+      "export",
+      "recover_current_tab",
+      "leave",
+      "end_active_conference",
+      "speak",
+      "test_speech",
+      "test_listen",
+    ]);
+    expect(action.description).toContain("recover_current_tab");
+    expect(properties.transport).toEqual({
+      type: "string",
+      enum: ["chrome", "chrome-node", "twilio"],
+      description: "Join transport",
+    });
+    expect(properties.mode).toEqual({
+      type: "string",
+      enum: ["agent", "bidi", "transcribe"],
+      description:
+        "Join mode. agent uses realtime transcription, the configured OpenClaw agent, and regular TTS. bidi uses the realtime voice model directly. transcribe joins observe-only.",
     });
   });
 
@@ -887,33 +913,27 @@ describe("google-meet plugin", () => {
         },
       }),
     ).toBe("https://meet.google.com/abc-defg-hij");
-    await expect(
-      findGoogleMeetCalendarEvent({
-        accessToken: "token",
-        now: new Date("2026-04-25T09:50:00Z"),
-        timeMin: "2026-04-25T00:00:00Z",
-        timeMax: "2026-04-26T00:00:00Z",
-      }),
-    ).resolves.toMatchObject({
-      calendarId: "primary",
-      meetingUri: "https://meet.google.com/abc-defg-hij",
-      event: { summary: "Project sync" },
+    const event = await findGoogleMeetCalendarEvent({
+      accessToken: "token",
+      now: new Date("2026-04-25T09:50:00Z"),
+      timeMin: "2026-04-25T00:00:00Z",
+      timeMax: "2026-04-26T00:00:00Z",
     });
-    await expect(
-      listGoogleMeetCalendarEvents({
-        accessToken: "token",
-        now: new Date("2026-04-25T09:50:00Z"),
-        timeMin: "2026-04-25T00:00:00Z",
-        timeMax: "2026-04-26T00:00:00Z",
-      }),
-    ).resolves.toMatchObject({
-      events: [
-        {
-          meetingUri: "https://meet.google.com/abc-defg-hij",
-          selected: true,
-        },
-      ],
+    expect(event.calendarId).toBe("primary");
+    expect(event.meetingUri).toBe("https://meet.google.com/abc-defg-hij");
+    expect(event.event.summary).toBe("Project sync");
+
+    const calendarEvents = await listGoogleMeetCalendarEvents({
+      accessToken: "token",
+      now: new Date("2026-04-25T09:50:00Z"),
+      timeMin: "2026-04-25T00:00:00Z",
+      timeMax: "2026-04-26T00:00:00Z",
     });
+    expect(calendarEvents.calendarId).toBe("primary");
+    expect(calendarEvents.events).toHaveLength(1);
+    expect(calendarEvents.events[0]?.meetingUri).toBe("https://meet.google.com/abc-defg-hij");
+    expect(calendarEvents.events[0]?.selected).toBe(true);
+    expect(calendarEvents.events[0]?.event.summary).toBe("Project sync");
     const calendarCall = fetchMock.mock.calls.find(([input]) => {
       const url = requestUrl(input);
       return url.pathname === "/calendar/v3/calendars/primary/events";
@@ -924,12 +944,8 @@ describe("google-meet plugin", () => {
     const url = requestUrl(calendarCall[0]);
     expect(url.searchParams.get("singleEvents")).toBe("true");
     expect(url.searchParams.get("orderBy")).toBe("startTime");
-    expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        policy: { allowedHostnames: ["www.googleapis.com"] },
-        auditContext: "google-meet.calendar.events.list",
-      }),
-    );
+    const guardCall = requireFetchGuardCall("google-meet.calendar.events.list");
+    expect(guardCall.policy).toEqual({ allowedHostnames: ["www.googleapis.com"] });
   });
 
   it("adds a reauth hint for missing Calendar scopes", async () => {
@@ -967,28 +983,26 @@ describe("google-meet plugin", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      fetchGoogleMeetSpace({
-        accessToken: "token",
-        meeting: "spaces/abc-defg-hij",
-      }),
-    ).resolves.toMatchObject({ name: "spaces/abc-defg-hij" });
-    expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://meet.googleapis.com/v2/spaces/abc-defg-hij",
-        init: expect.objectContaining({
-          headers: expect.objectContaining({ Authorization: "Bearer token" }),
-        }),
-        policy: { allowedHostnames: ["meet.googleapis.com"] },
-        auditContext: "google-meet.spaces.get",
-      }),
-    );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://meet.googleapis.com/v2/spaces/abc-defg-hij",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer token" }),
-      }),
-    );
+    const space = await fetchGoogleMeetSpace({
+      accessToken: "token",
+      meeting: "spaces/abc-defg-hij",
+    });
+    expect(space.name).toBe("spaces/abc-defg-hij");
+    expect(space.meetingCode).toBe("abc-defg-hij");
+    expect(space.meetingUri).toBe("https://meet.google.com/abc-defg-hij");
+    const guardCall = requireFetchGuardCall("google-meet.spaces.get");
+    expect(guardCall.url).toBe("https://meet.googleapis.com/v2/spaces/abc-defg-hij");
+    expect(requireRecord(guardCall.init, "spaces.get init").headers).toEqual({
+      Authorization: "Bearer token",
+      Accept: "application/json",
+    });
+    expect(guardCall.policy).toEqual({ allowedHostnames: ["meet.googleapis.com"] });
+    expect(fetchMock).toHaveBeenCalledWith("https://meet.googleapis.com/v2/spaces/abc-defg-hij", {
+      headers: {
+        Authorization: "Bearer token",
+        Accept: "application/json",
+      },
+    });
   });
 
   it("creates Meet spaces and returns the meeting URL", async () => {
@@ -1004,22 +1018,23 @@ describe("google-meet plugin", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(createGoogleMeetSpace({ accessToken: "token" })).resolves.toMatchObject({
-      meetingUri: "https://meet.google.com/new-abcd-xyz",
-      space: { name: "spaces/new-space" },
+    const result = await createGoogleMeetSpace({ accessToken: "token" });
+    expect(result.meetingUri).toBe("https://meet.google.com/new-abcd-xyz");
+    expect(result.space.name).toBe("spaces/new-space");
+    expect(result.space.meetingCode).toBe("new-abcd-xyz");
+    expect(result.space.meetingUri).toBe("https://meet.google.com/new-abcd-xyz");
+    const guardCall = requireFetchGuardCall("google-meet.spaces.create");
+    expect(guardCall.url).toBe("https://meet.googleapis.com/v2/spaces");
+    expect(guardCall.init).toEqual({
+      method: "POST",
+      headers: {
+        Authorization: "Bearer token",
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: "{}",
     });
-    expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://meet.googleapis.com/v2/spaces",
-        init: expect.objectContaining({
-          method: "POST",
-          headers: expect.objectContaining({ Authorization: "Bearer token" }),
-          body: "{}",
-        }),
-        policy: { allowedHostnames: ["meet.googleapis.com"] },
-        auditContext: "google-meet.spaces.create",
-      }),
-    );
+    expect(guardCall.policy).toEqual({ allowedHostnames: ["meet.googleapis.com"] });
   });
 
   it("lists Meet artifact metadata for the latest conference record by default", async () => {
