@@ -8,6 +8,7 @@ import {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
+  hasRuntimeOnlyEventUserMessageProvenance,
   isCompactionCheckpointTranscriptFileName,
   isCronRunSessionKey,
   isExecCompletionEvent,
@@ -28,6 +29,7 @@ const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // This limit applies to content only; the role label adds up to 11 chars.
 const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
+const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 
 export type SessionFileEntry = {
   path: string;
@@ -454,6 +456,15 @@ function isGeneratedHeartbeatPromptMessage(text: string, role: "user" | "assista
   return role === "user" && isHeartbeatUserMessage({ role, content: text }, HEARTBEAT_PROMPT);
 }
 
+function isGeneratedRuntimeEventPromptMessage(
+  text: string,
+  message: { role?: unknown; __openclaw?: unknown },
+): boolean {
+  return (
+    text === OPENCLAW_RUNTIME_EVENT_USER_PROMPT && hasRuntimeOnlyEventUserMessageProvenance(message)
+  );
+}
+
 function sanitizeSessionText(text: string, role: "user" | "assistant"): string | null {
   const strippedInbound = stripInboundMetadataForUserRole(text, role);
   const strippedInternal = stripInternalRuntimeContext(strippedInbound);
@@ -559,6 +570,7 @@ export async function buildSessionEntry(
       opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
     const allowArchiveContentCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
+    let skipAssistantAfterRuntimeEventPrompt = false;
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -591,7 +603,7 @@ export async function buildSessionEntry(
         continue;
       }
       const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown; provenance?: unknown }
+        | { role?: unknown; content?: unknown; provenance?: unknown; __openclaw?: unknown }
         | undefined;
       if (!message || typeof message.role !== "string") {
         continue;
@@ -605,6 +617,20 @@ export async function buildSessionEntry(
       const rawText = collectRawSessionText(message.content);
       if (rawText === null) {
         continue;
+      }
+      if (message.role === "assistant" && skipAssistantAfterRuntimeEventPrompt) {
+        skipAssistantAfterRuntimeEventPrompt = false;
+        continue;
+      }
+      const strippedRawText = stripInternalRuntimeContext(
+        stripInboundMetadataForUserRole(rawText, message.role),
+      );
+      if (isGeneratedRuntimeEventPromptMessage(normalizeSessionText(strippedRawText), message)) {
+        skipAssistantAfterRuntimeEventPrompt = true;
+        continue;
+      }
+      if (message.role === "user") {
+        skipAssistantAfterRuntimeEventPrompt = false;
       }
       if (
         !generatedByCronRun &&

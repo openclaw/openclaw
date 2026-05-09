@@ -7,6 +7,7 @@ import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
+import { markRuntimeOnlyEventUserMessage } from "../sessions/runtime-only-event-provenance.js";
 import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
@@ -16,6 +17,12 @@ type GuardedSessionManager = SessionManager & {
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
   clearPendingToolResults?: () => void;
 };
+
+type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
+
+function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage {
+  return (message as { role?: unknown }).role === "user";
+}
 
 function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
   if (cfg?.logging?.redactSensitive === "off") {
@@ -101,6 +108,7 @@ export function guardSessionManager(
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
+    markRuntimeOnlyUserMessageForPersistence?: (message: UserAgentMessage) => boolean;
   },
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
@@ -159,8 +167,13 @@ export function guardSessionManager(
 
   const guard = installSessionToolResultGuard(sessionManager, {
     sessionKey: opts?.sessionKey,
-    transformMessageForPersistence: (message) =>
-      applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
+    transformMessageForPersistence: (message) => {
+      const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
+      return isUserAgentMessage(withProvenance) &&
+        opts?.markRuntimeOnlyUserMessageForPersistence?.(withProvenance)
+        ? markRuntimeOnlyEventUserMessage(withProvenance)
+        : withProvenance;
+    },
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
     missingToolResultText: opts?.missingToolResultText,

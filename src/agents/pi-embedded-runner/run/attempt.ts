@@ -1400,6 +1400,7 @@ export async function runEmbeddedAttempt(
     let removeToolResultContextGuard: (() => void) | undefined;
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;
     let trajectoryEndRecorded = false;
+    let markNextPersistedUserMessageAsRuntimeOnlyEvent = false;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -1438,6 +1439,13 @@ export async function runEmbeddedAttempt(
         suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
+        },
+        markRuntimeOnlyUserMessageForPersistence: () => {
+          if (!markNextPersistedUserMessageAsRuntimeOnlyEvent) {
+            return false;
+          }
+          markNextPersistedUserMessageAsRuntimeOnlyEvent = false;
+          return true;
         },
       });
       trackSessionManagerAccess(params.sessionFile);
@@ -3200,7 +3208,12 @@ export async function runEmbeddedAttempt(
               inFlightPrompt: promptForModel,
             });
             if (promptSubmission.runtimeOnly) {
-              await abortable(activeSession.prompt(promptForModel));
+              markNextPersistedUserMessageAsRuntimeOnlyEvent = true;
+              try {
+                await abortable(activeSession.prompt(promptForModel));
+              } finally {
+                markNextPersistedUserMessageAsRuntimeOnlyEvent = false;
+              }
             } else {
               await queueRuntimeContextForNextTurn({
                 session: activeSession,
