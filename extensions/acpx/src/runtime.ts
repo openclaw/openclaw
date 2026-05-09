@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
-import { resolve as resolvePath } from "node:path";
+import { dirname, resolve as resolvePath } from "node:path";
 import {
   ACPX_BACKEND_ID,
   AcpxRuntime as BaseAcpxRuntime,
@@ -892,9 +892,14 @@ export class AcpxRuntime implements AcpRuntime {
         const frame = JSON.stringify({
           params: { update: { sessionUpdate: event.type, ...event } },
         });
-        fs.appendFile(eventLogActivePath, frame + "\n").catch((err: unknown) => {
-          console.error(`[acpx] event_log.active_path write failed (${eventLogActivePath}):`, err);
-        });
+        fs.mkdir(dirname(eventLogActivePath), { recursive: true })
+          .then(() => fs.appendFile(eventLogActivePath, frame + "\n"))
+          .catch((err: unknown) => {
+            console.error(
+              `[acpx] event_log.active_path write failed (${eventLogActivePath}):`,
+              err,
+            );
+          });
       }
     }
   }

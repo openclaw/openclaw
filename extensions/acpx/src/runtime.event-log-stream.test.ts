@@ -178,6 +178,10 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
     // Use a tmp dir to avoid touching the real ~/.acpx tree if a future fix
     // ever does write to disk during tests.
     acpxBaseDir = await mkdtemp(join(tmpdir(), "acpx-event-log-stream-test-"));
+    // Mock fs.mkdir so directory-creation in the fire-and-forget chain resolves
+    // immediately (as a mock microtask) rather than as a real syscall, keeping
+    // test assertions synchronisable via two await Promise.resolve() ticks.
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
     // Default the spy to a no-op so any unexpected real fs side-effects from
     // a future fix don't escape the tmp tree. Tests can still inspect call
     // arguments via `mock.calls`.
@@ -211,6 +215,12 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
           requestId: "req-1",
         }),
       );
+      // Flush the fire-and-forget mkdir → appendFile promise chain. The writer
+      // is intentionally not awaited in production code (turn must not stall on
+      // log I/O), so two microtask ticks are required here: one for mkdir, one
+      // for appendFile.
+      await Promise.resolve();
+      await Promise.resolve();
 
       // The discriminating signal: did SOMETHING write to the advertised
       // stream.ndjson path during the turn? Today: zero. After the fix: at
@@ -257,6 +267,9 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
           requestId: "req-1",
         }),
       );
+      // Flush the fire-and-forget mkdir → appendFile promise chain (two ticks).
+      await Promise.resolve();
+      await Promise.resolve();
 
       const matchingCalls = appendFileSpy.mock.calls.filter(
         ([targetPath]: [unknown, ...unknown[]]) => {
