@@ -2,6 +2,10 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+- fix(google): resolve `gemini-3-flash-preview` in forward-compat model resolver (#79750)
+
 ## 2026.5.8
 
 ### Changes
