@@ -103,7 +103,7 @@ describe("installPluginFromGitSpec", () => {
     ]);
     expect(runCommandWithTimeoutMock.mock.calls[1][0]).toEqual([
       "git",
-      "checkout",
+      "switch",
       "--detach",
       "--",
       "v1.2.3",
@@ -155,7 +155,7 @@ describe("installPluginFromGitSpec", () => {
 
     expect(runCommandWithTimeoutMock.mock.calls[1][0]).toEqual([
       "git",
-      "checkout",
+      "switch",
       "--detach",
       "--",
       "--ignore-skip-worktree-bits",
