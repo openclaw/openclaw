@@ -48,11 +48,6 @@ export type ObserveRecoveryDeps = {
       mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>;
       readdir(path: string): Promise<string[]>;
       rmdir(path: string): Promise<unknown>;
-      appendFile(
-        path: string,
-        data: string,
-        options?: { encoding?: BufferEncoding; mode?: number },
-      ): Promise<unknown>;
     };
     statSync(
       path: string,
@@ -78,11 +73,6 @@ export type ObserveRecoveryDeps = {
     mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): unknown;
     readdirSync(path: string): string[];
     rmdirSync(path: string): unknown;
-    appendFileSync(
-      path: string,
-      data: string,
-      options?: { encoding?: BufferEncoding; mode?: number },
-    ): unknown;
   };
   json5: { parse(value: string): unknown };
   env: NodeJS.ProcessEnv;

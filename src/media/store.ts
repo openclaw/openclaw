@@ -577,7 +577,7 @@ export async function saveMediaBuffer(
 }
 
 /**
- * Resolves a media ID saved by saveMediaBuffer to its absolute physical path.
+ * Resolves a media ID saved by saveMediaBuffer to a temporary local path.
  *
  * This is the read-side counterpart to saveMediaBuffer and is used by the
  * agent runner to hydrate opaque `media://inbound/<id>` URIs written by the
@@ -586,19 +586,17 @@ export async function saveMediaBuffer(
  * Security:
  * - Rejects IDs and subdirs containing path traversal, absolute paths, empty
  *   segments, or null bytes to prevent path injection outside the media root.
- * - Verifies the resolved path is a regular file (not a symlink or directory)
- *   before returning it, matching the write-side MEDIA_FILE_MODE policy.
+ * - Materializes the SQLite blob with the write-side MEDIA_FILE_MODE policy.
  *
  * @param id      The media ID as returned by SavedMedia.id (may include
  *                extension and original-filename prefix,
  *                e.g. "photo---<uuid>.png" or "图片---<uuid>.png").
  * @param subdir  The subdirectory the file was saved into (default "inbound").
- * @returns       Absolute path to the file on disk.
- * @throws        If the ID is unsafe, the file does not exist, or is not a
- *                regular file.
+ * @returns       Absolute path to a temporary materialization of the SQLite blob.
+ * @throws        If the ID is unsafe or the SQLite blob is missing.
  *
  * Prefer readMediaBuffer when the caller needs the bytes; this path-returning
- * helper is for channel surfaces that need a stable local attachment path.
+ * helper is only for channel surfaces that still need a local attachment path.
  */
 export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Promise<string> {
   const safeSubdir = resolveMediaSubdir(subdir, "resolveMediaBufferPath");
@@ -650,15 +648,15 @@ export async function readMediaBuffer(
 }
 
 /**
- * Deletes a file previously saved by saveMediaBuffer.
+ * Deletes media previously saved by saveMediaBuffer.
  *
- * This is used by parseMessageWithAttachments to clean up files that were
+ * This is used by parseMessageWithAttachments to clean up media that was
  * successfully offloaded earlier in the same request when a later attachment
- * fails validation and the entire parse is aborted, preventing orphaned files
- * from accumulating on disk ahead of the periodic TTL sweep.
+ * fails validation and the entire parse is aborted, preventing orphaned SQLite
+ * rows and temporary materializations ahead of the periodic TTL sweep.
  *
  * Uses a media-root handle to apply the same path-safety guards as the read
- * path while removing the file under the pinned media root.
+ * path while removing the matching SQLite row and temp materialization.
  *
  * Errors are intentionally not suppressed — callers that want best-effort
  * cleanup should catch and discard exceptions themselves (e.g. via

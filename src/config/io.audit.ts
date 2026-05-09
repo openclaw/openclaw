@@ -73,14 +73,14 @@ function parseFlagName(arg: string): string | null {
   return (eq === -1 ? arg : arg.slice(0, eq)).toLowerCase();
 }
 
-// Redacts CLI argv before it lands in the persistent config-audit log.
+// Redacts CLI argv before it lands in persistent SQLite config-audit state.
 // Layers, applied per element:
 //  1. `--flag=value` form for any name matching the explicit list or the
 //     suffix heuristic — mask the value half.
 //  2. value following a bare `--flag` form — emit `***` instead of the
 //     next arg, even if it starts with `-`. Command parsers accept
 //     dash-leading values for required options, and this persistent audit
-//     log should fail closed.
+//     state should fail closed.
 //  3. fall back to redactToolPayloadText for everything else, which catches
 //     `KEY=VALUE` env-style assignments, raw token shapes (sk-, ghp_, xox*,
 //     gsk_, AIza*, npm_, Telegram bot tokens, PEM blocks, Bearer headers,
