@@ -378,7 +378,7 @@ async function resolveDemoLocalApiKey(params: {
 }
 
 describe("getApiKeyForModel", () => {
-  it("reads oauth auth-profiles entries from auth-profiles.json via explicit profile", async () => {
+  it("reads oauth auth-profile entries from SQLite via explicit profile", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",

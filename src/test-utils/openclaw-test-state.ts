@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveAuthProfileStoreLocationForDisplay } from "../agents/auth-profiles/paths.js";
+import { savePersistedAuthProfileSecretsStore } from "../agents/auth-profiles/persisted.js";
+import type { AuthProfileSecretsStore } from "../agents/auth-profiles/types.js";
 import { captureEnv } from "./env.js";
 import { cleanupOpenClawStateForTest } from "./openclaw-state-cleanup.js";
 
@@ -43,6 +46,7 @@ export type OpenClawTestState = {
   writeJson: (relativePath: string, value: unknown) => Promise<string>;
   writeText: (relativePath: string, value: string) => Promise<string>;
   writeAuthProfiles: (store: unknown, agentId?: string) => Promise<string>;
+  writeLegacyAuthProfiles: (store: unknown, agentId?: string) => Promise<string>;
   applyEnv: () => void;
   restoreEnv: () => void;
   cleanup: () => Promise<void>;
@@ -296,7 +300,14 @@ export async function createOpenClawTestState(
       await fs.writeFile(filePath, value, "utf8");
       return filePath;
     },
-    writeAuthProfiles: (store, agentId = "main") => {
+    writeAuthProfiles: async (store, agentId = "main") => {
+      const targetAgentDir = agentDir(agentId);
+      savePersistedAuthProfileSecretsStore(store as AuthProfileSecretsStore, targetAgentDir, {
+        env,
+      });
+      return resolveAuthProfileStoreLocationForDisplay(targetAgentDir, env);
+    },
+    writeLegacyAuthProfiles: (store, agentId = "main") => {
       const filePath = path.join(agentDir(agentId), "auth-profiles.json");
       return writeJsonFile(filePath, store);
     },
