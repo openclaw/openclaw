@@ -332,6 +332,7 @@ describe("getMessageFeishu", () => {
         chatId: "oc_file",
         contentType: "file",
         content: "[file message]",
+        rawContent: JSON.stringify({ file_key: "file_v3_123" }),
       }),
     );
   });

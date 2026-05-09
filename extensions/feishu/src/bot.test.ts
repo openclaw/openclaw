@@ -1908,6 +1908,85 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("downloads media from a quoted file message into the agent context", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const quotedRawContent = JSON.stringify({
+      file_key: "file_quoted_payload",
+      file_name: "quoted.docx",
+    });
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_file",
+      chatId: "oc-group",
+      chatType: "group",
+      senderId: "ou-file-sender",
+      senderType: "user",
+      content: "[file message]",
+      rawContent: quotedRawContent,
+      contentType: "file",
+    });
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("quoted-file"),
+      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      fileName: "quoted.docx",
+    });
+    mockSaveMediaBuffer.mockResolvedValueOnce({
+      id: "quoted.docx",
+      path: "/tmp/quoted.docx",
+      size: Buffer.byteLength("quoted-file"),
+      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          requireMention: false,
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-replier",
+        },
+      },
+      message: {
+        message_id: "om_reply_to_file",
+        parent_id: "om_parent_file",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "please inspect this file" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_parent_file",
+        fileKey: "file_quoted_payload",
+        type: "file",
+      }),
+    );
+    expect(mockSaveMediaBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "inbound",
+      expect.any(Number),
+      "quoted.docx",
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ReplyToBody: "[file message]",
+        MediaPath: "/tmp/quoted.docx",
+        MediaPaths: ["/tmp/quoted.docx"],
+        MediaTypes: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+      }),
+    );
+  });
+
   it("includes message_id in BodyForAgent on its own line", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
