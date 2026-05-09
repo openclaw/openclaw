@@ -21,6 +21,36 @@ export type SqliteSessionTranscriptEvent = {
   createdAt: number;
 };
 
+export type SqliteSessionTranscriptFrontier = Pick<
+  SqliteSessionTranscript,
+  "sessionId" | "updatedAt" | "eventCount"
+> & {
+  lastSeq: number;
+  baseCreatedAt: number;
+};
+
+export type SqliteSessionTranscriptCursor = Pick<
+  SqliteSessionTranscriptFrontier,
+  "eventCount" | "lastSeq" | "baseCreatedAt"
+>;
+
+export type SqliteSessionTranscriptDelta =
+  | {
+      mode: "missing";
+      frontier: null;
+      events: [];
+    }
+  | {
+      mode: "append";
+      frontier: SqliteSessionTranscriptFrontier;
+      events: SqliteSessionTranscriptEvent[];
+    }
+  | {
+      mode: "reset";
+      frontier: SqliteSessionTranscriptFrontier;
+      events: SqliteSessionTranscriptEvent[];
+    };
+
 export type SqliteSessionTranscriptStoreOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
   sessionId: string;
@@ -69,6 +99,11 @@ type AgentTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "transcript_event_identities" | "transcript_events" | "transcript_snapshots"
 >;
+type TranscriptEventRow = {
+  seq: unknown;
+  event_json: unknown;
+  created_at: unknown;
+};
 
 function normalizeSessionId(value: string): string {
   const sessionId = value.trim();
@@ -213,6 +248,33 @@ function insertTranscriptEvent(params: {
   upsertTranscriptEventIdentity(params);
 }
 
+function mapTranscriptEventRow(row: TranscriptEventRow): SqliteSessionTranscriptEvent {
+  const seq = typeof row.seq === "bigint" ? Number(row.seq) : Number(row.seq);
+  return {
+    seq,
+    event: parseTranscriptEventJson(row.event_json, seq),
+    createdAt: parseCreatedAt(row.created_at),
+  };
+}
+
+function loadSqliteSessionTranscriptEventRows(params: {
+  database: OpenClawAgentDatabase;
+  sessionId: string;
+  afterSeq?: number;
+}): TranscriptEventRow[] {
+  return executeSqliteQuerySync(
+    params.database.db,
+    getAgentTranscriptKysely(params.database.db)
+      .selectFrom("transcript_events")
+      .select(["seq", "event_json", "created_at"])
+      .where("session_id", "=", params.sessionId)
+      .$if(typeof params.afterSeq === "number", (query) =>
+        query.where("seq", ">", Math.max(-1, Math.floor(params.afterSeq ?? -1))),
+      )
+      .orderBy("seq", "asc"),
+  ).rows as TranscriptEventRow[];
+}
+
 export function resolveSqliteSessionTranscriptScope(
   options: OpenClawStateDatabaseOptions & {
     agentId?: string;
@@ -295,6 +357,20 @@ export function listSqliteSessionTranscripts(
 export function getSqliteSessionTranscriptStats(
   options: SqliteSessionTranscriptStoreOptions,
 ): Pick<SqliteSessionTranscript, "sessionId" | "updatedAt" | "eventCount"> | null {
+  const frontier = getSqliteSessionTranscriptFrontier(options);
+  if (!frontier) {
+    return null;
+  }
+  return {
+    sessionId: frontier.sessionId,
+    updatedAt: frontier.updatedAt,
+    eventCount: frontier.eventCount,
+  };
+}
+
+export function getSqliteSessionTranscriptFrontier(
+  options: SqliteSessionTranscriptStoreOptions,
+): SqliteSessionTranscriptFrontier | null {
   const { sessionId } = normalizeTranscriptScope(options);
   const database = openTranscriptAgentDatabase(options);
   const row = executeSqliteQueryTakeFirstSync(
@@ -304,6 +380,8 @@ export function getSqliteSessionTranscriptStats(
       .select([
         (eb) => eb.fn.max<number | bigint>("created_at").as("updated_at"),
         (eb) => eb.fn.countAll<number | bigint>().as("event_count"),
+        (eb) => eb.fn.max<number | bigint>("seq").as("last_seq"),
+        (eb) => eb.fn.min<number | bigint>("created_at").as("base_created_at"),
       ])
       .where("session_id", "=", sessionId),
   );
@@ -314,10 +392,18 @@ export function getSqliteSessionTranscriptStats(
   }
   const updatedAt =
     typeof row?.updated_at === "bigint" ? Number(row.updated_at) : Number(row?.updated_at ?? 0);
+  const lastSeq =
+    typeof row?.last_seq === "bigint" ? Number(row.last_seq) : Number(row?.last_seq ?? -1);
+  const baseCreatedAt =
+    typeof row?.base_created_at === "bigint"
+      ? Number(row.base_created_at)
+      : Number(row?.base_created_at ?? 0);
   return {
     sessionId,
     updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
     eventCount,
+    lastSeq: Number.isFinite(lastSeq) ? lastSeq : -1,
+    baseCreatedAt: Number.isFinite(baseCreatedAt) ? baseCreatedAt : 0,
   };
 }
 
@@ -464,22 +550,61 @@ export function loadSqliteSessionTranscriptEvents(
 ): SqliteSessionTranscriptEvent[] {
   const { sessionId } = normalizeTranscriptScope(options);
   const database = openTranscriptAgentDatabase(options);
-  return executeSqliteQuerySync(
-    database.db,
-    getAgentTranscriptKysely(database.db)
-      .selectFrom("transcript_events")
-      .select(["seq", "event_json", "created_at"])
-      .where("session_id", "=", sessionId)
-      .orderBy("seq", "asc"),
-  ).rows.map((row) => {
-    const record = row;
-    const seq = typeof record.seq === "bigint" ? Number(record.seq) : record.seq;
+  return loadSqliteSessionTranscriptEventRows({ database, sessionId }).map(mapTranscriptEventRow);
+}
+
+export function loadSqliteSessionTranscriptDelta(
+  options: SqliteSessionTranscriptStoreOptions & {
+    cursor?: SqliteSessionTranscriptCursor;
+  },
+): SqliteSessionTranscriptDelta {
+  const frontier = getSqliteSessionTranscriptFrontier(options);
+  if (!frontier) {
+    return { mode: "missing", frontier: null, events: [] };
+  }
+  const { sessionId } = normalizeTranscriptScope(options);
+  const database = openTranscriptAgentDatabase(options);
+  const cursor = options.cursor;
+  if (!cursor) {
     return {
-      seq,
-      event: parseTranscriptEventJson(record.event_json, seq),
-      createdAt: parseCreatedAt(record.created_at),
+      mode: "reset",
+      frontier,
+      events: loadSqliteSessionTranscriptEventRows({ database, sessionId }).map(
+        mapTranscriptEventRow,
+      ),
     };
-  });
+  }
+  const normalizedCursor: SqliteSessionTranscriptCursor = {
+    eventCount: Math.max(0, Math.floor(cursor.eventCount)),
+    lastSeq: Math.max(-1, Math.floor(cursor.lastSeq)),
+    baseCreatedAt: Math.max(0, Math.floor(cursor.baseCreatedAt)),
+  };
+  const cursorInvalidated =
+    frontier.baseCreatedAt !== normalizedCursor.baseCreatedAt ||
+    frontier.eventCount < normalizedCursor.eventCount ||
+    frontier.lastSeq < normalizedCursor.lastSeq;
+  if (cursorInvalidated) {
+    return {
+      mode: "reset",
+      frontier,
+      events: loadSqliteSessionTranscriptEventRows({ database, sessionId }).map(
+        mapTranscriptEventRow,
+      ),
+    };
+  }
+  return {
+    mode: "append",
+    frontier,
+    events:
+      frontier.lastSeq === normalizedCursor.lastSeq &&
+      frontier.eventCount === normalizedCursor.eventCount
+        ? []
+        : loadSqliteSessionTranscriptEventRows({
+            database,
+            sessionId,
+            afterSeq: normalizedCursor.lastSeq,
+          }).map(mapTranscriptEventRow),
+  };
 }
 
 export function hasSqliteSessionTranscriptEvents(

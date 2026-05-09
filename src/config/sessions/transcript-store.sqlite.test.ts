@@ -12,7 +12,9 @@ import {
   appendSqliteSessionTranscriptMessage,
   deleteSqliteSessionTranscript,
   exportSqliteSessionTranscriptJsonl,
+  getSqliteSessionTranscriptFrontier,
   listSqliteSessionTranscripts,
+  loadSqliteSessionTranscriptDelta,
   loadSqliteSessionTranscriptEvents,
   recordSqliteSessionTranscriptSnapshot,
   replaceSqliteSessionTranscriptEvents,
@@ -251,5 +253,156 @@ describe("SQLite session transcript store", () => {
         message: { role: "user", content: "hi" },
       })}\n`,
     );
+  });
+
+  it("returns frontier metadata for a populated transcript", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    replaceSqliteSessionTranscriptEvents({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      events: [
+        { type: "session", id: "session-1" },
+        { type: "message", id: "m1", message: { role: "user", content: "hi" } },
+      ],
+      now: () => 300,
+    });
+
+    expect(
+      getSqliteSessionTranscriptFrontier({ env, agentId: "main", sessionId: "session-1" }),
+    ).toEqual({
+      sessionId: "session-1",
+      updatedAt: 300,
+      eventCount: 2,
+      lastSeq: 1,
+      baseCreatedAt: 300,
+    });
+  });
+
+  it("returns append delta when the transcript only grows", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    replaceSqliteSessionTranscriptEvents({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      events: [{ type: "session", id: "session-1" }],
+      now: () => 100,
+    });
+    replaceSqliteSessionTranscriptEvents({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      events: [
+        { type: "session", id: "session-1" },
+        { type: "message", id: "m1", message: { role: "assistant", content: "ok" } },
+      ],
+      now: () => 100,
+    });
+
+    expect(
+      loadSqliteSessionTranscriptDelta({
+        env,
+        agentId: "main",
+        sessionId: "session-1",
+        cursor: {
+          eventCount: 1,
+          lastSeq: 0,
+          baseCreatedAt: 100,
+        },
+      }),
+    ).toMatchObject({
+      mode: "append",
+      frontier: {
+        sessionId: "session-1",
+        updatedAt: 100,
+        eventCount: 2,
+        lastSeq: 1,
+        baseCreatedAt: 100,
+      },
+      events: [{ seq: 1, event: { type: "message", id: "m1" } }],
+    });
+  });
+
+  it("returns reset delta after replace rewrites the same session", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    replaceSqliteSessionTranscriptEvents({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      events: [{ type: "session", id: "session-1" }],
+      now: () => 100,
+    });
+    replaceSqliteSessionTranscriptEvents({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      events: [
+        { type: "session", id: "session-1" },
+        { type: "message", id: "m2", message: { role: "assistant", content: "rewritten" } },
+      ],
+      now: () => 200,
+    });
+
+    expect(
+      loadSqliteSessionTranscriptDelta({
+        env,
+        agentId: "main",
+        sessionId: "session-1",
+        cursor: {
+          eventCount: 1,
+          lastSeq: 0,
+          baseCreatedAt: 100,
+        },
+      }),
+    ).toMatchObject({
+      mode: "reset",
+      frontier: {
+        sessionId: "session-1",
+        updatedAt: 200,
+        eventCount: 2,
+        lastSeq: 1,
+        baseCreatedAt: 200,
+      },
+      events: [{ seq: 0 }, { seq: 1, event: { type: "message", id: "m2" } }],
+    });
+  });
+
+  it("returns missing when a previously cursored transcript is deleted", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    replaceSqliteSessionTranscriptEvents({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      events: [{ type: "session", id: "session-1" }],
+      now: () => 100,
+    });
+    expect(deleteSqliteSessionTranscript({ env, agentId: "main", sessionId: "session-1" })).toBe(
+      true,
+    );
+
+    expect(
+      loadSqliteSessionTranscriptDelta({
+        env,
+        agentId: "main",
+        sessionId: "session-1",
+        cursor: {
+          eventCount: 1,
+          lastSeq: 0,
+          baseCreatedAt: 100,
+        },
+      }),
+    ).toEqual({
+      mode: "missing",
+      frontier: null,
+      events: [],
+    });
   });
 });

@@ -21,8 +21,16 @@ export {
   upsertSessionEntry,
 } from "../config/sessions/store.js";
 export {
+  getSqliteSessionTranscriptFrontier,
+  loadSqliteSessionTranscriptDelta,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
+} from "../config/sessions/transcript-store.sqlite.js";
+export type {
+  SqliteSessionTranscriptCursor,
+  SqliteSessionTranscriptDelta,
+  SqliteSessionTranscriptEvent,
+  SqliteSessionTranscriptFrontier,
 } from "../config/sessions/transcript-store.sqlite.js";
 export {
   evaluateSessionFreshness,
