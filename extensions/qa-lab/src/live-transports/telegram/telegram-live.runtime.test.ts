@@ -331,6 +331,7 @@ describe("telegram live qa runtime", () => {
       "telegram-tools-compact-command",
       "telegram-whoami-command",
       "telegram-status-command",
+      "telegram-repeated-command-authorization",
       "telegram-other-bot-command-gating",
       "telegram-context-command",
       "telegram-current-session-status-tool",
@@ -347,6 +348,7 @@ describe("telegram live qa runtime", () => {
       "telegram-tools-compact-command",
       "telegram-whoami-command",
       "telegram-status-command",
+      "telegram-repeated-command-authorization",
       "telegram-other-bot-command-gating",
       "telegram-context-command",
       "telegram-current-session-status-tool",
@@ -359,16 +361,26 @@ describe("telegram live qa runtime", () => {
     ]);
     expect(
       scenarios.find((scenario) => scenario.id === "telegram-status-command")?.buildRun("sut_bot")
-        .input,
+        .steps[0].input,
     ).toBe("/status@sut_bot");
     expect(
       scenarios.find((scenario) => scenario.id === "telegram-status-command")?.buildRun("sut_bot")
-        .expectedTextIncludes,
+        .steps[0].expectedTextIncludes,
     ).toEqual(["OpenClaw", "Model:", "Session:", "Activation:"]);
     expect(
       scenarios
+        .find((scenario) => scenario.id === "telegram-repeated-command-authorization")
+        ?.buildRun("sut_bot").steps,
+    ).toMatchObject([
+      { driverGroupAuthorization: "deny", input: "/status@sut_bot", expectReply: false },
+      { driverGroupAuthorization: "allow", input: "/status@sut_bot", expectReply: true },
+      { input: "/help@sut_bot", expectReply: true },
+      { input: "/commands@sut_bot", expectReply: true },
+    ]);
+    expect(
+      scenarios
         .find((scenario) => scenario.id === "telegram-other-bot-command-gating")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectReply: false,
       input: "/status@OpenClawQaOtherBot",
@@ -376,7 +388,7 @@ describe("telegram live qa runtime", () => {
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-current-session-status-tool")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectedTextIncludes: ["QA-TELEGRAM-CURRENT-SESSION-OK", ":telegram:group:"],
       replyToLatestSutMessage: true,
@@ -384,12 +396,12 @@ describe("telegram live qa runtime", () => {
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
-        ?.buildRun("sut_bot").replyToLatestSutMessage,
+        ?.buildRun("sut_bot").steps[0].replyToLatestSutMessage,
     ).toBe(true);
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-reply-chain-exact-marker")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectedJoinedSutTextIncludes: ["QA-TELEGRAM-REPLY-CHAIN-OK"],
       expectedSutMessageCount: 1,
@@ -398,7 +410,7 @@ describe("telegram live qa runtime", () => {
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-stream-final-single-message")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectedJoinedSutTextIncludes: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
       expectedSutMessageCount: 1,
@@ -407,7 +419,7 @@ describe("telegram live qa runtime", () => {
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-long-final-reuses-preview")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
       expectedSutMessageCount: 2,
@@ -416,7 +428,7 @@ describe("telegram live qa runtime", () => {
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-long-final-three-chunks")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectedJoinedSutTextIncludes: [
         "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
@@ -436,6 +448,7 @@ describe("telegram live qa runtime", () => {
       "telegram-tools-compact-command",
       "telegram-whoami-command",
       "telegram-status-command",
+      "telegram-repeated-command-authorization",
       "telegram-other-bot-command-gating",
       "telegram-context-command",
       "telegram-mentioned-message-reply",
@@ -451,6 +464,7 @@ describe("telegram live qa runtime", () => {
         "telegram-tools-compact-command",
         "telegram-whoami-command",
         "telegram-status-command",
+        "telegram-repeated-command-authorization",
         "telegram-other-bot-command-gating",
         "telegram-context-command",
         "telegram-mentioned-message-reply",
