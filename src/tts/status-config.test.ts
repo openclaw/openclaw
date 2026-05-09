@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { resolveStatusTtsSnapshot } from "./status-config.js";
+import { writeTtsUserPrefsForMigration } from "./tts-prefs-store.js";
 
 let fixtureRoot = "";
 let fixtureId = 0;
@@ -13,6 +15,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  resetPluginStateStoreForTests();
   if (fixtureRoot) {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   }
@@ -32,6 +35,7 @@ async function withStatusTempHome(run: (home: string) => Promise<void>): Promise
   try {
     await run(home);
   } finally {
+    resetPluginStateStoreForTests();
     restoreEnv("HOME", previousHome);
     restoreEnv("USERPROFILE", previousUserProfile);
     restoreEnv("OPENCLAW_HOME", previousOpenClawHome);
@@ -332,24 +336,19 @@ describe("resolveStatusTtsSnapshot", () => {
     });
   });
 
-  it("derives the default prefs path from OPENCLAW_CONFIG_PATH when set", async () => {
+  it("uses SQLite-backed prefs by default", async () => {
     await withStatusTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw-dev");
-      const prefsPath = path.join(stateDir, "settings", "tts.json");
-      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
-      fs.writeFileSync(
-        prefsPath,
-        JSON.stringify({
-          tts: {
-            auto: "always",
-            provider: "openai",
-          },
-        }),
-      );
 
       delete process.env.OPENCLAW_STATE_DIR;
       vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
       try {
+        writeTtsUserPrefsForMigration({
+          tts: {
+            auto: "always",
+            provider: "openai",
+          },
+        });
         expect(
           resolveStatusTtsSnapshot({
             cfg: {

@@ -79,6 +79,10 @@ import {
   legacySubagentRegistryFileExists,
 } from "./doctor/legacy/subagent-registry.js";
 import {
+  importLegacyTtsPrefsFileToSqlite,
+  legacyTtsPrefsFileExists,
+} from "./doctor/legacy/tts-prefs.js";
+import {
   importLegacyTuiLastSessionStoreToSqlite,
   legacyTuiLastSessionFileExists,
 } from "./doctor/legacy/tui-last-session.js";
@@ -116,6 +120,7 @@ type LegacyStateProbe = {
   subagents: boolean;
   tuiLastSession: boolean;
   acpEventLedger: boolean;
+  ttsPrefs: boolean;
   voiceWake: boolean;
   voiceWakeRouting: boolean;
   authProfileStateAgentDirs: string[];
@@ -194,6 +199,7 @@ async function probeLegacyRuntimeStateFiles(params: {
     subagents: legacySubagentRegistryFileExists(env),
     tuiLastSession: await legacyTuiLastSessionFileExists({ stateDir: baseDir }),
     acpEventLedger: legacyAcpEventLedgerFileExists(env),
+    ttsPrefs: await legacyTtsPrefsFileExists(env),
     voiceWake: await legacyVoiceWakeConfigFileExists(baseDir),
     voiceWakeRouting: await legacyVoiceWakeRoutingConfigFileExists(baseDir),
     authProfileStateAgentDirs: discoverLegacyAuthProfileStateAgentDirs(env),
@@ -221,7 +227,7 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
   }
   if (!params.prompter.shouldRepair) {
     note(
-      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, exec approvals, channel pairing, node pairing, node host config, push, media, plugin binding approvals, installed plugin index, subagent, TUI, ACP event ledger, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
+      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, exec approvals, channel pairing, node pairing, node host config, push, media, plugin binding approvals, installed plugin index, subagent, TUI, ACP event ledger, TTS prefs, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
       "SQLite state",
     );
     return;
@@ -410,6 +416,14 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
         changes.push(
           `- Imported ${result.sessions} ACP event ledger session(s) and ${result.events} event(s) into SQLite.`,
         );
+      }
+    });
+  }
+  if (probe.ttsPrefs) {
+    await runImport("TTS prefs", async () => {
+      const result = await importLegacyTtsPrefsFileToSqlite(env);
+      if (result.imported) {
+        changes.push("- Imported TTS prefs into SQLite.");
       }
     });
   }

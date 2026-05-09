@@ -45,6 +45,13 @@ export { resolveEffectiveTtsConfig } from "../tts/tts-config.js";
 export type { TtsConfigResolutionContext } from "../tts/tts-config.js";
 export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";
 export {
+  readTtsUserPrefs,
+  resolveTtsPrefsRef,
+  SQLITE_TTS_PREFS_REF,
+  updateTtsUserPrefs,
+  type TtsUserPrefs,
+} from "../tts/tts-prefs-store.js";
+export {
   asBoolean,
   asFiniteNumber,
   asObject,

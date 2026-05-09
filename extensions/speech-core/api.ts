@@ -17,13 +17,17 @@ export {
   normalizeSpeechProviderId,
   normalizeTtsAutoMode,
   parseTtsDirectives,
+  readTtsUserPrefs,
   readResponseTextLimited,
   requireInRange,
   resolveEffectiveTtsConfig,
+  resolveTtsPrefsRef,
   scheduleCleanup,
+  SQLITE_TTS_PREFS_REF,
   summarizeText,
   trimToUndefined,
   truncateErrorDetail,
+  updateTtsUserPrefs,
   TTS_AUTO_MODES,
 } from "openclaw/plugin-sdk/speech-core";
 export type {
@@ -51,4 +55,5 @@ export type {
   TtsConfigResolutionContext,
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
+  TtsUserPrefs,
 } from "openclaw/plugin-sdk/speech-core";

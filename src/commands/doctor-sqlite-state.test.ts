@@ -26,6 +26,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { readTtsUserPrefs, SQLITE_TTS_PREFS_REF } from "../tts/tts-prefs-store.js";
 import { readTuiLastSessionKey } from "../tui/tui-last-session.js";
 
 const noteMock = vi.hoisted(() => vi.fn());
@@ -319,6 +320,18 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           "utf8",
         );
         await fs.writeFile(
+          path.join(stateDir, "settings", "tts.json"),
+          `${JSON.stringify({
+            tts: {
+              auto: "always",
+              provider: "edge",
+              maxLength: 2048,
+              summarize: false,
+            },
+          })}\n`,
+          "utf8",
+        );
+        await fs.writeFile(
           path.join(stateDir, "settings", "voicewake-routing.json"),
           `${JSON.stringify({
             defaultTarget: { mode: "current" },
@@ -507,6 +520,17 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(
           fs.stat(path.join(stateDir, "tui", "last-session.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(readTtsUserPrefs(SQLITE_TTS_PREFS_REF, env)).toMatchObject({
+          tts: {
+            auto: "always",
+            provider: "edge",
+            maxLength: 2048,
+            summarize: false,
+          },
+        });
+        await expect(fs.stat(path.join(stateDir, "settings", "tts.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
         expect(readOpenClawStateKvJson("voicewake", "triggers", { env })).toMatchObject({
           triggers: ["wake"],
         });
