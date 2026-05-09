@@ -48,12 +48,12 @@ describe("handleSlackAction", () => {
     return { cfg, context, hasRepliedRef };
   }
 
-  function expectLastSlackSend(content: string, threadTs?: string) {
+  function expectLastSlackSend(content: string, cfg: OpenClawConfig, threadTs?: string) {
     expect(sendSlackMessage).toHaveBeenLastCalledWith(
       "channel:C123",
       content,
       expect.objectContaining({
-        cfg: expect.any(Object),
+        cfg,
         mediaUrl: undefined,
         threadTs,
         blocks: undefined,
@@ -70,7 +70,7 @@ describe("handleSlackAction", () => {
       params.cfg,
       params.context,
     );
-    expectLastSlackSend("Second");
+    expectLastSlackSend("Second", params.cfg);
   }
 
   async function resolveReadToken(cfg: OpenClawConfig): Promise<string | undefined> {
@@ -189,6 +189,7 @@ describe("handleSlackAction", () => {
   });
 
   it("passes threadTs to sendSlackMessage for thread replies", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "sendMessage",
@@ -196,13 +197,13 @@ describe("handleSlackAction", () => {
         content: "Hello thread",
         threadTs: "1234567890.123456",
       },
-      slackConfig(),
+      cfg,
     );
     expect(sendSlackMessage).toHaveBeenCalledWith(
       "channel:C123",
       "Hello thread",
       expect.objectContaining({
-        cfg: expect.any(Object),
+        cfg,
         mediaUrl: undefined,
         threadTs: "1234567890.123456",
         blocks: undefined,
@@ -506,20 +507,21 @@ describe("handleSlackAction", () => {
   });
 
   it("auto-injects threadTs from context when replyToMode=all", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "sendMessage",
         to: "channel:C123",
         content: "Threaded reply",
       },
-      slackConfig(),
+      cfg,
       {
         currentChannelId: "C123",
         currentThreadTs: "1111111111.111111",
         replyToMode: "all",
       },
     );
-    expectLastSlackSend("Threaded reply", "1111111111.111111");
+    expectLastSlackSend("Threaded reply", cfg, "1111111111.111111");
   });
 
   it("replyToMode=first threads first message then stops", async () => {
@@ -531,7 +533,7 @@ describe("handleSlackAction", () => {
       context,
     );
 
-    expectLastSlackSend("First", "1111111111.111111");
+    expectLastSlackSend("First", cfg, "1111111111.111111");
     await sendSecondMessageAndExpectNoThread({ cfg, context });
   });
 
@@ -567,41 +569,40 @@ describe("handleSlackAction", () => {
       context,
     );
 
-    expectLastSlackSend("Explicit", "9999999999.999999");
+    expectLastSlackSend("Explicit", cfg, "9999999999.999999");
     expect(hasRepliedRef.value).toBe(true);
     await sendSecondMessageAndExpectNoThread({ cfg, context });
   });
 
   it("replyToMode=first without hasRepliedRef does not thread", async () => {
-    await handleSlackAction(
-      { action: "sendMessage", to: "channel:C123", content: "No ref" },
-      slackConfig(),
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "first",
-      },
-    );
-    expectLastSlackSend("No ref");
+    const cfg = slackConfig();
+    await handleSlackAction({ action: "sendMessage", to: "channel:C123", content: "No ref" }, cfg, {
+      currentChannelId: "C123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode: "first",
+    });
+    expectLastSlackSend("No ref", cfg);
   });
 
   it("does not auto-inject threadTs when replyToMode=off", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       { action: "sendMessage", to: "channel:C123", content: "No thread" },
-      slackConfig(),
+      cfg,
       {
         currentChannelId: "C123",
         currentThreadTs: "1111111111.111111",
         replyToMode: "off",
       },
     );
-    expectLastSlackSend("No thread");
+    expectLastSlackSend("No thread", cfg);
   });
 
   it("does not auto-inject threadTs when sending to different channel", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       { action: "sendMessage", to: "channel:C999", content: "Other channel" },
-      slackConfig(),
+      cfg,
       {
         currentChannelId: "C123",
         currentThreadTs: "1111111111.111111",
@@ -612,7 +613,7 @@ describe("handleSlackAction", () => {
       "channel:C999",
       "Other channel",
       expect.objectContaining({
-        cfg: expect.any(Object),
+        cfg,
         mediaUrl: undefined,
         threadTs: undefined,
         blocks: undefined,
@@ -621,6 +622,7 @@ describe("handleSlackAction", () => {
   });
 
   it("explicit threadTs overrides context threadTs", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "sendMessage",
@@ -628,31 +630,28 @@ describe("handleSlackAction", () => {
         content: "Explicit wins",
         threadTs: "9999999999.999999",
       },
-      slackConfig(),
+      cfg,
       {
         currentChannelId: "C123",
         currentThreadTs: "1111111111.111111",
         replyToMode: "all",
       },
     );
-    expectLastSlackSend("Explicit wins", "9999999999.999999");
+    expectLastSlackSend("Explicit wins", cfg, "9999999999.999999");
   });
 
   it("handles channel target without prefix when replyToMode=all", async () => {
-    await handleSlackAction(
-      { action: "sendMessage", to: "C123", content: "Bare target" },
-      slackConfig(),
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "all",
-      },
-    );
+    const cfg = slackConfig();
+    await handleSlackAction({ action: "sendMessage", to: "C123", content: "Bare target" }, cfg, {
+      currentChannelId: "C123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode: "all",
+    });
     expect(sendSlackMessage).toHaveBeenCalledWith(
       "C123",
       "Bare target",
       expect.objectContaining({
-        cfg: expect.any(Object),
+        cfg,
         mediaUrl: undefined,
         threadTs: "1111111111.111111",
         blocks: undefined,
