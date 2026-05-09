@@ -170,10 +170,10 @@ describe("pw-session ensurePageState", () => {
     expect(saveAsB.mock.calls[0]?.[0]).not.toBe(managedPathB);
     for (const call of [saveAsA.mock.calls[0], saveAsB.mock.calls[0]]) {
       const savedPath = call?.[0];
-      expect(savedPath).toEqual(expect.any(String));
       if (typeof savedPath !== "string") {
         throw new Error("Expected saved download path");
       }
+      expect(savedPath.length).toBeGreaterThan(0);
       const savedParentName = path.basename(path.dirname(savedPath));
       expect(
         savedParentName.includes("fs-safe-output") ||
