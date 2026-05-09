@@ -1,3 +1,4 @@
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -33,7 +34,7 @@ type SettingsManagerLike = {
   setCompactionEnabled?: (enabled: boolean) => void;
 };
 type CliCompactionDeps = {
-  readTranscriptState: (sessionFile: string) => Promise<TranscriptState>;
+  readTranscriptState: (transcriptLocator: string) => Promise<TranscriptState>;
   resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
   createPreparedEmbeddedPiSettingsManager: (params: {
     cwd: string;
@@ -109,7 +110,7 @@ async function compactCliTranscript(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
-  sessionFile: string;
+  transcriptLocator: string;
   cfg: OpenClawConfig;
   workspaceDir: string;
   agentDir: string;
@@ -149,7 +150,7 @@ async function compactCliTranscript(params: {
   const compactResult = await params.contextEngine.compact({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
+    transcriptLocator: params.transcriptLocator,
     tokenBudget: params.contextTokenBudget,
     currentTokenCount: params.currentTokenCount,
     force: true,
@@ -168,7 +169,7 @@ async function compactCliTranscript(params: {
     contextEngine: params.contextEngine,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
+    transcriptLocator: params.transcriptLocator,
     reason: "compaction",
     runtimeContext,
     config: params.cfg,
@@ -194,14 +195,17 @@ export async function runCliTurnCompactionLifecycle(params: {
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
 }): Promise<SessionEntry | undefined> {
-  const sessionFile = params.sessionEntry?.sessionFile;
   const contextTokenBudget = resolvePositiveInteger(params.sessionEntry?.contextTokens);
-  if (!sessionFile || !contextTokenBudget) {
+  if (!params.sessionEntry?.sessionId || !contextTokenBudget) {
     return params.sessionEntry;
   }
+  const transcriptLocator = createSqliteSessionTranscriptLocator({
+    agentId: params.sessionAgentId,
+    sessionId: params.sessionEntry.sessionId,
+  });
 
   const contextEngine = await cliCompactionDeps.resolveContextEngine(params.cfg);
-  const transcriptState = await cliCompactionDeps.readTranscriptState(sessionFile);
+  const transcriptState = await cliCompactionDeps.readTranscriptState(transcriptLocator);
   const settingsManager = await cliCompactionDeps.createPreparedEmbeddedPiSettingsManager({
     cwd: params.workspaceDir,
     agentDir: params.agentDir,
@@ -241,7 +245,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     contextEngine,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    sessionFile,
+    transcriptLocator,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,

@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { listSessionEntries } from "../../config/sessions/store.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
@@ -236,14 +235,9 @@ export function initFastReplySessionState(params: {
     ? normalizedResetBody.slice(resetMatch?.[0].length ?? 0).trimStart()
     : (ctx.BodyForAgent ?? ctx.Body ?? "");
   const now = Date.now();
-  const sessionFile =
-    !resetTriggered && existingEntry?.sessionFile
-      ? existingEntry.sessionFile
-      : createSqliteSessionTranscriptLocator({ sessionId, agentId });
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
-    sessionFile,
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,

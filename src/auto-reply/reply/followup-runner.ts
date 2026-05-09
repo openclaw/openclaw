@@ -289,7 +289,7 @@ export function createFollowupRunner(params: {
                 senderUsername: run.senderUsername,
                 senderE164: run.senderE164,
                 senderIsOwner: run.senderIsOwner,
-                sessionFile: run.sessionFile,
+                transcriptLocator: run.transcriptLocator,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,
                 config: runtimeConfig,
@@ -424,7 +424,7 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
           newSessionId: runResult.meta?.agentMeta?.sessionId,
-          newSessionFile: runResult.meta?.agentMeta?.sessionFile,
+          newTranscriptLocator: runResult.meta?.agentMeta?.transcriptLocator,
         });
         const refreshedSessionEntry =
           sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
@@ -435,7 +435,7 @@ export function createFollowupRunner(params: {
               key: queueKey,
               previousSessionId,
               nextSessionId: refreshedSessionEntry.sessionId,
-              nextSessionFile: refreshedSessionEntry.sessionFile,
+              nextTranscriptLocator: runResult.meta?.agentMeta?.transcriptLocator,
             });
           }
         }

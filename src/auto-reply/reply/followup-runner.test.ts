@@ -4,6 +4,7 @@ import path from "node:path";
 import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
@@ -84,9 +85,7 @@ async function incrementRunCompactionCountForFollowupTest(
   };
   if (newSessionId && newSessionId !== entry.sessionId) {
     nextEntry.sessionId = newSessionId;
-    if (entry.sessionFile?.trim()) {
-      nextEntry.sessionFile = path.join(path.dirname(entry.sessionFile), `${newSessionId}.jsonl`);
-    }
+    delete nextEntry.transcriptLocator;
   }
   const promptTokens =
     (lastCallUsage?.input ?? 0) +
@@ -147,7 +146,7 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
   key: string;
   previousSessionId?: string;
   nextSessionId?: string;
-  nextSessionFile?: string;
+  nextTranscriptLocator?: string;
   nextProvider?: string;
   nextModel?: string;
   nextAuthProfileId?: string;
@@ -179,8 +178,8 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
     }
     if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
       run.sessionId = params.nextSessionId!;
-      if (params.nextSessionFile?.trim()) {
-        run.sessionFile = params.nextSessionFile;
+      if (params.nextTranscriptLocator?.trim()) {
+        run.transcriptLocator = params.nextTranscriptLocator;
       }
     }
     if (shouldRewriteSelection) {
@@ -686,10 +685,8 @@ describe("createFollowupRunner compaction", () => {
   });
 
   it("tracks auto-compaction from embedded result metadata even when no compaction event is emitted", async () => {
-    const sessionsDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-meta-"));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile: path.join(sessionsDir, "session.jsonl"),
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = {
@@ -732,16 +729,20 @@ describe("createFollowupRunner compaction", () => {
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(2);
     expect(sessionStore.main.sessionId).toBe("session-rotated");
-    expect(await normalizeComparablePath(sessionStore.main.sessionFile ?? "")).toBe(
-      await normalizeComparablePath(path.join(sessionsDir, "session-rotated.jsonl")),
-    );
+    expect(sessionStore.main).not.toHaveProperty("transcriptLocator");
   });
 
   it("refreshes queued followup runs to the rotated transcript", async () => {
-    const sessionsDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-queue-"));
+    const initialTranscriptLocator = createSqliteSessionTranscriptLocator({
+      agentId: "agent",
+      sessionId: "session",
+    });
+    const rotatedTranscriptLocator = createSqliteSessionTranscriptLocator({
+      agentId: "agent",
+      sessionId: "session-rotated",
+    });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile: path.join(sessionsDir, "session.jsonl"),
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = {
@@ -754,6 +755,7 @@ describe("createFollowupRunner compaction", () => {
       meta: {
         agentMeta: {
           sessionId: "session-rotated",
+          transcriptLocator: rotatedTranscriptLocator,
           compactionCount: 1,
           lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
         },
@@ -774,7 +776,7 @@ describe("createFollowupRunner compaction", () => {
       prompt: "next",
       run: {
         sessionId: "session",
-        sessionFile: path.join(sessionsDir, "session.jsonl"),
+        transcriptLocator: initialTranscriptLocator,
       },
     });
     const queueSettings: QueueSettings = { mode: "queue" };
@@ -784,16 +786,14 @@ describe("createFollowupRunner compaction", () => {
       run: {
         verboseLevel: "on",
         sessionId: "session",
-        sessionFile: path.join(sessionsDir, "session.jsonl"),
+        transcriptLocator: initialTranscriptLocator,
       },
     });
 
     await runner(current);
 
     expect(queuedNext.run.sessionId).toBe("session-rotated");
-    expect(await normalizeComparablePath(queuedNext.run.sessionFile)).toBe(
-      await normalizeComparablePath(path.join(sessionsDir, "session-rotated.jsonl")),
-    );
+    expect(queuedNext.run.transcriptLocator).toBe(rotatedTranscriptLocator);
   });
 
   it("does not count failed compaction end events in followup runs", async () => {
@@ -876,7 +876,7 @@ describe("createFollowupRunner compaction", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      sessionFile: transcriptPath,
+      transcriptLocator: transcriptPath,
       totalTokens: 10,
       totalTokensFresh: false,
       compactionCount: 1,
@@ -904,7 +904,7 @@ describe("createFollowupRunner compaction", () => {
         sessionKey?: string;
       }) => {
         await compactEmbeddedPiSessionMock({
-          sessionFile: transcriptPath,
+          transcriptLocator: transcriptPath,
           workspaceDir,
         });
         params.followupRun.run.extraSystemPrompt = joinPromptSections(
@@ -952,7 +952,7 @@ describe("createFollowupRunner compaction", () => {
 
     const queued = createQueuedRun({
       run: {
-        sessionFile: transcriptPath,
+        transcriptLocator: transcriptPath,
         workspaceDir,
       },
     });

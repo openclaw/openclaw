@@ -268,16 +268,14 @@ function getRememberedTranscriptPath(agentId: string, sessionId: string): string
   )?.locator;
 }
 
-function resolveSyntheticSessionFile(params: {
+function resolveSyntheticTranscriptLocator(params: {
   agentId: string;
   sessionId: string;
-  sessionEntry?: SessionEntry;
-  sessionFile?: string;
+  transcriptLocator?: string;
   rememberedPath?: string;
 }): string {
   return (
-    params.sessionFile ??
-    params.sessionEntry?.sessionFile ??
+    params.transcriptLocator ??
     params.rememberedPath ??
     createSqliteSessionTranscriptLocator({ agentId: params.agentId, sessionId: params.sessionId })
   );
@@ -286,13 +284,13 @@ function resolveSyntheticSessionFile(params: {
 function resolveUsageSessionScope(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  sessionFile?: string;
+  transcriptLocator?: string;
   agentId?: string;
 }):
   | {
       agentId: string;
       sessionId: string;
-      sessionFile: string;
+      transcriptLocator: string;
     }
   | undefined {
   const explicitSessionId = params.sessionId?.trim() || params.sessionEntry?.sessionId?.trim();
@@ -301,26 +299,24 @@ function resolveUsageSessionScope(params: {
     return {
       agentId,
       sessionId: explicitSessionId,
-      sessionFile: resolveSyntheticSessionFile({
+      transcriptLocator: resolveSyntheticTranscriptLocator({
         agentId,
         sessionId: explicitSessionId,
-        sessionEntry: params.sessionEntry,
-        sessionFile: params.sessionFile,
+        transcriptLocator: params.transcriptLocator,
         rememberedPath: getRememberedTranscriptPath(agentId, explicitSessionId),
       }),
     };
   }
-  if (params.sessionFile) {
+  if (params.transcriptLocator) {
     const scope = resolveSqliteSessionTranscriptScopeForPath({
-      transcriptPath: params.sessionFile,
+      transcriptPath: params.transcriptLocator,
     });
     if (scope) {
       return {
         ...scope,
-        sessionFile: resolveSyntheticSessionFile({
+        transcriptLocator: resolveSyntheticTranscriptLocator({
           ...scope,
-          sessionEntry: params.sessionEntry,
-          sessionFile: params.sessionFile,
+          transcriptLocator: params.transcriptLocator,
         }),
       };
     }
@@ -389,13 +385,13 @@ function scanUsageEvents(params: {
   });
 }
 
-export function resolveExistingUsageSessionFile(params: {
+export function resolveExistingUsageTranscriptLocator(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  sessionFile?: string;
+  transcriptLocator?: string;
   agentId?: string;
 }): string | undefined {
-  return resolveUsageSessionScope(params)?.sessionFile;
+  return resolveUsageSessionScope(params)?.transcriptLocator;
 }
 
 export async function loadCostUsageSummary(params?: {
@@ -507,7 +503,7 @@ export async function loadCostUsageSummaryFromCache(params: {
 export async function loadSessionCostSummaryFromCache(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  sessionFile: string;
+  transcriptLocator: string;
   config?: OpenClawConfig;
   agentId?: string;
   startMs?: number;
@@ -587,7 +583,7 @@ export async function discoverAllSessions(params?: {
     }
     discovered.push({
       sessionId: transcript.sessionId,
-      sessionFile: resolveSyntheticSessionFile({
+      transcriptLocator: resolveSyntheticTranscriptLocator({
         agentId: transcript.agentId,
         sessionId: transcript.sessionId,
         rememberedPath: transcript.locator,
@@ -603,7 +599,7 @@ export async function discoverAllSessions(params?: {
 export async function loadSessionCostSummary(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  sessionFile?: string;
+  transcriptLocator?: string;
   config?: OpenClawConfig;
   agentId?: string;
   startMs?: number;
@@ -613,7 +609,7 @@ export async function loadSessionCostSummary(params: {
   if (!scope) {
     return null;
   }
-  const sessionFile = scope.sessionFile;
+  const transcriptLocator = scope.transcriptLocator;
   const events = loadSqliteSessionTranscriptEvents(scope);
   if (!events.length) {
     return null;
@@ -890,7 +886,7 @@ export async function loadSessionCostSummary(params: {
 
   return {
     sessionId: scope.sessionId,
-    sessionFile,
+    transcriptLocator,
     firstActivity,
     lastActivity,
     durationMs:
@@ -919,7 +915,7 @@ export async function loadSessionCostSummary(params: {
 export async function loadSessionUsageTimeSeries(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  sessionFile?: string;
+  transcriptLocator?: string;
   config?: OpenClawConfig;
   agentId?: string;
   maxPoints?: number;
@@ -1024,7 +1020,7 @@ export async function loadSessionUsageTimeSeries(params: {
 export async function loadSessionLogs(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
-  sessionFile?: string;
+  transcriptLocator?: string;
   config?: OpenClawConfig;
   agentId?: string;
   limit?: number;

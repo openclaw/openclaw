@@ -5,6 +5,8 @@
  * This handler is called before built-in command handlers.
  */
 
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
@@ -43,7 +45,12 @@ export const handlePluginCommand: CommandHandler = async (
     gatewayClientScopes: params.ctx.GatewayClientScopes,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
-    sessionFile: targetSessionEntry?.sessionFile,
+    transcriptLocator: targetSessionEntry?.sessionId
+      ? createSqliteSessionTranscriptLocator({
+          agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
+          sessionId: targetSessionEntry.sessionId,
+        })
+      : undefined,
     commandBody: command.commandBodyNormalized,
     config: cfg,
     from: command.from,

@@ -203,7 +203,7 @@ function isTranscriptPressureEvent(event: unknown): boolean {
 
 function resolveSessionLogPath(
   sessionId?: string,
-  sessionEntry?: SessionEntry,
+  _sessionEntry?: SessionEntry,
   sessionKey?: string,
 ): string | undefined {
   if (!sessionId) {
@@ -211,13 +211,7 @@ function resolveSessionLogPath(
   }
 
   try {
-    const transcriptPath = normalizeOptionalString(
-      (sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined)?.transcriptPath,
-    );
-    const transcriptLocator =
-      normalizeOptionalString(sessionEntry?.transcriptLocator) || transcriptPath;
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    void transcriptLocator;
     return createSqliteSessionTranscriptLocator({ agentId, sessionId });
   } catch {
     return undefined;
@@ -226,7 +220,6 @@ function resolveSessionLogPath(
 
 function resolveSqliteSessionTranscriptPath(params: {
   sessionId?: string;
-  sessionEntry?: SessionEntry;
   sessionKey?: string;
 }): string | undefined {
   const sessionId = normalizeOptionalString(params.sessionId);
@@ -239,13 +232,6 @@ function resolveSqliteSessionTranscriptPath(params: {
   );
   if (candidates.length === 0) {
     return undefined;
-  }
-  const explicit = normalizeOptionalString(params.sessionEntry?.transcriptLocator);
-  if (explicit) {
-    const matched = candidates.find((entry) => entry.locator === explicit);
-    if (matched) {
-      return matched.locator;
-    }
   }
   return candidates[0]?.locator;
 }
@@ -314,7 +300,6 @@ async function readSessionLogSnapshot(params: {
   const scope = resolveSqliteSessionTranscriptScope({
     agentId: params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined,
     sessionId,
-    transcriptPath: params.sessionEntry?.transcriptLocator,
   });
   if (!scope) {
     return snapshot;
@@ -371,14 +356,10 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     return undefined;
   }
   const fallbackTranscriptLocator = normalizeOptionalString(params.transcriptLocator);
-  const sessionEntryForTranscript =
-    params.sessionEntry?.transcriptLocator || !fallbackTranscriptLocator
-      ? params.sessionEntry
-      : ({ ...params.sessionEntry, transcriptLocator: fallbackTranscriptLocator } as SessionEntry);
   try {
     const snapshot = await readSessionLogSnapshot({
       sessionId,
-      sessionEntry: sessionEntryForTranscript,
+      sessionEntry: params.sessionEntry,
       sessionKey: params.sessionKey,
       includeByteSize: true,
       includeUsage: true,
@@ -401,16 +382,12 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         transcriptBytesTokens,
       };
     }
-    const messages = (await readSessionMessagesAsync(
-      sessionId,
-      sessionEntryForTranscript?.transcriptLocator,
-      {
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
-        mode: "recent",
-        maxMessages: 200,
-        maxBytes: 1024 * 1024,
-      },
-    )) as AgentMessage[];
+    const messages = (await readSessionMessagesAsync(sessionId, fallbackTranscriptLocator, {
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      mode: "recent",
+      maxMessages: 200,
+      maxBytes: 1024 * 1024,
+    })) as AgentMessage[];
     if (messages.length === 0) {
       return undefined;
     }
@@ -479,7 +456,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const transcriptSizeSnapshot = shouldCheckActiveTranscriptBytes
     ? await readSessionLogSnapshot({
         sessionId: entry.sessionId,
-        sessionEntry: { ...entry, transcriptLocator: params.followupRun.run.transcriptLocator },
+        sessionEntry: entry,
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
         includeByteSize: true,
         includeUsage: false,
@@ -573,7 +550,6 @@ export async function runPreflightCompactionIfNeeded(params: {
   const transcriptLocator =
     resolveSqliteSessionTranscriptPath({
       sessionId: entry.sessionId,
-      sessionEntry: { ...entry, transcriptLocator: params.followupRun.run.transcriptLocator },
       sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
     }) ??
     resolveSessionLogPath(
