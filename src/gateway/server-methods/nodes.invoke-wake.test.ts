@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   isNodeCommandAllowed: vi.fn<
     (params: MockNodeCommandPolicyParams) => { ok: true } | { ok: false; reason: string }
   >(() => ({ ok: true })),
+  isForegroundRestrictedPluginNodeCommand: vi.fn((command: string) =>
+    command.startsWith("canvas."),
+  ),
   sanitizeNodeInvokeParamsForForwarding: vi.fn(({ rawParams }: { rawParams: unknown }) => ({
     ok: true,
     params: rawParams,
@@ -39,6 +42,7 @@ vi.mock("../../config/io.js", () => ({
 vi.mock("../node-command-policy.js", () => ({
   resolveNodeCommandAllowlist: mocks.resolveNodeCommandAllowlist,
   isNodeCommandAllowed: mocks.isNodeCommandAllowed,
+  isForegroundRestrictedPluginNodeCommand: mocks.isForegroundRestrictedPluginNodeCommand,
 }));
 
 vi.mock("../node-invoke-sanitize.js", () => ({
@@ -251,6 +255,47 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   return respond;
 }
 
+describe("node plugin surface refresh", () => {
+  it("refreshes generic plugin surface capability urls", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const respond = vi.fn();
+    const client = {
+      connect: {
+        client: { id: "node-1", mode: "node" },
+      },
+      pluginSurfaceUrls: {
+        canvas: "http://127.0.0.1:18789/__openclaw__/cap/old-token",
+      },
+      pluginNodeCapabilitySurfaces: {
+        canvas: { surface: "canvas", ttlMs: 100 },
+      },
+    };
+
+    await nodeHandlers["node.pluginSurface.refresh"]({
+      req: { type: "req", id: "r1", method: "node.pluginSurface.refresh", params: {} },
+      params: { surface: "canvas" },
+      client: client as never,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        surface: "canvas",
+        pluginSurfaceUrls: {
+          canvas: expect.stringContaining("/__openclaw__/cap/"),
+        },
+        expiresAtMs: 1_100,
+      },
+      undefined,
+    );
+    expect(client.pluginSurfaceUrls.canvas).not.toContain("old-token");
+  });
+});
+
 describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
     mocks.getRuntimeConfig.mockClear();
@@ -259,6 +304,10 @@ describe("node.invoke APNs wake path", () => {
     mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set());
     mocks.isNodeCommandAllowed.mockClear();
     mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
+    mocks.isForegroundRestrictedPluginNodeCommand.mockClear();
+    mocks.isForegroundRestrictedPluginNodeCommand.mockImplementation((command: string) =>
+      command.startsWith("canvas."),
+    );
     mocks.sanitizeNodeInvokeParamsForForwarding.mockClear();
     mocks.sanitizeNodeInvokeParamsForForwarding.mockImplementation(
       ({ rawParams }: { rawParams: unknown }) => ({ ok: true, params: rawParams }),
@@ -609,9 +658,16 @@ describe("node.invoke APNs wake path", () => {
 
     const queuedActionId = (pullCall?.[1] as { actions?: Array<{ id?: string }> } | undefined)
       ?.actions?.[0]?.id;
-    expect(queuedActionId).toBeTruthy();
+    expect(queuedActionId).toEqual(
+      expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      ),
+    );
+    if (queuedActionId === undefined) {
+      throw new Error("expected queued action id");
+    }
 
-    const ackRespond = await ackPending("ios-node-queued", [queuedActionId!], ["canvas.navigate"]);
+    const ackRespond = await ackPending("ios-node-queued", [queuedActionId], ["canvas.navigate"]);
     const ackCall = ackRespond.mock.calls[0] as RespondCall | undefined;
     expect(ackCall?.[0]).toBe(true);
     expect(ackCall?.[1]).toMatchObject({

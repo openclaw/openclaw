@@ -346,7 +346,11 @@ describe("gateway silent scope-upgrade reconnect", () => {
 
       const paired = await getPairedDevice(loaded.identity.deviceId);
       expect(paired?.publicKey).toBe(loaded.publicKey);
-      expect(paired?.tokens?.operator?.token).toBeTruthy();
+      const operatorToken = paired?.tokens?.operator?.token;
+      if (typeof operatorToken !== "string") {
+        throw new Error("expected approved device operator token");
+      }
+      expect(operatorToken.length).toBeGreaterThan(0);
     } finally {
       approveSpy.mockRestore();
       ws?.close();
@@ -398,7 +402,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       expect((requested.error as Error).message).toContain("timeout");
 
       const pending = await devicePairingModule.listDevicePairing();
-      expect(pending.pending).toEqual([]);
+      expect(pending.pending).toStrictEqual([]);
     } finally {
       approveSpy.mockRestore();
       ws?.close();
@@ -439,7 +443,8 @@ describe("gateway silent scope-upgrade reconnect", () => {
 
       expect(res.ok).toBe(false);
       expect(res.error?.message).toBe("pairing required: device is not approved yet");
-      expect(replacementRequestId).toBeTruthy();
+      expect(replacementRequestId).toBeTypeOf("string");
+      expect(replacementRequestId.length).toBeGreaterThan(0);
       expect(
         (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,
       ).toBe(replacementRequestId);

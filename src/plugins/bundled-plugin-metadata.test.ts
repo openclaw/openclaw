@@ -31,6 +31,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "active-memory",
   "bonjour",
   "browser",
+  "canvas",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
@@ -50,6 +51,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
   "browser",
+  "canvas",
   "device-pair",
   "file-transfer",
   "memory-core",
@@ -113,14 +115,20 @@ function expectArtifactPresence(
   }
 }
 
+let repoBundledPluginMetadataCache: readonly BundledPluginMetadata[] | undefined;
+let repoBundledPluginManifestsCache:
+  | ReturnType<typeof listRepoBundledPluginManifestsUncached>
+  | undefined;
+
 function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
-  return listBundledPluginMetadata({
+  repoBundledPluginMetadataCache ??= listBundledPluginMetadata({
     rootDir: repoRoot,
     includeSyntheticChannelConfigs: false,
   });
+  return repoBundledPluginMetadataCache;
 }
 
-function listRepoBundledPluginManifests() {
+function listRepoBundledPluginManifestsUncached() {
   const bundledPluginsDir = path.join(repoRoot, "extensions");
   return fs
     .readdirSync(bundledPluginsDir, { withFileTypes: true })
@@ -129,6 +137,11 @@ function listRepoBundledPluginManifests() {
       const result = loadPluginManifest(path.join(bundledPluginsDir, entry.name), false);
       return result.ok ? [{ dirName: entry.name, manifest: result.manifest }] : [];
     });
+}
+
+function listRepoBundledPluginManifests() {
+  repoBundledPluginManifestsCache ??= listRepoBundledPluginManifestsUncached();
+  return repoBundledPluginManifestsCache;
 }
 
 function createRepoBundledManifestRegistry(): PluginManifestRegistry {
@@ -315,6 +328,13 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps iMessage message-tool discovery on a narrow public surface", () => {
+    const imessage = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "imessage");
+    expectArtifactPresence(imessage?.publicSurfaceArtifacts, {
+      contains: ["message-tool-api.js"],
+    });
+  });
+
   it("keeps Slack's narrow runtime-setter sidecar on the bundled public surface", () => {
     // Regression for #69317: the bundled channel entry now points its
     // runtime.specifier at runtime-setter-api.js to avoid loading the full
@@ -434,7 +454,9 @@ describe("bundled plugin metadata", () => {
 
   it("keeps config schemas on all bundled plugin manifests", () => {
     for (const entry of listRepoBundledPluginMetadata()) {
-      expect(entry.manifest.configSchema).toEqual(expect.any(Object));
+      expect(entry.manifest.configSchema).not.toBeNull();
+      expect(typeof entry.manifest.configSchema).toBe("object");
+      expect(Array.isArray(entry.manifest.configSchema)).toBe(false);
     }
   });
 

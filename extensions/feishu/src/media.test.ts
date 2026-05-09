@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -96,6 +96,15 @@ describe("sendMediaFeishu msg_type routing", () => {
       sendMediaFeishu,
       shouldSuppressFeishuTextForVoiceMedia,
     } = await import("./media.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./targets.js");
+    vi.doUnmock("./runtime.js");
+    vi.doUnmock("openclaw/plugin-sdk/media-runtime");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -557,8 +566,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
     expectMediaTimeoutClientConfigured();
     expect(result.buffer).toEqual(Buffer.from("image-data"));
-    expect(capturedPath).toBeDefined();
-    expectPathIsolatedToTmpRoot(capturedPath as string, imageKey);
+    if (!capturedPath) {
+      throw new Error("expected Feishu image temp path");
+    }
+    expectPathIsolatedToTmpRoot(capturedPath, imageKey);
   });
 
   it("uses isolated temp paths for message resource downloads", async () => {
@@ -580,8 +591,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(result.buffer).toEqual(Buffer.from("resource-data"));
-    expect(capturedPath).toBeDefined();
-    expectPathIsolatedToTmpRoot(capturedPath as string, fileKey);
+    if (!capturedPath) {
+      throw new Error("expected Feishu resource temp path");
+    }
+    expectPathIsolatedToTmpRoot(capturedPath, fileKey);
   });
 
   it("rejects invalid image keys before calling feishu api", async () => {

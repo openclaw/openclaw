@@ -392,6 +392,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     tts: {
       textToSpeech: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeech"],
+      textToSpeechStream: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechStream"],
       textToSpeechTelephony: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechTelephony"],
       listVoices: vi.fn() as unknown as PluginRuntime["tts"]["listVoices"],
     },
@@ -720,6 +721,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSessionMessages: vi.fn(),
       getSession: vi.fn(),
       deleteSession: vi.fn(),
+    },
+    llm: {
+      complete: vi.fn(),
     },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),

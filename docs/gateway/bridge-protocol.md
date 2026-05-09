@@ -40,8 +40,10 @@ authoritative pin without explicit user intent or other out-of-band verification
 3. Client sends `pair-request`.
 4. Gateway waits for approval, then sends `pair-ok` and `hello-ok`.
 
-Historically, `hello-ok` returned `serverName` and could include
-`canvasHostUrl`.
+Historically, `hello-ok` returned `serverName`; hosted plugin surfaces are now
+advertised through `pluginSurfaceUrls`. Canvas/A2UI uses
+`pluginSurfaceUrls.canvas`; the deprecated `canvasHostUrl` alias is not part of
+the refactored protocol.
 
 ## Frames
 

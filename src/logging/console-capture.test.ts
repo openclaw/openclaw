@@ -56,7 +56,7 @@ describe("enableConsoleCapture", () => {
     });
     routeLogsToStderr();
     enableConsoleCapture();
-    expect(() => console.log("hello")).not.toThrow();
+    expect(console.log("hello")).toBeUndefined();
   });
 
   it("swallows EIO from original console writes", () => {
@@ -65,7 +65,7 @@ describe("enableConsoleCapture", () => {
       throw eioError();
     };
     enableConsoleCapture();
-    expect(() => console.log("hello")).not.toThrow();
+    expect(console.log("hello")).toBeUndefined();
   });
 
   it("prefixes console output with timestamps when enabled", () => {
@@ -177,7 +177,7 @@ describe("enableConsoleCapture", () => {
     enableConsoleCapture();
     const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
     epipe.code = "EPIPE";
-    expect(() => stream.emit("error", epipe)).not.toThrow();
+    expect(stream.emit("error", epipe)).toBe(true);
   });
 
   it("rethrows non-EPIPE errors on stdout", () => {

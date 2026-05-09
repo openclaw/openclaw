@@ -65,6 +65,16 @@ function createRemoteContexts(remotePath: string) {
   return { ctx, sessionCtx };
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect((statError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
+}
+
 describe("stageSandboxMedia scp remote paths", () => {
   it("rejects remote attachment filenames with shell metacharacters before spawning scp", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
@@ -81,7 +91,7 @@ describe("stageSandboxMedia scp remote paths", () => {
       });
 
       expect(childProcessMocks.spawn).not.toHaveBeenCalled();
-      await expect(fs.stat(join(remoteCacheDir, basename(remotePath)))).rejects.toThrow();
+      await expectPathMissing(join(remoteCacheDir, basename(remotePath)));
       expect(ctx.MediaPath).toBe(remotePath);
       expect(sessionCtx.MediaPath).toBe(remotePath);
       expect(ctx.MediaUrl).toBe(remotePath);
@@ -107,11 +117,13 @@ describe("stageSandboxMedia scp remote paths", () => {
         workspaceDir,
       });
 
+      expect(childProcessMocks.spawn.mock.calls[0]?.[0]).toBe("scp");
       const remoteCacheRoot = join(CONFIG_DIR, "media", "remote-cache");
       const expectedSafeDir = join(remoteCacheRoot, slugifySessionKey(sessionKey));
       try {
-        await expect(fs.stat(expectedSafeDir)).resolves.toBeTruthy();
-        await expect(fs.stat(join(CONFIG_DIR, "escape"))).rejects.toThrow();
+        const safeDirStats = await fs.stat(expectedSafeDir);
+        expect(safeDirStats.isDirectory()).toBe(true);
+        await expectPathMissing(join(CONFIG_DIR, "escape"));
       } finally {
         await fs.rm(expectedSafeDir, { recursive: true, force: true });
       }

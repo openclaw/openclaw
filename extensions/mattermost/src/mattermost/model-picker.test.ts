@@ -59,7 +59,15 @@ describe("Mattermost model picker", () => {
     expect(view.text).toContain("/oc_model <provider/model> to switch");
     expect(view.text).toContain("Browse keeps the current runtime");
     expect(view.text).toContain("/oc_model <provider/model> --runtime <runtime>");
-    expect(view.buttons[0]?.[0]?.text).toBe("Browse providers");
+    const firstRow = view.buttons[0];
+    if (!firstRow) {
+      throw new Error("expected Mattermost model picker button row");
+    }
+    const browseButton = firstRow[0];
+    if (!browseButton) {
+      throw new Error("expected Mattermost browse providers button");
+    }
+    expect(browseButton.text).toBe("Browse providers");
   });
 
   it("trims accidental model spacing in Mattermost current-model text", () => {
@@ -128,7 +136,7 @@ describe("Mattermost model picker", () => {
     expect(parseMattermostModelPickerContext({ action: "select" })).toBeNull();
   });
 
-  it("falls back to the routed agent default model when no override is stored", async () => {
+  it("falls back to the routed agent default model when no override is stored", () => {
     const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
     try {
       const cfg: OpenClawConfig = {

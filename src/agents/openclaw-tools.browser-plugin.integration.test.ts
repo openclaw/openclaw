@@ -112,8 +112,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     });
 
     const browserTool = tools.find((tool) => tool.name === "browser");
-    expect(browserTool).toBeDefined();
-    if (!browserTool) {
+    if (browserTool === undefined) {
       throw new Error("expected browser tool");
     }
 
@@ -135,11 +134,8 @@ describe("createOpenClawTools browser plugin integration", () => {
       resolvedConfig: config,
     });
 
-    expect(hoisted.resolvePluginTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowGatewaySubagentBinding: true,
-      }),
-    );
+    expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
+    expect(hoisted.resolvePluginTools.mock.calls[0]?.[0]?.allowGatewaySubagentBinding).toBe(true);
   });
 
   it("forwards plugin tool deny policy to plugin resolution", () => {
@@ -159,12 +155,9 @@ describe("createOpenClawTools browser plugin integration", () => {
       resolvedConfig: config,
     });
 
-    expect(hoisted.resolvePluginTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolAllowlist: ["*"],
-        toolDenylist: ["browser"],
-      }),
-    );
+    expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
+    expect(hoisted.resolvePluginTools.mock.calls[0]?.[0]?.toolAllowlist).toEqual(["*"]);
+    expect(hoisted.resolvePluginTools.mock.calls[0]?.[0]?.toolDenylist).toEqual(["browser"]);
   });
 
   it("does not pass a stale active snapshot as plugin runtime config for a resolved run config", () => {

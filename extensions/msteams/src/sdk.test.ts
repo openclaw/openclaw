@@ -147,7 +147,7 @@ function createSdkStub(): MSTeamsTeamsSdk {
 }
 
 describe("createMSTeamsApp", () => {
-  it("does not crash with express 5 path-to-regexp (#55161)", async () => {
+  it("creates app without the Express 5 wildcard route regression (#55161)", async () => {
     // Regression test for: https://github.com/openclaw/openclaw/issues/55161
     // createMSTeamsApp passes a no-op httpServerAdapter to prevent the SDK from
     // creating its default HttpPlugin (which registers `/api*` — invalid in Express 5).
@@ -163,7 +163,6 @@ describe("createMSTeamsApp", () => {
 
     // This would throw "Missing parameter name at index 5: /api*" without the fix
     const app = await createMSTeamsApp(creds, sdk);
-    expect(app).toBeDefined();
     // Verify token methods are available (the reason we use the App class)
     expect(typeof (app as unknown as Record<string, unknown>).getBotToken).toBe("function");
   });
@@ -283,7 +282,7 @@ describe("createBotFrameworkJwtValidator", () => {
     await expect(validator.validate("Bearer botfw-token")).resolves.toBe(true);
 
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
-    expect((opts.audience as string[]).includes("https://api.botframework.com")).toBe(true);
+    expect(opts.audience).toContain("https://api.botframework.com");
   });
 
   it("accepts global audience tokens when azp matches the configured app id", async () => {
@@ -434,7 +433,7 @@ function makeFakeSdk() {
 
 describe("createMSTeamsApp – secret credentials", () => {
   it("passes clientId, clientSecret, tenantId to sdk.App", async () => {
-    const { sdk, appInstances } = makeFakeSdk();
+    const { sdk, appInstances, FakeApp } = makeFakeSdk();
     const creds: MSTeamsSecretCredentials = {
       type: "secret",
       appId: "my-app-id",
@@ -442,7 +441,7 @@ describe("createMSTeamsApp – secret credentials", () => {
       tenantId: "my-tenant",
     };
     const app = await createMSTeamsApp(creds, sdk);
-    expect(app).toBeDefined();
+    expect(app).toBeInstanceOf(FakeApp);
     expect(appInstances[0]).toMatchObject({
       clientId: "my-app-id",
       clientSecret: "my-secret",
@@ -473,10 +472,11 @@ describe("createMSTeamsApp – federated certificate credentials", () => {
       clientId: "fed-app-id",
       tenantId: "fed-tenant",
     });
-    expect(typeof appInstances[0].token).toBe("function");
-    const token = await (appInstances[0].token as (scope: string) => Promise<string>)(
-      "https://api.botframework.com/.default",
-    );
+    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
+    if (!tokenProvider) {
+      throw new Error("expected federated app to expose token provider");
+    }
+    const token = await tokenProvider("https://api.botframework.com/.default");
     expect(token).toBe("mock-managed-token");
   });
 
@@ -521,10 +521,11 @@ describe("createMSTeamsApp – federated managed identity", () => {
     };
     await createMSTeamsApp(creds, sdk);
     expect(appInstances[0]).toMatchObject({ clientId: "mi-app-id", tenantId: "mi-tenant" });
-    expect(typeof appInstances[0].token).toBe("function");
-    const token = await (appInstances[0].token as (scope: string) => Promise<string>)(
-      "https://api.botframework.com/.default",
-    );
+    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
+    if (!tokenProvider) {
+      throw new Error("expected managed-identity app to expose token provider");
+    }
+    const token = await tokenProvider("https://api.botframework.com/.default");
     expect(token).toBe("mock-managed-token");
   });
 
@@ -537,10 +538,11 @@ describe("createMSTeamsApp – federated managed identity", () => {
       useManagedIdentity: true,
     };
     await createMSTeamsApp(creds, sdk);
-    expect(typeof appInstances[0].token).toBe("function");
-    const token = await (appInstances[0].token as (scope: string) => Promise<string>)(
-      "https://api.botframework.com/.default",
-    );
+    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
+    if (!tokenProvider) {
+      throw new Error("expected managed-identity app to expose token provider");
+    }
+    const token = await tokenProvider("https://api.botframework.com/.default");
     expect(token).toBe("mock-managed-token");
   });
 

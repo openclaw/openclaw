@@ -28,6 +28,16 @@ function makeTempDir() {
 
 const mkdirSafe = mkdirSafeDir;
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function withOpenClawPackageArgv<T>(packageRoot: string, fn: () => T): T {
   mkdirSafe(path.join(packageRoot, "bin"));
   fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}\n', "utf-8");
@@ -246,6 +256,14 @@ function findCandidateById<T extends { idHint?: string }>(candidates: T[], idHin
   return candidates.find((candidate) => candidate.idHint === idHint);
 }
 
+function requireCandidateById<T extends { idHint?: string }>(candidates: T[], idHint: string): T {
+  const candidate = findCandidateById(candidates, idHint);
+  if (!candidate) {
+    throw new Error(`expected plugin candidate ${idHint}`);
+  }
+  return candidate;
+}
+
 function expectCandidateSource(
   candidates: Array<{ idHint?: string; source?: string }>,
   idHint: string,
@@ -255,8 +273,8 @@ function expectCandidateSource(
 }
 
 function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>) {
-  expect(diagnostics.some((entry) => entry.message.includes("escapes package directory"))).toBe(
-    true,
+  expect(diagnostics.map((entry) => entry.message)).toEqual(
+    expect.arrayContaining([expect.stringContaining("escapes package directory")]),
   );
 }
 
@@ -293,8 +311,7 @@ function expectBundleCandidateMatch(params: {
   source: string;
   expectRootDir?: boolean;
 }) {
-  const bundle = findCandidateById(params.candidates, params.idHint);
-  expect(bundle).toBeDefined();
+  const bundle = requireCandidateById(params.candidates, params.idHint);
   expect(bundle).toEqual(
     expect.objectContaining({
       idHint: params.idHint,
@@ -338,7 +355,7 @@ async function expectRejectedPackageExtensionEntry(params: {
     ).toBe(true);
     return;
   }
-  expect(result.diagnostics).toEqual([]);
+  expect(result.diagnostics).toStrictEqual([]);
 }
 
 afterEach(() => {
@@ -384,7 +401,7 @@ describe("discoverOpenClawPlugins", () => {
       expect(findCandidateById(candidates, "linked-plugin")?.rootDir).toBe(
         fs.realpathSync(linkedPluginDir),
       );
-      expect(diagnostics).toEqual([]);
+      expect(diagnostics).toStrictEqual([]);
     },
   );
 
@@ -410,7 +427,7 @@ describe("discoverOpenClawPlugins", () => {
       expect(findCandidateById(candidates, "workspace-linked-plugin")?.rootDir).toBe(
         fs.realpathSync(linkedPluginDir),
       );
-      expect(diagnostics).toEqual([]);
+      expect(diagnostics).toStrictEqual([]);
     },
   );
 
@@ -425,7 +442,7 @@ describe("discoverOpenClawPlugins", () => {
 
       const { candidates, diagnostics } = await discoverWithStateDir(stateDir, {});
       expectCandidateIds(candidates, { excludes: ["missing"] });
-      expect(diagnostics).toEqual([]);
+      expect(diagnostics).toStrictEqual([]);
     },
   );
 
@@ -456,7 +473,7 @@ describe("discoverOpenClawPlugins", () => {
       present: ["workspace-plugin"],
       absent: ["stray-workspace-plugin"],
     });
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
   });
 
   it("resolves tilde workspace dirs against the provided env", () => {
@@ -561,7 +578,7 @@ describe("discoverOpenClawPlugins", () => {
     );
 
     expectCandidateOrder(candidates, ["real-plugin"]);
-    expect(diagnostics).toEqual([]);
+    expect(diagnostics).toStrictEqual([]);
   });
 
   it("ignores packaged bundled plugin paths in configured load paths", () => {
@@ -584,9 +601,10 @@ describe("discoverOpenClawPlugins", () => {
       }),
     );
 
-    expect(candidates.filter((candidate) => candidate.idHint === "feishu")).toEqual([
+    expect(candidates.find((candidate) => candidate.idHint === "feishu")).toEqual(
       expect.objectContaining({ origin: "bundled" }),
-    ]);
+    );
+    expect(countMatching(candidates, (candidate) => candidate.idHint === "feishu")).toBe(1);
     expect(diagnostics).toEqual([
       expect.objectContaining({
         level: "warn",
@@ -621,9 +639,10 @@ describe("discoverOpenClawPlugins", () => {
       }),
     );
 
-    expect(candidates.filter((candidate) => candidate.idHint === "telegram")).toEqual([
+    expect(candidates.find((candidate) => candidate.idHint === "telegram")).toEqual(
       expect.objectContaining({ origin: "bundled" }),
-    ]);
+    );
+    expect(countMatching(candidates, (candidate) => candidate.idHint === "telegram")).toBe(1);
     expect(diagnostics).toEqual([
       expect.objectContaining({
         level: "warn",
@@ -718,14 +737,15 @@ describe("discoverOpenClawPlugins", () => {
       }),
     );
 
-    expect(candidates.filter((candidate) => candidate.idHint === "synology-chat")).toEqual([
+    expect(candidates.find((candidate) => candidate.idHint === "synology-chat")).toEqual(
       expect.objectContaining({
         origin: "bundled",
         rootDir: fs.realpathSync(bundledPluginDir),
         source: fs.realpathSync(bundledEntryPath),
       }),
-    ]);
-    expect(diagnostics).toEqual([]);
+    );
+    expect(countMatching(candidates, (candidate) => candidate.idHint === "synology-chat")).toBe(1);
+    expect(diagnostics).toStrictEqual([]);
   });
 
   it("loads package extension packs", async () => {
@@ -776,7 +796,7 @@ describe("discoverOpenClawPlugins", () => {
     ).toBe(true);
   });
 
-  it("lets a valid bundled plugin win when a managed package is source-only TypeScript", async () => {
+  it("lets a valid bundled plugin win when a managed package is source-only TypeScript", () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled");
     const bundledPluginDir = path.join(bundledDir, "discord");
@@ -936,10 +956,9 @@ describe("discoverOpenClawPlugins", () => {
     writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
 
     const result = await discoverWithStateDir(stateDir, {});
-    const candidate = findCandidateById(result.candidates, "missing-runtime-setup-pack");
+    const candidate = requireCandidateById(result.candidates, "missing-runtime-setup-pack");
 
-    expect(candidate).toBeDefined();
-    expect(candidate?.setupSource).toBeUndefined();
+    expect(candidate.setupSource).toBeUndefined();
     expect(
       result.diagnostics.some(
         (entry) =>
@@ -1614,10 +1633,9 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(path.join(globalExt, "dist", "setup-entry.js"), "export default {}", "utf-8");
 
     const result = await discoverWithStateDir(stateDir, {});
-    const candidate = findCandidateById(result.candidates, "escape-pack");
+    const candidate = requireCandidateById(result.candidates, "escape-pack");
 
-    expect(candidate).toBeDefined();
-    expect(candidate?.setupSource).toBeUndefined();
+    expect(candidate.setupSource).toBeUndefined();
     expectEscapesPackageDiagnostic(result.diagnostics);
   });
 
@@ -1652,7 +1670,7 @@ describe("discoverOpenClawPlugins", () => {
 
     const { candidates } = await discoverWithStateDir(stateDir, {});
 
-    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
+    expect(candidates.map((candidate) => candidate.idHint)).not.toContain("pack");
   });
 
   it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {
@@ -1666,8 +1684,8 @@ describe("discoverOpenClawPlugins", () => {
     const result = await discoverWithStateDir(stateDir, {});
 
     expect(result.candidates).toHaveLength(0);
-    expect(result.diagnostics.some((diag) => diag.message.includes("world-writable path"))).toBe(
-      true,
+    expect(result.diagnostics.map((diag) => diag.message)).toEqual(
+      expect.arrayContaining([expect.stringContaining("world-writable path")]),
     );
   });
 
@@ -1688,12 +1706,15 @@ describe("discoverOpenClawPlugins", () => {
         }),
       );
 
-      expect(result.candidates.some((candidate) => candidate.idHint === "demo-pack")).toBe(true);
-      expect(
-        result.diagnostics.some(
-          (diag) => diag.source === packDir && diag.message.includes("world-writable path"),
-        ),
-      ).toBe(false);
+      expect(result.candidates.map((candidate) => candidate.idHint)).toContain("demo-pack");
+      expect(result.diagnostics).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            source: packDir,
+            message: expect.stringContaining("world-writable path"),
+          }),
+        ]),
+      );
       expect(fs.statSync(packDir).mode & 0o777).toBe(0o755);
     },
   );
@@ -1714,8 +1735,10 @@ describe("discoverOpenClawPlugins", () => {
       const result = await discoverWithStateDir(stateDir, { ownershipUid: actualUid + 1 });
       const shouldBlockForMismatch = actualUid !== 0;
       expect(result.candidates).toHaveLength(shouldBlockForMismatch ? 0 : 1);
-      expect(result.diagnostics.some((diag) => diag.message.includes("suspicious ownership"))).toBe(
-        shouldBlockForMismatch,
+      expect(result.diagnostics.map((diag) => diag.message)).toEqual(
+        shouldBlockForMismatch
+          ? expect.arrayContaining([expect.stringContaining("suspicious ownership")])
+          : expect.not.arrayContaining([expect.stringContaining("suspicious ownership")]),
       );
       if (shouldBlockForMismatch) {
         expect(result.diagnostics).toContainEqual(
@@ -1785,7 +1808,7 @@ describe("discoverOpenClawPlugins", () => {
     },
   );
 
-  it("reflects plugin root changes on the next discovery call", async () => {
+  it("reflects plugin root changes on the next discovery call", () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");
     mkdirSafe(globalExt);
@@ -1794,12 +1817,12 @@ describe("discoverOpenClawPlugins", () => {
 
     const env = buildDiscoveryEnvWithOverrides(stateDir);
     const first = discoverWithEnv({ env });
-    expect(first.candidates.some((candidate) => candidate.idHint === "fresh")).toBe(true);
+    expect(first.candidates.map((candidate) => candidate.idHint)).toContain("fresh");
 
     fs.rmSync(pluginPath, { force: true });
 
     const second = discoverWithEnv({ env });
-    expect(second.candidates.some((candidate) => candidate.idHint === "fresh")).toBe(false);
+    expect(second.candidates.map((candidate) => candidate.idHint)).not.toContain("fresh");
   });
 
   it("discovers bundled and global plugins for each workspace-specific scan", () => {

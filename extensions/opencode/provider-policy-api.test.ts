@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
+function collectLegacyExtendedLevelIds(levels: readonly { id: string }[] | undefined): string[] {
+  const ids: string[] = [];
+  for (const level of levels ?? []) {
+    if (level.id === "xhigh" || level.id === "max") {
+      ids.push(level.id);
+    }
+  }
+  return ids;
+}
+
 describe("opencode provider policy public artifact", () => {
   it("exposes Claude Opus 4.7 thinking levels without loading the full provider plugin", () => {
     expect(
@@ -24,6 +34,6 @@ describe("opencode provider policy public artifact", () => {
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
-    expect(profile.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(false);
+    expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual([]);
   });
 });

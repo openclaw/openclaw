@@ -14,16 +14,28 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect(statError).toBeInstanceOf(Error);
+  if (!(statError instanceof Error)) {
+    throw new Error("expected missing path error");
+  }
+  expect(Reflect.get(statError, "code")).toBe("ENOENT");
+}
+
 describe("runtime postbuild static assets", () => {
   it("tracks plugin-owned static assets that release packaging must ship", () => {
-    expect(listStaticExtensionAssetOutputs()).toEqual(
-      expect.arrayContaining([
-        "dist/extensions/acpx/error-format.mjs",
-        "dist/extensions/acpx/mcp-command-line.mjs",
-        "dist/extensions/acpx/mcp-proxy.mjs",
-        "dist/extensions/diffs/assets/viewer-runtime.js",
-      ]),
-    );
+    expect(listStaticExtensionAssetOutputs()).toEqual([
+      "dist/extensions/acpx/error-format.mjs",
+      "dist/extensions/acpx/mcp-command-line.mjs",
+      "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/diffs/assets/viewer-runtime.js",
+    ]);
   });
 
   it("discovers static assets from plugin package metadata", async () => {
@@ -74,7 +86,7 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
   });
 
-  it("warns when a declared static asset is missing", async () => {
+  it("warns when a declared static asset is missing", () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const warn = vi.fn();
 
@@ -117,7 +129,7 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "runtime-tts.runtime.js"), "utf8")).toBe(
       'export * from "./runtime-tts.runtime-AbCd1234.js";\n',
     );
-    await expect(fs.stat(path.join(distDir, "library.js"))).rejects.toThrow();
+    await expectPathMissing(path.join(distDir, "library.js"));
   });
 
   it("does not write ambiguous stable aliases for colliding root runtime chunks", async () => {
@@ -142,7 +154,7 @@ describe("runtime postbuild static assets", () => {
 
     writeStableRootRuntimeAliases({ rootDir });
 
-    await expect(fs.stat(path.join(distDir, "install.runtime.js"))).rejects.toThrow();
+    await expectPathMissing(path.join(distDir, "install.runtime.js"));
   });
 
   it("writes a stable plugin install runtime alias when install runtimes collide", async () => {

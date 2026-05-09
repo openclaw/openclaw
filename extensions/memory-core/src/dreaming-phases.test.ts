@@ -27,6 +27,8 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
 const DREAMING_TEST_DAY = "2026-04-05";
+const EMPTY_SESSION_CONTENT_HASH =
+  "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070";
 const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   plugins: {
     entries: {
@@ -53,6 +55,26 @@ const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
     },
   },
 };
+
+function requireCandidateByKey<T extends { key: string }>(candidates: T[], key: string): T {
+  const candidate = candidates.find((entry) => entry.key === key);
+  if (!candidate) {
+    throw new Error(`expected promotion candidate ${key}`);
+  }
+  return candidate;
+}
+
+function requireCandidateKeyByPath(
+  candidates: Array<{ key: string; path: string }>,
+  predicate: (path: string) => boolean,
+  label: string,
+): string {
+  const key = candidates.find((candidate) => predicate(candidate.path))?.key;
+  if (!key) {
+    throw new Error(`expected promotion candidate key for ${label}`);
+  }
+  return key;
+}
 
 function createHarness(
   config: OpenClawConfig,
@@ -961,7 +983,7 @@ describe("memory-core dreaming phases", () => {
       expect.objectContaining({
         lineCount: 0,
         lastContentLine: 0,
-        contentHash: expect.any(String),
+        contentHash: EMPTY_SESSION_CONTENT_HASH,
       }),
     ]);
   });
@@ -1074,7 +1096,7 @@ describe("memory-core dreaming phases", () => {
       expect.objectContaining({
         lineCount: 0,
         lastContentLine: 0,
-        contentHash: expect.any(String),
+        contentHash: EMPTY_SESSION_CONTENT_HASH,
       }),
     ]);
   });
@@ -1183,7 +1205,7 @@ describe("memory-core dreaming phases", () => {
       expect.objectContaining({
         lineCount: 0,
         lastContentLine: 0,
-        contentHash: expect.any(String),
+        contentHash: EMPTY_SESSION_CONTENT_HASH,
       }),
     ]);
   });
@@ -2314,9 +2336,8 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs,
     });
-    const reinforcedCandidate = reinforced.find((candidate) => candidate.key === baseline[0].key);
-    expect(reinforcedCandidate).toBeDefined();
-    expect(reinforcedCandidate!.score).toBeGreaterThan(baselineScore);
+    const reinforcedCandidate = requireCandidateByKey(reinforced, baseline[0].key);
+    expect(reinforcedCandidate.score).toBeGreaterThan(baselineScore);
 
     const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
     const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
@@ -2373,12 +2394,16 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs,
     });
-    const liveKey = baseline.find((candidate) => candidate.path === "memory/2026-04-03.md")?.key;
-    const staleKey = baseline.find((candidate) =>
-      candidate.path.includes("session-corpus/2026-04-16.txt"),
-    )?.key;
-    expect(liveKey).toBeDefined();
-    expect(staleKey).toBeDefined();
+    const liveKey = requireCandidateKeyByPath(
+      baseline,
+      (candidatePath) => candidatePath === "memory/2026-04-03.md",
+      "live memory note",
+    );
+    const staleKey = requireCandidateKeyByPath(
+      baseline,
+      (candidatePath) => candidatePath.includes("session-corpus/2026-04-16.txt"),
+      "stale session corpus",
+    );
 
     await withDreamingTestClock(async () => {
       setDreamingTestTime();
@@ -2404,8 +2429,8 @@ describe("memory-core dreaming phases", () => {
     const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
       entries: Record<string, { remHits: number }>;
     };
-    expect(phaseSignalStore.entries[liveKey!]).toMatchObject({ remHits: 1 });
-    expect(phaseSignalStore.entries[staleKey!]).toBeUndefined();
+    expect(phaseSignalStore.entries[liveKey]).toMatchObject({ remHits: 1 });
+    expect(phaseSignalStore.entries[staleKey]).toBeUndefined();
 
     const remOutput = await fs.readFile(
       path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
@@ -2741,7 +2766,7 @@ describe("previewRemHarness", () => {
       },
     });
 
-    expect(preview.groundedInputPaths).toEqual([]);
+    expect(preview.groundedInputPaths).toStrictEqual([]);
     expect(preview.grounded).toBeNull();
   });
 
@@ -2778,8 +2803,8 @@ describe("previewRemHarness", () => {
     });
 
     expect(preview.remSkipped).toBe(true);
-    expect(preview.rem.candidateTruths).toEqual([]);
-    expect(preview.rem.bodyLines).toEqual([]);
+    expect(preview.rem.candidateTruths).toStrictEqual([]);
+    expect(preview.rem.bodyLines).toStrictEqual([]);
     expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
   });
 });

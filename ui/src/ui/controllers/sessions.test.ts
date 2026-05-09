@@ -88,6 +88,7 @@ describe("createSessionAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:dashboard:abc");
     expect(state.sessionsLoading).toBe(false);
@@ -150,6 +151,7 @@ describe("deleteSessionsAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsLoading).toBe(false);
   });
@@ -161,7 +163,7 @@ describe("deleteSessionsAndRefresh", () => {
 
     const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toEqual([]);
+    expect(deleted).toStrictEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -195,7 +197,7 @@ describe("deleteSessionsAndRefresh", () => {
 
     const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toEqual([]);
+    expect(deleted).toStrictEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -244,6 +246,7 @@ describe("deleteSessionsAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsLoading).toBe(false);
   });
@@ -372,6 +375,7 @@ describe("loadSessions", () => {
       limit: 50,
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
   });
 
@@ -401,6 +405,7 @@ describe("loadSessions", () => {
       limit: 50,
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
   });
 
@@ -449,10 +454,12 @@ describe("loadSessions", () => {
       limit: 10,
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsResult?.ts).toBe(2);
     expect(state.sessionsLoading).toBe(false);
@@ -535,6 +542,7 @@ describe("loadSessions", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.compaction.list", {
       key: "agent:main:main",
@@ -591,7 +599,7 @@ describe("applySessionsChangedEvent", () => {
     });
 
     expect(applied).toEqual({ applied: false });
-    expect(state.sessionsResult?.sessions).toEqual([]);
+    expect(state.sessionsResult?.sessions).toStrictEqual([]);
   });
 
   it("applies partial events only to existing source-of-truth rows", () => {
@@ -637,7 +645,7 @@ describe("applySessionsChangedEvent", () => {
     });
 
     expect(applied).toEqual({ applied: true, change: "deleted" });
-    expect(state.sessionsResult?.sessions).toEqual([]);
+    expect(state.sessionsResult?.sessions).toStrictEqual([]);
   });
 
   it("keeps terminal status updates visible while archived sessions are hidden", () => {

@@ -80,6 +80,17 @@ let mockedDispatchSequence: Array<{
     mediaUrls?: string[];
   };
 }> = [];
+
+function countFinalDispatches(): number {
+  let count = 0;
+  for (const entry of mockedDispatchSequence) {
+    if (entry.kind === "final") {
+      count++;
+    }
+  }
+  return count;
+}
+
 let mockedProgressEvents: string[] = [];
 let mockedReplyOptionEvents: Array<
   | {
@@ -95,6 +106,21 @@ let mockedReplyOptionEvents: Array<
     }
   | { kind: "partial"; text: string }
 > = [];
+
+function requireCapturedTyping() {
+  if (!capturedTyping) {
+    throw new Error("expected Slack typing callback");
+  }
+  return capturedTyping;
+}
+
+function requireCapturedItemEventHandler() {
+  const handler = capturedReplyOptions?.onItemEvent;
+  if (!handler) {
+    throw new Error("expected Slack reply item event handler");
+  }
+  return handler;
+}
 
 const noop = () => {};
 const noopAsync = async () => {};
@@ -331,17 +357,32 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
   },
   formatChannelProgressDraftText: (params: {
     entry?: { streaming?: { progress?: { label?: string | false; maxLines?: number } } };
-    lines: Array<string | { text: string }>;
+    lines: Array<
+      string | { text: string; icon?: string; detail?: string; status?: string; label: string }
+    >;
     formatLine?: (line: string) => string;
   }) => {
     const label = params.entry?.streaming?.progress?.label;
+    const maxLines = params.entry?.streaming?.progress?.maxLines ?? 8;
     const formatLine = params.formatLine ?? ((line: string) => line);
-    return [
+    const lines = [
       label === false ? undefined : (label ?? "Thinking"),
-      ...params.lines.map((line) => `• ${formatLine(typeof line === "string" ? line : line.text)}`),
+      ...params.lines.map((line) => {
+        const text =
+          typeof line === "string"
+            ? line
+            : line.detail
+              ? `${line.icon ?? ""} ${line.detail}`.trim()
+              : line.status
+                ? `${line.icon ?? ""} ${line.status}`.trim()
+                : line.text;
+        const formatted = formatLine(text);
+        return /^\p{Extended_Pictographic}/u.test(text) ? formatted : `• ${formatted}`;
+      }),
     ]
       .filter((line): line is string => Boolean(line))
-      .join("\n");
+      .slice(-maxLines);
+    return lines.join("\n");
   },
   formatChannelProgressDraftLine: (params: {
     progressText?: string;
@@ -594,7 +635,7 @@ vi.mock("../reply.runtime.js", () => ({
     return {
       queuedFinal: false,
       counts: {
-        final: mockedDispatchSequence.filter((entry) => entry.kind === "final").length,
+        final: countFinalDispatches(),
       },
     };
   },
@@ -710,11 +751,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(capturedTyping).toBeDefined();
+    const typing = requireCapturedTyping();
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
 
-    await capturedTyping?.start();
-    await capturedTyping?.stop?.();
+    await typing.start();
+    await typing.stop?.();
 
     expect(setSlackThreadStatus).toHaveBeenCalledWith({
       channelId: "C123",
@@ -797,7 +838,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
       [
-        "Shelling",
         "• step 1",
         "• step 2",
         "• step 3",
@@ -859,7 +899,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• 🛠️ Exec\n• done");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
     expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("pnpm test");
   });
 
@@ -875,7 +915,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-    expect(capturedReplyOptions?.onItemEvent).toBeDefined();
+    await requireCapturedItemEventHandler()({ progressText: "hidden progress" });
   });
 
   it("does not create a blank Slack progress draft when label and lines are disabled", async () => {
@@ -914,7 +954,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-    expect(capturedReplyOptions?.onItemEvent).toBeDefined();
+    await requireCapturedItemEventHandler()({ progressText: "hidden partial progress" });
   });
 
   it("starts native streams in the first-reply thread for top-level channel messages", async () => {
@@ -942,7 +982,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   it("suppresses reasoning payloads before Slack native streaming delivery", async () => {
     mockedNativeStreaming = true;
     mockedDispatchSequence = [
-      { kind: "block", payload: { text: "Reasoning:\n_hidden_", isReasoning: true } },
+      { kind: "block", payload: { text: "hidden", isReasoning: true } },
       { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
     ];
 

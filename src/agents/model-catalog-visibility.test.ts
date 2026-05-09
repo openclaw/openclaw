@@ -22,20 +22,20 @@ describe("resolveVisibleModelCatalog", () => {
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
       { provider: "openai", id: "gpt-test", name: "GPT Test" },
     ];
+    const cfg = {} as OpenClawConfig;
 
     const result = resolveVisibleModelCatalog({
-      cfg: {} as OpenClawConfig,
+      cfg,
       catalog,
       defaultProvider: "openai",
       runtimeAuthDiscovery: false,
     });
 
-    expect(createProviderAuthCheckerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowPluginSyntheticAuth: false,
-        discoverExternalCliAuth: false,
-      }),
-    );
+    expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
+    const checkerOptions = createProviderAuthCheckerMock.mock.calls[0]?.[0];
+    expect(checkerOptions?.cfg).toBe(cfg);
+    expect(checkerOptions?.allowPluginSyntheticAuth).toBe(false);
+    expect(checkerOptions?.discoverExternalCliAuth).toBe(false);
     expect(authChecker).toHaveBeenCalledWith("anthropic");
     expect(authChecker).toHaveBeenCalledWith("openai");
     expect(result).toEqual([{ provider: "openai", id: "gpt-test", name: "GPT Test" }]);

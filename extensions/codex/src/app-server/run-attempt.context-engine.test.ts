@@ -67,6 +67,7 @@ function threadStartResult(threadId = "thread-1") {
   return {
     thread: {
       id: threadId,
+      sessionId: "session-1",
       forkedFromId: null,
       preview: "",
       ephemeral: false,
@@ -146,7 +147,7 @@ function createStartedThreadHarness(
   return {
     requests,
     async waitForMethod(method: string) {
-      await vi.waitFor(() => expect(requests.some((entry) => entry.method === method)).toBe(true), {
+      await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain(method), {
         interval: 1,
       });
     },

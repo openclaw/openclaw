@@ -14,7 +14,9 @@ describe("command-analysis explanation summary", () => {
     expect(summary.commandCount).toBe(1);
     expect(summary.riskKinds).toContain("shell-wrapper");
     expect(summary.riskKinds).toContain("inline-eval");
-    expect(summary.warningLines.some((line) => line.includes("inline-eval"))).toBe(true);
+    expect(summary.warningLines).toEqual(
+      expect.arrayContaining([expect.stringContaining("inline-eval")]),
+    );
   });
 
   it("summarizes policy command segments without async parsing", () => {
@@ -73,7 +75,7 @@ describe("command-analysis explanation summary", () => {
         commandText: "echo ok",
         commandArgv: ["python3", "-c", "print(1)"],
       })?.riskKinds,
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       resolveCommandAnalysisSummaryForDisplay({
         host: "gateway",

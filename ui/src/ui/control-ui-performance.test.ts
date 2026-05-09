@@ -70,8 +70,13 @@ describe("recordControlUiPerformanceEvent", () => {
     }
 
     expect(host.eventLogBuffer).toHaveLength(250);
-    expect(host.eventLogBuffer[0]?.payload).toEqual({ i: 259 });
-    expect(host.eventLogBuffer.at(-1)?.payload).toEqual({ i: 10 });
+    const [newestEvent] = host.eventLogBuffer;
+    const oldestEvent = host.eventLogBuffer.at(-1);
+    if (!newestEvent || !oldestEvent) {
+      throw new Error("Expected bounded performance event buffer entries");
+    }
+    expect(newestEvent.payload).toEqual({ i: 259 });
+    expect(oldestEvent.payload).toEqual({ i: 10 });
   });
 });
 
@@ -223,7 +228,7 @@ describe("startControlUiResponsivenessObserver", () => {
     expect(
       host.eventLogBuffer.filter((entry) => entry.event === "control-ui.longtask"),
     ).toHaveLength(50);
-    expect(host.eventLogBuffer.some((entry) => entry.event === "gateway.event")).toBe(true);
+    expect(host.eventLogBuffer.map((entry) => entry.event)).toContain("gateway.event");
   });
 
   it("returns null when responsiveness entries are unsupported or observe fails", () => {

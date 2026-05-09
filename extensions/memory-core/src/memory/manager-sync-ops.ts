@@ -1178,6 +1178,7 @@ export abstract class MemoryManagerSyncOps {
     const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
 
     const originalDb = this.db;
+    let tempDbClosed = false;
     let originalDbClosed = false;
     const originalState = {
       ftsAvailable: this.fts.available,
@@ -1216,6 +1217,12 @@ export abstract class MemoryManagerSyncOps {
       nextMeta = await runMemoryAtomicReindex({
         targetPath: dbPath,
         tempPath: tempDbPath,
+        beforeTempCleanup: () => {
+          if (!tempDbClosed) {
+            closeMemoryDatabase(tempDb);
+            tempDbClosed = true;
+          }
+        },
         build: async () => {
           await this.seedEmbeddingCache(originalDb);
           const shouldSyncMemory = this.sources.has("memory");
@@ -1265,7 +1272,8 @@ export abstract class MemoryManagerSyncOps {
           this.writeMeta(meta);
           this.pruneEmbeddingCacheIfNeeded?.();
 
-          closeMemoryDatabase(this.db);
+          closeMemoryDatabase(tempDb);
+          tempDbClosed = true;
           closeMemoryDatabase(originalDb);
           originalDbClosed = true;
           return meta;
@@ -1278,7 +1286,10 @@ export abstract class MemoryManagerSyncOps {
       this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {
       try {
-        closeMemoryDatabase(this.db);
+        if (!tempDbClosed && this.db === tempDb) {
+          closeMemoryDatabase(tempDb);
+          tempDbClosed = true;
+        }
       } catch {}
       restoreOriginalState();
       throw err;

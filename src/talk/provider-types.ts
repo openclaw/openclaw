@@ -99,6 +99,7 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   audioFormat?: RealtimeVoiceAudioFormat;
   instructions?: string;
   autoRespondToAudio?: boolean;
+  interruptResponseOnInputAudio?: boolean;
   tools?: RealtimeVoiceTool[];
 };
 
@@ -187,4 +188,6 @@ export type RealtimeVoiceBargeInOptions = {
    * This lets providers interrupt output even when the sink cannot provide real playback marks.
    */
   audioPlaybackActive?: boolean;
+  /** Interrupt even when normal barge-in audio-duration guards would treat the event as echo. */
+  force?: boolean;
 };

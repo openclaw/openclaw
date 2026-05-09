@@ -70,6 +70,7 @@ import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
@@ -1170,7 +1171,7 @@ export async function runReplyAgent(params: {
     if (error instanceof ReplyRunAlreadyActiveError) {
       typing.cleanup();
       return markReplyPayloadForSourceSuppressionDelivery({
-        text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+        text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
       });
     }
     throw error;

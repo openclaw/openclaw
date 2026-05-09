@@ -95,7 +95,12 @@ function getTelegramChannelConfig(cfg: Record<string, unknown>) {
 function listTelegramAccountIdsForTest(cfg: Record<string, unknown>): string[] {
   const telegram = getTelegramChannelConfig(cfg);
   const accounts = telegram.accounts as Record<string, unknown> | undefined;
-  const ids = Object.keys(accounts ?? {}).filter(Boolean);
+  const ids: string[] = [];
+  for (const accountId of Object.keys(accounts ?? {})) {
+    if (accountId) {
+      ids.push(accountId);
+    }
+  }
   return ids.length > 0 ? ids : ["default"];
 }
 
@@ -299,6 +304,8 @@ function createTelegramHealthPlugin(): HealthTestPlugin {
     config: {
       listAccountIds: (cfg) => listTelegramAccountIdsForTest(cfg as Record<string, unknown>),
       resolveAccount: (cfg, accountId) =>
+        resolveTelegramAccountForTest({ cfg: cfg as Record<string, unknown>, accountId }),
+      inspectAccount: (cfg, accountId) =>
         resolveTelegramAccountForTest({ cfg: cfg as Record<string, unknown>, accountId }),
       isConfigured: (account) => Boolean((account as TelegramHealthAccount).token.trim()),
     },
@@ -507,8 +514,8 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.ok).toBe(true);
     expect(telegram.probe?.bot?.username).toBe("bot");
     expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
-    expect(calls.some((c) => c.includes("/getMe"))).toBe(true);
-    expect(calls.some((c) => c.includes("/getWebhookInfo"))).toBe(true);
+    expect(calls).toEqual(expect.arrayContaining([expect.stringContaining("/getMe")]));
+    expect(calls).toEqual(expect.arrayContaining([expect.stringContaining("/getWebhookInfo")]));
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
@@ -520,7 +527,9 @@ describe("getHealthSnapshot", () => {
       );
       expect(tokenFileProbe.telegram.configured).toBe(true);
       expect(tokenFileProbe.telegram.probe?.ok).toBe(true);
-      expect(tokenFileProbe.calls.some((c) => c.includes("bott-file/getMe"))).toBe(true);
+      expect(tokenFileProbe.calls).toEqual(
+        expect.arrayContaining([expect.stringContaining("bott-file/getMe")]),
+      );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -815,7 +824,7 @@ describe("getHealthSnapshot", () => {
 
     expect(main?.heartbeat.everyMs).toBeNull();
     expect(main?.heartbeat.every).toBe("disabled");
-    expect(ops?.heartbeat.everyMs).toBeTruthy();
+    expect(ops?.heartbeat.everyMs).toBe(60 * 60 * 1000);
     expect(ops?.heartbeat.every).toBe("1h");
   });
 });

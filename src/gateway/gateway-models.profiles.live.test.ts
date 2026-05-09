@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -6,6 +7,9 @@ import path from "node:path";
 import {
   clampThinkingLevel,
   type Api,
+  getModels,
+  getProviders,
+  type KnownProvider,
   type Model,
   type ModelThinkingLevel,
 } from "@mariozechner/pi-ai";
@@ -90,7 +94,6 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
 );
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3-flash-preview",
-  "google/gemini-3-pro-preview",
   "google/gemini-3.1-flash-lite-preview",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
@@ -115,10 +118,13 @@ function parseFilter(raw?: string): Set<string> | null {
   if (!trimmed || trimmed === "all") {
     return null;
   }
-  const ids = trimmed
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const ids: string[] = [];
+  for (const rawId of trimmed.split(",")) {
+    const id = rawId.trim();
+    if (id.length > 0) {
+      ids.push(id);
+    }
+  }
   return ids.length ? new Set(ids) : null;
 }
 
@@ -126,6 +132,44 @@ function providerFilterList(): string[] | undefined {
   return PROVIDERS
     ? [...PROVIDERS].toSorted((left, right) => left.localeCompare(right))
     : undefined;
+}
+
+function providerListFromExplicitModelFilter(params: {
+  modelFilter: Set<string> | null;
+  providerFilter: Set<string> | null;
+}): string[] | undefined {
+  if (!params.modelFilter || params.modelFilter.size === 0) {
+    return undefined;
+  }
+  const providers = new Set<string>();
+  for (const raw of params.modelFilter) {
+    const ref = parseExplicitLiveModelRef(raw, params.providerFilter);
+    if (!ref) {
+      return undefined;
+    }
+    providers.add(ref.provider);
+  }
+  return providers.size > 0
+    ? [...providers].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
+}
+
+function providerScopedModelRegistryProviders(params: {
+  providerList: string[] | undefined;
+  useExplicit: boolean;
+  modelFilter: Set<string> | null;
+  providerFilter: Set<string> | null;
+}): string[] | undefined {
+  if (params.providerList) {
+    return params.providerList;
+  }
+  if (!params.useExplicit) {
+    return undefined;
+  }
+  return providerListFromExplicitModelFilter({
+    modelFilter: params.modelFilter,
+    providerFilter: params.providerFilter,
+  });
 }
 
 function shouldSuppressGatewayLiveOllamaWarnings(): boolean {
@@ -279,7 +323,7 @@ async function withGatewayLiveModelTimeout<T>(operation: Promise<T>, context: st
 }
 
 function logProgress(message: string): void {
-  process.stderr.write(`[live] ${message}\n`);
+  writeSync(2, `[live] ${message}\n`);
 }
 
 function enterProductionEnvForLiveRun() {
@@ -353,7 +397,7 @@ function isMeaningful(text: string): boolean {
   if (trimmed.length < 60) {
     return false;
   }
-  const words = trimmed.split(/\s+/g).filter(Boolean);
+  const words = trimmed.split(/\s+/g);
   if (words.length < 12) {
     return false;
   }
@@ -574,7 +618,7 @@ describe("resolveGatewayLiveSuiteTimeoutMs", () => {
   });
 
   it("scales model-capped sweeps for multi-probe retries", () => {
-    expect(resolveGatewayLiveSuiteTimeoutMs(3)).toBeGreaterThan(GATEWAY_LIVE_DEFAULT_TIMEOUT_MS);
+    expect(resolveGatewayLiveSuiteTimeoutMs(4)).toBeGreaterThan(GATEWAY_LIVE_DEFAULT_TIMEOUT_MS);
   });
 
   it("caps very large model sweeps", () => {
@@ -661,6 +705,32 @@ describe("resolveExplicitLiveModelCandidates", () => {
     expect(candidates).toEqual([model]);
   });
 
+  it("normalizes retired Google Gemini refs before targeted lookup", () => {
+    const model = createGatewayLiveTestModel("google", "gemini-3.1-pro-preview");
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["google"]),
+      modelFilter: new Set(["google/gemini-3-pro-preview"]),
+      env: {},
+    });
+    const candidates = resolveExplicitLiveModelCandidates({
+      modelRegistry: {
+        find(provider, modelId) {
+          expect(provider).toBe("google");
+          expect(modelId).toBe("gemini-3.1-pro-preview");
+          return model;
+        },
+        getAll() {
+          throw new Error("explicit model lookup should not enumerate registry");
+        },
+      },
+      modelFilter: new Set(["google/gemini-3-pro-preview"]),
+      providerFilter: new Set(["google"]),
+      targetMatcher: matcher,
+    });
+
+    expect(candidates).toEqual([model]);
+  });
+
   it("falls back to enumeration for ambiguous model-only filters", () => {
     const matcher = createLiveTargetMatcher({
       providerFilter: null,
@@ -683,6 +753,41 @@ describe("resolveExplicitLiveModelCandidates", () => {
         targetMatcher: matcher,
       }),
     ).toBeNull();
+  });
+});
+
+describe("providerScopedModelRegistryProviders", () => {
+  it("uses explicit provider-qualified model refs without enumerating the full registry", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["openai/gpt-5.2", "anthropic/claude-sonnet-4-6"]),
+        providerFilter: null,
+      }),
+    ).toEqual(["anthropic", "openai"]);
+  });
+
+  it("uses a single provider filter for explicit model-only refs", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["gpt-5.2"]),
+        providerFilter: new Set(["openai"]),
+      }),
+    ).toEqual(["openai"]);
+  });
+
+  it("falls back to the full registry for ambiguous explicit model-only refs", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["gpt-5.2"]),
+        providerFilter: null,
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -1253,7 +1358,10 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
     try {
       const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
       expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile).toBeDefined();
+      expect(sanitized.profiles.codexProfile).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+      });
       expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
       expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
       expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });
@@ -1283,17 +1391,17 @@ function extractTranscriptMessageText(message: unknown): string {
   if (!Array.isArray(record.content)) {
     return "";
   }
-  return record.content
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return "";
-      }
+  const textParts: string[] = [];
+  for (const entry of record.content) {
+    if (entry && typeof entry === "object") {
       const text = (entry as { text?: unknown }).text;
-      return typeof text === "string" && text.trim() ? text.trim() : "";
-    })
-    .filter(Boolean)
-    .join("\n")
-    .trim();
+      const trimmed = typeof text === "string" ? text.trim() : "";
+      if (trimmed.length > 0) {
+        textParts.push(trimmed);
+      }
+    }
+  }
+  return textParts.join("\n").trim();
 }
 
 async function readSessionAssistantTexts(sessionKey: string, modelKey?: string): Promise<string[]> {
@@ -1408,6 +1516,139 @@ type LiveModelRegistry = {
   getAll(): Array<Model<Api>>;
 };
 
+function resolveKnownProvider(provider: string): KnownProvider | undefined {
+  const normalized = provider.trim();
+  return getProviders().find((knownProvider) => knownProvider === normalized);
+}
+
+function toGatewayLiveModel(params: {
+  provider: string;
+  providerConfig: ModelProviderConfig;
+  modelConfig: NonNullable<ModelProviderConfig["models"]>[number];
+}): Model<Api> | null {
+  const id = params.modelConfig.id?.trim();
+  const api = params.modelConfig.api ?? params.providerConfig.api;
+  const baseUrl = params.modelConfig.baseUrl ?? params.providerConfig.baseUrl;
+  if (!id || !api || !baseUrl) {
+    return null;
+  }
+  const input = params.modelConfig.input.filter(
+    (value): value is "text" | "image" => value === "text" || value === "image",
+  );
+  return {
+    id,
+    name: params.modelConfig.name ?? id,
+    api: api as Api,
+    provider: params.provider,
+    baseUrl,
+    reasoning: params.modelConfig.reasoning ?? false,
+    input: input.length > 0 ? input : ["text"],
+    cost: params.modelConfig.cost ?? {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: params.modelConfig.contextWindow ?? 128_000,
+    maxTokens: params.modelConfig.maxTokens ?? 16_384,
+    compat: params.modelConfig.compat,
+  };
+}
+
+async function loadProviderScopedConfiguredModels(params: {
+  agentDir: string;
+  providerList: readonly string[];
+}): Promise<Array<Model<Api>>> {
+  const modelsPath = path.join(params.agentDir, "models.json");
+  let parsed: { providers?: Record<string, ModelProviderConfig> };
+  try {
+    parsed = JSON.parse(await fs.readFile(modelsPath, "utf8")) as {
+      providers?: Record<string, ModelProviderConfig>;
+    };
+  } catch {
+    return [];
+  }
+
+  const providers = parsed.providers ?? {};
+  const models: Array<Model<Api>> = [];
+  const seen = new Set<string>();
+  for (const rawProvider of params.providerList) {
+    const normalizedProvider = normalizeProviderId(rawProvider);
+    const entry = Object.entries(providers).find(
+      ([provider]) => normalizeProviderId(provider) === normalizedProvider,
+    );
+    if (!entry) {
+      continue;
+    }
+    const [provider, providerConfig] = entry;
+    for (const modelConfig of providerConfig.models ?? []) {
+      const model = toGatewayLiveModel({ provider, providerConfig, modelConfig });
+      if (!model) {
+        continue;
+      }
+      const key = `${normalizeProviderId(model.provider)}/${model.id.toLowerCase()}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      models.push(model);
+    }
+  }
+  return models;
+}
+
+function loadProviderScopedBuiltInModels(providerList: readonly string[]): Array<Model<Api>> {
+  const models: Array<Model<Api>> = [];
+  const seen = new Set<string>();
+  for (const rawProvider of providerList) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider) {
+      continue;
+    }
+    const knownProvider = resolveKnownProvider(provider);
+    if (!knownProvider) {
+      continue;
+    }
+    for (const model of getModels(knownProvider)) {
+      const key = `${normalizeProviderId(model.provider)}/${model.id.toLowerCase()}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      models.push(model);
+    }
+  }
+  return models;
+}
+
+async function loadProviderScopedModels(params: {
+  agentDir: string;
+  providerList: readonly string[];
+}): Promise<Array<Model<Api>>> {
+  const configured = await loadProviderScopedConfiguredModels(params);
+  if (configured.length > 0) {
+    return configured;
+  }
+  return loadProviderScopedBuiltInModels(params.providerList);
+}
+
+function createStaticLiveModelRegistry(models: Array<Model<Api>>): LiveModelRegistry {
+  return {
+    find(provider, modelId) {
+      const normalizedProvider = normalizeProviderId(provider);
+      const normalizedModelId = modelId.toLowerCase();
+      return models.find(
+        (model) =>
+          normalizeProviderId(model.provider) === normalizedProvider &&
+          model.id.toLowerCase() === normalizedModelId,
+      );
+    },
+    getAll() {
+      return models;
+    },
+  };
+}
+
 function parseExplicitLiveModelRef(
   raw: string,
   providerFilter: Set<string> | null,
@@ -1419,7 +1660,11 @@ function parseExplicitLiveModelRef(
   const slash = trimmed.indexOf("/");
   if (slash !== -1) {
     const provider = normalizeProviderId(trimmed.slice(0, slash));
-    const modelId = trimmed.slice(slash + 1).trim();
+    const rawModelId = trimmed.slice(slash + 1).trim();
+    const modelId =
+      provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
+        ? normalizeGoogleModelId(rawModelId)
+        : rawModelId;
     return provider && modelId ? { provider, modelId } : null;
   }
   if (!providerFilter || providerFilter.size !== 1) {
@@ -2410,45 +2655,62 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         );
 
         const agentDir = resolveDefaultAgentDir(cfg);
-        logProgress("[all-models] loading auth profiles");
-        const authProfileStore = await withGatewayLiveSetupTimeout(
-          Promise.resolve().then(() =>
-            providerList
-              ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-                  allowKeychainPrompt: false,
-                })
-              : ensureAuthProfileStore(agentDir, {
-                  allowKeychainPrompt: false,
-                }),
-          ),
-          "[all-models] load auth profiles",
-        );
-        const authStorage = await withGatewayLiveSetupTimeout(
-          Promise.resolve().then(() =>
-            discoverAuthStorage(agentDir, {
-              config: cfg,
-              env: process.env,
-              ...(providerList
-                ? {
-                    skipExternalAuthProfiles: true,
-                    syntheticAuthProviderRefs: [],
-                  }
-                : {}),
-            }),
-          ),
-          "[all-models] load auth storage",
-        );
-        logProgress("[all-models] loading model registry");
-        const modelRegistry = discoverModels(authStorage, agentDir);
-        const all = await withGatewayLiveSetupTimeout(
-          Promise.resolve().then(() => modelRegistry.getAll()),
-          "[all-models] load model registry",
-        );
-
         const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
         const useExplicit = Boolean(rawModels) && !useModern;
         const filter = useExplicit ? parseFilter(rawModels) : null;
+        const providerScopedModelProviders = providerScopedModelRegistryProviders({
+          providerList,
+          useExplicit,
+          modelFilter: filter,
+          providerFilter: PROVIDERS,
+        });
+        let authProfileStore: AuthProfileStore | undefined;
+        let modelRegistry: LiveModelRegistry;
+        let all: Array<Model<Api>>;
+        if (providerScopedModelProviders) {
+          logProgress("[all-models] loading provider-scoped model refs");
+          all = await withGatewayLiveSetupTimeout(
+            loadProviderScopedModels({ agentDir, providerList: providerScopedModelProviders }),
+            "[all-models] load provider-scoped model refs",
+          );
+          modelRegistry = createStaticLiveModelRegistry(all);
+        } else {
+          logProgress("[all-models] loading auth profiles");
+          authProfileStore = await withGatewayLiveSetupTimeout(
+            Promise.resolve().then(() =>
+              providerList
+                ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+                    allowKeychainPrompt: false,
+                  })
+                : ensureAuthProfileStore(agentDir, {
+                    allowKeychainPrompt: false,
+                  }),
+            ),
+            "[all-models] load auth profiles",
+          );
+          const authStorage = await withGatewayLiveSetupTimeout(
+            Promise.resolve().then(() =>
+              discoverAuthStorage(agentDir, {
+                config: cfg,
+                env: process.env,
+                ...(providerList
+                  ? {
+                      skipExternalAuthProfiles: true,
+                      syntheticAuthProviderRefs: [],
+                    }
+                  : {}),
+              }),
+            ),
+            "[all-models] load auth storage",
+          );
+          logProgress("[all-models] loading model registry");
+          modelRegistry = discoverModels(authStorage, agentDir);
+          all = await withGatewayLiveSetupTimeout(
+            Promise.resolve().then(() => modelRegistry.getAll()),
+            "[all-models] load model registry",
+          );
+        }
         const maxModels = GATEWAY_LIVE_MAX_MODELS;
         const targetMatcher = createLiveTargetMatcher({
           providerFilter: PROVIDERS,
@@ -2538,6 +2800,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
           );
         }
+        expect(selectedCandidates.length).toBeGreaterThan(0);
         const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
         if (imageCandidates.length === 0) {
           logProgress("[all-models] no image-capable models selected; image probe will be skipped");

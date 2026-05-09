@@ -140,7 +140,7 @@ describe("config cli integration", () => {
         runtime: runtime.runtime,
       });
 
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.errors).toStrictEqual([]);
       const afterWrite = JSON5.parse(fs.readFileSync(configPath, "utf8"));
       expect(afterWrite.plugins?.entries?.["openclaw-mem0"]?.hooks).toEqual({
         allowConversationAccess: true,
@@ -214,9 +214,9 @@ describe("config cli integration", () => {
       });
       const afterDryRun = fs.readFileSync(configPath, "utf8");
       expect(afterDryRun).toBe(before);
-      expect(runtime.errors).toEqual([]);
-      expect(runtime.logs.some((line) => line.includes("Dry run successful: 2 update(s)"))).toBe(
-        true,
+      expect(runtime.errors).toStrictEqual([]);
+      expect(runtime.logs).toEqual(
+        expect.arrayContaining([expect.stringContaining("Dry run successful: 2 update(s)")]),
       );
 
       await runConfigSet({
@@ -291,19 +291,23 @@ describe("config cli integration", () => {
       ).rejects.toThrow("__exit__:1");
       const after = fs.readFileSync(configPath, "utf8");
       expect(after).toBe(before);
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.errors).toStrictEqual([]);
       const raw = runtime.logs.at(-1);
-      expect(raw).toBeTruthy();
-      const payload = JSON.parse(raw ?? "{}") as {
+      if (raw === undefined) {
+        throw new Error("expected config check JSON log");
+      }
+      const payload = JSON.parse(raw) as {
         ok?: boolean;
         checks?: { schema?: boolean; resolvability?: boolean };
         errors?: Array<{ kind?: string; ref?: string }>;
       };
       expect(payload.ok).toBe(false);
       expect(payload.checks?.resolvability).toBe(true);
-      expect(payload.errors?.some((entry) => entry.kind === "resolvability")).toBe(true);
-      expect(payload.errors?.some((entry) => entry.ref?.includes("MISSING_TEST_SECRET"))).toBe(
-        true,
+      expect(payload.errors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "resolvability" })]),
+      );
+      expect(payload.errors?.map((entry) => entry.ref ?? "")).toEqual(
+        expect.arrayContaining([expect.stringContaining("MISSING_TEST_SECRET")]),
       );
     } finally {
       envSnapshot.restore();

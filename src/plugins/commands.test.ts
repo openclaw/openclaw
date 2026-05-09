@@ -111,6 +111,14 @@ function expectCommandMatch(
   });
 }
 
+function requirePluginCommandMatch(commandBody: string) {
+  const match = matchPluginCommand(commandBody);
+  if (!match) {
+    throw new Error(`expected plugin command match for ${commandBody}`);
+  }
+  return match;
+}
+
 function expectProviderCommandSpecs(
   provider: Parameters<typeof getPluginCommandSpecs>[0],
   expectedNames: readonly string[],
@@ -419,7 +427,7 @@ describe("registerPluginCommand", () => {
       { provider: "telegram", expectedNames: ["voice"] },
       { provider: "discord", expectedNames: [] },
     ]);
-    expect(listProviderPluginCommandSpecs("discord")).toEqual([]);
+    expect(listProviderPluginCommandSpecs("discord")).toStrictEqual([]);
   });
 
   it("allows Slack to resolve provider-native plugin specs without changing shared native gating", () => {
@@ -455,7 +463,7 @@ describe("registerPluginCommand", () => {
       OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
     };
 
-    expect(getPluginCommandSpecs("discord", { env })).toEqual([]);
+    expect(getPluginCommandSpecs("discord", { env })).toStrictEqual([]);
     expect(
       getPluginCommandSpecs("discord", {
         env,
@@ -593,11 +601,10 @@ describe("registerPluginCommand", () => {
         return { text: "ok" };
       },
     });
-    const match = matchPluginCommand("/voice");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/voice");
 
     await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -620,11 +627,10 @@ describe("registerPluginCommand", () => {
       requiredScopes: ["operator.pairing"],
       handler,
     });
-    const match = matchPluginCommand("/pairlike");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/pairlike");
 
     const result = await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -645,11 +651,10 @@ describe("registerPluginCommand", () => {
       requiredScopes: ["operator.pairing"],
       handler,
     });
-    const match = matchPluginCommand("/pairlike");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/pairlike");
 
     const result = await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "webchat",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -670,11 +675,10 @@ describe("registerPluginCommand", () => {
       requiredScopes: ["operator.pairing"],
       handler,
     });
-    const match = matchPluginCommand("/pairlike");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/pairlike");
 
     const result = await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: false,
@@ -741,11 +745,10 @@ describe("registerPluginCommand", () => {
         return { text: "ok" };
       },
     });
-    const match = matchPluginCommand("/codex");
-    expect(match).toBeTruthy();
+    const match = requirePluginCommandMatch("/codex");
 
     await executePluginCommand({
-      command: match!.command,
+      command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -1060,7 +1063,7 @@ describe("registerPluginCommand", () => {
       config: {} as never,
     });
 
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
   });
 
   it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {

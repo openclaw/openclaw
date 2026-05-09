@@ -16,13 +16,17 @@ afterEach(async () => {
 
 describe("resolve-openclaw-package-candidate", () => {
   it("accepts only OpenClaw release package specs for npm candidates", () => {
-    expect(() => validateOpenClawPackageSpec("openclaw@beta")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@alpha")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@latest")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27-1")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27-beta.2")).not.toThrow();
-    expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27-alpha.2")).not.toThrow();
+    for (const spec of [
+      "openclaw@beta",
+      "openclaw@alpha",
+      "openclaw@latest",
+      "openclaw@2026.4.27",
+      "openclaw@2026.4.27-1",
+      "openclaw@2026.4.27-beta.2",
+      "openclaw@2026.4.27-alpha.2",
+    ]) {
+      expect(validateOpenClawPackageSpec(spec), spec).toBeUndefined();
+    }
 
     expect(() => validateOpenClawPackageSpec("@evil/openclaw@1.0.0")).toThrow(
       "package_spec must be openclaw@alpha",
@@ -59,9 +63,12 @@ describe("resolve-openclaw-package-candidate", () => {
         "--output-dir",
         ".artifacts/docker-e2e-package",
       ]),
-    ).toMatchObject({
+    ).toEqual({
       artifactDir: ".",
+      githubOutput: "",
+      metadata: "",
       outputDir: ".artifacts/docker-e2e-package",
+      outputName: "openclaw-current.tgz",
       packageSha256: "",
       packageRef: "release/2026.4.27",
       packageSpec: "openclaw@beta",
@@ -87,7 +94,7 @@ describe("resolve-openclaw-package-candidate", () => {
       ),
     );
 
-    await expect(readArtifactPackageCandidateMetadata(dir)).resolves.toMatchObject({
+    await expect(readArtifactPackageCandidateMetadata(dir)).resolves.toEqual({
       packageRef: "release/2026.4.30",
       packageSourceSha: "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2",
       packageTrustedReason: "repository-branch-history",

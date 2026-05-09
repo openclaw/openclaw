@@ -20,7 +20,7 @@ Codex has two OpenClaw routes:
 
 | Route                      | Config/command                                         | Setup page                              |
 | -------------------------- | ------------------------------------------------------ | --------------------------------------- |
-| Native Codex app-server    | `/codex ...`, `agentRuntime.id: "codex"`               | [Codex harness](/plugins/codex-harness) |
+| Native Codex app-server    | `/codex ...`, `openai/gpt-*` agent refs                | [Codex harness](/plugins/codex-harness) |
 | Explicit Codex ACP adapter | `/acp spawn codex`, `runtime: "acp", agentId: "codex"` | This page                               |
 
 Prefer the native route unless you explicitly need ACP/acpx behavior.
@@ -190,6 +190,32 @@ Override the command or version in plugin config:
 - `command` accepts an absolute path, relative path (resolved from the OpenClaw workspace), or command name.
 - `expectedVersion: "any"` disables strict version matching.
 - Custom `command` paths disable plugin-local auto-install.
+
+Override an individual ACP agent command with structured arguments when a path
+or flag value should remain one argv token:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "agents": {
+            "claude": {
+              "command": "node",
+              "args": ["/path/to/custom adapter.mjs", "--verbose"]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+- `agents.<id>.command` is the executable or existing command string for that ACP agent.
+- `agents.<id>.args` is optional. Each array item is shell-quoted before OpenClaw passes it through the current acpx command-string registry.
 
 See [Plugins](/tools/plugin).
 

@@ -97,32 +97,15 @@ import {
   registerMemoryPromptSectionForPlugin,
   registerMemoryRuntimeForPlugin,
 } from "./memory-state.js";
+import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
-  PluginCliBackendRegistration,
-  PluginCliRegistration,
-  PluginCommandRegistration,
-  PluginControlUiDescriptorRegistryRegistration,
-  PluginConversationBindingResolvedHandlerRegistration,
-  PluginHookRegistration,
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
-  PluginAgentHarnessRegistration,
-  PluginMemoryEmbeddingProviderRegistration,
-  PluginNodeHostCommandRegistration,
-  PluginProviderRegistration,
   PluginRecord,
-  PluginRegistry,
   PluginRegistryParams,
-  PluginReloadRegistration,
-  PluginRuntimeLifecycleRegistryRegistration,
-  PluginSecurityAuditCollectorRegistration,
-  PluginServiceRegistration,
-  PluginSessionExtensionRegistryRegistration,
   PluginTextTransformsRegistration,
-  PluginToolMetadataRegistryRegistration,
-  PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -151,6 +134,7 @@ import type {
   PluginConversationBindingResolvedEvent,
   OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawGatewayDiscoveryService,
+  OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
@@ -200,6 +184,7 @@ export type {
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
   PluginControlUiDescriptorRegistryRegistration,
+  PluginHostedMediaResolverRegistration,
   PluginRuntimeLifecycleRegistryRegistration,
   PluginRecord,
   PluginRegistry,
@@ -348,6 +333,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
   };
+  const {
+    registerModelCatalogProvider,
+    registerSynthesizedTextModelCatalogProvider,
+    registerSynthesizedMediaModelCatalogProvider,
+  } = createModelCatalogRegistrationHandlers({
+    registry,
+    pushDiagnostic,
+  });
 
   const throwRegistrationError = (message: string): never => {
     throw new Error(message);
@@ -783,11 +776,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         path: normalizedPath,
         handler: params.handler,
+        ...(params.handleUpgrade ? { handleUpgrade: params.handleUpgrade } : {}),
         auth: params.auth,
         match,
         ...(params.gatewayRuntimeScopeSurface
           ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
           : {}),
+        ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
         source: record.source,
       };
       return;
@@ -797,12 +792,36 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       path: normalizedPath,
       handler: params.handler,
+      ...(params.handleUpgrade ? { handleUpgrade: params.handleUpgrade } : {}),
       auth: params.auth,
       match,
       ...(params.gatewayRuntimeScopeSurface
         ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
         : {}),
+      ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
       source: record.source,
+    });
+  };
+
+  const registerHostedMediaResolver = (
+    record: PluginRecord,
+    resolver: OpenClawPluginHostedMediaResolver,
+  ) => {
+    if (typeof resolver !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "hosted media resolver registration missing resolver",
+      });
+      return;
+    }
+    (registry.hostedMediaResolvers ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      resolver,
+      source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -924,6 +943,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       provider: normalizedProvider,
       source: record.source,
       rootDir: record.rootDir,
+    });
+    registerSynthesizedTextModelCatalogProvider({
+      record,
+      provider: normalizedProvider,
     });
   };
 
@@ -1050,7 +1073,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     kindLabel: string;
     registrations: Array<PluginOwnedProviderRegistration<T>>;
     ownedIds: string[];
-  }) => {
+  }): boolean => {
     const id = params.provider.id.trim();
     const { record, kindLabel } = params;
     const missingLabel = `${kindLabel} registration missing id`;
@@ -1062,7 +1085,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: missingLabel,
       });
-      return;
+      return false;
     }
     const existing = params.registrations.find((entry) => entry.provider.id === id);
     if (existing) {
@@ -1072,7 +1095,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: `${duplicateLabel} (${existing.pluginId})`,
       });
-      return;
+      return false;
     }
     if (!params.ownedIds.includes(id)) {
       params.ownedIds.push(id);
@@ -1084,6 +1107,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       rootDir: record.rootDir,
     });
+    return true;
   };
 
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
@@ -1139,39 +1163,60 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     provider: ImageGenerationProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "image-generation provider",
       registrations: registry.imageGenerationProviders,
       ownedIds: record.imageGenerationProviderIds,
     });
+    if (registered) {
+      registerSynthesizedMediaModelCatalogProvider({
+        record,
+        kind: "image_generation",
+        provider,
+      });
+    }
   };
 
   const registerVideoGenerationProvider = (
     record: PluginRecord,
     provider: VideoGenerationProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "video-generation provider",
       registrations: registry.videoGenerationProviders,
       ownedIds: record.videoGenerationProviderIds,
     });
+    if (registered) {
+      registerSynthesizedMediaModelCatalogProvider({
+        record,
+        kind: "video_generation",
+        provider,
+      });
+    }
   };
 
   const registerMusicGenerationProvider = (
     record: PluginRecord,
     provider: MusicGenerationProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "music-generation provider",
       registrations: registry.musicGenerationProviders,
       ownedIds: record.musicGenerationProviderIds,
     });
+    if (registered) {
+      registerSynthesizedMediaModelCatalogProvider({
+        record,
+        kind: "music_generation",
+        provider,
+      });
+    }
   };
 
   const registerWebFetchProvider = (record: PluginRecord, provider: WebFetchProviderPlugin) => {
@@ -1207,7 +1252,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
-    opts?: { commands?: string[]; descriptors?: OpenClawPluginCliCommandDescriptor[] },
+    opts?: {
+      parentPath?: string[];
+      commands?: string[];
+      descriptors?: OpenClawPluginCliCommandDescriptor[];
+    },
   ) => {
     const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
       const normalized = normalizeCommandDescriptorName(raw);
@@ -1221,6 +1270,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       }
       return normalized;
     };
+    const parentPath = (opts?.parentPath ?? []).map((segment) =>
+      normalizeCommandRoot(segment, "command"),
+    );
+    if (parentPath.some((segment) => segment === null)) {
+      return;
+    }
+    const normalizedParentPath = parentPath as string[];
     const descriptors = (opts?.descriptors ?? [])
       .map((descriptor) => {
         const name = normalizeCommandRoot(descriptor.name, "descriptor");
@@ -1251,11 +1307,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const serializeCommandPath = (command: string) => [...normalizedParentPath, command].join(" ");
+    const commandPaths = commands.map(serializeCommandPath);
+    const commandPathSet = new Set(commandPaths);
     const existing = registry.cliRegistrars.find((entry) =>
-      entry.commands.some((command) => commands.includes(command)),
+      entry.commands
+        .map((command) => [...(entry.parentPath ?? []), command].join(" "))
+        .some((commandPath) => commandPathSet.has(commandPath)),
     );
     if (existing) {
-      const overlap = commands.find((command) => existing.commands.includes(command));
+      const existingCommandPaths = new Set(
+        existing.commands.map((command) => [...(existing.parentPath ?? []), command].join(" ")),
+      );
+      const overlap = commandPaths.find((commandPath) => existingCommandPaths.has(commandPath));
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -1264,11 +1328,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    record.cliCommands.push(...commands);
+    record.cliCommands.push(...commandPaths);
     registry.cliRegistrars.push({
       pluginId: record.id,
       pluginName: record.name,
       register: registrar,
+      parentPath: normalizedParentPath,
       commands,
       descriptors,
       source: record.source,
@@ -2195,6 +2260,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             },
           } satisfies PluginRuntime["state"];
         }
+        if (prop === "llm") {
+          const llm = Reflect.get(target, prop, receiver);
+          return {
+            complete: (params) =>
+              withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
+          } satisfies PluginRuntime["llm"];
+        }
         if (prop !== "subagent") {
           return Reflect.get(target, prop, receiver);
         }
@@ -2260,7 +2332,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config, params.pluginConfig),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
+              registerHostedMediaResolver: (resolver) =>
+                registerHostedMediaResolver(record, resolver),
               registerProvider: (provider) => registerProvider(record, provider),
+              registerModelCatalogProvider: (provider) =>
+                registerModelCatalogProvider(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
               registerDetachedTaskRuntime: (runtime) => {
                 const existing = getDetachedTaskLifecycleRuntimeRegistration();
@@ -2666,7 +2742,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     pushDiagnostic,
     registerTool,
     registerChannel,
+    registerHostedMediaResolver,
     registerProvider,
+    registerModelCatalogProvider,
     registerAgentHarness,
     registerCliBackend,
     registerTextTransforms,

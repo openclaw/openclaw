@@ -390,7 +390,6 @@ jobs:
 
             if [[ "$LIVE_MODELS_ONLY" != "true" ]]; then
               add_suite live-cache
-              add_suite openai-ws-stream-live-e2e
 
               add_profile_suite native-live-src-agents "stable full"
               add_profile_suite native-live-src-gateway-core "minimum stable full"
@@ -531,7 +530,7 @@ jobs:
 
   validate_special_e2e:
     needs: validate_selected_ref
-    if: (inputs.include_repo_e2e || (inputs.include_live_suites && !inputs.live_models_only)) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e' || inputs.live_suite_filter == 'openai-ws-stream-live-e2e')
+    if: inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -544,12 +543,6 @@ jobs:
             timeout_minutes: 120
             requires_repo_e2e: true
             requires_live_suites: false
-          - suite_id: openai-ws-stream-live-e2e
-            label: OpenAI WebSocket live E2E
-            command: pnpm test:e2e src/agents/openai-ws-stream.e2e.test.ts
-            timeout_minutes: 90
-            requires_repo_e2e: false
-            requires_live_suites: true
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENCLAW_E2E_WORKERS: "1"
@@ -583,9 +576,7 @@ jobs:
         run: |
           set -euo pipefail
           case "${{ matrix.suite_id }}" in
-            openai-ws-stream-live-e2e)
-              echo "OPENAI_LIVE_TEST=1" >> "$GITHUB_ENV"
-              echo "OPENCLAW_LIVE_TEST=1" >> "$GITHUB_ENV"
+            openshell-e2e)
               ;;
           esac
 
@@ -595,11 +586,7 @@ jobs:
         run: |
           set -euo pipefail
           case "${{ matrix.suite_id }}" in
-            openai-ws-stream-live-e2e)
-              [[ -n "${OPENAI_API_KEY:-}" ]] || {
-                echo "OPENAI_API_KEY is required for the OpenAI WebSocket live E2E suite." >&2
-                exit 1
-              }
+            openshell-e2e)
               ;;
           esac
 

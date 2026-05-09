@@ -32,7 +32,10 @@ export {
   resolveRegularFileAppendFlags,
   root,
   statRegularFileSync,
+  writeExternalFileWithinRoot,
   withTimeout,
+  type ExternalFileWriteOptions,
+  type ExternalFileWriteResult,
   type FsSafeErrorCode as SafeOpenErrorCode,
 } from "../infra/fs-safe.js";
 
@@ -80,10 +83,13 @@ export { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 export {
   assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,
+  ensureAbsoluteDirectory,
   findExistingAncestor,
   resolveAbsolutePathForRead,
   resolveAbsolutePathForWrite,
   type AbsolutePathSymlinkPolicy,
+  type EnsureAbsoluteDirectoryOptions,
+  type EnsureAbsoluteDirectoryResult,
   type ResolvedAbsolutePath,
   type ResolvedWritableAbsolutePath,
 } from "../infra/fs-safe.js";

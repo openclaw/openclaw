@@ -207,6 +207,20 @@ async function closeCliMemoryManagers(): Promise<void> {
   }
 }
 
+async function disposeCliAgentHarnesses(): Promise<void> {
+  try {
+    const { listAgentHarnessIds, disposeRegisteredAgentHarnesses } =
+      await import("../agents/harness/registry.js");
+    if (listAgentHarnessIds().length === 0) {
+      return;
+    }
+    await disposeRegisteredAgentHarnesses();
+  } catch {
+    // Best-effort teardown for short-lived CLI commands. Harness plugins may
+    // own subprocesses, but cleanup must not hide the command's real outcome.
+  }
+}
+
 function pauseNonTtyStdinForCliExit(): void {
   const stdin = process.stdin;
   if (stdin.isTTY) {
@@ -324,6 +338,21 @@ async function resolveUnownedCliPrimary(params: {
   return primary;
 }
 
+async function resolveUnownedCliPrimaryMessage(params: {
+  primary: string;
+  config: OpenClawConfig;
+}): Promise<string> {
+  const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
+    await import("../plugins/manifest-command-aliases.runtime.js");
+  return (
+    resolveMissingPluginCommandMessageFromPolicy(params.primary, params.config, {
+      resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
+      resolveToolOwner: resolveManifestToolOwner,
+    }) ??
+    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`
+  );
+}
+
 async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
@@ -418,9 +447,7 @@ export async function runCli(argv: string[] = process.argv) {
     const config = await readBestEffortCliConfig();
     const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
     if (unownedPrimary) {
-      throw new Error(
-        `Unknown command: openclaw ${unownedPrimary}. No built-in command or plugin CLI metadata owns "${unownedPrimary}".`,
-      );
+      throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
     }
     const { startProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     proxyHandle = await startProxy(config?.proxy ?? undefined);
@@ -566,6 +593,7 @@ export async function runCli(argv: string[] = process.argv) {
       const [
         { buildProgram },
         { formatUncaughtError },
+        { formatCliFailureLines },
         { runFatalErrorHooks },
         {
           installUnhandledRejectionHandler,
@@ -577,6 +605,7 @@ export async function runCli(argv: string[] = process.argv) {
         Promise.all([
           import("./program.js"),
           import("../infra/errors.js"),
+          import("./failure-output.js"),
           import("../infra/fatal-error-hooks.js"),
           import("../infra/unhandled-rejections.js"),
           import("../terminal/restore.js"),
@@ -599,7 +628,13 @@ export async function runCli(argv: string[] = process.argv) {
           );
           return;
         }
-        console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+        for (const line of formatCliFailureLines({
+          title: "OpenClaw hit an unexpected runtime error.",
+          error,
+          argv: normalizedArgv,
+        })) {
+          console.error(line);
+        }
         for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
           console.error("[openclaw]", message);
         }
@@ -651,13 +686,14 @@ export async function runCli(argv: string[] = process.argv) {
               (command) => command.name() === primary || command.aliases().includes(primary),
             )
           ) {
-            const { resolveManifestCommandAliasOwner } =
+            const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
               await import("../plugins/manifest-command-aliases.runtime.js");
             const missingPluginCommandMessage = resolveMissingPluginCommandMessageFromPolicy(
               primary,
               config,
               {
                 resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
+                resolveToolOwner: resolveManifestToolOwner,
               },
             );
             if (missingPluginCommandMessage) {
@@ -691,6 +727,7 @@ export async function runCli(argv: string[] = process.argv) {
       process.off("exit", onExit);
     }
     await stopStartedProxy();
+    await disposeCliAgentHarnesses();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
   }

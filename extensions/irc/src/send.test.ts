@@ -1,8 +1,8 @@
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
 import { createSendCfgThreadingRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IrcClient } from "./client.js";
-import { setIrcRuntime } from "./runtime.js";
+import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => {
@@ -66,10 +66,36 @@ vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
 import { ircMessageAdapter } from "./message-adapter.js";
 import { sendMessageIrc } from "./send.js";
 
+function resetHoistedMocks() {
+  hoisted.loadConfig.mockReset();
+  hoisted.resolveMarkdownTableMode.mockReset().mockReturnValue("preserve");
+  hoisted.convertMarkdownTables.mockReset().mockImplementation((text: string) => text);
+  hoisted.record.mockReset();
+  hoisted.normalizeIrcMessagingTarget
+    .mockReset()
+    .mockImplementation((value: string) => value.trim());
+  hoisted.connectIrcClient.mockReset();
+  hoisted.buildIrcConnectOptions.mockReset().mockReturnValue({});
+}
+
+afterAll(() => {
+  vi.doUnmock("./normalize.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./connect-options.js");
+  vi.doUnmock("./protocol.js");
+  vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/text-runtime");
+  vi.resetModules();
+});
+
 describe("sendMessageIrc cfg threading", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resetHoistedMocks();
     setIrcRuntime(createSendCfgThreadingRuntime(hoisted) as never);
+  });
+
+  afterEach(() => {
+    clearIrcRuntime();
   });
 
   it("uses explicitly provided cfg without loading runtime config", async () => {
@@ -106,7 +132,7 @@ describe("sendMessageIrc cfg threading", () => {
       direction: "outbound",
     });
     expect(result.target).toBe("#room");
-    expect(result.messageId).toEqual(expect.any(String));
+    expect(result.messageId).toBeTypeOf("string");
     expect(result.messageId.length).toBeGreaterThan(0);
     expect(result.receipt).toMatchObject({
       primaryPlatformMessageId: "irc-msg-1",
@@ -165,7 +191,7 @@ describe("sendMessageIrc cfg threading", () => {
     expect(hoisted.loadConfig).not.toHaveBeenCalled();
     expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
     expect(result.target).toBe("#room");
-    expect(result.messageId).toEqual(expect.any(String));
+    expect(result.messageId).toBeTypeOf("string");
     expect(result.messageId.length).toBeGreaterThan(0);
   });
 

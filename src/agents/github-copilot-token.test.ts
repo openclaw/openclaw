@@ -64,16 +64,14 @@ describe("resolveCopilotApiToken", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://api.github.com/copilot_internal/v2/token",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Accept: "application/json",
-          Authorization: "Bearer github-token",
-          ...buildCopilotIdeHeaders({ includeApiVersion: true }),
-        }),
-      }),
-    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.github.com/copilot_internal/v2/token");
+    expect(init.method).toBe("GET");
+    expect(init.headers).toEqual({
+      Accept: "application/json",
+      Authorization: "Bearer github-token",
+      ...buildCopilotIdeHeaders({ includeApiVersion: true }),
+    });
   });
 });

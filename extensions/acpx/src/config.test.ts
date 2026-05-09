@@ -16,7 +16,7 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.permissionMode).toBe("approve-reads");
     expect(resolved.nonInteractivePermissions).toBe("fail");
     expect(resolved.timeoutSeconds).toBe(120);
-    expect(resolved.agents).toEqual({});
+    expect(resolved.agents).toStrictEqual({});
   });
 
   it("keeps explicit timeoutSeconds config", () => {
@@ -55,6 +55,62 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.agents).toEqual({
       claude: "claude --acp",
       codex: "codex custom-acp",
+    });
+  });
+
+  it("combines agent command with args array", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          claude: {
+            command: "node",
+            args: ["/path/to/adapter.mjs", "--verbose"],
+          },
+          codex: {
+            command: "codex-acp",
+            args: ["--model", "gpt-5"],
+          },
+        },
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.agents).toEqual({
+      claude: "node /path/to/adapter.mjs --verbose",
+      codex: "codex-acp --model gpt-5",
+    });
+  });
+
+  it("quotes agent args that need to survive command-line parsing as one token", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          custom: {
+            command: "node",
+            args: ["/tmp/My Adapter.mjs", "--flag=value with spaces", "owner's-choice"],
+          },
+        },
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.agents).toEqual({
+      custom: "node '/tmp/My Adapter.mjs' '--flag=value with spaces' 'owner'\"'\"'s-choice'",
+    });
+  });
+
+  it("handles agent command without args (backward compat)", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          simple: { command: "simple-acp" },
+        },
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.agents).toEqual({
+      simple: "simple-acp",
     });
   });
 
@@ -98,7 +154,10 @@ describe("embedded acpx plugin config", () => {
     });
 
     const server = resolved.mcpServers["openclaw-plugin-tools"];
-    expect(server).toBeDefined();
+    expect(server).toMatchObject({
+      command: process.execPath,
+      args: expect.any(Array),
+    });
     expect(server.command).toBe(process.execPath);
     expect(Array.isArray(server.args)).toBe(true);
     expect(server.args?.length).toBeGreaterThan(0);
@@ -113,7 +172,10 @@ describe("embedded acpx plugin config", () => {
     });
 
     const server = resolved.mcpServers["openclaw-tools"];
-    expect(server).toBeDefined();
+    expect(server).toMatchObject({
+      command: process.execPath,
+      args: expect.any(Array),
+    });
     expect(server.command).toBe(process.execPath);
     expect(Array.isArray(server.args)).toBe(true);
     expect(server.args?.length).toBeGreaterThan(0);

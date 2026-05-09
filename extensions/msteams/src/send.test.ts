@@ -95,6 +95,32 @@ function mockContinueConversationFailure(error: string) {
   return mockContinueConversation;
 }
 
+const continueConversationFailureCases = [
+  {
+    name: "editMessageMSTeams",
+    error: "Service unavailable",
+    expected: "msteams edit failed",
+    invoke: () =>
+      editMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:conversation@thread.tacv2",
+        activityId: "activity-123",
+        text: "Updated text",
+      }),
+  },
+  {
+    name: "deleteMessageMSTeams",
+    error: "Not found",
+    expected: "msteams delete failed",
+    invoke: () =>
+      deleteMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:conversation@thread.tacv2",
+        activityId: "activity-456",
+      }),
+  },
+];
+
 function createSharePointSendContext(params: {
   conversationId: string;
   graphChatId: string | null;
@@ -394,6 +420,21 @@ describe("sendMessageMSTeams", () => {
   });
 });
 
+describe("MSTeams continueConversation failure handling", () => {
+  beforeEach(() => {
+    mockState.resolveMSTeamsSendContext.mockReset();
+  });
+
+  it.each(continueConversationFailureCases)(
+    "$name throws a descriptive error when continueConversation fails",
+    async ({ error, expected, invoke }) => {
+      mockContinueConversationFailure(error);
+
+      await expect(invoke()).rejects.toThrow(expected);
+    },
+  );
+});
+
 describe("editMessageMSTeams", () => {
   beforeEach(() => {
     mockState.resolveMSTeamsSendContext.mockReset();
@@ -434,29 +475,17 @@ describe("editMessageMSTeams", () => {
 
     expect(result.conversationId).toBe("19:conversation@thread.tacv2");
     expect(mockContinueConversation).toHaveBeenCalledTimes(1);
-    expect(mockContinueConversation).toHaveBeenCalledWith(
-      "app-id",
+    const continueConversationCall = mockContinueConversation.mock.calls[0];
+    expect(continueConversationCall?.[0]).toBe("app-id");
+    expect(continueConversationCall?.[1]).toEqual(
       expect.objectContaining({ activityId: undefined }),
-      expect.any(Function),
     );
+    expect(typeof continueConversationCall?.[2]).toBe("function");
     expect(mockUpdateActivity).toHaveBeenCalledWith({
       type: "message",
       id: "activity-123",
       text: "Updated message text",
     });
-  });
-
-  it("throws a descriptive error when continueConversation fails", async () => {
-    mockContinueConversationFailure("Service unavailable");
-
-    await expect(
-      editMessageMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "conversation:19:conversation@thread.tacv2",
-        activityId: "activity-123",
-        text: "Updated text",
-      }),
-    ).rejects.toThrow("msteams edit failed");
   });
 });
 
@@ -499,24 +528,13 @@ describe("deleteMessageMSTeams", () => {
 
     expect(result.conversationId).toBe("19:conversation@thread.tacv2");
     expect(mockContinueConversation).toHaveBeenCalledTimes(1);
-    expect(mockContinueConversation).toHaveBeenCalledWith(
-      "app-id",
+    const continueConversationCall = mockContinueConversation.mock.calls[0];
+    expect(continueConversationCall?.[0]).toBe("app-id");
+    expect(continueConversationCall?.[1]).toEqual(
       expect.objectContaining({ activityId: undefined }),
-      expect.any(Function),
     );
+    expect(typeof continueConversationCall?.[2]).toBe("function");
     expect(mockDeleteActivity).toHaveBeenCalledWith("activity-456");
-  });
-
-  it("throws a descriptive error when continueConversation fails", async () => {
-    mockContinueConversationFailure("Not found");
-
-    await expect(
-      deleteMessageMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "conversation:19:conversation@thread.tacv2",
-        activityId: "activity-456",
-      }),
-    ).rejects.toThrow("msteams delete failed");
   });
 
   it("passes the appId and proactive ref to continueConversation", async () => {

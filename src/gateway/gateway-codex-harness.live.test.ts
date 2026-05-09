@@ -364,7 +364,7 @@ async function verifyCodexImageProbe(params: {
   }
   const { extractPayloadText } = await import("./test-helpers.agent-results.js");
   expect(extractPayloadText(payload.result)).toContain(expectedToken);
-  expect(events.some((event) => event.stream === "codex_app_server.lifecycle")).toBe(true);
+  expect(events.map((event) => event.stream)).toContain("codex_app_server.lifecycle");
 }
 
 function findGuardianReviewStatus(events: CapturedAgentEvent[]): "approved" | "denied" | undefined {
@@ -376,11 +376,13 @@ function findGuardianReviewStatus(events: CapturedAgentEvent[]): "approved" | "d
 function assertGuardianReviewCompleted(params: {
   events: CapturedAgentEvent[];
   label: string;
+  requireEvents?: boolean;
 }): CapturedAgentEvent | undefined {
   const completedEvents = params.events.filter(
     (event) => event.data?.phase === "completed" && event.data?.status,
   );
-  if (completedEvents.length === 0 && !CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS) {
+  const requireEvents = params.requireEvents ?? CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS;
+  if (completedEvents.length === 0 && !requireEvents) {
     return undefined;
   }
   expect(
@@ -441,13 +443,20 @@ async function verifyCodexGuardianProbe(params: {
   const review = assertGuardianReviewCompleted({
     events: deniedResult.events,
     label: "ask-back probe",
+    requireEvents: false,
   });
   // The approve/deny call is Codex policy-owned and may change independently.
-  // OpenClaw's contract here is that Guardian mode reaches Codex app-server and
-  // projects the structured review lifecycle back onto the agent event bus.
+  // OpenClaw's strict projection contract is covered by the allow probe above.
+  // Riskier prompts may be refused or ask back before Codex creates a review
+  // event, depending on current policy/model behavior.
   if (review?.data?.status === "denied") {
     expect(deniedResult.text).toContain(askBackToken);
     expect(deniedResult.text.toLowerCase()).toMatch(/approv|permission|guardian|reject|denied/);
+  } else if (!review) {
+    expect(deniedResult.text).toContain(askBackToken);
+    expect(deniedResult.text.toLowerCase()).toMatch(
+      /approv|permission|guardian|reject|denied|block|cannot|can't/,
+    );
   }
   expect(deniedResult.text.trim().length).toBeGreaterThan(0);
 }
@@ -783,6 +792,7 @@ describeLive("gateway live (Codex harness)", () => {
               expectedToken: firstToken,
               message: `Reply with exactly ${firstToken} and nothing else.`,
             });
+            expect(firstText).toContain(firstToken);
             logCodexLiveStep("first-turn", { firstText });
 
             const secondNonce = randomBytes(3).toString("hex").toUpperCase();
@@ -793,6 +803,7 @@ describeLive("gateway live (Codex harness)", () => {
               expectedToken: secondToken,
               message: `Reply with exactly ${secondToken} and nothing else. Do not repeat ${firstToken}.`,
             });
+            expect(secondText).toContain(secondToken);
             logCodexLiveStep("second-turn", { secondText });
           } finally {
             unsubscribeDebugEvents();

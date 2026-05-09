@@ -26,11 +26,7 @@ export type { ClientToolDefinition } from "../../command/shared-types.js";
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
 export type CurrentTurnPromptContext = {
-  reply?: {
-    body: string;
-    senderLabel?: string;
-    isQuote?: boolean;
-  };
+  text: string;
 };
 
 export type RunEmbeddedPiAgentParams = {

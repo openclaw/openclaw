@@ -64,6 +64,11 @@ function makeRuntime(): { runtime: RuntimeEnv; logs: string[] } {
   };
 }
 
+function expectLogsToInclude(logs: readonly string[], text: string): void {
+  const matches = logs.filter((line) => line.includes(text));
+  expect(matches.length).toBeGreaterThan(0);
+}
+
 describe("sessionsCleanupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -119,7 +124,11 @@ describe("sessionsCleanupCommand", () => {
         staleKeys: Set<string>;
         cappedKeys: Set<string>;
         budgetEvictedKeys: Set<string>;
+        dmScopeRetiredKeys: Set<string>;
       }) => {
+        if (params.dmScopeRetiredKeys.has(params.key)) {
+          return "retire-dm-scope";
+        }
         if (params.missingKeys.has(params.key)) {
           return "prune-missing";
         }
@@ -181,6 +190,7 @@ describe("sessionsCleanupCommand", () => {
           beforeCount: 3,
           afterCount: 1,
           missing: 0,
+          dmScopeRetired: 0,
           pruned: 0,
           capped: 2,
           diskBudget: {
@@ -245,6 +255,7 @@ describe("sessionsCleanupCommand", () => {
       beforeCount: 3,
       afterCount: 1,
       missing: 0,
+      dmScopeRetired: 0,
       pruned: 2,
       capped: 0,
       diskBudget: null,
@@ -286,6 +297,7 @@ describe("sessionsCleanupCommand", () => {
             beforeCount: 2,
             afterCount: 1,
             missing: 0,
+            dmScopeRetired: 0,
             pruned: 1,
             capped: 0,
             diskBudget: {
@@ -305,6 +317,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set<string>(),
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -347,6 +360,7 @@ describe("sessionsCleanupCommand", () => {
             beforeCount: 1,
             afterCount: 0,
             missing: 1,
+            dmScopeRetired: 0,
             pruned: 0,
             capped: 0,
             diskBudget: null,
@@ -357,6 +371,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set<string>(),
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -393,6 +408,7 @@ describe("sessionsCleanupCommand", () => {
             beforeCount: 2,
             afterCount: 1,
             missing: 0,
+            dmScopeRetired: 0,
             pruned: 1,
             capped: 0,
             unreferencedArtifacts: {
@@ -412,6 +428,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -425,11 +442,16 @@ describe("sessionsCleanupCommand", () => {
       runtime,
     );
 
-    expect(logs.some((line) => line.includes("Planned session actions:"))).toBe(true);
-    expect(logs.some((line) => line.includes("Would prune unreferenced artifacts: 2"))).toBe(true);
-    expect(logs.some((line) => line.includes("Action") && line.includes("Key"))).toBe(true);
-    expect(logs.some((line) => line.includes("fresh") && line.includes("keep"))).toBe(true);
-    expect(logs.some((line) => line.includes("stale") && line.includes("prune-stale"))).toBe(true);
+    expectLogsToInclude(logs, "Planned session actions:");
+    expectLogsToInclude(logs, "Would prune unreferenced artifacts: 2");
+    const tableHeaderLines = logs.filter((line) => line.includes("Action") && line.includes("Key"));
+    expect(tableHeaderLines.length).toBeGreaterThan(0);
+    const freshKeepLines = logs.filter((line) => line.includes("fresh") && line.includes("keep"));
+    expect(freshKeepLines.length).toBeGreaterThan(0);
+    const stalePruneLines = logs.filter(
+      (line) => line.includes("stale") && line.includes("prune-stale"),
+    );
+    expect(stalePruneLines.length).toBeGreaterThan(0);
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {
@@ -450,6 +472,7 @@ describe("sessionsCleanupCommand", () => {
             beforeCount: 1,
             afterCount: 0,
             missing: 0,
+            dmScopeRetired: 0,
             pruned: 1,
             capped: 0,
             diskBudget: null,
@@ -460,6 +483,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
         },
         {
           summary: {
@@ -470,6 +494,7 @@ describe("sessionsCleanupCommand", () => {
             beforeCount: 1,
             afterCount: 0,
             missing: 0,
+            dmScopeRetired: 0,
             pruned: 1,
             capped: 0,
             diskBudget: null,
@@ -480,6 +505,7 @@ describe("sessionsCleanupCommand", () => {
           staleKeys: new Set(["stale"]),
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],

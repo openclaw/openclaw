@@ -418,9 +418,7 @@ describeNonWin("exec script preflight", () => {
       const text = result.content.find((c) => c.type === "text")?.text ?? "";
 
       expect(text).not.toMatch(/exec preflight:/);
-      expect(result.details).toMatchObject({
-        status: expect.stringMatching(/completed|failed/),
-      });
+      expect((result.details as { status?: string }).status).toMatch(/completed|failed/);
     });
   });
 
@@ -436,7 +434,7 @@ describeNonWin("exec script preflight", () => {
     });
     const text = result.content.find((c) => c.type === "text")?.text?.trim();
 
-    expect(result.details).toMatchObject({ status: "completed" });
+    expect((result.details as { status?: string }).status).toBe("completed");
     expect(text).toBe("ok");
   });
 
@@ -490,7 +488,9 @@ describeNonWin("exec script preflight", () => {
         }),
       ).resolves.toBeUndefined();
       expect(scriptOpenFlags.length).toBeGreaterThan(0);
-      expect(scriptOpenFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
+      expect(scriptOpenFlags.filter((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).not.toEqual(
+        [],
+      );
     });
   });
 

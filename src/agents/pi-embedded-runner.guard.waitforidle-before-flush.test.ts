@@ -22,10 +22,13 @@ function toolResult(id: string, text: string): AgentMessage {
 }
 
 function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
   const promise = new Promise<T>((r) => {
     resolve = r;
   });
+  if (!resolve) {
+    throw new Error("Expected wait-for-idle deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -137,5 +140,44 @@ describe("flushPendingToolResultsAfterIdle", () => {
       timeoutMs: 30_000,
     });
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("immediately clears pending tool results without waiting when timeoutMs is 0 or less", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    // Agent that never resolves idle
+    const idle = deferred<void>();
+    const waitForIdleSpy = vi.fn(() => idle.promise);
+    const agent = { waitForIdle: waitForIdleSpy };
+
+    appendMessage(assistantToolCall("call_orphan_immediate"));
+
+    // Should resolve immediately without advancing timers
+    await flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 0,
+      clearPendingOnTimeout: true,
+    });
+
+    // Verify waitForIdle was completely bypassed
+    expect(waitForIdleSpy).not.toHaveBeenCalled();
+
+    // The pending tool result should be cleared immediately.
+    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant"]);
+
+    // Test negative timeout as well
+    appendMessage(assistantToolCall("call_orphan_negative"));
+    await flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: -100,
+      clearPendingOnTimeout: true,
+    });
+
+    // Verify waitForIdle was still bypassed
+    expect(waitForIdleSpy).not.toHaveBeenCalled();
+    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "assistant"]);
   });
 });

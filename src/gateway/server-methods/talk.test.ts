@@ -561,7 +561,12 @@ describe("talk.session unified handlers", () => {
     const toolRespond = vi.fn();
     await talkHandlers["talk.session.submitToolResult"]({
       req: { type: "req", id: "4", method: "talk.session.submitToolResult" },
-      params: { sessionId: "relay-unified-1", callId: "call-1", result: { ok: true } },
+      params: {
+        sessionId: "relay-unified-1",
+        callId: "call-1",
+        result: { status: "working" },
+        options: { willContinue: true },
+      },
       client: { connId: "conn-1" } as never,
       isWebchatConnect: () => false,
       respond: toolRespond as never,
@@ -571,7 +576,8 @@ describe("talk.session unified handlers", () => {
       relaySessionId: "relay-unified-1",
       connId: "conn-1",
       callId: "call-1",
-      result: { ok: true },
+      result: { status: "working" },
+      options: { willContinue: true },
     });
 
     const closeRespond = vi.fn();
@@ -1078,6 +1084,46 @@ describe("talk.client.toolCall handler", () => {
         runId: "run-voice-1",
         idempotencyKey: expect.stringMatching(/^talk-call-1-/),
       },
+      undefined,
+    );
+  });
+
+  it("passes configured consult thinking and fast-mode overrides to chat.send", async () => {
+    const respond = vi.fn();
+
+    await talkHandlers["talk.client.toolCall"]({
+      req: { type: "req", id: "1", method: "talk.client.toolCall" },
+      params: {
+        sessionKey: "main",
+        callId: "call-1",
+        name: "openclaw_agent_consult",
+        args: { question: "Are the basement lights off?" },
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              consultThinkingLevel: "low",
+              consultFastMode: true,
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(mocks.chatSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          thinking: "low",
+          fastMode: true,
+        }),
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId: "run-voice-1" }),
       undefined,
     );
   });
