@@ -1358,7 +1358,7 @@ Echo-heavy OpenAI Realtime example:
 }
 ```
 
-Use this when the model hears its own Discord playback through an open mic, but you still want to interrupt it by speaking. OpenClaw keeps OpenAI from auto-interrupting on raw input audio, while `bargeIn: true` lets Discord speaker-start events cancel active playback and start the next captured turn.
+Use this when the model hears its own Discord playback through an open mic, but you still want to interrupt it by speaking. OpenClaw keeps OpenAI from auto-interrupting on raw input audio, while `bargeIn: true` lets Discord speaker-start events and already-active speaker audio cancel active realtime responses before the next captured turn reaches OpenAI.
 
 Expected voice logs:
 
@@ -1366,6 +1366,7 @@ Expected voice logs:
 - On realtime start: `discord voice: realtime bridge starting ... interruptResponse=false bargeIn=true`
 - On realtime consult: `discord voice: realtime consult requested ... voiceSession=... supervisorSession=... question=...`
 - On agent answer: `discord voice: agent turn answer ...`
+- On same-speaker interruption: `discord voice: realtime barge-in from active speaker audio ...`
 - On disabled barge-in: `discord voice: realtime capture ignored during playback (barge-in disabled) ...`
 
 Credentials are resolved per component: LLM route auth for `voice.model`, STT auth for `tools.media.audio`, TTS auth for `messages.tts`/`voice.tts`, and realtime provider auth for `voice.realtime.providers` or the provider's normal auth config.

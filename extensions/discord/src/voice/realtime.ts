@@ -50,6 +50,7 @@ type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["re
 type PendingSpeakerTurn = {
   context: DiscordRealtimeSpeakerContext;
   hasAudio: boolean;
+  interruptedPlayback: boolean;
   closed: boolean;
 };
 
@@ -252,6 +253,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     const turn: PendingSpeakerTurn = {
       context: { ...context, userId },
       hasAudio: false,
+      interruptedPlayback: false,
       closed: false,
     };
     this.pendingSpeakerTurns.push(turn);
@@ -273,6 +275,13 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     turn.hasAudio = true;
     const realtimePcm = convertDiscordPcm48kStereoToRealtimePcm24kMono(discordPcm48kStereo);
     if (realtimePcm.length > 0) {
+      if (!turn.interruptedPlayback && this.isBargeInEnabled()) {
+        turn.interruptedPlayback = true;
+        logVoiceVerbose(
+          `realtime barge-in from active speaker audio: guild ${this.params.entry.guildId} channel ${this.params.entry.channelId} user ${turn.context.userId}`,
+        );
+        this.handleBargeIn();
+      }
       this.bridge.sendAudio(realtimePcm);
     }
   }
@@ -281,7 +290,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (!this.isBargeInEnabled()) {
       return;
     }
-    this.bridge?.handleBargeIn({ audioPlaybackActive: Boolean(this.outputStream) });
+    this.bridge?.handleBargeIn({ audioPlaybackActive: true });
     this.clearOutputAudio();
   }
 

@@ -594,6 +594,100 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("interrupts realtime playback when an already-active speaker keeps talking", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager({
+      groupPolicy: "open",
+      allowFrom: ["discord:u1"],
+      voice: {
+        enabled: true,
+        mode: "bidi",
+        realtime: {
+          provider: "openai",
+          bargeIn: true,
+          providers: {
+            openai: {
+              interruptResponseOnInputAudio: false,
+            },
+          },
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          audioSink?: {
+            sendAudio: (audio: Buffer) => void;
+          };
+        }
+      | undefined;
+    const player = getLastAudioPlayer();
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u1",
+    );
+
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    turn?.sendInputAudio(Buffer.alloc(3840));
+
+    expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalled();
+    expect(player.stop).toHaveBeenCalledWith(true);
+    expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
+  });
+
+  it("interrupts provider response state even after local realtime playback has ended", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      allowFrom: ["discord:u1"],
+      voice: {
+        enabled: true,
+        mode: "bidi",
+        realtime: {
+          provider: "openai",
+          bargeIn: true,
+          providers: {
+            openai: {
+              interruptResponseOnInputAudio: false,
+            },
+          },
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const player = getLastAudioPlayer();
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u1",
+    );
+
+    turn?.sendInputAudio(Buffer.alloc(3840));
+
+    expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalled();
+    expect(player.stop).toHaveBeenCalledWith(true);
+    expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
+  });
+
   it("ignores realtime capture during playback when barge-in is disabled", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
