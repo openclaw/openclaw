@@ -435,7 +435,7 @@ describe("tryDispatchAcpReply spawn-child outbound delivery (Gap 1)", () => {
     // true, failedCounts stays zero), then after "parent teardown" we update
     // failedCounts to reflect an async transport failure. The next deliver() call
     // sees the failure and routes via the session binding.
-    const { dispatcher, toolResultMock, blockReplyMock, failedCounts } = createDispatcher();
+    const { dispatcher, toolResultMock, failedCounts } = createDispatcher();
 
     managerMocks.runTurn.mockImplementation(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
