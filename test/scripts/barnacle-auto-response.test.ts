@@ -246,13 +246,12 @@ describe("barnacle-auto-response", () => {
       file("README.md"),
     ]);
 
-    expect(labels).toEqual(
-      expect.arrayContaining([
-        candidateLabels.blankTemplate,
-        candidateLabels.lowSignalDocs,
-        candidateLabels.docsDiscoverability,
-      ]),
-    );
+    expect(labels).toEqual([
+      candidateLabels.blankTemplate,
+      candidateLabels.needsRealBehaviorProof,
+      candidateLabels.lowSignalDocs,
+      candidateLabels.docsDiscoverability,
+    ]);
   });
 
   it("does not treat template boilerplate as behavior evidence for test-only churn", () => {
@@ -260,9 +259,11 @@ describe("barnacle-auto-response", () => {
       file("src/gateway/foo.test.ts"),
     ]);
 
-    expect(labels).toEqual(
-      expect.arrayContaining([candidateLabels.blankTemplate, candidateLabels.testOnlyNoBug]),
-    );
+    expect(labels).toEqual([
+      candidateLabels.blankTemplate,
+      candidateLabels.needsRealBehaviorProof,
+      candidateLabels.testOnlyNoBug,
+    ]);
   });
 
   it("labels external PRs that are missing real behavior proof", () => {
