@@ -97,7 +97,7 @@ Relevant Codex code:
 For Codex harness turns, OpenClaw should preserve this lifecycle:
 
 1. Read the mirrored OpenClaw session transcript.
-2. Bootstrap the active context engine when a previous session file exists.
+2. Bootstrap the active context engine when previous SQLite transcript rows exist.
 3. Run bootstrap maintenance when available.
 4. Assemble context using the active context engine.
 5. Convert the assembled context into Codex-compatible inputs.
@@ -462,8 +462,8 @@ This makes the split auditable.
 
 ### 9. Session reset and binding behavior
 
-The existing Codex harness `reset(...)` clears the Codex app-server binding from
-the OpenClaw session file. Preserve that behavior.
+The existing Codex harness `reset(...)` clears the Codex app-server binding for
+the OpenClaw session scope. Preserve that behavior.
 
 Also ensure context-engine state cleanup continues to happen through existing
 OpenClaw session lifecycle paths. Do not add Codex-specific cleanup unless the
@@ -494,7 +494,7 @@ Codex-specific additions:
 Add tests under `extensions/codex/src/app-server`:
 
 1. `run-attempt.context-engine.test.ts`
-   - Codex calls `bootstrap` when a session file exists.
+   - Codex calls `bootstrap` when SQLite transcript rows exist.
    - Codex calls `assemble` with mirrored messages, token budget, tool names,
      citations mode, model id, and prompt.
    - `systemPromptAddition` is included in developer instructions.
