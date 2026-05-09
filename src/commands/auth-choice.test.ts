@@ -1034,7 +1034,7 @@ describe("applyAuthChoice", () => {
     expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
       existingPrimary,
     );
-    expect(result.config.agents?.defaults?.models?.["openrouter/auto"]).toEqual({});
+    expect(result.config.agents?.defaults?.models?.["openrouter/auto"]).toStrictEqual({});
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
       "Kept existing default model anthropic/claude-opus-4-6; openrouter/auto is available.",
