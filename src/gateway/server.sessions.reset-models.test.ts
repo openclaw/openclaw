@@ -35,7 +35,7 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
     key: string;
     entry: {
       sessionId: string;
-      sessionFile?: string;
+      transcriptLocator?: string;
       modelProvider?: string;
       model?: string;
       contextTokens?: number;
@@ -45,9 +45,9 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:main:main");
   expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-model");
-  const sessionFile = reset.payload?.entry.sessionFile;
-  if (!sessionFile) {
-    throw new Error("expected reset session file");
+  const transcriptLocator = reset.payload?.entry.transcriptLocator;
+  if (!transcriptLocator) {
+    throw new Error("expected reset transcript locator");
   }
   expect(reset.payload?.entry.modelProvider).toBe("openai");
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
@@ -237,7 +237,7 @@ test("sessions.reset follows the updated default after an auto fallback pinned a
 test("sessions.reset preserves spawned session ownership metadata", async () => {
   const { dir } = await createSessionStoreDir();
   const stateDir = await fs.realpath(process.env.OPENCLAW_STATE_DIR ?? dir);
-  const customSessionFile = path.join(
+  const customTranscriptLocator = path.join(
     stateDir,
     "agents",
     "main",
@@ -247,7 +247,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   await seedGatewaySessionEntries({
     entries: {
       "subagent:child": sessionStoreEntry("sess-owned-child", {
-        sessionFile: customSessionFile,
+        transcriptLocator: customTranscriptLocator,
         chatType: "group",
         channel: "discord",
         groupId: "group-1",
@@ -308,7 +308,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
     key: string;
     entry: {
       sessionId?: string;
-      sessionFile?: string;
+      transcriptLocator?: string;
       chatType?: string;
       channel?: string;
       groupId?: string;
@@ -365,7 +365,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   expect(reset.ok).toBe(true);
   const resetSessionId = reset.payload?.entry.sessionId;
   expect(resetSessionId).toBeTruthy();
-  expect(reset.payload?.entry.sessionFile).toBe(
+  expect(reset.payload?.entry.transcriptLocator).toBe(
     createSqliteSessionTranscriptLocator({
       agentId: "main",
       sessionId: resetSessionId ?? "",
@@ -423,7 +423,13 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   expect(reset.payload?.entry.label).toBe("owned child");
 
   const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:subagent:child" });
-  expect(stored?.sessionFile).toBe(reset.payload?.entry.sessionFile);
+  expect(reset.payload?.entry.transcriptLocator).toBe(
+    createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: resetSessionId ?? "",
+    }),
+  );
+  expect(stored).not.toHaveProperty("transcriptLocator");
   expect(stored?.chatType).toBe("group");
   expect(stored?.channel).toBe("discord");
   expect(stored?.groupId).toBe("group-1");
