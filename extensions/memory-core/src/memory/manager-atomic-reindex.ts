@@ -68,12 +68,39 @@ export async function moveMemoryIndexFiles(
   }
 }
 
-async function removeMemoryIndexFiles(
-  basePath: string,
-  fileOps: MemoryIndexFileOps = defaultFileOps,
+async function rmWithRetry(
+  path: string,
+  options: Required<MoveMemoryIndexFilesOptions>,
 ): Promise<void> {
+  for (let attempt = 1; attempt <= options.maxRenameAttempts; attempt++) {
+    try {
+      await options.fileOps.rm(path, { force: true });
+      return;
+    } catch (err) {
+      if (!isTransientRenameError(err) || attempt === options.maxRenameAttempts) {
+        throw err;
+      }
+      await options.fileOps.wait(options.renameRetryDelayMs * attempt);
+    }
+  }
+  throw new Error("rm retry loop exited unexpectedly");
+}
+
+export async function removeMemoryIndexFiles(
+  basePath: string,
+  options: MoveMemoryIndexFilesOptions = {},
+): Promise<void> {
+  const resolvedOptions: Required<MoveMemoryIndexFilesOptions> = {
+    fileOps: options.fileOps ?? defaultFileOps,
+    maxRenameAttempts: Math.max(1, options.maxRenameAttempts ?? defaultMaxRenameAttempts),
+    renameRetryDelayMs: options.renameRetryDelayMs ?? defaultRenameRetryDelayMs,
+  };
   const suffixes = ["", "-wal", "-shm"];
-  await Promise.all(suffixes.map((suffix) => fileOps.rm(`${basePath}${suffix}`, { force: true })));
+  // Sequential to avoid concurrent lock conflicts on WAL/SHM files (Windows
+  // EBUSY on SQLite WAL cleanup — #79708).
+  for (const suffix of suffixes) {
+    await rmWithRetry(`${basePath}${suffix}`, resolvedOptions);
+  }
 }
 
 async function swapMemoryIndexFiles(targetPath: string, tempPath: string): Promise<void> {

@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { moveMemoryIndexFiles, runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
+import {
+  moveMemoryIndexFiles,
+  removeMemoryIndexFiles,
+  runMemoryAtomicReindex,
+} from "./manager-atomic-reindex.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -132,6 +136,40 @@ describe("memory manager atomic reindex", () => {
 
     expect(rename).toHaveBeenCalledTimes(1);
     expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("retries EBUSY on rm during index file cleanup", async () => {
+    const rm = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "EBUSY" }))
+      .mockResolvedValue(undefined);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await removeMemoryIndexFiles("index.sqlite.tmp", {
+      fileOps: { rename: fs.rename, rm, wait },
+      maxRenameAttempts: 3,
+      renameRetryDelayMs: 10,
+    });
+
+    expect(rm).toHaveBeenCalledTimes(4);
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(wait).toHaveBeenCalledWith(10);
+  });
+
+  it("throws after exhausting EBUSY retries on rm", async () => {
+    const rm = vi.fn().mockRejectedValue(Object.assign(new Error("busy"), { code: "EBUSY" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      removeMemoryIndexFiles("index.sqlite.tmp", {
+        fileOps: { rename: fs.rename, rm, wait },
+        maxRenameAttempts: 3,
+        renameRetryDelayMs: 10,
+      }),
+    ).rejects.toMatchObject({ code: "EBUSY" });
+
+    expect(rm).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
   });
 });
 
