@@ -21,6 +21,7 @@ import {
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
+  type CodexDynamicToolCallOutputContentItem,
   type CodexServerNotification,
   type CodexThreadItem,
   type CodexTurn,
@@ -80,6 +81,20 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 ] as const;
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
+const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
+
+type ToolTranscriptCallInput = {
+  id: string;
+  name: string;
+  arguments?: unknown;
+};
+
+type ToolTranscriptResultInput = {
+  id: string;
+  name: string;
+  text?: string;
+  isError: boolean;
+};
 
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
@@ -97,6 +112,9 @@ export class CodexAppServerEventProjector {
     { chars: number; messages: number; truncated: boolean }
   >();
   private readonly toolMetas = new Map<string, { toolName: string; meta?: string }>();
+  private readonly toolTranscriptMessages: AgentMessage[] = [];
+  private readonly toolTranscriptCallIds = new Set<string>();
+  private readonly toolTranscriptResultIds = new Set<string>();
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -238,6 +256,7 @@ export class CodexAppServerEventProjector {
         ),
       );
     }
+    messagesSnapshot.push(...this.toolTranscriptMessages);
     if (lastAssistant) {
       messagesSnapshot.push(attachCodexMirrorIdentity(lastAssistant, `${turnId}:assistant`));
     }
@@ -295,6 +314,28 @@ export class CodexAppServerEventProjector {
       yieldDetected: options?.yieldDetected || false,
       didSendDeterministicApprovalPrompt: this.guardianReviewCount > 0 ? false : undefined,
     };
+  }
+
+  recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
+    this.recordToolTranscriptCall({
+      id: params.callId,
+      name: params.tool,
+      arguments: sanitizeCodexToolArguments(params.arguments),
+    });
+  }
+
+  recordDynamicToolResult(params: {
+    callId: string;
+    tool: string;
+    success: boolean;
+    contentItems: CodexDynamicToolCallOutputContentItem[];
+  }): void {
+    this.recordToolTranscriptResult({
+      id: params.callId,
+      name: params.tool,
+      text: collectDynamicToolContentText(params.contentItems),
+      isError: !params.success,
+    });
   }
 
   markTimedOut(): void {
@@ -402,6 +443,7 @@ export class CodexAppServerEventProjector {
     }
     this.emitStandardItemEvent({ phase: "start", item });
     this.emitNormalizedToolItemEvent({ phase: "start", item });
+    this.recordNativeToolTranscriptCall(item);
     this.emitToolResultSummary(item);
     this.emitAgentEvent({
       stream: "codex_app_server.item",
@@ -456,6 +498,8 @@ export class CodexAppServerEventProjector {
     this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "end", item });
     this.emitNormalizedToolItemEvent({ phase: "result", item });
+    this.recordNativeToolTranscriptCall(item);
+    this.recordNativeToolTranscriptResult(item);
     this.emitToolResultSummary(item);
     this.emitToolResultOutput(item);
     this.emitAgentEvent({
@@ -558,6 +602,8 @@ export class CodexAppServerEventProjector {
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
+      this.recordNativeToolTranscriptCall(item);
+      this.recordNativeToolTranscriptResult(item);
       this.emitToolResultSummary(item);
       this.emitToolResultOutput(item);
     }
@@ -805,6 +851,63 @@ export class CodexAppServerEventProjector {
     });
   }
 
+  private recordNativeToolTranscriptCall(item: CodexThreadItem | undefined): void {
+    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+      return;
+    }
+    const name = itemName(item);
+    if (!name) {
+      return;
+    }
+    this.recordToolTranscriptCall({
+      id: item.id,
+      name,
+      arguments: itemToolArgs(item),
+    });
+  }
+
+  private recordNativeToolTranscriptResult(item: CodexThreadItem | undefined): void {
+    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+      return;
+    }
+    const name = itemName(item);
+    if (!name) {
+      return;
+    }
+    this.recordToolTranscriptResult({
+      id: item.id,
+      name,
+      text: itemTranscriptResultText(item),
+      isError: isNonSuccessItemStatus(itemStatus(item)),
+    });
+  }
+
+  private recordToolTranscriptCall(params: ToolTranscriptCallInput): void {
+    if (!params.id || !params.name || this.toolTranscriptCallIds.has(params.id)) {
+      return;
+    }
+    this.toolTranscriptCallIds.add(params.id);
+    this.toolTranscriptMessages.push(
+      attachCodexMirrorIdentity(
+        this.createToolCallMessage(params),
+        `${this.turnId}:tool:${params.id}:call`,
+      ),
+    );
+  }
+
+  private recordToolTranscriptResult(params: ToolTranscriptResultInput): void {
+    if (!params.id || !params.name || this.toolTranscriptResultIds.has(params.id)) {
+      return;
+    }
+    this.toolTranscriptResultIds.add(params.id);
+    this.toolTranscriptMessages.push(
+      attachCodexMirrorIdentity(
+        this.createToolResultMessage(params),
+        `${this.turnId}:tool:${params.id}:result`,
+      ),
+    );
+  }
+
   private formatCodexErrorMessage(params: JsonObject): string | undefined {
     const error = isJsonObject(params.error) ? params.error : undefined;
     return (
@@ -910,6 +1013,47 @@ export class CodexAppServerEventProjector {
       stopReason: "stop",
       timestamp: Date.now(),
     };
+  }
+
+  private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {
+    return {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: params.id,
+          name: params.name,
+          arguments: normalizeToolTranscriptArguments(params.arguments),
+        },
+      ],
+      api: this.params.model.api ?? "openai-codex-responses",
+      provider: this.params.provider,
+      model: this.params.modelId,
+      usage: ZERO_USAGE,
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+  }
+
+  private createToolResultMessage(params: ToolTranscriptResultInput): AgentMessage {
+    const text = truncateToolTranscriptText(params.text?.trim() || toolResultStatusText(params));
+    return {
+      role: "toolResult",
+      toolCallId: params.id,
+      toolName: params.name,
+      isError: params.isError,
+      content: [
+        {
+          type: "toolResult",
+          toolCallId: params.id,
+          toolUseId: params.id,
+          tool_use_id: params.id,
+          content: text,
+          text,
+        },
+      ],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
   }
 
   private isNotificationForTurn(params: JsonObject): boolean {
@@ -1268,6 +1412,22 @@ function itemOutputText(item: CodexThreadItem): string | undefined {
   return undefined;
 }
 
+function itemTranscriptResultText(item: CodexThreadItem): string | undefined {
+  const output = itemOutputText(item);
+  if (output) {
+    return output;
+  }
+  const result = itemToolResult(item).result;
+  return result ? stringifyJsonValue(result) : itemStatus(item);
+}
+
+function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
 function collectDynamicToolContentText(contentItems: CodexThreadItem["contentItems"]): string {
   if (!Array.isArray(contentItems)) {
     return "";
@@ -1281,6 +1441,17 @@ function collectDynamicToolContentText(contentItems: CodexThreadItem["contentIte
       return text ? [text] : [];
     })
     .join("\n");
+}
+
+function truncateToolTranscriptText(text: string): string {
+  if (text.length <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+    return text;
+  }
+  return `${text.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}\n...(truncated)...`;
+}
+
+function toolResultStatusText(params: ToolTranscriptResultInput): string {
+  return params.isError ? `${params.name} failed` : `${params.name} completed`;
 }
 
 function stringifyJsonValue(value: unknown): string | undefined {
