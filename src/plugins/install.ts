@@ -450,6 +450,47 @@ async function installPluginFromManagedNpmRoot(
   const expectedPluginId = params.expectedPluginId;
   const npmRoot = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
   const installRoot = path.join(npmRoot, "node_modules", params.packageName);
+
+  // When the wizard uses mode="install" but the plugin dir already exists, check whether
+  // the installed version already satisfies the requested version before erroring.
+  // If installed >= requested, skip reinstall silently.
+  if (mode === "install" && params.npmResolution.version) {
+    const installedPkgJson = path.join(installRoot, "package.json");
+    const installedVersion = await fs
+      .readFile(installedPkgJson, "utf8")
+      .then((raw) => {
+        const parsed = JSON.parse(raw) as unknown;
+        return parsed &&
+          typeof parsed === "object" &&
+          "version" in parsed &&
+          typeof (parsed as { version: unknown }).version === "string"
+          ? (parsed as { version: string }).version
+          : null;
+      })
+      .catch(() => null);
+    if (installedVersion) {
+      const installedParsed = parseComparableSemver(installedVersion);
+      const requestedParsed = parseComparableSemver(params.npmResolution.version);
+      if (
+        installedParsed &&
+        requestedParsed &&
+        compareComparableSemver(installedParsed, requestedParsed) >= 0
+      ) {
+        logger.info?.(
+          `Plugin ${params.packageName}@${installedVersion} already installed (requested ${params.npmResolution.version}); skipping.`,
+        );
+        return {
+          ok: true,
+          pluginId: expectedPluginId ?? params.packageName,
+          targetDir: installRoot,
+          extensions: [],
+          npmResolution: params.npmResolution,
+          ...(params.integrityDrift ? { integrityDrift: params.integrityDrift } : {}),
+        };
+      }
+    }
+  }
+
   const effectiveMode = await resolveEffectiveInstallMode({
     runtime,
     requestedMode: mode,

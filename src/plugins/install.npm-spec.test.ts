@@ -1166,6 +1166,44 @@ describe("installPluginFromNpmSpec", () => {
     ).toBe(false);
   });
 
+  it("skips reinstall when installed version is newer than or equal to requested", async () => {
+    for (const [installedVersion, requestedVersion] of [
+      ["0.0.2", "0.0.1"],
+      ["0.0.1", "0.0.1"],
+    ]) {
+      runCommandWithTimeoutMock.mockReset();
+      const stateDir = suiteTempRootTracker.makeTempDir();
+      const npmRoot = path.join(stateDir, "npm");
+      const installRoot = path.join(npmRoot, "node_modules", "@openclaw", "voice-call");
+      fs.mkdirSync(installRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(installRoot, "package.json"),
+        JSON.stringify({ name: "@openclaw/voice-call", version: installedVersion }),
+        "utf-8",
+      );
+      mockNpmViewMetadataResult(runCommandWithTimeoutMock, {
+        name: "@openclaw/voice-call",
+        version: requestedVersion,
+        integrity: "sha512-plugin-test",
+        shasum: "pluginshasum",
+      });
+
+      const result = await installPluginFromNpmSpec({
+        spec: `@openclaw/voice-call@${requestedVersion}`,
+        npmDir: npmRoot,
+        mode: "install",
+        logger: { info: () => {}, warn: () => {} },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(
+        runCommandWithTimeoutMock.mock.calls.some(
+          (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "install",
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("allows duplicate npm installs in update mode", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
