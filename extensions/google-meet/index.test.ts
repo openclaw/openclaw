@@ -3145,19 +3145,28 @@ describe("google-meet plugin", () => {
       respond,
     });
 
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          path: "/tabs/focus",
-          body: { targetId: "existing-meet-tab" },
-        }),
+    const focusCall = nodesInvoke.mock.calls.find(([rawCall]) => {
+      const call = requireRecord(rawCall, "node invoke");
+      const params = requireRecord(call.params, "node invoke params");
+      return params.path === "/tabs/focus";
+    });
+    if (!focusCall) {
+      throw new Error("Expected browser.proxy /tabs/focus node invoke");
+    }
+    expect(
+      requireRecord(requireRecord(focusCall[0], "focus node invoke").params, "focus params"),
+    ).toEqual({
+      method: "POST",
+      path: "/tabs/focus",
+      timeoutMs: 5000,
+      body: { targetId: "existing-meet-tab" },
+    });
+    expect(
+      nodesInvoke.mock.calls.some(([rawCall]) => {
+        const call = requireRecord(rawCall, "node invoke");
+        return requireRecord(call.params, "node invoke params").path === "/tabs/open";
       }),
-    );
-    expect(nodesInvoke).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ path: "/tabs/open" }),
-      }),
-    );
+    ).toBe(false);
   });
 
   it("recovers and inspects an existing Meet tab without opening a new one", async () => {
@@ -3213,7 +3222,7 @@ describe("google-meet plugin", () => {
       execute: (
         id: string,
         params: unknown,
-      ) => Promise<{ details: { found?: boolean; browser?: unknown } }>;
+      ) => Promise<{ details: { found?: boolean; targetId?: string; browser?: unknown } }>;
     };
 
     const result = await tool.execute("id", {
@@ -3221,27 +3230,33 @@ describe("google-meet plugin", () => {
       url: "https://meet.google.com/abc-defg-hij",
     });
 
-    expect(result.details).toMatchObject({
-      found: true,
-      targetId: "existing-meet-tab",
-      browser: {
-        manualActionRequired: true,
-        manualActionReason: "meet-admission-required",
-      },
+    expect(result.details.found).toBe(true);
+    expect(result.details.targetId).toBe("existing-meet-tab");
+    const browser = requireRecord(result.details.browser, "recovered browser state");
+    expect(browser.manualActionRequired).toBe(true);
+    expect(browser.manualActionReason).toBe("meet-admission-required");
+    const focusCall = nodesInvoke.mock.calls.find(([rawCall]) => {
+      const call = requireRecord(rawCall, "node invoke");
+      const params = requireRecord(call.params, "node invoke params");
+      return params.path === "/tabs/focus";
     });
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          path: "/tabs/focus",
-          body: { targetId: "existing-meet-tab" },
-        }),
+    if (!focusCall) {
+      throw new Error("Expected browser.proxy /tabs/focus node invoke");
+    }
+    expect(
+      requireRecord(requireRecord(focusCall[0], "focus node invoke").params, "focus params"),
+    ).toEqual({
+      method: "POST",
+      path: "/tabs/focus",
+      timeoutMs: 5000,
+      body: { targetId: "existing-meet-tab" },
+    });
+    expect(
+      nodesInvoke.mock.calls.some(([rawCall]) => {
+        const call = requireRecord(rawCall, "node invoke");
+        return requireRecord(call.params, "node invoke params").path === "/tabs/open";
       }),
-    );
-    expect(nodesInvoke).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ path: "/tabs/open" }),
-      }),
-    );
+    ).toBe(false);
   });
 
   it("recovers and inspects an existing local Chrome Meet tab", async () => {
@@ -3288,7 +3303,9 @@ describe("google-meet plugin", () => {
       execute: (
         id: string,
         params: unknown,
-      ) => Promise<{ details: { transport?: string; found?: boolean; browser?: unknown } }>;
+      ) => Promise<{
+        details: { transport?: string; found?: boolean; targetId?: string; browser?: unknown };
+      }>;
     };
 
     const result = await tool.execute("id", {
@@ -3296,21 +3313,22 @@ describe("google-meet plugin", () => {
       url: "https://meet.google.com/abc-defg-hij",
     });
 
-    expect(result.details).toMatchObject({
-      transport: "chrome",
-      found: true,
-      targetId: "local-meet-tab",
-      browser: {
-        manualActionRequired: true,
-        manualActionReason: "meet-admission-required",
-      },
-    });
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "browser.request",
-      expect.any(Object),
-      expect.objectContaining({ method: "POST", path: "/tabs/focus" }),
-      { progress: false },
+    expect(result.details.transport).toBe("chrome");
+    expect(result.details.found).toBe(true);
+    expect(result.details.targetId).toBe("local-meet-tab");
+    const browser = requireRecord(result.details.browser, "recovered browser state");
+    expect(browser.manualActionRequired).toBe(true);
+    expect(browser.manualActionReason).toBe("meet-admission-required");
+    const focusCall = callGatewayFromCli.mock.calls.find(
+      ([, , request]) => requireRecord(request, "browser request").path === "/tabs/focus",
     );
+    if (!focusCall) {
+      throw new Error("Expected browser /tabs/focus request");
+    }
+    expect(focusCall[0]).toBe("browser.request");
+    expect(requireRecord(focusCall[2], "focus request").method).toBe("POST");
+    expect(requireRecord(focusCall[2], "focus request").path).toBe("/tabs/focus");
+    expect(focusCall[3]).toEqual({ progress: false });
     expect(nodesInvoke).not.toHaveBeenCalled();
   });
 
@@ -3338,13 +3356,15 @@ describe("google-meet plugin", () => {
       message: "Say exactly: hello.",
     });
 
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "googlemeet.chrome",
-        params: expect.objectContaining({ action: "start" }),
-      }),
-    );
-    expect(result.details).toMatchObject({ createdSession: true });
+    const startCall = nodesInvoke.mock.calls.find(([rawCall]) => {
+      const call = requireRecord(rawCall, "node invoke");
+      const params = requireRecord(call.params, "node invoke params");
+      return call.command === "googlemeet.chrome" && params.action === "start";
+    });
+    if (!startCall) {
+      throw new Error("Expected googlemeet.chrome start node invoke");
+    }
+    expect(result.details.createdSession).toBe(true);
   });
 
   it("refreshes realtime browser state in status after a delayed Meet join", async () => {
