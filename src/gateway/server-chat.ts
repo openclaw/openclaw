@@ -1,3 +1,4 @@
+import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -38,6 +39,35 @@ export type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+
+function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown }>(payload: T): T {
+  const data = payload.data;
+  if (!data || typeof data !== "object") {
+    return payload;
+  }
+  const record = data as Record<string, unknown>;
+  if (record.name !== "tool_search_code") {
+    return payload;
+  }
+  const target = resolveToolSearchCodeDisplayTarget(record.args);
+  const projectedName = target?.toolName;
+  if (!projectedName || projectedName === "tool_search_code") {
+    return payload;
+  }
+
+  // Channel/node subscribers render from event data, not the richer display
+  // helper used by Control UI. Project obvious bridge calls so verbose
+  // surfaces name the concrete tool while keeping the bridge identity available.
+  const projectedData: Record<string, unknown> = { ...record, name: projectedName };
+  if (target.detail) {
+    projectedData.args = { detail: target.detail };
+  }
+  if (target.bridgeVerb) {
+    projectedData.bridgeToolName = "tool_search_code";
+    projectedData.bridgeVerb = target.bridgeVerb;
+  }
+  return { ...payload, data: projectedData };
+}
 
 function resolveHeartbeatAckMaxChars(): number {
   try {
@@ -694,7 +724,10 @@ export function createAgentEventHandler({
           sessionKey,
           "agent",
           isToolEvent
-            ? { ...channelToolPayload, ...buildSessionEventSnapshot(sessionKey) }
+            ? projectToolSearchCodeEventForChannelPayload({
+                ...channelToolPayload,
+                ...buildSessionEventSnapshot(sessionKey),
+              })
             : agentPayload,
         );
       }
