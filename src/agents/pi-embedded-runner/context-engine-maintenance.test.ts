@@ -123,7 +123,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: sqliteTranscript("session-1"),
+      transcriptLocator: sqliteTranscript("session-1"),
       runtimeContext: { workspaceDir: "/tmp/workspace" },
     });
 
@@ -163,7 +163,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: sqliteTranscript("session-1"),
+      transcriptLocator: sqliteTranscript("session-1"),
       sessionManager,
     });
 
@@ -218,7 +218,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
         sessionId: "session-rewrite-handoff",
         sessionKey,
-        sessionFile: sqliteTranscript("session-rewrite-handoff"),
+        transcriptLocator: sqliteTranscript("session-rewrite-handoff"),
         deferTranscriptRewriteToSessionLane: true,
       });
 
@@ -323,7 +323,7 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: sqliteTranscript("session-1"),
+      transcriptLocator: sqliteTranscript("session-1"),
       reason: "turn",
       runtimeContext: { workspaceDir: "/tmp/workspace" },
     });
@@ -337,7 +337,7 @@ describe("runContextEngineMaintenance", () => {
     expectRecordFields(maintainParams, {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: sqliteTranscript("session-1"),
+      transcriptLocator: sqliteTranscript("session-1"),
     });
     expect(
       requireRecord(maintainParams.runtimeContext, "maintain runtime context").workspaceDir,
@@ -396,7 +396,7 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
-      sessionFile: sqliteTranscript("session-background-file-rewrite"),
+      transcriptLocator: sqliteTranscript("session-background-file-rewrite"),
       reason: "turn",
       executionMode: "background",
       sessionManager,
@@ -482,7 +482,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-1",
           sessionKey,
-          sessionFile: sqliteTranscript("session-1"),
+          transcriptLocator: sqliteTranscript("session-1"),
           reason: "turn",
           runtimeContext: {
             workspaceDir: "/tmp/workspace",
@@ -518,7 +518,7 @@ describe("runContextEngineMaintenance", () => {
         expectRecordFields(maintainParams, {
           sessionId: "session-1",
           sessionKey,
-          sessionFile: sqliteTranscript("session-1"),
+          transcriptLocator: sqliteTranscript("session-1"),
         });
         expectRecordFields(requireRecord(maintainParams.runtimeContext, "runtime context"), {
           workspaceDir: "/tmp/workspace",
@@ -603,14 +603,14 @@ describe("runContextEngineMaintenance", () => {
             contextEngine: backgroundEngine,
             sessionId: "session-2",
             sessionKey,
-            sessionFile: sqliteTranscript("session-2"),
+            transcriptLocator: sqliteTranscript("session-2"),
             reason: "turn",
           }),
           runContextEngineMaintenance({
             contextEngine: backgroundEngine,
             sessionId: "session-2",
             sessionKey,
-            sessionFile: sqliteTranscript("session-2"),
+            transcriptLocator: sqliteTranscript("session-2"),
             reason: "turn",
           }),
         ]);
@@ -682,7 +682,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-rerun",
           sessionKey,
-          sessionFile: sqliteTranscript("session-rerun"),
+          transcriptLocator: sqliteTranscript("session-rerun"),
           reason: "turn",
         });
 
@@ -692,7 +692,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-rerun",
           sessionKey,
-          sessionFile: sqliteTranscript("session-rerun"),
+          transcriptLocator: sqliteTranscript("session-rerun"),
           reason: "turn",
         });
 
@@ -760,7 +760,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-legacy",
           sessionKey,
-          sessionFile: sqliteTranscript("session-legacy"),
+          transcriptLocator: sqliteTranscript("session-legacy"),
           reason: "turn",
         });
 
@@ -823,7 +823,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-enqueue-reject",
           sessionKey,
-          sessionFile: sqliteTranscript("session-enqueue-reject"),
+          transcriptLocator: sqliteTranscript("session-enqueue-reject"),
           reason: "turn",
         });
         await flushAsyncWork();
@@ -892,7 +892,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-3",
           sessionKey,
-          sessionFile: sqliteTranscript("session-3"),
+          transcriptLocator: sqliteTranscript("session-3"),
           reason: "turn",
         });
 
@@ -993,7 +993,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-rewrite-priority",
           sessionKey,
-          sessionFile: sqliteTranscript("session-rewrite-priority"),
+          transcriptLocator: sqliteTranscript("session-rewrite-priority"),
           reason: "turn",
         });
 
@@ -1066,7 +1066,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-fast",
           sessionKey,
-          sessionFile: sqliteTranscript("session-fast"),
+          transcriptLocator: sqliteTranscript("session-fast"),
           reason: "turn",
         });
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
@@ -1121,7 +1121,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-long",
           sessionKey,
-          sessionFile: sqliteTranscript("session-long"),
+          transcriptLocator: sqliteTranscript("session-long"),
           reason: "turn",
         });
 
@@ -1193,7 +1193,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-throttle",
           sessionKey,
-          sessionFile: sqliteTranscript("session-throttle"),
+          transcriptLocator: sqliteTranscript("session-throttle"),
           reason: "turn",
         });
 
@@ -1262,7 +1262,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-fail",
           sessionKey,
-          sessionFile: sqliteTranscript("session-fail"),
+          transcriptLocator: sqliteTranscript("session-fail"),
           reason: "turn",
         });
         await waitForAssertion(() =>

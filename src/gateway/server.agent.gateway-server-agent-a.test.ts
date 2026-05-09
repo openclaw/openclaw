@@ -445,7 +445,7 @@ describe("gateway server agent", () => {
     ];
     await resetGatewayModelCatalogCacheForTest();
 
-    await setTestSessionStore({
+    await seedTestSessionRows({
       agentId: "vision",
       entries: {
         main: {

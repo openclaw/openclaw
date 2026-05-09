@@ -59,7 +59,14 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
     };
   }
 
-  return { makeStorePath };
+  async function makeStoreKey() {
+    return {
+      storeKey: `case-${caseId++}`,
+      cleanup: async () => {},
+    };
+  }
+
+  return { makeStorePath, makeStoreKey };
 }
 
 export async function writeCronStoreSnapshot(params: { storePath?: string; jobs: CronJob[] }) {
