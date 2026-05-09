@@ -359,6 +359,8 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
     );
+    expect(workflow).not.toContain("openai-ws-stream-live-e2e");
+    expect(workflow).not.toContain("src/agents/openai-ws-stream.e2e.test.ts");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-deepseek-fireworks");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-opencode-openrouter");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai-zai");
@@ -370,7 +372,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
-    expect((workflow.match(/service_tier=\\"priority\\"/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect((workflow.match(/service_tier=\\"fast\\"/g) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(workflow).not.toContain(
       'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
     );
@@ -552,7 +554,7 @@ describe("package artifact reuse", () => {
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );
     expect(workflow).toContain(
-      "package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}",
+      "package_sha256: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.package_sha256 || '' }}",
     );
     expect(workflow).toContain("suite_profile: custom");
     expect(workflow).toContain(

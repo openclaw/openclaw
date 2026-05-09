@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
+const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
+
 vi.mock("../model-suppression.js", () => {
   // Mirrors the canonical manifest-driven suppression in
   // extensions/qwen/openclaw.plugin.json and src/plugins/manifest-model-suppression.ts.
@@ -140,6 +142,10 @@ vi.mock("../pi-model-discovery.js", () => ({
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
+vi.mock("./model.static-catalog.js", () => ({
+  resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
+}));
+
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
 const mockGetOpenRouterModelCapabilities = vi.fn<
@@ -180,6 +186,7 @@ beforeEach(() => {
   mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
   mockLoadOpenRouterModelCapabilities.mockReset();
   mockLoadOpenRouterModelCapabilities.mockResolvedValue();
+  resolveBundledStaticCatalogModelMock.mockReset();
 });
 
 function createRuntimeHooks() {
@@ -261,6 +268,70 @@ describe("resolveModel", () => {
       provider: "openrouter",
       id: "openrouter/auto",
     });
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("resolves opt-in bundled static catalog rows while skipping PI discovery", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      name: "Mistral Medium 3.5",
+      api: "openai-completions",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 8192,
+    });
+
+    const result = await resolveModelAsync(
+      "mistral",
+      "mistral-medium-3-5",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+        skipPiDiscovery: true,
+      },
+    );
+
+    expect(expectResolvedModel(result)).toMatchObject({
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      api: "openai-completions",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      contextWindow: 262144,
+      maxTokens: 8192,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("does not use bundled static catalog rows unless the caller opts in", async () => {
+    const result = await resolveModelAsync(
+      "mistral",
+      "mistral-medium-3-5",
+      "/tmp/agent",
+      undefined,
+      {
+        runtimeHooks: createRuntimeHooks(),
+        skipPiDiscovery: true,
+      },
+    );
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: mistral/mistral-medium-3-5");
+    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });

@@ -124,6 +124,7 @@ describe("collectCodexRouteWarnings", () => {
       cfg: {
         agents: {
           defaults: {
+            agentRuntime: { id: "codex" },
             model: {
               primary: "openai-codex/gpt-5.5",
               fallbacks: ["openai-codex/gpt-5.4", "anthropic/claude-sonnet-4-6"],
@@ -191,7 +192,11 @@ describe("collectCodexRouteWarnings", () => {
     });
 
     expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toEqual([expect.stringContaining("Repaired Codex model routes")]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Repaired Codex model routes"),
+      "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+      "Removed agents.list.worker.agentRuntime; runtime is now provider/model scoped.",
+    ]);
     expect(result.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.5",
       fallbacks: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
@@ -210,8 +215,8 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.agents?.list?.[0]).toMatchObject({
       id: "worker",
       model: "openai/gpt-5.4",
-      agentRuntime: { id: "codex" },
     });
+    expect(result.cfg.agents?.list?.[0]?.agentRuntime).toBeUndefined();
     expect(result.cfg.channels?.modelByChannel?.telegram?.default).toBe("openai/gpt-5.4");
     expect(result.cfg.hooks?.mappings?.[0]?.model).toBe("openai/gpt-5.4-mini");
     expect(result.cfg.hooks?.gmail?.model).toBe("openai/gpt-5.4");

@@ -23,7 +23,6 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
@@ -42,7 +41,7 @@ import {
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { readStringParam } from "./common.js";
+import { normalizeToolModelOverride, readStringParam } from "./common.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
@@ -272,11 +271,8 @@ async function resolveModelOverride(params: {
       isDefault: boolean;
     }
 > {
-  const raw = params.raw.trim();
+  const raw = normalizeToolModelOverride(params.raw);
   if (!raw) {
-    return { kind: "reset" };
-  }
-  if (normalizeOptionalLowercaseString(raw) === "default") {
     return { kind: "reset" };
   }
 

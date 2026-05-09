@@ -268,6 +268,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(600);
     expect(source).toContain("buildReleaseProviderConfigOverride");
     expect(source).toContain("models: []");
+    expect(source).toContain('agentRuntime: { id: "pi" }');
     expect(source).toContain('"--merge"');
     expect(source).toContain(providerOverride);
     expect(source).not.toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");

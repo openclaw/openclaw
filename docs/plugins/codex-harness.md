@@ -409,20 +409,20 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.4 mini
 - GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.129.0`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.130.0`. A `model/list` probe
 against that bundled app-server returned:
 
-| Model id            | Default | Hidden | Input modalities | Reasoning efforts        |
-| ------------------- | ------- | ------ | ---------------- | ------------------------ |
-| `gpt-5.5`           | Yes     | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4`           | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4-mini`      | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex`     | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.2`           | No      | No     | text, image      | low, medium, high, xhigh |
-| `codex-auto-review` | No      | Yes    | text, image      | low, medium, high, xhigh |
+| Model id              | Default | Hidden | Input modalities | Reasoning efforts        |
+| --------------------- | ------- | ------ | ---------------- | ------------------------ |
+| `gpt-5.5`             | Yes     | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4`             | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4-mini`        | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.3-codex`       | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.3-codex-spark` | No      | No     | text             | low, medium, high, xhigh |
+| `gpt-5.2`             | No      | No     | text, image      | low, medium, high, xhigh |
 
-Hidden models are returned by the app-server catalog for internal or specialized
-flows, but they are not normal model-picker choices.
+Hidden models can be returned by the app-server catalog for internal or
+specialized flows, but they are not normal model-picker choices.
 
 You can tune discovery under `plugins.entries.codex.config.discovery`:
 
@@ -656,10 +656,15 @@ Supported `appServer` fields:
 | `serviceTier`                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                      |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
-`appServer.requestTimeoutMs`: each Codex `item/tool/call` request must receive
-an OpenClaw response within 30 seconds. On timeout, OpenClaw aborts the tool
-signal where supported and returns a failed dynamic-tool response to Codex so
-the turn can continue instead of leaving the session in `processing`.
+`appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 30 second
+OpenClaw watchdog by default. A positive per-call `timeoutMs` argument extends
+or shortens that specific tool budget. The `image_generate` tool also uses
+`agents.defaults.imageGenerationModel.timeoutMs` when the tool call does not
+provide its own timeout, and the media-understanding `image` tool uses
+`tools.media.image.timeoutSeconds` or its 60 second media default. Dynamic tool
+budgets are capped at 600000 ms. On timeout, OpenClaw aborts the tool signal
+where supported and returns a failed dynamic-tool response to Codex so the turn
+can continue instead of leaving the session in `processing`.
 
 After OpenClaw responds to a Codex turn-scoped app-server request, the harness
 also expects Codex to finish the native turn with `turn/completed`. If the

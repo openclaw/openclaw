@@ -17,6 +17,7 @@ import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   cancelTaskById,
   createTaskRecord,
@@ -59,6 +60,7 @@ import {
   sweepTaskRegistry,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
+import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const hoisted = vi.hoisted(() => {
@@ -261,45 +263,120 @@ async function flushAsyncWork(times = 4) {
   }
 }
 
-async function withTaskRegistryTempDir<T>(run: (root: string) => Promise<T>): Promise<T> {
+function createInMemoryTaskRegistryStore() {
+  const tasks = new Map<string, TaskRecord>();
+  const deliveryStates = new Map<string, TaskDeliveryState>();
+  return {
+    loadSnapshot: () => ({
+      tasks: new Map(tasks),
+      deliveryStates: new Map(deliveryStates),
+    }),
+    saveSnapshot: (snapshot: {
+      tasks: Map<string, TaskRecord>;
+      deliveryStates: Map<string, TaskDeliveryState>;
+    }) => {
+      tasks.clear();
+      deliveryStates.clear();
+      for (const [taskId, task] of snapshot.tasks.entries()) {
+        tasks.set(taskId, task);
+      }
+      for (const [taskId, state] of snapshot.deliveryStates.entries()) {
+        deliveryStates.set(taskId, state);
+      }
+    },
+    upsertTaskWithDeliveryState: (params: {
+      task: TaskRecord;
+      deliveryState?: TaskDeliveryState;
+    }) => {
+      tasks.set(params.task.taskId, params.task);
+      if (params.deliveryState) {
+        deliveryStates.set(params.deliveryState.taskId, params.deliveryState);
+      } else {
+        deliveryStates.delete(params.task.taskId);
+      }
+    },
+    upsertTask: (task: TaskRecord) => {
+      tasks.set(task.taskId, task);
+    },
+    deleteTaskWithDeliveryState: (taskId: string) => {
+      tasks.delete(taskId);
+      deliveryStates.delete(taskId);
+    },
+    deleteTask: (taskId: string) => {
+      tasks.delete(taskId);
+      deliveryStates.delete(taskId);
+    },
+    upsertDeliveryState: (state: TaskDeliveryState) => {
+      deliveryStates.set(state.taskId, state);
+    },
+    deleteDeliveryState: (taskId: string) => {
+      deliveryStates.delete(taskId);
+    },
+    close: () => {},
+  };
+}
+
+function createInMemoryTaskFlowRegistryStore() {
+  const flows = new Map<string, TaskFlowRecord>();
+  return {
+    loadSnapshot: () => ({
+      flows: new Map(flows),
+    }),
+    saveSnapshot: (snapshot: { flows: Map<string, TaskFlowRecord> }) => {
+      flows.clear();
+      for (const [flowId, flow] of snapshot.flows.entries()) {
+        flows.set(flowId, flow);
+      }
+    },
+    upsertFlow: (flow: TaskFlowRecord) => {
+      flows.set(flow.flowId, flow);
+    },
+    deleteFlow: (flowId: string) => {
+      flows.delete(flowId);
+    },
+    close: () => {},
+  };
+}
+
+function configureInMemoryTaskStoresForTests() {
+  configureTaskRegistryRuntime({
+    store: createInMemoryTaskRegistryStore(),
+  });
+  configureTaskFlowRegistryRuntime({
+    store: createInMemoryTaskFlowRegistryStore(),
+  });
+}
+
+function resetTaskRegistryMemoryForTest(opts?: { persist?: boolean }) {
+  resetTaskRegistryForTests(opts);
+  configureTaskRegistryRuntime({
+    store: createInMemoryTaskRegistryStore(),
+  });
+}
+
+async function withTaskRegistryTempDir<T>(
+  run: (root: string) => Promise<T>,
+  options?: { durableStore?: boolean },
+): Promise<T> {
   return await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    if (options?.durableStore !== true) {
+      configureInMemoryTaskStoresForTests();
+    }
     try {
       return await run(root);
     } finally {
       // Close both sqlite-backed registries before Windows temp-dir cleanup tries to remove them.
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
 }
 
 function configureInMemoryTaskStoresForLinkValidationTests() {
-  configureTaskRegistryRuntime({
-    store: {
-      loadSnapshot: () => ({
-        tasks: new Map(),
-        deliveryStates: new Map(),
-      }),
-      saveSnapshot: () => {},
-      upsertTask: () => {},
-      deleteTask: () => {},
-      close: () => {},
-    },
-  });
-  configureTaskFlowRegistryRuntime({
-    store: {
-      loadSnapshot: () => ({
-        flows: new Map(),
-      }),
-      saveSnapshot: () => {},
-      upsertFlow: () => {},
-      deleteFlow: () => {},
-      close: () => {},
-    },
-  });
+  configureInMemoryTaskStoresForTests();
 }
 
 describe("task-registry", () => {
@@ -339,7 +416,7 @@ describe("task-registry", () => {
   it("updates task status from lifecycle events", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       createTaskRecord({
         runtime: "acp",
@@ -380,7 +457,7 @@ describe("task-registry", () => {
   it("ignores late agent events for operator-cancelled tasks", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       const task = createTaskRecord({
         runtime: "cli",
@@ -430,7 +507,7 @@ describe("task-registry", () => {
   it("keeps stronger run-scoped terminal states when a late success arrives", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       createTaskRecord({
         runtime: "cli",
@@ -471,7 +548,7 @@ describe("task-registry", () => {
   it("does not downgrade failed run-scoped tasks when a late success arrives", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       createTaskRecord({
         runtime: "cli",
@@ -511,7 +588,7 @@ describe("task-registry", () => {
   it("lets delivery failure upgrade a lifecycle success", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       createTaskRecord({
         runtime: "cli",
@@ -552,7 +629,7 @@ describe("task-registry", () => {
   it("summarizes task pressure by status and runtime", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       createTaskRecord({
         runtime: "acp",
@@ -609,7 +686,7 @@ describe("task-registry", () => {
   it("rejects cross-owner parent flow links during task creation", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests({ persist: false });
+      resetTaskRegistryMemoryForTest({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       configureInMemoryTaskStoresForLinkValidationTests();
 
@@ -635,7 +712,7 @@ describe("task-registry", () => {
   it("rejects system-scoped parent flow links during task creation", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests({ persist: false });
+      resetTaskRegistryMemoryForTest({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       configureInMemoryTaskStoresForLinkValidationTests();
 
@@ -662,7 +739,7 @@ describe("task-registry", () => {
   it("rejects cross-owner flow links for existing tasks", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests({ persist: false });
+      resetTaskRegistryMemoryForTest({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       configureInMemoryTaskStoresForLinkValidationTests();
 
@@ -695,7 +772,7 @@ describe("task-registry", () => {
   it("rejects parent flow links once cancellation has been requested", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests({ persist: false });
+      resetTaskRegistryMemoryForTest({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       configureInMemoryTaskStoresForLinkValidationTests();
 
@@ -729,7 +806,7 @@ describe("task-registry", () => {
   it("rejects parent flow links for terminal flows", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests({ persist: false });
+      resetTaskRegistryMemoryForTest({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       configureInMemoryTaskStoresForLinkValidationTests();
 
@@ -756,7 +833,7 @@ describe("task-registry", () => {
   it("delivers ACP completion to the requester channel when a delivery origin exists", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "notifychat",
         to: "notifychat:123",
@@ -815,7 +892,7 @@ describe("task-registry", () => {
   it("records delivery failure and queues a session fallback when direct delivery misses", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       hoisted.sendMessageMock.mockRejectedValueOnce(new Error("notifychat unavailable"));
 
       createTaskRecord({
@@ -862,7 +939,7 @@ describe("task-registry", () => {
   it("still wakes the parent when blocked delivery misses the outward channel", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       hoisted.sendMessageMock.mockRejectedValueOnce(new Error("notifychat unavailable"));
 
       createTaskRecord({
@@ -900,7 +977,7 @@ describe("task-registry", () => {
   it("marks internal fallback delivery as session queued instead of delivered", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       createTaskRecord({
         runtime: "acp",
@@ -939,7 +1016,7 @@ describe("task-registry", () => {
   it("wakes the parent for blocked tasks even when delivery falls back to the session", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       createTaskRecord({
         runtime: "acp",
@@ -972,7 +1049,7 @@ describe("task-registry", () => {
   it("does not include internal progress detail in the terminal channel message", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "notifychat",
         to: "notifychat:123",
@@ -1024,7 +1101,7 @@ describe("task-registry", () => {
   it("surfaces blocked outcomes separately from completed tasks", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "notifychat",
         to: "notifychat:123",
@@ -1066,7 +1143,7 @@ describe("task-registry", () => {
   it("does not queue an unblock follow-up for ordinary completed tasks", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "notifychat",
         to: "notifychat:123",
@@ -1106,7 +1183,7 @@ describe("task-registry", () => {
   it("keeps distinct task records when different producers share a runId", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       createTaskRecord({
         runtime: "cli",
@@ -1141,7 +1218,7 @@ describe("task-registry", () => {
   it("scopes shared-run lifecycle events to the matching session", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       const victimTask = createTaskRecord({
         runtime: "acp",
@@ -1192,7 +1269,7 @@ describe("task-registry", () => {
   it("suppresses duplicate ACP delivery when a preferred spawned task shares the runId", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "notifychat",
         to: "notifychat:123",
@@ -1247,7 +1324,7 @@ describe("task-registry", () => {
   it("does not suppress ACP delivery across different requester scopes when runIds collide", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       const victimTask = createTaskRecord({
         runtime: "acp",
@@ -1299,7 +1376,7 @@ describe("task-registry", () => {
   it("adopts preferred ACP spawn metadata when collapsing onto an earlier direct record", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       const directTask = createTaskRecord({
         runtime: "acp",
@@ -1345,7 +1422,7 @@ describe("task-registry", () => {
   it("collapses ACP run-owned task creation onto the existing spawned task", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       const spawnedTask = createTaskRecord({
         runtime: "acp",
@@ -1387,7 +1464,7 @@ describe("task-registry", () => {
   it("delivers a terminal ACP update only once when multiple notifiers race", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "notifychat",
         to: "notifychat:123",
@@ -1431,37 +1508,40 @@ describe("task-registry", () => {
   });
 
   it("restores persisted tasks from disk on the next lookup", async () => {
-    await withTaskRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+    await withTaskRegistryTempDir(
+      async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryForTests();
 
-      const task = createTaskRecord({
-        runtime: "subagent",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        childSessionKey: "agent:main:subagent:child",
-        runId: "run-restore",
-        task: "Restore me",
-        status: "running",
-        deliveryStatus: "pending",
-      });
+        const task = createTaskRecord({
+          runtime: "subagent",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey: "agent:main:subagent:child",
+          runId: "run-restore",
+          task: "Restore me",
+          status: "running",
+          deliveryStatus: "pending",
+        });
 
-      resetTaskRegistryForTests({
-        persist: false,
-      });
+        resetTaskRegistryForTests({
+          persist: false,
+        });
 
-      expect(resolveTaskForLookupToken(task.taskId)).toMatchObject({
-        taskId: task.taskId,
-        runId: "run-restore",
-        task: "Restore me",
-      });
-    });
+        expect(resolveTaskForLookupToken(task.taskId)).toMatchObject({
+          taskId: task.taskId,
+          runId: "run-restore",
+          task: "Restore me",
+        });
+      },
+      { durableStore: true },
+    );
   });
 
   it("indexes tasks by session key for latest and list lookups", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests({ persist: false });
+      resetTaskRegistryMemoryForTest({ persist: false });
       const nowSpy = vi.spyOn(Date, "now");
       nowSpy.mockReturnValue(1_700_000_000_000);
 
@@ -1497,7 +1577,7 @@ describe("task-registry", () => {
   it("infers agent ids for session-scoped tasks", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests({ persist: false });
+      resetTaskRegistryMemoryForTest({ persist: false });
 
       const created = createTaskRecord({
         runtime: "cli",
@@ -1520,7 +1600,7 @@ describe("task-registry", () => {
   it("projects inspection-time orphaned tasks as lost without mutating the registry", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       const task = createTaskRecord({
         runtime: "acp",
@@ -1553,7 +1633,7 @@ describe("task-registry", () => {
   it("marks orphaned tasks lost with cleanupAfter in a single maintenance pass", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const now = Date.now();
 
       const task = createTaskRecord({
@@ -1595,7 +1675,7 @@ describe("task-registry", () => {
   it("closes terminal parent-owned one-shot ACP sessions during maintenance", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const now = Date.now();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:claude:acp:stale-oneshot";
@@ -1651,7 +1731,7 @@ describe("task-registry", () => {
   it("does not relist task records for each terminal ACP cleanup check", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const now = Date.now();
       const tasks = Array.from({ length: 20 }, (_, index) => {
         const task = createTaskRecord({
@@ -1692,7 +1772,7 @@ describe("task-registry", () => {
   it("keeps terminal ACP cleanup from closing a child session with fresh active work", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const now = Date.now();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:claude:acp:shared-child";
@@ -1748,7 +1828,7 @@ describe("task-registry", () => {
   it("closes stale terminal persistent ACP sessions only when no binding remains", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const now = Date.now();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:claude:acp:stale-persistent";
@@ -1801,7 +1881,7 @@ describe("task-registry", () => {
   it("keeps terminal persistent ACP sessions that still have an active binding", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const now = Date.now();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:claude:acp:bound-persistent";
@@ -1848,7 +1928,7 @@ describe("task-registry", () => {
   it("closes orphaned parent-owned one-shot ACP sessions after task records are gone", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:claude:acp:orphaned-oneshot";
       const closeAcpSession = vi.fn().mockResolvedValue(undefined);
@@ -1885,7 +1965,7 @@ describe("task-registry", () => {
   it("keeps orphaned parent-owned persistent ACP sessions while a binding is active", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:claude:acp:bound-orphaned-persistent";
       const closeAcpSession = vi.fn().mockResolvedValue(undefined);
@@ -1916,7 +1996,7 @@ describe("task-registry", () => {
   it("closes orphaned parent-owned persistent ACP sessions without active bindings", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const parentSessionKey = "agent:main:telegram:direct:owner";
       const childSessionKey = "agent:claude:acp:unbound-orphaned-persistent";
       const closeAcpSession = vi.fn().mockResolvedValue(undefined);
@@ -1953,7 +2033,7 @@ describe("task-registry", () => {
   it("prunes old terminal tasks during maintenance sweeps", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       const task = createTaskRecord({
         runtime: "cli",
@@ -1985,7 +2065,7 @@ describe("task-registry", () => {
   it("previews and repairs missing cleanup timestamps during maintenance", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const now = Date.now();
       configureTaskRegistryRuntime({
         store: {
@@ -2037,7 +2117,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       vi.useFakeTimers();
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const now = Date.now();
 
       const task = createTaskRecord({
@@ -2071,7 +2151,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       vi.useFakeTimers();
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
 
       const unhandled: unknown[] = [];
       const onUnhandledRejection = (reason: unknown) => {
@@ -2206,7 +2286,7 @@ describe("task-registry", () => {
   it("backdates createdAt when a task is created with an earlier startedAt", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
       const task = createTaskRecord({
@@ -2234,7 +2314,7 @@ describe("task-registry", () => {
   it("keeps timestamps monotonic when an update supplies an earlier startedAt", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
       const task = createTaskRecord({
@@ -2267,7 +2347,7 @@ describe("task-registry", () => {
   it("normalizes restored task timestamps before exposing them", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       configureTaskRegistryRuntime({
         store: {
           loadSnapshot: () => ({
@@ -2308,7 +2388,7 @@ describe("task-registry", () => {
   it("reloads from durable state instead of preserving stale in-memory tasks", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const now = Date.now();
       let durableTasks = new Map<string, ReturnType<typeof createTaskRecord>>();
       configureTaskRegistryRuntime({
@@ -2377,7 +2457,7 @@ describe("task-registry", () => {
   it("summarizes inspectable task audit findings", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       const now = Date.now();
       configureTaskRegistryRuntime({
         store: {
@@ -2427,7 +2507,7 @@ describe("task-registry", () => {
   it("delivers concise state-change updates only when notify policy requests them", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "guildchat",
         to: "guildchat:123",
@@ -2483,7 +2563,7 @@ describe("task-registry", () => {
   it("keeps background ACP progress off the foreground lane and only sends a terminal notify", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       resetSystemEventsForTest();
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "guildchat",
@@ -2557,7 +2637,7 @@ describe("task-registry", () => {
   it("delivers a concise terminal failure message without internal ACP chatter", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       resetSystemEventsForTest();
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "guildchat",
@@ -2608,7 +2688,7 @@ describe("task-registry", () => {
   it("emits concise state-change updates without surfacing raw ACP chatter", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryMemoryForTest();
       resetSystemEventsForTest();
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "guildchat",

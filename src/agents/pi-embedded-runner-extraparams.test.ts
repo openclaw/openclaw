@@ -2177,21 +2177,25 @@ describe("applyExtraParamsToAgent", () => {
       model,
     });
 
-    expect(effectiveExtraParams).toMatchObject({
-      transport: "websocket",
-      hookApplied: true,
-    });
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        context: expect.objectContaining({
-          model,
-          transport: "websocket",
-          agentDir: "/tmp/agent",
-          workspaceDir: "/tmp/workspace",
-        }),
-      }),
-    );
+    expect(effectiveExtraParams.transport).toBe("websocket");
+    expect(effectiveExtraParams.hookApplied).toBe(true);
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
+    const hookCall = resolveProviderExtraParamsForTransport.mock.calls[0]?.[0] as
+      | {
+          provider?: string;
+          context?: {
+            model?: unknown;
+            transport?: string;
+            agentDir?: string;
+            workspaceDir?: string;
+          };
+        }
+      | undefined;
+    expect(hookCall?.provider).toBe("openai");
+    expect(hookCall?.context?.model).toBe(model);
+    expect(hookCall?.context?.transport).toBe("websocket");
+    expect(hookCall?.context?.agentDir).toBe("/tmp/agent");
+    expect(hookCall?.context?.workspaceDir).toBe("/tmp/workspace");
   });
 
   it("keys prepared extra-param memoization by resolved model transport inputs", () => {
@@ -2299,17 +2303,13 @@ describe("applyExtraParamsToAgent", () => {
       resolvedTransport,
     });
 
-    expect(effectiveExtraParams).toMatchObject({
-      transport: "auto",
-      hookApplied: true,
-    });
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          transport: "websocket",
-        }),
-      }),
-    );
+    expect(effectiveExtraParams.transport).toBe("auto");
+    expect(effectiveExtraParams.hookApplied).toBe(true);
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
+    const hookCall = resolveProviderExtraParamsForTransport.mock.calls[0]?.[0] as
+      | { context?: { transport?: string } }
+      | undefined;
+    expect(hookCall?.context?.transport).toBe("websocket");
   });
 
   it("applies transport hook parallel_tool_calls patches to request payloads", () => {

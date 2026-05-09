@@ -393,6 +393,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
 - `params.extra_body`/`params.extraBody`: advanced pass-through JSON merged into `api: "openai-completions"` request bodies for OpenAI-compatible proxies. If it collides with generated request keys, the extra body wins; non-native completions routes still strip OpenAI-only `store` afterward.
 - `params.chat_template_kwargs`: vLLM/OpenAI-compatible chat-template arguments merged into top-level `api: "openai-completions"` request bodies. For `vllm/nemotron-3-*` with thinking off, the bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true`; explicit `chat_template_kwargs` override generated defaults, and `extra_body.chat_template_kwargs` still has final precedence. For vLLM Qwen thinking controls, set `params.qwenThinkingFormat` to `"chat-template"` or `"top-level"` on that model entry.
+- `compat.thinkingFormat`: OpenAI-compatible thinking payload style. Use `"qwen"` for Qwen-style top-level `enable_thinking`, or `"qwen-chat-template"` for `chat_template_kwargs.enable_thinking` on Qwen-family backends that support request-level chat-template kwargs, such as vLLM. OpenClaw maps disabled thinking to `false` and enabled thinking to `true`.
 - `compat.supportedReasoningEfforts`: per-model OpenAI-compatible reasoning effort list. Include `"xhigh"` for custom endpoints that truly accept it; OpenClaw then exposes `/think xhigh` in command menus, Gateway session rows, session patch validation, agent CLI validation, and `llm-task` validation for that configured provider/model. Use `compat.reasoningEffortMap` when the backend wants a provider-specific value for a canonical level.
 - `params.preserveThinking`: Z.AI-only opt-in for preserved thinking. When enabled and thinking is on, OpenClaw sends `thinking.clear_thinking: false` and replays prior `reasoning_content`; see [Z.AI thinking and preserved thinking](/providers/zai#thinking-and-preserved-thinking).
 - Runtime policy belongs on providers or models, not on `agents.defaults`. Use `models.providers.<provider>.agentRuntime` for provider-wide rules or `agents.defaults.models["provider/model"].agentRuntime` / `agents.list[].models["provider/model"].agentRuntime` for model-specific rules. OpenAI agent models on the official OpenAI provider select Codex by default.
@@ -483,6 +484,10 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
 - CLI backends are text-first; tools are always disabled.
 - Sessions supported when `sessionArg` is set.
 - Image pass-through supported when `imageArg` accepts file paths.
+- `reseedFromRawTranscriptWhenUncompacted: true` lets a backend recover safe
+  invalidated sessions from a bounded raw OpenClaw transcript tail before the
+  first compaction summary exists. Auth profile or credential-epoch changes
+  still never raw-reseed.
 
 ### `agents.defaults.systemPromptOverride`
 
@@ -1378,6 +1383,8 @@ Defaults for Talk mode (macOS/iOS/Android).
       },
       system: {},
     },
+    consultThinkingLevel: "low",
+    consultFastMode: true,
     speechLocale: "ru-RU",
     silenceTimeoutMs: 1500,
     interruptOnSpeech: true,
@@ -1405,6 +1412,8 @@ Defaults for Talk mode (macOS/iOS/Android).
 - `providers.*.voiceAliases` lets Talk directives use friendly names.
 - `providers.mlx.modelId` selects the Hugging Face repo used by the macOS local MLX helper. If omitted, macOS uses `mlx-community/Soprano-80M-bf16`.
 - macOS MLX playback runs through the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`; `OPENCLAW_MLX_TTS_BIN` overrides the helper path for development.
+- `consultThinkingLevel` controls the thinking level for the full OpenClaw agent run behind Control UI Talk realtime `openclaw_agent_consult` calls. Leave unset to preserve normal session/model behavior.
+- `consultFastMode` sets a one-shot fast-mode override for Control UI Talk realtime consults without changing the session's normal fast-mode setting.
 - `speechLocale` sets the BCP 47 locale id used by iOS/macOS Talk speech recognition. Leave unset to use the device default.
 - `silenceTimeoutMs` controls how long Talk mode waits after user silence before it sends the transcript. Unset keeps the platform default pause window (`700 ms on macOS and Android, 900 ms on iOS`).
 

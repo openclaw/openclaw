@@ -76,18 +76,17 @@ describe("openrouter-model-capabilities", () => {
       const module = await importOpenRouterModelCapabilities("top-level-max-tokens");
       await module.loadOpenRouterModelCapabilities("acme/top-level-max-completion");
 
-      expect(module.getOpenRouterModelCapabilities("acme/top-level-max-completion")).toMatchObject({
-        input: ["text", "image"],
-        reasoning: true,
-        contextWindow: 65432,
-        maxTokens: 12345,
-      });
-      expect(module.getOpenRouterModelCapabilities("acme/top-level-max-output")).toMatchObject({
-        input: ["text", "image"],
-        reasoning: false,
-        contextWindow: 54321,
-        maxTokens: 23456,
-      });
+      const maxCompletion = module.getOpenRouterModelCapabilities("acme/top-level-max-completion");
+      expect(maxCompletion?.input).toEqual(["text", "image"]);
+      expect(maxCompletion?.reasoning).toBe(true);
+      expect(maxCompletion?.contextWindow).toBe(65432);
+      expect(maxCompletion?.maxTokens).toBe(12345);
+
+      const maxOutput = module.getOpenRouterModelCapabilities("acme/top-level-max-output");
+      expect(maxOutput?.input).toEqual(["text", "image"]);
+      expect(maxOutput?.reasoning).toBe(false);
+      expect(maxOutput?.contextWindow).toBe(54321);
+      expect(maxOutput?.maxTokens).toBe(23456);
     });
   });
 

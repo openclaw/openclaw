@@ -19,6 +19,7 @@ import type {
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
+  RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
@@ -59,6 +60,7 @@ type OpenAIRealtimeVoiceProviderConfig = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   interruptResponseOnInputAudio?: boolean;
+  minBargeInAudioEndMs?: number;
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
@@ -73,6 +75,7 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   interruptResponseOnInputAudio?: boolean;
+  minBargeInAudioEndMs?: number;
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
@@ -84,6 +87,7 @@ const OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
   "Conversation already has an active response in progress:";
 const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
+const OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 
 type RealtimeEvent = {
   type: string;
@@ -92,6 +96,14 @@ type RealtimeEvent = {
   item_id?: string;
   call_id?: string;
   name?: string;
+  arguments?: string;
+  item?: {
+    id?: string;
+    type?: string;
+    name?: string;
+    call_id?: string;
+    arguments?: string;
+  };
   response?: {
     id?: string;
     status?: string;
@@ -177,10 +189,16 @@ function normalizeProviderConfig(
       typeof raw?.interruptResponseOnInputAudio === "boolean"
         ? raw.interruptResponseOnInputAudio
         : undefined,
+    minBargeInAudioEndMs: asNonNegativeInteger(raw?.minBargeInAudioEndMs),
     azureEndpoint: trimToUndefined(raw?.azureEndpoint),
     azureDeployment: trimToUndefined(raw?.azureDeployment),
     azureApiVersion: trimToUndefined(raw?.azureApiVersion),
   };
+}
+
+function asNonNegativeInteger(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  return number === undefined || number < 0 ? undefined : Math.floor(number);
 }
 
 type OpenAIRealtimeApiKeyResolution =
@@ -263,6 +281,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
   private static readonly BASE_RECONNECT_DELAY_MS = 1000;
   private static readonly CONNECT_TIMEOUT_MS = 10_000;
+  readonly supportsToolResultContinuation = true;
 
   private ws: WebSocket | null = null;
   private connected = false;
@@ -276,9 +295,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private responseCreateInFlight = false;
   private responseCancelInFlight = false;
   private responseCreatePending = false;
+  private continuingToolCallIds = new Set<string>();
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
   private toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
+  private deliveredToolCallKeys = new Set<string>();
   private readonly flowId = randomUUID();
   private sessionReadyFired = false;
   private readonly audioFormat: RealtimeVoiceAudioFormat;
@@ -329,7 +350,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.sendUserMessage(instructions ?? this.config.instructions ?? "Greet the meeting.");
   }
 
-  submitToolResult(callId: string, result: unknown): void {
+  submitToolResult(
+    callId: string,
+    result: unknown,
+    options?: RealtimeVoiceToolResultOptions,
+  ): void {
     this.sendEvent({
       type: "conversation.item.create",
       item: {
@@ -338,6 +363,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         output: JSON.stringify(result),
       },
     });
+    if (options?.willContinue === true) {
+      this.continuingToolCallIds.add(callId);
+      return;
+    }
+    this.continuingToolCallIds.delete(callId);
     this.requestResponseCreate();
   }
 
@@ -765,23 +795,26 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "response.function_call_arguments.done": {
         const key = event.item_id ?? "unknown";
         const buffered = this.toolCallBuffers.get(key);
-        if (this.config.onToolCall) {
-          const rawArgs =
-            buffered?.args ||
-            ((event as unknown as Record<string, unknown>).arguments as string) ||
-            "{}";
-          let args: unknown = {};
-          try {
-            args = JSON.parse(rawArgs);
-          } catch {}
-          this.config.onToolCall({
-            itemId: key,
-            callId: buffered?.callId || event.call_id || "",
-            name: buffered?.name || event.name || "",
-            args,
-          });
-        }
+        this.emitToolCallOnce({
+          itemId: event.item_id,
+          callId: buffered?.callId || event.call_id,
+          name: buffered?.name || event.name,
+          rawArgs: buffered?.args || event.arguments,
+        });
         this.toolCallBuffers.delete(key);
+        return;
+      }
+
+      case "conversation.item.done": {
+        if (event.item?.type !== "function_call") {
+          return;
+        }
+        this.emitToolCallOnce({
+          itemId: event.item.id ?? event.item_id,
+          callId: event.item.call_id ?? event.call_id ?? event.item.id ?? event.item_id,
+          name: event.item.name ?? event.name,
+          rawArgs: event.item.arguments ?? event.arguments,
+        });
         return;
       }
 
@@ -811,10 +844,30 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
     const assistantItemId = this.lastAssistantItemId;
     const responseStartTimestamp = this.responseStartTimestamp;
+    const force = options?.force === true;
     const shouldInterruptProvider =
-      responseStartTimestamp !== null &&
       assistantItemId !== null &&
-      (this.markQueue.length > 0 || options?.audioPlaybackActive === true);
+      ((responseStartTimestamp !== null &&
+        (this.markQueue.length > 0 || options?.audioPlaybackActive === true)) ||
+        force);
+    const audioEndMs = shouldInterruptProvider
+      ? Math.max(
+          0,
+          responseStartTimestamp === null
+            ? this.latestMediaTimestamp
+            : this.latestMediaTimestamp - responseStartTimestamp,
+        )
+      : null;
+    const minBargeInAudioEndMs =
+      this.config.minBargeInAudioEndMs ?? OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS;
+    if (!force && audioEndMs !== null && audioEndMs < minBargeInAudioEndMs) {
+      this.config.onEvent?.({
+        direction: "client",
+        type: "conversation.item.truncate.skipped",
+        detail: `reason=barge-in audioEndMs=${audioEndMs} minAudioEndMs=${minBargeInAudioEndMs}`,
+      });
+      return;
+    }
     if (
       options?.audioPlaybackActive === true &&
       this.responseActive &&
@@ -824,8 +877,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.responseCancelInFlight = true;
     }
     if (shouldInterruptProvider) {
-      const elapsedMs = this.latestMediaTimestamp - responseStartTimestamp;
-      const audioEndMs = Math.max(0, elapsedMs);
       this.sendEvent(
         {
           type: "conversation.item.truncate",
@@ -844,11 +895,46 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.config.onClearAudio();
   }
 
+  private emitToolCallOnce(fields: {
+    itemId?: string;
+    callId?: string;
+    name?: string;
+    rawArgs?: string;
+  }): void {
+    if (!this.config.onToolCall) {
+      return;
+    }
+    const itemId = fields.itemId || fields.callId || "unknown";
+    const callId = fields.callId || itemId;
+    const name = fields.name || "";
+    const dedupeKey = fields.itemId || fields.callId || `${name}:${fields.rawArgs ?? ""}`;
+    if (this.deliveredToolCallKeys.has(dedupeKey)) {
+      return;
+    }
+    this.deliveredToolCallKeys.add(dedupeKey);
+    let args: unknown = {};
+    try {
+      args = JSON.parse(fields.rawArgs || "{}");
+    } catch {}
+    this.config.onToolCall({
+      itemId,
+      callId,
+      name,
+      args,
+    });
+  }
+
   private requestResponseCreate(): void {
-    if (this.responseActive || this.responseCreateInFlight || this.responseCancelInFlight) {
+    if (
+      this.responseActive ||
+      this.responseCreateInFlight ||
+      this.responseCancelInFlight ||
+      this.continuingToolCallIds.size > 0
+    ) {
       this.responseCreatePending = true;
       return;
     }
+    this.responseCreatePending = false;
     this.responseCreateInFlight = true;
     this.sendEvent({ type: "response.create" });
   }
@@ -868,8 +954,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseCreateInFlight = false;
     this.responseCancelInFlight = false;
     this.responseCreatePending = false;
+    this.continuingToolCallIds.clear();
     this.lastAssistantItemId = null;
     this.toolCallBuffers.clear();
+    this.deliveredToolCallKeys.clear();
   }
 
   private sendMark(): void {
@@ -917,6 +1005,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     if (event.type === "response.cancelled") {
       return "cancelled";
+    }
+    if (event.type === "conversation.item.done" && event.item?.type) {
+      return [event.item.type, event.item.name ? `name=${event.item.name}` : undefined]
+        .filter(Boolean)
+        .join(" ");
     }
     return undefined;
   }
@@ -1074,6 +1167,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         prefixPaddingMs: config.prefixPaddingMs,
         interruptResponseOnInputAudio:
           req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
+        minBargeInAudioEndMs: config.minBargeInAudioEndMs,
         azureEndpoint: config.azureEndpoint,
         azureDeployment: config.azureDeployment,
         azureApiVersion: config.azureApiVersion,

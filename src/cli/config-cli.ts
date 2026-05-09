@@ -3,6 +3,10 @@ import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
+import {
+  normalizeAgentModelMapForConfig,
+  normalizeAgentModelRefForConfig,
+} from "../config/model-input.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
@@ -89,6 +93,53 @@ type ConfigMutationOptions = {
   merge?: boolean | undefined;
   replace?: boolean | undefined;
 };
+
+function normalizeAgentDefaultModelValueForConfigMutation(value: unknown): unknown {
+  if (typeof value === "string") {
+    return normalizeAgentModelRefForConfig(value);
+  }
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+
+  const next: Record<string, unknown> = { ...value };
+  if (typeof next.primary === "string") {
+    next.primary = normalizeAgentModelRefForConfig(next.primary);
+  }
+  if (Array.isArray(next.fallbacks)) {
+    next.fallbacks = next.fallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+  }
+  return next;
+}
+
+function normalizeConfigMutationModelRefs(cfg: OpenClawConfig): OpenClawConfig {
+  const defaults = cfg.agents?.defaults;
+  if (!defaults) {
+    return cfg;
+  }
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...defaults,
+        ...(defaults.model !== undefined
+          ? {
+              model: normalizeAgentDefaultModelValueForConfigMutation(
+                defaults.model,
+              ) as typeof defaults.model,
+            }
+          : undefined),
+        ...(defaults.models !== undefined
+          ? { models: normalizeAgentModelMapForConfig(defaults.models) }
+          : undefined),
+      },
+    },
+  };
+}
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
@@ -1418,7 +1469,7 @@ async function runConfigOperations(params: {
     root: next,
     operations,
   });
-  const nextConfig = next as OpenClawConfig;
+  const nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
   const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
     (line) => line.trim(),
@@ -1529,7 +1580,7 @@ async function runConfigOperations(params: {
   }
 
   await replaceConfigFile({
-    nextConfig: next,
+    nextConfig,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     ...(unsetPaths.length > 0 ? { writeOptions: { unsetPaths } } : {}),
   });

@@ -107,13 +107,15 @@ describe("scripts/lib/docker-e2e-plan", () => {
       bareImage: true,
       e2eImage: true,
       functionalImage: true,
-      liveImage: false,
+      liveImage: true,
       package: true,
     });
     expect(plan.credentials).toEqual(["anthropic", "openai"]);
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-openai");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("codex-on-demand");
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-anthropic");
     expect(plan.lanes.map((lane) => lane.name)).toContain("mcp-channels");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("live-plugin-tool");
     expect(plan.lanes.map((lane) => lane.name)).toContain("commitments-safety");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-23");
@@ -209,7 +211,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       releaseChunk: "plugins-runtime-install-h",
     });
 
-    expect(packageInstallOpenAi.lanes.map((lane) => lane.name)).toEqual(["install-e2e-openai"]);
+    expect(packageInstallOpenAi.lanes.map((lane) => lane.name)).toEqual([
+      "install-e2e-openai",
+      "codex-on-demand",
+    ]);
     expect(packageInstallAnthropic.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-anthropic",
     ]);
@@ -315,7 +320,18 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 2,
       },
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
+        imageKind: "bare",
+        live: true,
+        name: "live-plugin-tool",
+        resources: ["docker", "live", "live:openai", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 3,
+      },
+      {
+        command:
+          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
         imageKind: "functional",
         live: true,
         name: "openwebui",
@@ -412,6 +428,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
     expect(packageUpdate.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-openai",
+      "codex-on-demand",
       "install-e2e-anthropic",
       "npm-onboard-channel-agent",
       "npm-onboard-discord-channel-agent",
@@ -427,6 +444,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ...bundledPluginSweepLanes,
       "cron-mcp-cleanup",
       "openai-web-search-minimal",
+      "live-plugin-tool",
       "openwebui",
     ]);
     expect(legacy.lanes.map((lane) => lane.name)).toEqual([
@@ -434,6 +452,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ...bundledPluginSweepLanes,
       "cron-mcp-cleanup",
       "openai-web-search-minimal",
+      "live-plugin-tool",
       "plugin-update",
       "openwebui",
     ]);
@@ -593,6 +612,38 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
   });
 
+  it("plans the Codex on-demand onboarding lane as package-backed npm proof", () => {
+    const plan = planFor({ selectedLaneNames: ["codex-on-demand"] });
+
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe("OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand");
+    expect(lane.imageKind).toBe("bare");
+    expect(lane.live).toBe(false);
+    expect(lane.name).toBe("codex-on-demand");
+    expect(lane.resources).toEqual(["docker", "npm", "service"]);
+    expect(lane.stateScenario).toBe("empty");
+    expect(plan.needs.bareImage).toBe(true);
+    expect(plan.needs.package).toBe(true);
+  });
+
+  it("plans the live plugin tool lane as package-backed OpenAI proof", () => {
+    const plan = planFor({ selectedLaneNames: ["live-plugin-tool"] });
+
+    expect(plan.credentials).toEqual(["openai"]);
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe("OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool");
+    expect(lane.imageKind).toBe("bare");
+    expect(lane.live).toBe(true);
+    expect(lane.name).toBe("live-plugin-tool");
+    expect(lane.resources).toEqual(["docker", "live", "live:openai", "npm"]);
+    expect(lane.stateScenario).toBe("empty");
+    expect(plan.needs.bareImage).toBe(true);
+    expect(plan.needs.liveImage).toBe(true);
+    expect(plan.needs.package).toBe(true);
+  });
+
   it("plans Open WebUI as a live-auth functional image lane", () => {
     const plan = planFor({
       includeOpenWebUI: true,
@@ -602,7 +653,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.credentials).toEqual(["openai"]);
     expect(plan.lanes.map(summarizeLane)).toEqual([
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
+        command:
+          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
         imageKind: "functional",
         live: true,
         name: "openwebui",
@@ -686,7 +738,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map(summarizeLane)).toEqual([
       {
         command:
-          "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local pnpm test:install:e2e",
+          "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=1500 OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=300 pnpm test:install:e2e",
         imageKind: "bare",
         live: false,
         name: "install-e2e-openai",

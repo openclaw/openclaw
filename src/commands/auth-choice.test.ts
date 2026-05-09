@@ -19,7 +19,7 @@ import {
 
 type DetectZaiEndpoint = typeof import("../plugins/provider-zai-endpoint.js").detectZaiEndpoint;
 
-const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
+const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-2.5-flash";
 const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 

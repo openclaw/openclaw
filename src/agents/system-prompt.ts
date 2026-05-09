@@ -6,6 +6,7 @@ import {
   hasNativeApprovalPromptRuntimeCapability,
   isKnownNativeApprovalPromptChannel,
 } from "../channels/plugins/native-approval-prompt.js";
+import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import {
@@ -13,6 +14,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
 import {
   buildFullBootstrapPromptLines,
@@ -62,6 +64,34 @@ const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
 type StablePromptPrefixCacheEntry = {
   value: string;
 };
+
+function normalizeSubagentDelegationMode(mode?: SubagentDelegationMode): SubagentDelegationMode {
+  return mode === "prefer" ? "prefer" : "suggest";
+}
+
+function buildSubagentDelegationPreferenceSection(params: {
+  mode: SubagentDelegationMode;
+  isMinimal: boolean;
+  hasSessionsSpawn: boolean;
+  hasSubagents: boolean;
+}): string[] {
+  if (params.isMinimal || params.mode !== "prefer" || !params.hasSessionsSpawn) {
+    return [];
+  }
+  return [
+    "## Sub-Agent Delegation",
+    "Mode: prefer. You are the responsive coordinator for this conversation.",
+    "- Reply directly only for trivial chat, clarifying questions, or a short answer already known from current context.",
+    "- Anything requiring more work than a direct reply should go through `sessions_spawn`; avoid doing expensive tool calls yourself.",
+    "- Delegate file/code inspection, shell commands, web/browser use, long reads, debugging, coding, multi-step analysis, comparisons, non-trivial summarization, and background waiting.",
+    '- Give the child a clear task. Omit `context` for isolated children; set `context:"fork"` only when current transcript details matter.',
+    "- After spawning, do not poll for completion. Child completion is push-based and returns as a runtime event; synthesize that result for the user.",
+    params.hasSubagents
+      ? "- Use `subagents(action=list|steer|kill)` only when explicitly asked for status, or when debugging/intervening; never use it in a wait loop."
+      : "",
+    "",
+  ].filter(Boolean);
+}
 
 const stablePromptPrefixCache = new Map<string, StablePromptPrefixCacheEntry>();
 
@@ -624,6 +654,8 @@ export function buildAgentSystemPrompt(params: {
   /** Controls the generic silent-reply section. Channel-aware prompts can set "none". */
   silentReplyPromptMode?: SilentReplyPromptMode;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Prompt-only strength for delegating non-trivial work through sub-agents. Defaults to "suggest". */
+  subagentDelegationMode?: SubagentDelegationMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
   /** Registered runtime slash/native command names such as `codex`. */
@@ -642,6 +674,7 @@ export function buildAgentSystemPrompt(params: {
     channel?: string;
     capabilities?: string[];
     repoRoot?: string;
+    activeProcessSessions?: ActiveProcessSessionReference[];
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
@@ -813,6 +846,7 @@ export function buildAgentSystemPrompt(params: {
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
+  const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const silentReplyPromptMode = sourceMessageToolOnly
     ? "none"
@@ -901,6 +935,7 @@ export function buildAgentSystemPrompt(params: {
     threadBoundAcpSpawnEnabled,
     sourceMessageToolOnly,
     silentReplyPromptMode,
+    subagentDelegationMode,
     sandboxInfo: params.sandboxInfo,
     displayWorkspaceDir,
     workspaceGuidance,
@@ -967,6 +1002,12 @@ export function buildAgentSystemPrompt(params: {
         : []),
       "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
       "",
+      ...buildSubagentDelegationPreferenceSection({
+        mode: subagentDelegationMode,
+        isMinimal,
+        hasSessionsSpawn,
+        hasSubagents: availableTools.has("subagents"),
+      }),
       ...buildOverridablePromptSection({
         override: providerSectionOverrides.interaction_style,
         fallback: [],
@@ -1223,10 +1264,28 @@ export function buildAgentSystemPrompt(params: {
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
+    ...buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
   return lines.filter(Boolean).join("\n");
+}
+
+function buildActiveProcessSessionReferenceLines(
+  sessions: ActiveProcessSessionReference[] | undefined,
+): string[] {
+  if (!sessions?.length) {
+    return [];
+  }
+  return [
+    "Active background exec sessions in this scope:",
+    ...sessions.map((session) => {
+      const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
+      const cwd = session.cwd ? ` cwd=${sanitizeForPromptLiteral(session.cwd)}` : "";
+      return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
+    }),
+    "Use the process tool with a sessionId to poll, log, write to, or terminate these sessions. If prior context lost a sessionId, run process list.",
+  ];
 }
 
 export function buildRuntimeLine(
@@ -1240,6 +1299,7 @@ export function buildRuntimeLine(
     defaultModel?: string;
     shell?: string;
     repoRoot?: string;
+    activeProcessSessions?: ActiveProcessSessionReference[];
   },
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],

@@ -1477,6 +1477,68 @@ describe("updateNpmInstalledPlugins", () => {
     );
   });
 
+  it("uses exact npm spec selectors as dry-run target versions when probes omit metadata", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.2.3",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: installPath,
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@1.2.4",
+        installPath,
+      }),
+      pluginIds: ["demo"],
+      dryRun: true,
+    });
+
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "demo",
+      status: "updated",
+      currentVersion: "1.2.3",
+      nextVersion: "1.2.4",
+      message: "Would update demo: 1.2.3 -> 1.2.4.",
+    });
+  });
+
+  it("keeps exact npm dry-runs unchanged when probe metadata is absent but spec matches", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.2.3",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: installPath,
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@1.2.3",
+        installPath,
+      }),
+      pluginIds: ["demo"],
+      dryRun: true,
+    });
+
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "demo",
+      status: "unchanged",
+      currentVersion: "1.2.3",
+      nextVersion: "1.2.3",
+      message: "demo is up to date (1.2.3).",
+    });
+  });
+
   it("updates disabled trusted official ClawHub installs through the catalog spec", async () => {
     installPluginFromClawHubMock.mockResolvedValue(
       createSuccessfulClawHubUpdateResult({

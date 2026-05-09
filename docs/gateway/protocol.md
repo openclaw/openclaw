@@ -377,7 +377,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `talk.session.appendAudio` appends base64 PCM input audio to Gateway-owned realtime relay and transcription sessions.
     - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state is cleared.
     - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in Gateway relay sessions.
-    - `talk.session.submitToolResult` completes a provider tool call emitted by a Gateway-owned realtime relay session.
+    - `talk.session.submitToolResult` completes a provider tool call emitted by a Gateway-owned realtime relay session. Pass `options: { willContinue: true }` for interim tool output when a final result will follow.
     - `talk.session.close` closes a Gateway-owned relay, transcription, or managed-room session and emits terminal Talk events.
     - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
     - `talk.client.create` creates a client-owned realtime provider session using `webrtc` or `provider-websocket` while the Gateway owns config, credentials, instructions, and tool policy.

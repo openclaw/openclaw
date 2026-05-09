@@ -3406,21 +3406,25 @@ public struct TalkSessionSubmitToolResultParams: Codable, Sendable {
     public let sessionid: String
     public let callid: String
     public let result: AnyCodable
+    public let options: [String: AnyCodable]?
 
     public init(
         sessionid: String,
         callid: String,
-        result: AnyCodable)
+        result: AnyCodable,
+        options: [String: AnyCodable]?)
     {
         self.sessionid = sessionid
         self.callid = callid
         self.result = result
+        self.options = options
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionid = "sessionId"
         case callid = "callId"
         case result
+        case options
     }
 }
 
@@ -5819,6 +5823,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let sessionid: String?
     public let message: String
     public let thinking: String?
+    public let fastmode: Bool?
     public let deliver: Bool?
     public let originatingchannel: String?
     public let originatingto: String?
@@ -5835,6 +5840,7 @@ public struct ChatSendParams: Codable, Sendable {
         sessionid: String?,
         message: String,
         thinking: String?,
+        fastmode: Bool?,
         deliver: Bool?,
         originatingchannel: String?,
         originatingto: String?,
@@ -5850,6 +5856,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.sessionid = sessionid
         self.message = message
         self.thinking = thinking
+        self.fastmode = fastmode
         self.deliver = deliver
         self.originatingchannel = originatingchannel
         self.originatingto = originatingto
@@ -5867,6 +5874,7 @@ public struct ChatSendParams: Codable, Sendable {
         case sessionid = "sessionId"
         case message
         case thinking
+        case fastmode = "fastMode"
         case deliver
         case originatingchannel = "originatingChannel"
         case originatingto = "originatingTo"

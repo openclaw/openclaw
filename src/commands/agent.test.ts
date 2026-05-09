@@ -9,6 +9,7 @@ import * as attemptExecutionRuntime from "../agents/command/attempt-execution.ru
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,7 +19,10 @@ import {
   resetAgentEventsForTest,
   resetAgentRunContextForTest,
 } from "../infra/agent-events.js";
+import type { PluginProviderRegistration } from "../plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -321,8 +325,30 @@ function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalo
   vi.mocked(loadModelCatalog).mockResolvedValueOnce(entries);
 }
 
+function installThinkingTestProviders() {
+  const registry = createTestRegistry();
+  registry.providers = ["anthropic", "codex", "ollama", "openai", "openrouter"].map(
+    (providerId): PluginProviderRegistration => ({
+      pluginId: providerId,
+      source: "test",
+      provider: {
+        id: providerId,
+        label: providerId,
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: BASE_THINKING_LEVELS.map((id) => ({ id })),
+          defaultLevel: "off",
+        }),
+      },
+    }),
+  );
+  setActivePluginRegistry(registry);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  resetPluginRuntimeStateForTest();
+  installThinkingTestProviders();
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest();
   resetAgentRunContextForTest();

@@ -71,6 +71,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## GitHub / CI
 
 - Triage: list first, hydrate few. Use bounded `gh --json --jq`; avoid repeated full comment scans.
+- Bare GitHub issue/PR URL or number => `review <ref>`: load repo maintainer skill if available, inspect live with `gh`, report findings in chat. No comments/close/merge/fix unless explicitly asked.
 - Automatic PR/issue discovery: skip maintainer-owned items unless directly relevant. Do not comment, close, label, retitle, rebase, fix up, or land them without explicit maintainer request.
 - PR scan/triage: no unsolicited PR comments/reviews. Report in chat only unless explicitly asked, or a close/duplicate action needs a reason comment.
 - Search/dedupe: prefer `gh search issues 'repo:openclaw/openclaw is:open <terms>' --json number,title,state,updatedAt --limit 20`.
