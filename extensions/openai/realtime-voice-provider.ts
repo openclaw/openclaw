@@ -58,6 +58,7 @@ type OpenAIRealtimeVoiceProviderConfig = {
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
+  interruptResponseOnInputAudio?: boolean;
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
@@ -71,6 +72,7 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
+  interruptResponseOnInputAudio?: boolean;
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
@@ -165,6 +167,10 @@ function normalizeProviderConfig(
     vadThreshold: asFiniteNumber(raw?.vadThreshold),
     silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
     prefixPaddingMs: asFiniteNumber(raw?.prefixPaddingMs),
+    interruptResponseOnInputAudio:
+      typeof raw?.interruptResponseOnInputAudio === "boolean"
+        ? raw.interruptResponseOnInputAudio
+        : undefined,
     azureEndpoint: trimToUndefined(raw?.azureEndpoint),
     azureDeployment: trimToUndefined(raw?.azureDeployment),
     azureApiVersion: trimToUndefined(raw?.azureApiVersion),
@@ -571,6 +577,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private resolveGaSessionUpdatePayload(): RealtimeSessionUpdateGaPayload {
     const cfg = this.config;
     const autoRespondToAudio = cfg.autoRespondToAudio ?? true;
+    const interruptResponseOnInputAudio = cfg.interruptResponseOnInputAudio ?? autoRespondToAudio;
     return {
       type: "realtime",
       model: cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
@@ -588,7 +595,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
             silence_duration_ms: cfg.silenceDurationMs ?? 500,
             create_response: autoRespondToAudio,
-            interrupt_response: autoRespondToAudio,
+            interrupt_response: interruptResponseOnInputAudio,
           },
         },
         output: {
@@ -995,6 +1002,8 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         vadThreshold: config.vadThreshold,
         silenceDurationMs: config.silenceDurationMs,
         prefixPaddingMs: config.prefixPaddingMs,
+        interruptResponseOnInputAudio:
+          req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
         azureEndpoint: config.azureEndpoint,
         azureDeployment: config.azureDeployment,
         azureApiVersion: config.azureApiVersion,

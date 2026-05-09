@@ -270,7 +270,8 @@ describe("DiscordVoiceManager", () => {
     entersStateMock.mockReset();
     entersStateMock.mockResolvedValue(undefined);
     createAudioPlayerMock.mockClear();
-    resolveAgentRouteMock.mockClear();
+    resolveAgentRouteMock.mockReset();
+    resolveAgentRouteMock.mockReturnValue({ agentId: "agent-1", sessionKey: "discord:g1:c1" });
     agentCommandMock.mockReset();
     agentCommandMock.mockResolvedValue({ payloads: [] });
     transcribeAudioFileMock.mockReset();
@@ -391,6 +392,8 @@ describe("DiscordVoiceManager", () => {
       entry: {
         guildId: "g1",
         channelId: "1001",
+        sessionChannelId: "1001",
+        voiceSessionKey: "discord:g1:1001",
         route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
         connection: createConnectionMock(),
         player: createAudioPlayerMock(),
@@ -546,6 +549,80 @@ describe("DiscordVoiceManager", () => {
       }
     ).handleSpeakingStart(entry, "u1");
 
+    expect(player.stop).not.toHaveBeenCalled();
+    expect(connection.receiver.subscribe).not.toHaveBeenCalled();
+  });
+
+  it("allows configured realtime barge-in when provider input interruption is disabled", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager({
+      groupPolicy: "open",
+      allowFrom: ["discord:u1"],
+      voice: {
+        enabled: true,
+        mode: "bidi",
+        realtime: {
+          provider: "openai",
+          bargeIn: true,
+          providers: {
+            openai: {
+              interruptResponseOnInputAudio: false,
+            },
+          },
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const player = getLastAudioPlayer();
+    const entry = getSessionEntry(manager);
+    player.state.status = "playing";
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u1");
+
+    expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalled();
+    expect(player.stop).toHaveBeenCalledWith(true);
+    expect(connection.receiver.subscribe).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({ end: expect.any(Object) }),
+    );
+  });
+
+  it("ignores realtime capture during playback when barge-in is disabled", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager({
+      groupPolicy: "open",
+      allowFrom: ["discord:u1"],
+      voice: {
+        enabled: true,
+        mode: "bidi",
+        realtime: {
+          provider: "openai",
+          bargeIn: false,
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const player = getLastAudioPlayer();
+    const entry = getSessionEntry(manager);
+    player.state.status = "playing";
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u1");
+
+    expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
     expect(player.stop).not.toHaveBeenCalled();
     expect(connection.receiver.subscribe).not.toHaveBeenCalled();
   });
@@ -926,6 +1003,11 @@ describe("DiscordVoiceManager", () => {
           voice: "cedar",
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
+          providers: {
+            openai: {
+              interruptResponseOnInputAudio: false,
+            },
+          },
         },
       },
     });
@@ -950,6 +1032,7 @@ describe("DiscordVoiceManager", () => {
     const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
       | {
           autoRespondToAudio?: boolean;
+          interruptResponseOnInputAudio?: boolean;
           instructions?: string;
           tools?: Array<{ name: string }>;
           onToolCall?: (
@@ -964,6 +1047,7 @@ describe("DiscordVoiceManager", () => {
         }
       | undefined;
     expect(bridgeParams?.autoRespondToAudio).toBe(true);
+    expect(bridgeParams?.interruptResponseOnInputAudio).toBe(false);
     expect(bridgeParams?.instructions).toContain("Call openclaw_agent_consult");
     expect(bridgeParams?.tools?.map((tool) => tool.name)).toContain("openclaw_agent_consult");
 
@@ -995,6 +1079,93 @@ describe("DiscordVoiceManager", () => {
       }),
       expect.anything(),
     );
+  });
+
+  it("routes bidi realtime consults through a configured voice agent session target", async () => {
+    resolveAgentRouteMock.mockImplementation((params: { peer?: { id?: string } }) => {
+      if (params.peer?.id === "maintainers") {
+        return {
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel:maintainers",
+        };
+      }
+      return {
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:1001",
+      };
+    });
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "maintainer answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "bidi",
+        agentSession: {
+          mode: "target",
+          target: "channel:maintainers",
+        },
+        realtime: {
+          provider: "openai",
+          consultPolicy: "always",
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+      route?: { sessionKey?: string };
+      voiceSessionKey?: string;
+    };
+    expect(entry.voiceSessionKey).toBe("agent:main:discord:channel:1001");
+    expect(entry.route?.sessionKey).toBe("agent:main:discord:channel:maintainers");
+
+    const ownerTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
+
+    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => void;
+        }
+      | undefined;
+    bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-1",
+        callId: "call-1",
+        name: "openclaw_agent_consult",
+        args: { question: "check the maintainer channel context" },
+      },
+      realtimeSessionMock,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:maintainers",
+      }),
+      expect.anything(),
+    );
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
+      text: "maintainer answer",
+    });
   });
 
   it("keeps bidi realtime consults on the audio turn speaker context", async () => {
