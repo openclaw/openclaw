@@ -241,12 +241,12 @@ function resolveSqliteSessionTranscriptPath(params: {
   }
   const explicit = normalizeOptionalString(params.sessionEntry?.sessionFile);
   if (explicit) {
-    const matched = candidates.find((entry) => entry.path === explicit);
+    const matched = candidates.find((entry) => entry.locator === explicit);
     if (matched) {
-      return matched.path;
+      return matched.locator;
     }
   }
-  return candidates[0]?.path;
+  return candidates[0]?.locator;
 }
 
 function deriveTranscriptUsageSnapshot(

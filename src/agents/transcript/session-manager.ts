@@ -260,7 +260,7 @@ function listSqliteTranscriptRecords(): SqliteTranscriptRecord[] {
       agentId: entry.agentId,
       sessionId: entry.sessionId,
       path:
-        entry.path ??
+        entry.locator ??
         createSqliteSessionTranscriptLocator({
           agentId: entry.agentId,
           sessionId: entry.sessionId,

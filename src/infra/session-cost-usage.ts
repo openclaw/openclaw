@@ -265,7 +265,7 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
 function getRememberedTranscriptPath(agentId: string, sessionId: string): string | undefined {
   return listSqliteSessionTranscriptLocators().find(
     (entry) => entry.agentId === agentId && entry.sessionId === sessionId,
-  )?.path;
+  )?.locator;
 }
 
 function resolveSyntheticSessionFile(params: {
@@ -590,7 +590,7 @@ export async function discoverAllSessions(params?: {
       sessionFile: resolveSyntheticSessionFile({
         agentId: transcript.agentId,
         sessionId: transcript.sessionId,
-        rememberedPath: transcript.path,
+        rememberedPath: transcript.locator,
       }),
       mtime: transcript.updatedAt,
       firstUserMessage,
