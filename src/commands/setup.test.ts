@@ -186,7 +186,7 @@ describe("setupCommand", () => {
         gateway?: { mode?: string };
       };
 
-      expect(raw.agents?.defaults?.workspace).toBe(workspace);
+      expect(raw.agents?.defaults?.workspace).toBe("~/.openclaw/workspace");
       expect(raw.gateway?.mode).toBe("local");
     });
   });
