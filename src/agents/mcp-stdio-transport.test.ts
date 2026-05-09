@@ -1,3 +1,4 @@
+import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -45,11 +46,7 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("spawn");
     await started;
 
-    const [command, args, options] = spawnMock.mock.calls[0] as [
-      string,
-      string[],
-      { env?: NodeJS.ProcessEnv },
-    ];
+    const [command, args, options] = spawnMock.mock.calls[0] as [string, string[], SpawnOptions];
     if (process.platform === "linux") {
       expect(command).toBe("/bin/sh");
       expect(args).toEqual([
@@ -63,15 +60,11 @@ describe("OpenClawStdioClientTransport", () => {
       expect(command).toBe("npx");
       expect(args).toEqual(["-y", "example-mcp"]);
     }
-    expect(options).toEqual(
-      expect.objectContaining({
-        cwd: "/tmp/example",
-        detached: process.platform !== "win32",
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      }),
-    );
-    expect(options.env).toEqual(expect.objectContaining({ EXAMPLE: "1" }));
+    expect(options.cwd).toBe("/tmp/example");
+    expect(options.detached).toBe(process.platform !== "win32");
+    expect(options.shell).toBe(false);
+    expect(options.stdio).toEqual(["pipe", "pipe", "pipe"]);
+    expect(options.env?.EXAMPLE).toBe("1");
     expect(transport.pid).toBe(4321);
     expect(transport.stderr).toBeInstanceOf(PassThrough);
   });
@@ -159,9 +152,9 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("spawn");
     await started;
 
-    await expect(
-      transport.send({ jsonrpc: "2.0", id: 2, method: "ping" }),
-    ).rejects.toThrow("EPIPE");
+    await expect(transport.send({ jsonrpc: "2.0", id: 2, method: "ping" })).rejects.toThrow(
+      "EPIPE",
+    );
   });
 
   it("rejects send() when stdin.write throws synchronously (#75438)", async () => {
@@ -179,8 +172,8 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("spawn");
     await started;
 
-    await expect(
-      transport.send({ jsonrpc: "2.0", id: 3, method: "ping" }),
-    ).rejects.toThrow("write after end");
+    await expect(transport.send({ jsonrpc: "2.0", id: 3, method: "ping" })).rejects.toThrow(
+      "write after end",
+    );
   });
 });
