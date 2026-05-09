@@ -172,13 +172,13 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       unknown
     >;
     const currentSessionId = sessionEntry.sessionId as string;
-    const currentTranscriptPath = currentSessionId
+    const currentTranscriptLocator = currentSessionId
       ? createSqliteSessionTranscriptLocator({ agentId, sessionId: currentSessionId })
       : undefined;
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
-      transcriptPath: currentTranscriptPath,
+      transcriptLocator: currentTranscriptLocator,
       hasCfg: Boolean(cfg),
     });
 
@@ -192,12 +192,12 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
-    if (currentSessionId || currentTranscriptPath) {
+    if (currentSessionId || currentTranscriptLocator) {
       sessionContent = await getRecentTranscriptContent(
         {
           agentId,
           sessionId: currentSessionId,
-          transcriptPath: currentTranscriptPath,
+          transcriptLocator: currentTranscriptLocator,
         },
         messageCount,
       );
