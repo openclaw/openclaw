@@ -5,6 +5,7 @@ import type {
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { resolveCopilotTransportApi, resolveStaticCopilotModelOverride } from "./model-metadata.js";
 
 export const PROVIDER_ID = "github-copilot";
 const CODEX_FORWARD_COMPAT_TARGET_IDS = new Set(["gpt-5.4", "gpt-5.3-codex"]);
@@ -17,14 +18,6 @@ const DEFAULT_MAX_TOKENS = 8192;
 
 function isCopilotCodexModelId(modelId: string): boolean {
   return /(?:^|[-_.])codex(?:$|[-_.])/.test(modelId);
-}
-
-export function resolveCopilotTransportApi(
-  modelId: string,
-): "anthropic-messages" | "openai-responses" {
-  return (normalizeOptionalLowercaseString(modelId) ?? "").includes("claude")
-    ? "anthropic-messages"
-    : "openai-responses";
 }
 
 export function resolveCopilotForwardCompatModel(
@@ -60,6 +53,22 @@ export function resolveCopilotForwardCompatModel(
       } as ProviderRuntimeModel);
     }
     // Template not found — fall through to synthetic catch-all below.
+  }
+
+  const staticOverride = resolveStaticCopilotModelOverride(lowerModelId);
+  if (staticOverride) {
+    return normalizeModelCompat({
+      id: trimmedModelId,
+      name: staticOverride.name ?? trimmedModelId,
+      provider: PROVIDER_ID,
+      api: staticOverride.api ?? resolveCopilotTransportApi(trimmedModelId),
+      reasoning: staticOverride.reasoning ?? false,
+      input: staticOverride.input ?? ["text", "image"],
+      cost: staticOverride.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: staticOverride.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+      maxTokens: staticOverride.maxTokens ?? DEFAULT_MAX_TOKENS,
+      ...(staticOverride.compat ? { compat: staticOverride.compat } : {}),
+    } as ProviderRuntimeModel);
   }
 
   // Catch-all: create a synthetic model definition for any unknown model ID.
