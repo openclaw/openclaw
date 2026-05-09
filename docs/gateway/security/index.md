@@ -1016,7 +1016,8 @@ Recommendations:
 - Keep log and transcript redaction on (`logging.redactSensitive: "tools"`; default).
 - Add custom patterns for your environment via `logging.redactPatterns` (tokens, hostnames, internal URLs).
 - When sharing diagnostics, prefer `openclaw status --all` (pasteable, secrets redacted) over raw logs.
-- Prune old session transcripts and log files if you don't need long retention.
+- Delete old session history through OpenClaw tooling and rotate log files if
+  you do not need long retention.
 
 Details: [Logging](/gateway/logging)
 
@@ -1304,7 +1305,8 @@ If your AI does something bad:
 ### Collect for a report
 
 - Timestamp, gateway host OS + OpenClaw version
-- The session transcript(s) + a short log tail (after redacting)
+- The relevant SQLite-backed session transcript rows plus a short log tail
+  (after redacting)
 - What the attacker sent + what the agent did
 - Whether the Gateway was exposed beyond loopback (LAN/Tailscale Funnel/Serve)
 
