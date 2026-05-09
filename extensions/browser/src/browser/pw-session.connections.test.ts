@@ -97,6 +97,32 @@ function makeDisconnectedReadBrowser(): BrowserMockBundle {
   return { browser, browserClose };
 }
 
+function makeStuckPageTargetBrowser(): BrowserMockBundle {
+  let context: import("playwright-core").BrowserContext;
+  const browserClose = vi.fn(async () => {});
+  const page = {
+    on: vi.fn(),
+    context: () => context,
+    title: vi.fn(async () => "never reached"),
+    url: vi.fn(() => "https://stuck.example"),
+  } as unknown as import("playwright-core").Page;
+
+  context = {
+    pages: () => [page],
+    on: vi.fn(),
+    newCDPSession: vi.fn(() => new Promise(() => {})),
+  } as unknown as import("playwright-core").BrowserContext;
+
+  const browser = {
+    contexts: () => [context],
+    on: vi.fn(),
+    off: vi.fn(),
+    close: browserClose,
+  } as unknown as import("playwright-core").Browser;
+
+  return { browser, browserClose };
+}
+
 function makeMutatingDisconnectBrowser(): BrowserMockBundle & {
   newPage: ReturnType<typeof vi.fn>;
 } {
@@ -247,6 +273,37 @@ describe("pw-session connection scoping", () => {
     expect(pages.map((page) => page.targetId)).toEqual(["A"]);
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
     await vi.waitFor(() => expect(stale.browserClose).toHaveBeenCalledTimes(1));
+    expect(refreshed.browserClose).not.toHaveBeenCalled();
+  });
+
+  it("times out stuck page enumeration and evicts the scoped connection", async () => {
+    const stuck = makeStuckPageTargetBrowser();
+    const refreshed = makeBrowser("A", "https://a.example/recovered");
+    let connectCalls = 0;
+
+    connectOverCdpSpy.mockImplementation((async (...args: unknown[]) => {
+      const endpointText = String(args[0]);
+      if (endpointText !== "http://127.0.0.1:9222") {
+        throw new Error(`unexpected endpoint: ${endpointText}`);
+      }
+      connectCalls += 1;
+      return connectCalls === 1 ? stuck.browser : refreshed.browser;
+    }) as never);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await expect(
+      listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
+    ).rejects.toThrow(/Playwright page enumeration timed out after 20ms/);
+
+    await vi.waitFor(() => expect(stuck.browserClose).toHaveBeenCalledTimes(1));
+
+    const pages = await listPagesViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      timeoutMs: 1000,
+    });
+
+    expect(pages.map((page) => page.targetId)).toEqual(["A"]);
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
     expect(refreshed.browserClose).not.toHaveBeenCalled();
   });
 

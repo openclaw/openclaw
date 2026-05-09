@@ -1589,6 +1589,53 @@ async function withPlaywrightSafeReadReconnect<T>(
   }
 }
 
+function normalizePlaywrightOperationTimeoutMs(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+async function withPlaywrightOperationTimeout<T>(opts: {
+  cdpUrl: string;
+  timeoutMs?: number;
+  label: string;
+  ssrfPolicy?: SsrFPolicy;
+  run: () => Promise<T>;
+}): Promise<T> {
+  const timeoutMs = normalizePlaywrightOperationTimeoutMs(opts.timeoutMs);
+  if (timeoutMs === undefined) {
+    return await opts.run();
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timeoutError: Error | undefined;
+  const work = opts.run();
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timeoutError = new Error(`${opts.label} timed out after ${timeoutMs}ms`);
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([work, timeout]);
+  } catch (err) {
+    if (err === timeoutError) {
+      await forceDisconnectPlaywrightForTarget({
+        cdpUrl: opts.cdpUrl,
+        ssrfPolicy: opts.ssrfPolicy,
+        reason: opts.label,
+      }).catch(() => {});
+    }
+    throw err;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 /**
  * List all pages/tabs from the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/list is ephemeral.
@@ -1596,6 +1643,7 @@ async function withPlaywrightSafeReadReconnect<T>(
 export async function listPagesViaPlaywright(opts: {
   cdpUrl: string;
   ssrfPolicy?: SsrFPolicy;
+  timeoutMs?: number;
 }): Promise<
   Array<{
     targetId: string;
@@ -1604,58 +1652,67 @@ export async function listPagesViaPlaywright(opts: {
     type: string;
   }>
 > {
-  return await withPlaywrightSafeReadReconnect(opts.cdpUrl, async () => {
-    const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
-    const pages = await getAllPages(browser);
-    const results: Array<{
-      targetId: string;
-      title: string;
-      url: string;
-      type: string;
-    }> = [];
+  const readPages = async () =>
+    await withPlaywrightSafeReadReconnect(opts.cdpUrl, async () => {
+      const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+      const pages = await getAllPages(browser);
+      const results: Array<{
+        targetId: string;
+        title: string;
+        url: string;
+        type: string;
+      }> = [];
 
-    for (const page of pages) {
-      if (isBlockedPageRef(opts.cdpUrl, page)) {
-        continue;
-      }
-      let tid: string | null;
-      try {
-        tid = await pageTargetId(page);
-      } catch (err) {
-        if (isRecoverablePlaywrightDisconnectError(err)) {
-          throw err;
-        }
-        tid = null;
-      }
-      if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
-        let title = "";
-        try {
-          title = await page.title();
-        } catch (err) {
-          if (isRecoverablePlaywrightDisconnectError(err)) {
-            throw err;
-          }
-        }
-        let url = "";
-        try {
-          url = page.url();
-        } catch (err) {
-          if (isRecoverablePlaywrightDisconnectError(err)) {
-            throw err;
-          }
-        }
-        if (!isSelectableCdpBrowserTarget({ url })) {
+      for (const page of pages) {
+        if (isBlockedPageRef(opts.cdpUrl, page)) {
           continue;
         }
-        results.push({
-          targetId: tid,
-          title,
-          url,
-          type: "page",
-        });
+        let tid: string | null;
+        try {
+          tid = await pageTargetId(page);
+        } catch (err) {
+          if (isRecoverablePlaywrightDisconnectError(err)) {
+            throw err;
+          }
+          tid = null;
+        }
+        if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
+          let title = "";
+          try {
+            title = await page.title();
+          } catch (err) {
+            if (isRecoverablePlaywrightDisconnectError(err)) {
+              throw err;
+            }
+          }
+          let url = "";
+          try {
+            url = page.url();
+          } catch (err) {
+            if (isRecoverablePlaywrightDisconnectError(err)) {
+              throw err;
+            }
+          }
+          if (!isSelectableCdpBrowserTarget({ url })) {
+            continue;
+          }
+          results.push({
+            targetId: tid,
+            title,
+            url,
+            type: "page",
+          });
+        }
       }
-    }
-    return results;
+      return results;
+    });
+
+  return await withPlaywrightOperationTimeout({
+    cdpUrl: opts.cdpUrl,
+    timeoutMs: opts.timeoutMs,
+    label: "Playwright page enumeration",
+    ssrfPolicy: opts.ssrfPolicy,
+    run: readPages,
   });
 }
 
