@@ -236,7 +236,6 @@ export function installContextEngineLoopHook(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
-  transcriptLocator: string;
   tokenBudget?: number;
   modelId: string;
   getPrePromptMessageCount?: () => number;
@@ -246,7 +245,7 @@ export function installContextEngineLoopHook(params: {
     prePromptMessageCount: number;
   }) => ContextEngineRuntimeContext | undefined;
 }): () => void {
-  const { contextEngine, sessionId, sessionKey, transcriptLocator, tokenBudget, modelId } = params;
+  const { contextEngine, sessionId, sessionKey, tokenBudget, modelId } = params;
   const mutableAgent = params.agent as GuardableAgentRecord;
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
@@ -295,7 +294,6 @@ export function installContextEngineLoopHook(params: {
         await contextEngine.afterTurn({
           sessionId,
           sessionKey,
-          transcriptLocator,
           messages: sourceMessages,
           prePromptMessageCount,
           tokenBudget,

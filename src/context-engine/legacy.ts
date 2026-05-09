@@ -56,7 +56,6 @@ export class LegacyContextEngine implements ContextEngine {
   async afterTurn(_params: {
     sessionId: string;
     sessionKey?: string;
-    transcriptLocator?: string;
     messages: AgentMessage[];
     prePromptMessageCount: number;
     autoCompactionSummary?: string;
@@ -70,7 +69,6 @@ export class LegacyContextEngine implements ContextEngine {
   async compact(params: {
     sessionId: string;
     sessionKey?: string;
-    transcriptLocator?: string;
     tokenBudget?: number;
     force?: boolean;
     currentTokenCount?: number;

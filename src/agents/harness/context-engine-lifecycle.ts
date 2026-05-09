@@ -24,7 +24,6 @@ export async function bootstrapHarnessContextEngine(params: {
   sessionId: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator?: string;
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
@@ -43,7 +42,6 @@ export async function bootstrapHarnessContextEngine(params: {
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         transcriptScope: params.transcriptScope,
-        transcriptLocator: params.transcriptLocator,
       });
     }
     await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
@@ -51,7 +49,6 @@ export async function bootstrapHarnessContextEngine(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       transcriptScope: params.transcriptScope,
-      transcriptLocator: params.transcriptLocator,
       reason: "bootstrap",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
@@ -103,7 +100,6 @@ export async function finalizeHarnessContextEngineTurn(params: {
   sessionIdUsed: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator?: string;
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
   tokenBudget?: number;
@@ -129,7 +125,6 @@ export async function finalizeHarnessContextEngineTurn(params: {
         sessionId: params.sessionIdUsed,
         sessionKey: params.sessionKey,
         transcriptScope: params.transcriptScope,
-        transcriptLocator: params.transcriptLocator,
         messages: conversationSnapshot.messages,
         prePromptMessageCount: conversationSnapshot.prePromptMessageCount,
         tokenBudget: params.tokenBudget,
@@ -183,7 +178,6 @@ export async function finalizeHarnessContextEngineTurn(params: {
       sessionId: params.sessionIdUsed,
       sessionKey: params.sessionKey,
       transcriptScope: params.transcriptScope,
-      transcriptLocator: params.transcriptLocator,
       reason: "turn",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
@@ -236,7 +230,6 @@ export async function runHarnessContextEngineMaintenance(params: {
   sessionId: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator?: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
@@ -248,7 +241,6 @@ export async function runHarnessContextEngineMaintenance(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     transcriptScope: params.transcriptScope,
-    transcriptLocator: params.transcriptLocator,
     reason: params.reason,
     sessionManager: params.sessionManager as Parameters<
       typeof runContextEngineMaintenance

@@ -49,7 +49,6 @@ type DeferredTurnMaintenanceScheduleParams = {
   sessionId: string;
   sessionKey: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator?: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
@@ -281,7 +280,6 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionId: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator?: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
@@ -344,7 +342,6 @@ async function executeContextEngineMaintenance(params: {
   sessionId: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator?: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -359,13 +356,11 @@ async function executeContextEngineMaintenance(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     transcriptScope: params.transcriptScope,
-    transcriptLocator: params.transcriptLocator,
     runtimeContext: buildContextEngineMaintenanceRuntimeContext({
       sessionAgentId: params.sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       transcriptScope: params.transcriptScope,
-      transcriptLocator: params.transcriptLocator,
       sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
       runtimeContext: params.runtimeContext,
       agentId: params.agentId,
@@ -392,7 +387,6 @@ async function runDeferredTurnMaintenanceWorker(params: {
   sessionId: string;
   sessionKey: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator?: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
@@ -474,7 +468,6 @@ async function runDeferredTurnMaintenanceWorker(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       transcriptScope: params.transcriptScope,
-      transcriptLocator: params.transcriptLocator,
       reason: "turn",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
@@ -601,7 +594,6 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
         sessionId: params.sessionId,
         sessionKey,
         transcriptScope: params.transcriptScope,
-        transcriptLocator: params.transcriptLocator,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
         agentId: params.agentId,
@@ -659,7 +651,6 @@ export async function runContextEngineMaintenance(params: {
   sessionId: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator?: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -685,7 +676,6 @@ export async function runContextEngineMaintenance(params: {
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
         transcriptScope: params.transcriptScope,
-        transcriptLocator: params.transcriptLocator,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
         agentId: params.agentId,
@@ -704,7 +694,6 @@ export async function runContextEngineMaintenance(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       transcriptScope: params.transcriptScope,
-      transcriptLocator: params.transcriptLocator,
       reason: params.reason,
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,

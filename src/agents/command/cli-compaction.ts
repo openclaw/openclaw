@@ -1,10 +1,9 @@
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureContextEnginesInitialized as ensureContextEnginesInitializedImpl } from "../../context-engine/init.js";
 import { resolveContextEngine as resolveContextEngineImpl } from "../../context-engine/registry.js";
-import type { ContextEngine } from "../../context-engine/types.js";
+import type { ContextEngine, ContextEngineTranscriptScope } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AgentMessage } from "../agent-core-contract.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../pi-embedded-runner/compaction-runtime-context.js";
@@ -117,7 +116,7 @@ async function compactCliTranscript(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
-  transcriptLocator: string;
+  transcriptScope: ContextEngineTranscriptScope;
   cfg: OpenClawConfig;
   workspaceDir: string;
   agentDir: string;
@@ -157,7 +156,7 @@ async function compactCliTranscript(params: {
   const compactResult = await params.contextEngine.compact({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    transcriptLocator: params.transcriptLocator,
+    transcriptScope: params.transcriptScope,
     tokenBudget: params.contextTokenBudget,
     currentTokenCount: params.currentTokenCount,
     force: true,
@@ -176,7 +175,7 @@ async function compactCliTranscript(params: {
     contextEngine: params.contextEngine,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    transcriptLocator: params.transcriptLocator,
+    transcriptScope: params.transcriptScope,
     reason: "compaction",
     runtimeContext,
     config: params.cfg,
@@ -206,10 +205,10 @@ export async function runCliTurnCompactionLifecycle(params: {
   if (!params.sessionEntry?.sessionId || !contextTokenBudget) {
     return params.sessionEntry;
   }
-  const transcriptLocator = createSqliteSessionTranscriptLocator({
+  const transcriptScope = {
     agentId: params.sessionAgentId,
     sessionId: params.sessionEntry.sessionId,
-  });
+  };
 
   cliCompactionDeps.ensureContextEnginesInitialized();
   const contextEngine = await cliCompactionDeps.resolveContextEngine(params.cfg);
@@ -256,7 +255,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     contextEngine,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    transcriptLocator,
+    transcriptScope,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
