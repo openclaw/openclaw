@@ -5,7 +5,6 @@ import {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
-  isCompactionCheckpointTranscriptFileName,
   isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
@@ -56,16 +55,6 @@ export type SessionTranscriptDeltaStats = {
   messageCount: number;
   updatedAt: number;
 };
-
-function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
-  const fileName = path.basename(absPath);
-  // Compaction checkpoints are always skipped: they are derived snapshots of an
-  // active session and would double-index the same content.
-  if (isCompactionCheckpointTranscriptFileName(fileName)) {
-    return true;
-  }
-  return false;
-}
 
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
@@ -205,7 +194,6 @@ export function sessionPathForTranscript(absPath: string): string {
 export function resolveSessionTranscriptScope(locator: string): {
   agentId: string;
   sessionId: string;
-  transcriptPath?: string;
 } | null {
   const sqliteRef = parseSqliteSessionTranscriptRef(locator);
   if (sqliteRef) {
@@ -457,19 +445,6 @@ export async function buildSessionTranscriptEntry(
       (total, entry) => total + JSON.stringify(entry.event).length + 1,
       0,
     );
-    if (shouldSkipTranscriptFileForDreaming(absPath)) {
-      return {
-        path: sessionPathForTranscript(absPath),
-        absPath,
-        mtimeMs,
-        size,
-        messageCount,
-        hash: hashText("\n\n"),
-        content: "",
-        lineMap: [],
-        messageTimestampsMs: [],
-      };
-    }
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];
