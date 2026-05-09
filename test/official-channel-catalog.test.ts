@@ -162,7 +162,7 @@ describe("buildOfficialChannelCatalog", () => {
     expect(entries.length).toBeGreaterThan(0);
     for (const entry of entries) {
       const installSource = describePluginInstallSource(requireInstall(entry));
-      expect(installSource.warnings).toEqual([]);
+      expect(installSource.warnings).toStrictEqual([]);
       expect(requireNpmInstallSource(installSource).pinState).toBe("exact-with-integrity");
     }
   });
