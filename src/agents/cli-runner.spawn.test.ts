@@ -38,10 +38,6 @@ import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fix
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 
-async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-}
-
 beforeEach(() => {
   resetAgentEventsForTest();
   resetClaudeLiveSessionsForTest();
