@@ -162,9 +162,10 @@ describe("describeImageWithModel", () => {
           prompt: "Describe the image.",
           image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
         }),
-        signal: expect.any(AbortSignal),
       }),
     );
+    const [, fetchOptions] = fetchMock.mock.calls[0] ?? [];
+    expect(fetchOptions?.signal).toBeInstanceOf(AbortSignal);
     expect(timeoutSpy).toHaveBeenCalledWith(1000);
     expect(completeMock).not.toHaveBeenCalled();
   });
@@ -380,13 +381,20 @@ describe("describeImageWithModel", () => {
           }),
         ],
       }),
-      expect.any(Object),
+      expect.objectContaining({
+        apiKey: "oauth-test",
+        maxTokens: 512,
+      }),
     );
     const firstCall = completeMock.mock.calls[0];
     if (!firstCall) {
       throw new Error("Expected image completion call");
     }
-    const [, context] = firstCall;
+    const [, context, options] = firstCall;
+    expect(Object.keys(options).toSorted()).toEqual(["apiKey", "maxTokens", "signal", "timeoutMs"]);
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(options.timeoutMs).toBeGreaterThan(0);
+    expect(options.timeoutMs).toBeLessThanOrEqual(1000);
     const userMessage = context.messages[0];
     if (!userMessage) {
       throw new Error("expected image completion user message");
