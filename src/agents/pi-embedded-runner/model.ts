@@ -65,6 +65,9 @@ type ProviderRuntimeHooks = {
   normalizeProviderTransportWithPlugin: typeof normalizeProviderTransportWithPlugin;
 };
 
+/** 当 provider timeoutSeconds 未配置时使用的默认请求超时时间（毫秒） */
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+
 const TARGET_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   buildProviderUnknownModelHintWithPlugin,
   prepareProviderDynamicModel,
@@ -336,13 +339,14 @@ function resolveConfiguredProviderDefaultApi(
   return providerConfig?.baseUrl ? "openai-completions" : undefined;
 }
 
-function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
+function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number {
   if (
     typeof timeoutSeconds !== "number" ||
     !Number.isFinite(timeoutSeconds) ||
     timeoutSeconds <= 0
   ) {
-    return undefined;
+    // provider timeoutSeconds 未配置或 <=0 时，回退到 120 秒默认超时，避免 HTTP 请求无限等待
+    return DEFAULT_REQUEST_TIMEOUT_MS;
   }
   return Math.floor(timeoutSeconds) * 1000;
 }
