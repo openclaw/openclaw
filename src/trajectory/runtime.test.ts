@@ -14,8 +14,6 @@ import { listTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   createTrajectoryRuntimeRecorder,
-  resolveTrajectoryPointerOpenFlags,
-  resolveTrajectoryFilePath,
   toTrajectoryToolDefinitions,
 } from "./runtime.js";
 
@@ -46,10 +44,10 @@ afterEach(() => {
 function expectTrajectoryRuntimeRecorder(
   recorder: ReturnType<typeof createTrajectoryRuntimeRecorder>,
 ): TrajectoryRuntimeRecorder {
+  expect(recorder).toEqual(expect.objectContaining({ recordEvent: expect.any(Function) }));
   if (recorder === null) {
     throw new Error("Expected trajectory runtime recorder");
   }
-  expect(typeof recorder.recordEvent).toBe("function");
   return recorder;
 }
 
@@ -86,30 +84,12 @@ function useTempStateDir(): void {
 }
 
 describe("trajectory runtime", () => {
-  it("resolves a session-adjacent trajectory file by default", () => {
-    expect(
-      resolveTrajectoryFilePath({
-        sessionFile: "/tmp/session.jsonl",
-        sessionId: "session-1",
-      }),
-    ).toBe("/tmp/session.trajectory.jsonl");
-  });
-
-  it("sanitizes session ids when resolving an override directory", () => {
-    expect(
-      resolveTrajectoryFilePath({
-        env: { OPENCLAW_TRAJECTORY_DIR: "/tmp/traces" },
-        sessionId: "../evil/session",
-      }),
-    ).toBe("/tmp/traces/___evil_session.jsonl");
-  });
-
   it("records sanitized runtime events into the agent database by default", () => {
     useTempStateDir();
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
+      transcriptLocator: "/tmp/session.jsonl",
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "responses",
@@ -149,7 +129,7 @@ describe("trajectory runtime", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
-      sessionFile: "/tmp/session.jsonl",
+      transcriptLocator: "/tmp/session.jsonl",
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "responses",
@@ -176,7 +156,7 @@ describe("trajectory runtime", () => {
         modelId: "gpt-5.4",
         modelApi: "responses",
         workspaceDir: "/tmp/workspace",
-        runtimeFile: "sqlite:main:trajectory:session-1",
+        runtimeLocator: "sqlite:main:trajectory:session-1",
         eventCount: 2,
       },
     });
@@ -190,7 +170,7 @@ describe("trajectory runtime", () => {
     useTempStateDir();
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
+      transcriptLocator: "/tmp/session.jsonl",
     });
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
@@ -214,7 +194,7 @@ describe("trajectory runtime", () => {
     useTempStateDir();
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
+      transcriptLocator: "/tmp/session.jsonl",
       maxRuntimeFileBytes: 900,
     });
 
@@ -242,16 +222,6 @@ describe("trajectory runtime", () => {
     expect(truncated?.data?.droppedEvents).toBeGreaterThan(0);
   });
 
-  it("keeps pointer write flags usable when O_NOFOLLOW is unavailable", () => {
-    expect(
-      resolveTrajectoryPointerOpenFlags({
-        O_CREAT: 0x01,
-        O_TRUNC: 0x02,
-        O_WRONLY: 0x04,
-      }),
-    ).toBe(0x07);
-  });
-
   it("does not record runtime events when explicitly disabled", () => {
     useTempStateDir();
     const recorder = createTrajectoryRuntimeRecorder({
@@ -260,7 +230,7 @@ describe("trajectory runtime", () => {
       },
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
+      transcriptLocator: "/tmp/session.jsonl",
     });
 
     expect(recorder).toBeNull();

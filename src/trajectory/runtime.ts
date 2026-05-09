@@ -14,11 +14,6 @@ import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
 export {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
-  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-  resolveTrajectoryFilePath,
-  resolveTrajectoryPointerFilePath,
-  resolveTrajectoryPointerOpenFlags,
-  safeTrajectorySessionFileName,
 } from "./paths.js";
 
 type TrajectoryRuntimeInit = {
@@ -28,7 +23,7 @@ type TrajectoryRuntimeInit = {
   runId?: string;
   sessionId: string;
   sessionKey?: string;
-  sessionFile?: string;
+  transcriptLocator?: string;
   provider?: string;
   modelId?: string;
   modelApi?: string | null;
@@ -38,7 +33,7 @@ type TrajectoryRuntimeInit = {
 
 type TrajectoryRuntimeRecorder = {
   enabled: true;
-  filePath: string;
+  runtimeLocator: string;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   flush: () => Promise<void>;
 };
@@ -173,7 +168,7 @@ export function createTrajectoryRuntimeRecorder(
   }
 
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const filePath = `sqlite:${agentId}:trajectory:${params.sessionId}`;
+  const runtimeLocator = `sqlite:${agentId}:trajectory:${params.sessionId}`;
   const maxRuntimeFileBytes = Math.max(
     1,
     Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
@@ -240,7 +235,7 @@ export function createTrajectoryRuntimeRecorder(
           ...(params.modelId ? { modelId: params.modelId } : {}),
           ...(params.modelApi ? { modelApi: params.modelApi } : {}),
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-          runtimeFile: filePath,
+          runtimeLocator,
           eventCount: artifactEventCount,
           bytes: Buffer.byteLength(artifactLines.join(""), "utf8"),
         },
@@ -285,7 +280,7 @@ export function createTrajectoryRuntimeRecorder(
 
   return {
     enabled: true,
-    filePath,
+    runtimeLocator,
     recordEvent: (type, data) => {
       if (captureStopped) {
         droppedEvents += 1;
