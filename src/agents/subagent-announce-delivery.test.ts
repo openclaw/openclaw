@@ -1211,6 +1211,62 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("reports subagent group completions that miss required message-tool delivery", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "Child result that must not be raw-sent.",
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-subagent-message-tool",
+      sourceTool: "subagent_announce",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:openclaw:subagent:child-123",
+          childSessionId: "child-123",
+          announceType: "subagent task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Raw child result that should stay internal.",
+          replyInstruction: "Let the requester/orchestrator deliver the final response.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: false,
+        path: "direct",
+        error: "completion agent did not deliver through the message tool",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          deliver: false,
+          channel: "slack",
+          accountId: "acct-1",
+          to: "channel:C123",
+          threadId: undefined,
+        }),
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("does not fallback for generated media group completions when message tool evidence exists", async () => {
     const callGateway = createGatewayMock({
       result: {
