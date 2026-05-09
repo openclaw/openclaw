@@ -111,6 +111,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
       expect.objectContaining({
         discoveryEntriesOnly: true,
+        includeUntrustedWorkspacePlugins: false,
       }),
     );
   });
