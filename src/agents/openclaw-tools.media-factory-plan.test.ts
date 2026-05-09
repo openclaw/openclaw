@@ -300,6 +300,25 @@ describe("optional media tool factory planning", () => {
     });
   });
 
+  it("lets group:core authorize factory-built PDF tools", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          pdfModel: { primary: "media-owner/model" },
+        },
+      },
+      tools: { allow: ["group:core"] },
+    };
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+      }).pdf,
+    ).toBe(true);
+  });
+
   it("preserves implicit allow-all from alsoAllow-only policies for built-in media factories", async () => {
     const config: OpenClawConfig = {
       agents: {

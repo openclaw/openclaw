@@ -341,6 +341,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "pdf",
+    label: "pdf",
+    description: "PDF analysis",
+    sectionId: "media",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "tts",
     label: "tts",
     description: "Text-to-speech conversion",
@@ -386,7 +394,9 @@ function buildCoreToolGroupMap() {
   const openclawTools = CORE_TOOL_DEFINITIONS.filter((tool) => tool.includeInOpenClawGroup).map(
     (tool) => tool.id,
   );
+  const coreTools = CORE_TOOL_DEFINITIONS.map((tool) => tool.id);
   return {
+    "group:core": coreTools,
     "group:openclaw": openclawTools,
     ...Object.fromEntries(sectionToolMap.entries()),
   };

@@ -210,6 +210,10 @@ export function buildPluginToolMetadataKey(pluginId: string, toolName: string): 
 }
 
 function normalizeAllowlist(list?: string[]) {
+  // Do not expand core tool groups (group:core, group:fs, etc.) into concrete
+  // tool names here — expanded names can collide with plugin-owned tools that
+  // share the same name (browser, canvas, memory_get, …).  Keep group entries
+  // as opaque strings; only group:plugins is checked verbatim downstream.
   return new Set(normalizeUniqueStringEntries((list ?? []).map(normalizeToolName)));
 }
 

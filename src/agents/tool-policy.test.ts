@@ -38,13 +38,29 @@ describe("tool-policy", () => {
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
-  it("includes core tool groups in group:openclaw", () => {
-    const group = TOOL_GROUPS["group:openclaw"];
+  it("includes all core tools in group:core", () => {
+    const group = TOOL_GROUPS["group:core"];
+    expect(group).toContain("read");
+    expect(group).toContain("exec");
     expect(group).toContain("browser");
+    expect(group).toContain("canvas");
     expect(group).toContain("message");
+    expect(group).toContain("pdf");
     expect(group).toContain("subagents");
     expect(group).toContain("session_status");
     expect(group).toContain("tts");
+  });
+
+  it("keeps group:openclaw as the curated OpenClaw integration group", () => {
+    const group = TOOL_GROUPS["group:openclaw"];
+    expect(group).toContain("browser");
+    expect(group).toContain("message");
+    expect(group).toContain("pdf");
+    expect(group).toContain("subagents");
+    expect(group).toContain("session_status");
+    expect(group).toContain("tts");
+    expect(group).not.toContain("read");
+    expect(group).not.toContain("exec");
   });
 
   it("normalizes tool names and aliases", () => {

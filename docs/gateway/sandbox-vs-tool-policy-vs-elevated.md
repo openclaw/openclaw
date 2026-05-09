@@ -87,6 +87,7 @@ Tool policies (global, agent, sandbox) support `group:*` entries that expand to 
 
 Available groups:
 
+- `group:core`: all built-in core tools (excludes provider plugins)
 - `group:runtime`: `exec`, `process`, `code_execution` (`bash` is accepted as
   an alias for `exec`)
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
@@ -99,8 +100,8 @@ Available groups:
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
 - `group:agents`: `agents_list`, `update_plan`
-- `group:media`: `image`, `image_generate`, `music_generate`, `video_generate`, `tts`
-- `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
+- `group:media`: `image`, `image_generate`, `music_generate`, `pdf`, `video_generate`, `tts`
+- `group:openclaw`: curated OpenClaw integration tools (excludes filesystem, shell runtime, and provider plugins)
 - `group:plugins`: all loaded plugin-owned tools, including configured MCP servers exposed through `bundle-mcp`
 
 For sandboxed MCP servers, the sandbox tool policy is a second allow gate. If `mcp.servers` is configured but sandboxed turns only show built-in tools, add `bundle-mcp`, `group:plugins`, or a server-prefixed MCP tool name/glob such as `outlook__send_mail` or `outlook__*` to `tools.sandbox.tools.alsoAllow`, then restart/reload the gateway and recapture the tool list. Server globs use the provider-safe MCP server prefix: non-`[A-Za-z0-9_-]` characters become `-`, names that do not start with a letter get an `mcp-` prefix, and long or duplicate prefixes may be truncated or suffixed.
