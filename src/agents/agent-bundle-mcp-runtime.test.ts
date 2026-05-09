@@ -1710,7 +1710,7 @@ process.on("SIGINT", shutdown);`,
     // The runtime's internal sessionId is the shared-runtime key, not either caller's sessionId,
     // so log lines unambiguously identify the shared runtime.
     expect(runtimeA.sessionId.startsWith("__mcp-shared__::")).toBe(true);
-    expect(manager.listSessionIds().sort()).toEqual(["session-shared-a", "session-shared-b"]);
+    expect(manager.listSessionIds().toSorted()).toEqual(["session-shared-a", "session-shared-b"]);
 
     // Disposing one attached session must not tear the shared runtime down.
     await manager.disposeSession("session-shared-a");
@@ -1841,7 +1841,7 @@ process.on("SIGINT", shutdown);`,
 
     now += 60;
     await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
-    expect(manager.listSessionIds().sort()).toEqual(["session-idle", "session-leased"]);
+    expect(manager.listSessionIds().toSorted()).toEqual(["session-idle", "session-leased"]);
     expect(disposed).toEqual([]);
 
     releaseLease?.();
