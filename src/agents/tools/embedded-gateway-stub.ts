@@ -45,6 +45,9 @@ interface EmbeddedGatewayRuntime {
     cfg: OpenClawConfig;
     p: SessionsResolveParams;
   }) => Promise<SessionsResolveResult>;
+  serializeSessionsResolveSuccess: (
+    result: Extract<SessionsResolveResult, { ok: true }>,
+  ) => Record<string, unknown>;
   loadSessionEntry: (sessionKey: string) => {
     cfg: OpenClawConfig;
     storePath: string | undefined;
@@ -94,7 +97,7 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   if (!resolved.ok) {
     throw new Error(resolved.error.message);
   }
-  return { ok: true, key: resolved.key };
+  return rt.serializeSessionsResolveSuccess(resolved);
 }
 
 async function handleChatHistory(params: Record<string, unknown>): Promise<{

@@ -104,7 +104,10 @@ import {
   type SessionsPreviewResult,
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
-import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import {
+  resolveSessionKeyFromResolveParams,
+  serializeSessionsResolveSuccess,
+} from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
 import type {
@@ -917,7 +920,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, resolved.error);
       return;
     }
-    respond(true, { ok: true, key: resolved.key }, undefined);
+    respond(true, serializeSessionsResolveSuccess(resolved), undefined);
   },
   "sessions.compaction.list": ({ params, respond }) => {
     if (

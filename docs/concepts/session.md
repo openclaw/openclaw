@@ -143,6 +143,9 @@ Preview with `openclaw sessions cleanup --dry-run`.
 
 - `openclaw status` -- session store path and recent activity.
 - `openclaw sessions --json` -- all sessions (filter with `--active <minutes>`).
+- Gateway clients can call `sessions.resolve` with `includeLineage: true` to
+  resolve a key, label, or `sessionId` to the current canonical session key and
+  read the known session-family ids across resets or rotations.
 - `/status` in chat -- context usage, model, and toggles.
 - `/context list` -- what is in the system prompt.
 
