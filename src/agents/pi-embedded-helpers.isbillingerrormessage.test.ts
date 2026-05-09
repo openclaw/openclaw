@@ -683,6 +683,19 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     expect(classifyFailoverReasonFromHttpStatus(422, payload)).toBe("format");
   });
 
+  it("preserves structured server_error markers on explicit HTTP 5xx statuses", () => {
+    expect(classifyFailoverReasonFromHttpStatus(500, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(502, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(504, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(500)).toBe("timeout");
+  });
+
   it("treats generic HTTP 410 responses as retryable timeouts", () => {
     expect(classifyFailoverReasonFromHttpStatus(410)).toBe("timeout");
     expect(classifyFailoverReasonFromHttpStatus(410, "")).toBe("timeout");

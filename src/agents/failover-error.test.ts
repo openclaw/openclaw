@@ -986,9 +986,16 @@ describe("failover-error", () => {
         message: OPENAI_SERVER_ERROR_PAYLOAD,
       }),
     ).toBe("server_error");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 500,
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      }),
+    ).toBe("server_error");
 
     const err = coerceToFailoverError(
       {
+        status: 500,
         message: OPENAI_SERVER_ERROR_PAYLOAD,
       },
       { provider: "openai-codex", model: "gpt-5.4" },

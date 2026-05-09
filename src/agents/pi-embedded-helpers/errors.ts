@@ -697,6 +697,9 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification("timeout");
   }
   if (status === 500 || status === 502 || status === 504) {
+    if (messageReason === "server_error") {
+      return messageClassification;
+    }
     return toReasonClassification("timeout");
   }
   if (status === 529) {
