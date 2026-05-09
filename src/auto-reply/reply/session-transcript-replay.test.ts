@@ -30,6 +30,10 @@ async function readJsonlRecords(filePath: string): Promise<ReplayRecord[]> {
   return records;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("replayRecentUserAssistantMessages", () => {
   let root = "";
   beforeEach(async () => {
@@ -73,7 +77,7 @@ describe("replayRecentUserAssistantMessages", () => {
     ).join("");
     await fs.writeFile(assistantSource, onlyAssistants, "utf8");
     expect(await call(assistantSource, assistantTarget)).toBe(0);
-    await expect(fs.stat(assistantTarget)).rejects.toThrow();
+    await expectPathMissing(assistantTarget);
   });
 
   it("skips header for pre-existing targets and aligns the tail to a user turn", async () => {
