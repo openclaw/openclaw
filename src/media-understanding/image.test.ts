@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
-  ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
+  ensureOpenClawModelCatalogMock: vi.fn(async () => {}),
   getApiKeyForModelMock: vi.fn(async () => ({
     apiKey: "oauth-test", // pragma: allowlist secret
     source: "test",
@@ -24,7 +24,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 const {
   completeMock,
-  ensureOpenClawModelsJsonMock,
+  ensureOpenClawModelCatalogMock,
   getApiKeyForModelMock,
   resolveApiKeyForProviderMock,
   requireApiKeyMock,
@@ -87,7 +87,7 @@ vi.mock("../agents/models-config.js", async () => ({
   ...(await vi.importActual<typeof import("../agents/models-config.js")>(
     "../agents/models-config.js",
   )),
-  ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
+  ensureOpenClawModelCatalog: ensureOpenClawModelCatalogMock,
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -201,7 +201,7 @@ describe("describeImageWithModel", () => {
       text: "portal ok",
       model: "MiniMax-VL-01",
     });
-    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalled();
+    expect(ensureOpenClawModelCatalogMock).toHaveBeenCalled();
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.store).toBe(authStore);
     expect(requireApiKeyMock).toHaveBeenCalled();
@@ -667,7 +667,7 @@ describe("describeImageWithModel", () => {
 
   it("rejects when image runtime setup exceeds the request timeout", async () => {
     vi.useFakeTimers();
-    ensureOpenClawModelsJsonMock.mockImplementationOnce(() => new Promise(() => {}));
+    ensureOpenClawModelCatalogMock.mockImplementationOnce(() => new Promise(() => {}));
 
     const result = describeImageWithModel({
       cfg: {},

@@ -108,7 +108,7 @@ openclaw models auth paste-token --provider openrouter
 }
 ```
 
-OpenClaw expects the canonical `version` + `profiles` shape at runtime. If an older install still has a flat file such as `{ "openrouter": { "apiKey": "..." } }`, run `openclaw doctor --fix` to rewrite it as an `openrouter:default` API-key profile; doctor keeps a `.legacy-flat.*.bak` copy beside the original. Endpoint details such as `baseUrl`, `api`, model ids, headers, and timeouts belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in `auth-profiles.json`.
+OpenClaw expects the canonical `version` + `profiles` shape at runtime. If an older install still has a flat file such as `{ "openrouter": { "apiKey": "..." } }`, run `openclaw doctor --fix` to rewrite it as an `openrouter:default` API-key profile; doctor keeps a `.legacy-flat.*.bak` copy beside the original. Endpoint details such as `baseUrl`, `api`, model ids, headers, and timeouts belong under `models.providers.<id>` in `openclaw.json` or the stored model catalog, not in `auth-profiles.json`.
 
 External auth routes such as Bedrock `auth: "aws-sdk"` are also not credentials. If you want a named Bedrock route, put `auth.profiles.<id>.mode: "aws-sdk"` in `openclaw.json`; do not write `type: "aws-sdk"` into `auth-profiles.json`. `openclaw doctor --fix` moves legacy AWS SDK markers from the credential store into config metadata.
 
@@ -132,7 +132,7 @@ openclaw models status --probe
 
 Notes:
 
-- Probe rows can come from auth profiles, env credentials, or `models.json`.
+- Probe rows can come from auth profiles, env credentials, or the stored model catalog.
 - If explicit `auth.order.<provider>` omits a stored profile, probe reports
   `excluded_by_auth_order` for that profile instead of trying it.
 - If auth exists but OpenClaw cannot resolve a probeable model candidate for

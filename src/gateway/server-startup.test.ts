@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
-const ensureOpenClawModelsJsonMock = vi.fn<
+const ensureOpenClawModelCatalogMock = vi.fn<
   (
     config: unknown,
     agentDir: unknown,
@@ -18,8 +18,8 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: (config: unknown, agentDir: unknown, options?: unknown) =>
-    ensureOpenClawModelsJsonMock(config, agentDir, options),
+  ensureOpenClawModelCatalog: (config: unknown, agentDir: unknown, options?: unknown) =>
+    ensureOpenClawModelCatalogMock(config, agentDir, options),
 }));
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => {
@@ -57,7 +57,7 @@ describe("gateway startup primary model warmup", () => {
   });
 
   beforeEach(() => {
-    ensureOpenClawModelsJsonMock.mockClear();
+    ensureOpenClawModelCatalogMock.mockClear();
     piModelModuleLoadedMock.mockClear();
     resolveEmbeddedAgentRuntimeMock.mockClear();
     resolveEmbeddedAgentRuntimeMock.mockReturnValue("auto");
@@ -79,7 +79,16 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expectModelsJsonPrewarmCall(cfg);
+    expect(ensureOpenClawModelCatalogMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        providerDiscoveryProviderIds: ["openai-codex"],
+        providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
+      }),
+    );
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
@@ -89,7 +98,7 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelCatalogMock).not.toHaveBeenCalled();
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
@@ -127,7 +136,7 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelCatalogMock).not.toHaveBeenCalled();
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
@@ -146,7 +155,7 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelCatalogMock).not.toHaveBeenCalled();
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
@@ -167,12 +176,21 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expectModelsJsonPrewarmCall(cfg);
+    expect(ensureOpenClawModelCatalogMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        providerDiscoveryProviderIds: ["openai-codex"],
+        providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
+      }),
+    );
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("warns when scoped models.json preparation fails", async () => {
-    ensureOpenClawModelsJsonMock.mockRejectedValueOnce(new Error("models write failed"));
+  it("warns when scoped model catalog preparation fails", async () => {
+    ensureOpenClawModelCatalogMock.mockRejectedValueOnce(new Error("models write failed"));
     const warn = vi.fn();
 
     await prewarmConfiguredPrimaryModel({

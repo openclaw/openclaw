@@ -190,7 +190,7 @@ When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models
 | Token limits         | Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw                                                                                                |
 | Costs                | Sets all costs to `0`                                                                                                                                                |
 
-This avoids manual model entries while keeping the catalog aligned with the local Ollama instance. You can use a full ref such as `ollama/<pulled-model>:latest` in local `infer model run`; OpenClaw resolves that installed model from Ollama's live catalog without requiring a hand-written `models.json` entry.
+This avoids manual model entries while keeping the catalog aligned with the local Ollama instance. You can use a full ref such as `ollama/<pulled-model>:latest` in local `infer model run`; OpenClaw resolves that installed model from Ollama's live catalog without requiring a hand-written model catalog entry.
 
 For signed-in Ollama hosts, some `:cloud` models may be usable through `/api/chat`
 and `/api/show` before they appear in `/api/tags`. When you explicitly select a

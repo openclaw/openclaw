@@ -31,7 +31,11 @@ import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-t
 import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
-import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import {
+  readStoredModelsConfigRaw,
+  writeStoredModelsConfigRaw,
+} from "../agents/models-config-store.js";
+import { ensureOpenClawModelCatalog } from "../agents/models-config.js";
 import {
   clampThinkingLevel,
   type Api,
@@ -1555,10 +1559,13 @@ async function loadProviderScopedConfiguredModels(params: {
   agentDir: string;
   providerList: readonly string[];
 }): Promise<Array<Model<Api>>> {
-  const modelsPath = path.join(params.agentDir, "models.json");
   let parsed: { providers?: Record<string, ModelProviderConfig> };
   try {
-    parsed = JSON.parse(await fs.readFile(modelsPath, "utf8")) as {
+    const stored = readStoredModelsConfigRaw(params.agentDir);
+    if (!stored) {
+      return [];
+    }
+    parsed = JSON.parse(stored.raw) as {
       providers?: Record<string, ModelProviderConfig>;
     };
   } catch {
@@ -1940,9 +1947,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
   const liveProviders = nextCfg.models?.providers;
   if (liveProviders && Object.keys(liveProviders).length > 0) {
-    const modelsPath = path.join(tempAgentDir, "models.json");
     await fs.mkdir(tempAgentDir, { recursive: true });
-    await fs.writeFile(modelsPath, `${JSON.stringify({ providers: liveProviders }, null, 2)}\n`);
+    writeStoredModelsConfigRaw(
+      tempAgentDir,
+      `${JSON.stringify({ providers: liveProviders }, null, 2)}\n`,
+    );
   }
 
   // Keep the broad live Docker suite on the impl entrypoint. The lazy public
@@ -2637,14 +2646,14 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           "[all-models] load config",
         );
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
-        logProgress("[all-models] preparing models.json");
+        logProgress("[all-models] preparing model catalog");
         await withGatewayLiveSetupTimeout(
-          ensureOpenClawModelsJson(cfg, undefined, {
+          ensureOpenClawModelCatalog(cfg, undefined, {
             workspaceDir,
             ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
             providerDiscoveryEntriesOnly: true,
           }),
-          "[all-models] prepare models.json",
+          "[all-models] prepare model catalog",
         );
 
         const agentDir = resolveDefaultAgentDir(cfg);
@@ -2863,7 +2872,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
     const cfg = getRuntimeConfig();
-    await ensureOpenClawModelsJson(cfg);
+    await ensureOpenClawModelCatalog(cfg);
 
     const agentDir = resolveDefaultAgentDir(cfg);
     const authStorage = discoverAuthStorage(agentDir);

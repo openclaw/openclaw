@@ -469,8 +469,8 @@ Default operator flow:
   <Accordion title="secrets audit">
     Findings include:
 
-    - plaintext values at rest (`openclaw.json`, `auth-profiles.json`, `.env`, and generated `agents/*/agent/models.json`)
-    - plaintext sensitive provider header residues in generated `models.json` entries
+    - plaintext values at rest (`openclaw.json`, `auth-profiles.json`, `.env`, and the stored model catalog)
+    - plaintext sensitive provider header residues in stored model catalog entries
     - unresolved refs
     - precedence shadowing (`auth-profiles.json` taking priority over `openclaw.json` refs)
     - legacy residues (`auth.json`, OAuth reminders)

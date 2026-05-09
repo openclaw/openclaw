@@ -45,7 +45,7 @@ const hoisted = vi.hoisted(() => {
     model: "gpt-5.4",
   }));
   const resolveEmbeddedAgentRuntime = vi.fn(() => "pi");
-  const ensureOpenClawModelsJson = vi.fn(async () => undefined);
+  const ensureOpenClawModelCatalog = vi.fn(async () => undefined);
   return {
     startPluginServices,
     startGmailWatcherWithLogs,
@@ -71,7 +71,7 @@ const hoisted = vi.hoisted(() => {
     isCliProvider,
     resolveConfiguredModelRef,
     resolveEmbeddedAgentRuntime,
-    ensureOpenClawModelsJson,
+    ensureOpenClawModelCatalog,
   };
 });
 
@@ -170,7 +170,7 @@ vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
 }));
 
 vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: hoisted.ensureOpenClawModelsJson,
+  ensureOpenClawModelCatalog: hoisted.ensureOpenClawModelCatalog,
 }));
 
 vi.mock("./server-tailscale.js", () => ({
@@ -268,8 +268,8 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.resolveConfiguredModelRef.mockClear();
     hoisted.resolveEmbeddedAgentRuntime.mockReset();
     hoisted.resolveEmbeddedAgentRuntime.mockReturnValue("pi");
-    hoisted.ensureOpenClawModelsJson.mockReset();
-    hoisted.ensureOpenClawModelsJson.mockResolvedValue(undefined);
+    hoisted.ensureOpenClawModelCatalog.mockReset();
+    hoisted.ensureOpenClawModelCatalog.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -599,7 +599,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("prewarms models.json in the configured default agent dir", async () => {
+  it("prewarms the model catalog in the configured default agent dir", async () => {
     const cfg = {
       agents: {
         defaults: { model: "openai/gpt-5.4" },
@@ -616,13 +616,14 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(hoisted.resolveDefaultAgentDir).toHaveBeenCalledWith(cfg);
-    expect(hoisted.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
-    const ensureCall = firstEnsureModelsJsonCall();
-    expect(ensureCall[0]).toBe(cfg);
-    expect(ensureCall[1]).toBe("/tmp/openclaw-state/agents/ops/agent");
-    const options = ensureCall[2];
-    expect(options?.workspaceDir).toBe("/tmp/openclaw-workspace");
-    expect(options?.providerDiscoveryProviderIds).toEqual(["openai"]);
+    expect(hoisted.ensureOpenClawModelCatalog).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/openclaw-state/agents/ops/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-workspace",
+        providerDiscoveryProviderIds: ["openai"],
+      }),
+    );
   });
 
   it("starts channels without waiting for primary model prewarm completion", async () => {

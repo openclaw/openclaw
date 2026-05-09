@@ -342,7 +342,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 
 ## Providers via `models.providers` (custom/base URL)
 
-Use `models.providers` (or `models.json`) to add **custom** providers or OpenAI/Anthropic-compatible proxies.
+Use `models.providers` to add **custom** providers or OpenAI/Anthropic-compatible proxies. Older `models.json` files are imported by `openclaw doctor --fix`.
 
 Many of the bundled provider plugins below already publish a default catalog. Use explicit `models.providers.<id>` entries only when you want to override the default base URL, headers, or model list.
 

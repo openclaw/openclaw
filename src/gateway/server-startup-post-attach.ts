@@ -251,12 +251,12 @@ async function prewarmConfiguredPrimaryModel(params: {
     return;
   }
   // Keep startup prewarm metadata-only; resolving models can import provider runtimes and block readiness.
-  const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
+  const { ensureOpenClawModelCatalog } = await import("../agents/models-config.js");
   const agentDir = resolveDefaultAgentDir(params.cfg);
   const workspaceDir =
     params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   try {
-    await ensureOpenClawModelsJson(params.cfg, agentDir, {
+    await ensureOpenClawModelCatalog(params.cfg, agentDir, {
       workspaceDir,
       providerDiscoveryProviderIds: [provider],
       providerDiscoveryTimeoutMs: STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS,

@@ -96,7 +96,7 @@ src/agents/
 ├── model-auth.ts                  # Auth profile resolution
 ├── auth-profiles.ts               # Profile store, cooldown, failover
 ├── model-selection.ts             # Default model resolution
-├── models-config.ts               # models.json generation
+├── models-config.ts               # SQLite model catalog materialization
 ├── model-catalog.ts               # Model catalog cache
 ├── context-window-guard.ts        # Context window validation
 ├── failover-error.ts              # FailoverError class

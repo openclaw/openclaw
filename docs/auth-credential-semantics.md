@@ -86,8 +86,8 @@ removes the marker from the credential store.
 
 ## Probe target resolution
 
-- Probe targets can come from auth profiles, environment credentials, or
-  `models.json`.
+- Probe targets can come from auth profiles, environment credentials, or the
+  stored model catalog.
 - If a provider has credentials but OpenClaw cannot resolve a probeable model
   candidate for it, `models status --probe` reports `status: no_model` with
   `reasonCode: no_model`.
