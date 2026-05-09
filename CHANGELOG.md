@@ -172,6 +172,10 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Memory: close temp SQLite handles before failed atomic reindex cleanup and retry Windows EBUSY/EPERM/EACCES temp file removals, so `memory index --force` does not abort or leave temp sidecars on locked filesystems. Fixes #79708. Thanks @LobsterFarmerAmp and @hclsys.
+- Skills CLI: normalize object-shaped `metadata.openclaw.requires.config` entries by their `path` so skill info/status no longer renders `[object Object]` or blocks valid config requirements. Fixes #79488. Thanks @sebrinass.
+- Agents/subagents: honor `OPENCLAW_SPAWN_ALLOWLIST` and `SPAWN_ALLOWLIST` as fallback target-agent allowlists for `sessions_spawn` when no config allowlist is set. Fixes #79490. Thanks @baptisterou.
+- Control UI/WebChat: map backend agent run ids back to the originating chat run so context-overflow lifecycle errors clear the active run instead of leaving Stop and queued `/new` stuck. Fixes #79525. Thanks @dmak.
+- CLI/status: prefer systemd `is-active` when `systemctl show` returns a stale failed state, so active Gateway user services report as running. Fixes #79515. Thanks @holgergruenhagen.
 - Agents/CLI: add an explicit `reseedFromRawTranscriptWhenUncompacted` backend opt-in so safe invalidated CLI sessions can reseed from a bounded raw OpenClaw transcript tail before compaction while auth-boundary resets remain no-raw. Fixes #79713. (#79764) Thanks @hclsys.
 - Agents/CLI: handle resumed CLI JSONL output and bound supervisor output buffering so resumed runs stay readable without letting noisy child output grow unbounded.
 - Codex app-server: honor per-call `timeoutMs`, configured `image_generate` timeouts, and media image-understanding timeouts for dynamic tool calls, capped at 600000 ms, so slow image generation and image analysis no longer fail at the 30s bridge default. Fixes #79810. Thanks @omarshahine.

@@ -1,6 +1,49 @@
 import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
+
+type SubagentAllowlistEnv = {
+  OPENCLAW_SPAWN_ALLOWLIST?: string;
+  SPAWN_ALLOWLIST?: string;
+};
+
+export function parseSubagentAllowlistEnv(raw: string | undefined): string[] | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        const normalized = normalizeStringEntries(parsed);
+        return normalized.length > 0 ? normalized : undefined;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  const normalized = normalizeStringEntries(trimmed.split(","));
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+export function resolveConfiguredSubagentAllowAgents(params: {
+  agentAllowAgents?: readonly string[];
+  defaultAllowAgents?: readonly string[];
+  env?: SubagentAllowlistEnv;
+}): readonly string[] | undefined {
+  if (params.agentAllowAgents !== undefined) {
+    return params.agentAllowAgents;
+  }
+  if (params.defaultAllowAgents !== undefined) {
+    return params.defaultAllowAgents;
+  }
+  return (
+    parseSubagentAllowlistEnv(params.env?.OPENCLAW_SPAWN_ALLOWLIST) ??
+    parseSubagentAllowlistEnv(params.env?.SPAWN_ALLOWLIST)
+  );
+}
 
 function normalizeAllowAgents(allowAgents: readonly string[] | undefined): {
   configured: boolean;

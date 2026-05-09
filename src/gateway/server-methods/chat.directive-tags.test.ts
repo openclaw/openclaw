@@ -2084,6 +2084,31 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(finalBroadcast).toBeUndefined();
   });
 
+  it("maps the agent runtime run id back to the chat.send client run", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-run-map-");
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "agent-run-context-overflow";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "client-run-context-overflow",
+      message: "hello from dashboard",
+      expectBroadcast: false,
+    });
+
+    expect(context.addChatRun).toHaveBeenCalledWith("client-run-context-overflow", {
+      sessionKey: "main",
+      clientRunId: "client-run-context-overflow",
+    });
+    expect(context.addChatRun).toHaveBeenCalledWith("agent-run-context-overflow", {
+      sessionKey: "main",
+      clientRunId: "client-run-context-overflow",
+    });
+  });
+
   it("does not emit pre-gate user transcript content when before_agent_run hooks are registered", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-before-run-gate-");
     mockState.finalText = "ok";

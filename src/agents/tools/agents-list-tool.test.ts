@@ -90,6 +90,27 @@ describe("agents_list tool", () => {
     expect(details.agents?.[0]?.configured).toBe(true);
   });
 
+  it("uses SPAWN_ALLOWLIST as the default allowed target set when config omits allowAgents", async () => {
+    vi.stubEnv("SPAWN_ALLOWLIST", "*");
+    loadConfigMock.mockReturnValue({
+      agents: {
+        list: [{ id: "main", default: true }, { id: "codex" }],
+      },
+    } satisfies OpenClawConfig);
+
+    const { createAgentsListTool } = await import("./agents-list-tool.js");
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+
+    expect(result.details).toMatchObject({
+      requester: "main",
+      allowAny: true,
+      agents: [{ id: "main" }, { id: "codex" }],
+    });
+  });
+
   it("ignores legacy env-forced plugin runtime selections", async () => {
     vi.stubEnv("OPENCLAW_AGENT_RUNTIME", "codex");
     loadConfigMock.mockReturnValue({

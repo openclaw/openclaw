@@ -29,7 +29,10 @@ import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
-import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
+import {
+  resolveConfiguredSubagentAllowAgents,
+  resolveSubagentTargetPolicy,
+} from "./subagent-target-policy.js";
 export {
   SUBAGENT_SPAWN_ACCEPTED_NOTE,
   SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
@@ -805,9 +808,11 @@ export async function spawnSubagentDirect(
     requesterAgentId,
     targetAgentId,
     requestedAgentId,
-    allowAgents:
-      resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
-      cfg?.agents?.defaults?.subagents?.allowAgents,
+    allowAgents: resolveConfiguredSubagentAllowAgents({
+      agentAllowAgents: resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents,
+      defaultAllowAgents: cfg?.agents?.defaults?.subagents?.allowAgents,
+      env: process.env,
+    }),
   });
   if (!targetPolicy.ok) {
     return {

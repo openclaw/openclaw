@@ -244,8 +244,8 @@ Fields under `metadata.openclaw`:
 <ParamField path="requires.env" type="string[]">
   Env var must exist or be provided in config.
 </ParamField>
-<ParamField path="requires.config" type="string[]">
-  List of `openclaw.json` paths that must be truthy.
+<ParamField path="requires.config" type='Array<string | { path: string; access?: string; purpose?: string }>'>
+  List of `openclaw.json` paths that must be truthy. Object entries are accepted for descriptive metadata; OpenClaw uses their `path` value for eligibility checks.
 </ParamField>
 <ParamField path="primaryEnv" type="string">
   Env var name associated with `skills.entries.<name>.apiKey`.
