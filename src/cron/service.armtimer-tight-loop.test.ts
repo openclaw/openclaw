@@ -6,7 +6,7 @@ import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-tight-loop-" });
+const { makeStoreKey } = createCronStoreHarness({ prefix: "openclaw-cron-tight-loop-" });
 
 /**
  * Create a cron job that is past-due AND has a stuck `runningAtMs` marker.
@@ -46,12 +46,12 @@ describe("CronService - armTimer tight loop prevention", () => {
   }
 
   function createTimerState(params: {
-    storePath: string;
+    storeKey: string;
     now: number;
     runIsolatedAgentJob?: () => Promise<{ status: "ok" }>;
   }) {
     return createCronServiceState({
-      storePath: params.storePath,
+      storeKey: params.storeKey,
       cronEnabled: true,
       log: noopLogger,
       nowMs: () => params.now,
@@ -79,7 +79,7 @@ describe("CronService - armTimer tight loop prevention", () => {
     const pastDueMs = 17 * 60 * 1000; // 17 minutes past due
 
     const state = createTimerState({
-      storePath: "/tmp/test-cron/jobs.json",
+      storeKey: "tight-loop-min-delay",
       now,
     });
     state.store = {
@@ -107,7 +107,7 @@ describe("CronService - armTimer tight loop prevention", () => {
     const now = Date.parse("2026-02-28T12:32:00.000Z");
 
     const state = createTimerState({
-      storePath: "/tmp/test-cron/jobs.json",
+      storeKey: "tight-loop-max-delay",
       now,
     });
     state.store = {
@@ -145,7 +145,7 @@ describe("CronService - armTimer tight loop prevention", () => {
     const now = Date.parse("2026-02-28T12:32:00.000Z");
 
     const state = createTimerState({
-      storePath: "/tmp/test-cron/jobs.json",
+      storeKey: "tight-loop-rearm",
       now,
     });
     state.store = {
@@ -179,17 +179,17 @@ describe("CronService - armTimer tight loop prevention", () => {
 
   it("breaks the onTimer→armTimer hot-loop with stuck runningAtMs", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const now = Date.parse("2026-02-28T12:32:00.000Z");
     const pastDueMs = 17 * 60 * 1000;
 
-    await saveCronStore(store.storePath, {
+    await saveCronStore(store.storeKey, {
       version: 1,
       jobs: [createStuckPastDueJob({ id: "monitor", nowMs: now, pastDueMs })],
     });
 
     const state = createTimerState({
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       now,
     });
 

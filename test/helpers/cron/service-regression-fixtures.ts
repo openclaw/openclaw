@@ -64,9 +64,9 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
   });
 
   return {
-    makeStorePath() {
+    makeStoreKey() {
       return {
-        storePath: path.join(fixtureRoot, `case-${fixtureCount++}.jobs.json`),
+        storeKey: `case-${fixtureCount++}`,
       };
     },
   };
@@ -83,14 +83,14 @@ export function createDeferred<T>() {
 }
 
 export function createRunningCronServiceState(params: {
-  storePath: string;
+  storeKey?: string;
   log: CronServiceDeps["log"];
   nowMs: () => number;
   jobs: CronJob[];
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
-    storeKey: params.storePath,
+    storeKey: params.storeKey ?? "default",
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),
@@ -189,10 +189,10 @@ export function createIsolatedRegressionJob(params: {
   };
 }
 
-export async function writeCronJobs(storePath: string, jobs: CronJob[]) {
-  await saveCronStore(storePath, { version: 1, jobs });
+export async function writeCronJobs(storeKey: string, jobs: CronJob[]) {
+  await saveCronStore(storeKey, { version: 1, jobs });
 }
 
-export async function writeCronStoreSnapshot(storePath: string, jobs: unknown[]) {
-  await saveCronStore(storePath, { version: 1, jobs: jobs as CronJob[] });
+export async function writeCronStoreSnapshot(storeKey: string, jobs: unknown[]) {
+  await saveCronStore(storeKey, { version: 1, jobs: jobs as CronJob[] });
 }

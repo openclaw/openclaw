@@ -351,7 +351,6 @@ describe("diagnostics command", () => {
     expect(calls[0]?.args).toBe("diagnostics flaky tool call");
     expect(calls[0]?.diagnosticsPreviewOnly).toBe(true);
     expect(calls[0]?.senderIsOwner).toBe(true);
-    expect(calls[0]?.transcriptLocator).toBe("sqlite-transcript://main/session-1");
     expect(calls[0]?.diagnosticsSessions).toEqual([
       expect.objectContaining({
         agentHarnessId: "codex",

@@ -413,7 +413,7 @@ async function callTransform(
 describe("installContextEngineLoopHook", () => {
   const sessionId = "test-session-id";
   const sessionKey = "agent:main:subagent:test";
-  const sessionFile = "/tmp/test-session.jsonl";
+  const transcriptLocator = "agent:main:test-session";
   const tokenBudget = 4096;
   const modelId = "test-model";
 
@@ -432,7 +432,7 @@ describe("installContextEngineLoopHook", () => {
       contextEngine: engine,
       sessionId,
       sessionKey,
-      sessionFile,
+      transcriptLocator,
       tokenBudget,
       modelId,
       ...(prePromptCount !== undefined ? { getPrePromptMessageCount: () => prePromptCount } : {}),

@@ -24,11 +24,13 @@ function createIssue66019Job(params: { id: string; scheduledAt: number }) {
 }
 
 function createIssue66019State(params: {
+  storeKey: string;
   nowMs: () => number;
   runIsolatedAgentJob: Parameters<typeof createCronServiceState>[0]["runIsolatedAgentJob"];
 }) {
   return createCronServiceState({
     cronEnabled: true,
+    storeKey: params.storeKey,
     log: noopLogger,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),
@@ -62,7 +64,7 @@ async function expectJobDoesNotRefireWhenNextRunIsUnresolved(params: {
 
 describe("#66019 unresolved next-run repro", () => {
   it("does not refire a recurring cron job 2s later when next-run resolution returns undefined", async () => {
-    const store = issue66019Fixtures.makeStorePath();
+    const store = issue66019Fixtures.makeStoreKey();
     const scheduledAt = Date.parse("2026-04-13T15:40:00.000Z");
     let now = scheduledAt;
 
@@ -70,11 +72,12 @@ describe("#66019 unresolved next-run repro", () => {
       id: "cron-66019-minimal-success",
       scheduledAt,
     });
-    await writeCronJobs(store.storePath, [cronJob]);
+    await writeCronJobs(store.storeKey, [cronJob]);
 
     const runIsolatedAgentJob = createDefaultIsolatedRunner();
     const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
     const state = createIssue66019State({
+      storeKey: store.storeKey,
       nowMs: () => now,
       runIsolatedAgentJob,
     });
@@ -96,7 +99,7 @@ describe("#66019 unresolved next-run repro", () => {
   });
 
   it("does not refire a recurring errored cron job after the first backoff window when next-run resolution returns undefined", async () => {
-    const store = issue66019Fixtures.makeStorePath();
+    const store = issue66019Fixtures.makeStoreKey();
     const scheduledAt = Date.parse("2026-04-13T15:45:00.000Z");
     let now = scheduledAt;
 
@@ -104,7 +107,7 @@ describe("#66019 unresolved next-run repro", () => {
       id: "cron-66019-minimal-error",
       scheduledAt,
     });
-    await writeCronJobs(store.storePath, [cronJob]);
+    await writeCronJobs(store.storeKey, [cronJob]);
 
     const runIsolatedAgentJob = vi.fn().mockResolvedValue({
       status: "error",
@@ -112,6 +115,7 @@ describe("#66019 unresolved next-run repro", () => {
     });
     const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
     const state = createIssue66019State({
+      storeKey: store.storeKey,
       nowMs: () => now,
       runIsolatedAgentJob,
     });
@@ -133,7 +137,7 @@ describe("#66019 unresolved next-run repro", () => {
   });
 
   it("preserves the active error backoff floor when maintenance repair later finds a natural next run", async () => {
-    const store = issue66019Fixtures.makeStorePath();
+    const store = issue66019Fixtures.makeStoreKey();
     const scheduledAt = Date.parse("2026-04-13T15:50:00.000Z");
     let now = scheduledAt;
 
@@ -141,7 +145,7 @@ describe("#66019 unresolved next-run repro", () => {
       id: "cron-66019-error-backoff-floor",
       scheduledAt,
     });
-    await writeCronJobs(store.storePath, [cronJob]);
+    await writeCronJobs(store.storeKey, [cronJob]);
 
     const runIsolatedAgentJob = vi.fn().mockResolvedValue({
       status: "error",
@@ -155,6 +159,7 @@ describe("#66019 unresolved next-run repro", () => {
       .mockReturnValueOnce(undefined)
       .mockReturnValue(naturalNext);
     const state = createIssue66019State({
+      storeKey: store.storeKey,
       nowMs: () => now,
       runIsolatedAgentJob,
     });

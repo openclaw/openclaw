@@ -43,7 +43,7 @@ const sessionParams = {
   sessionIdUsed: "session-1",
   sessionId: "session-1",
   sessionKey: "agent:main",
-  sessionFile: "sqlite-transcript://main/session-1.jsonl",
+  transcriptLocator: "agent:main:session-1",
 };
 
 describe("harness context engine lifecycle", () => {
@@ -84,7 +84,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
-      sessionFile: sessionParams.sessionFile,
+      transcriptLocator: sessionParams.transcriptLocator,
       messagesSnapshot: [
         beforePromptUser,
         beforePromptRuntimeContext,
@@ -129,7 +129,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
-      sessionFile: sessionParams.sessionFile,
+      transcriptLocator: sessionParams.transcriptLocator,
       messagesSnapshot: [
         beforePromptUser,
         beforePromptRuntimeContext,

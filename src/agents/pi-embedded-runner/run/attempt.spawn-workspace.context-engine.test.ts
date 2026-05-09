@@ -36,7 +36,7 @@ import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 const hoisted = getHoisted();
 const embeddedSessionId = "embedded-session";
-const sessionFile = "/tmp/session.jsonl";
+const transcriptLocator = "agent:main:session-attempt";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
 type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
@@ -81,11 +81,11 @@ async function runBootstrap(
   overrides: Partial<Parameters<typeof runAttemptContextEngineBootstrap>[0]> = {},
 ) {
   await runAttemptContextEngineBootstrap({
-    hadSessionFile: true,
+    hadTranscriptLocator: true,
     contextEngine,
     sessionId: embeddedSessionId,
     sessionKey,
-    sessionFile,
+    transcriptLocator,
     sessionManager: hoisted.sessionManager,
     runtimeContext: {},
     runMaintenance: hoisted.runContextEngineMaintenanceMock,
@@ -122,7 +122,7 @@ async function finalizeTurn(
     yieldAborted: false,
     sessionIdUsed: embeddedSessionId,
     sessionKey,
-    sessionFile,
+    transcriptLocator,
     messagesSnapshot: [doneMessage],
     prePromptMessageCount: 0,
     tokenBudget: 2048,
@@ -1213,16 +1213,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       flushPendingToolResultsAfterIdle: flushMock,
       session: { agent: {}, dispose: disposeMock },
       sessionManager: hoisted.sessionManager,
-      releaseWsSession: hoisted.releaseWsSessionMock,
-      sessionId: embeddedSessionId,
       bundleLspRuntime: undefined,
     });
 
     expect(flushMock).toHaveBeenCalledTimes(1);
     expect(disposeMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
-      allowPool: false,
-    });
   });
 });
 

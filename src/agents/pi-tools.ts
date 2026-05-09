@@ -1,3 +1,4 @@
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -399,6 +400,8 @@ export function createOpenClawCodingTools(options?: {
   modelHasVision?: boolean;
   /** Require explicit message targets (no implicit last-route sends). */
   requireExplicitMessageTarget?: boolean;
+  /** Visible source replies must be sent through the message tool when set to message_tool_only. */
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   /** Runtime-owned filesystem capabilities. Absence of workspace disables host workspace tools. */
@@ -843,6 +846,7 @@ export function createOpenClawCodingTools(options?: {
           hasRepliedRef: options?.hasRepliedRef,
           modelHasVision: options?.modelHasVision,
           requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
+          sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
           disableMessageTool: options?.disableMessageTool,
           enableHeartbeatTool,
           disablePluginTools: !includePluginTools,

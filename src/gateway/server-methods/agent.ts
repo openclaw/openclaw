@@ -633,8 +633,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       let baseProvider: string | undefined;
       let baseModel: string | undefined;
       if (requestedSessionKeyRaw) {
-        const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw);
-        const modelRef = resolveSessionModelRef(sessCfg, sessEntry, undefined);
+        const {
+          cfg: sessCfg,
+          entry: sessEntry,
+          agentId: sessionAgentId,
+        } = loadSessionEntry(requestedSessionKeyRaw);
+        const modelRef = resolveSessionModelRef(sessCfg, sessEntry, sessionAgentId);
         baseProvider = modelRef.provider;
         baseModel = modelRef.model;
       }
