@@ -37,7 +37,6 @@ describe("listAcpSessionEntries", () => {
     hoisted.resolveAllAgentSessionDatabaseTargetsMock.mockResolvedValue([
       {
         agentId: "ops",
-        storePath: "/custom/sessions/ops.json",
       },
     ]);
     hoisted.listSessionEntriesMock.mockReturnValue([

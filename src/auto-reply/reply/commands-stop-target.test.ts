@@ -124,7 +124,6 @@ function buildStopParams(): HandleCommandsParams {
       updatedAt: Date.now(),
     },
     sessionStore: {},
-    storePath: "/tmp/openclaw-agent.sqlite",
   } as unknown as HandleCommandsParams;
 }
 
