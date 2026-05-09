@@ -157,6 +157,7 @@ openclaw infer model run --local --model anthropic/claude-sonnet-4-6 --prompt "R
 openclaw infer model run --local --model cerebras/zai-glm-4.7 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model google/gemini-2.5-flash --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model groq/llama-3.1-8b-instant --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model mistral/mistral-medium-3-5 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model mistral/mistral-small-latest --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model openai/gpt-4.1 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model ollama/qwen2.5vl:7b --prompt "Describe this image." --file ./photo.jpg --json
@@ -165,6 +166,7 @@ openclaw infer model run --local --model ollama/qwen2.5vl:7b --prompt "Describe 
 Notes:
 
 - Local `model run` is the narrowest CLI smoke for provider/model/auth health because, for non-Codex providers, it sends only the supplied prompt to the selected model.
+- For Mistral Medium 3.5 reasoning probes, leave temperature unset/default. Mistral rejects `reasoning_effort="high"` plus `temperature: 0`; use `mistral/mistral-medium-3-5` with default temperature or a non-zero reasoning-mode value such as `0.7`.
 - `openai-codex/*` local probes are the narrow exception: OpenClaw adds a minimal system instruction so the Codex Responses transport can populate its required `instructions` field, without adding full agent context, tools, memory, or session transcript.
 - Local `model run --file` keeps that lean path and attaches image content directly to the single user message. Common image files such as PNG, JPEG, and WebP work when their MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called.
 - `model run --file` is best when you want to test the selected multimodal text model directly. Use `infer image describe` when you want OpenClaw's image-understanding provider selection and default image-model routing.
