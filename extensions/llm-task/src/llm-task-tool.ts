@@ -8,7 +8,6 @@ import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
-import { createSqliteSessionTranscriptLocator } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../api.js";
@@ -257,14 +256,11 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const fullPrompt = `${system}\n\nTASK:\n${prompt}\n\nINPUT_JSON:\n${inputJson}\n`;
 
       const sessionId = `llm-task-${randomUUID()}`;
-      const sessionFile = createSqliteSessionTranscriptLocator({
-        agentId: api.config ? resolveDefaultAgentId(api.config) : undefined,
-        sessionId,
-      });
+      const agentId = api.config ? resolveDefaultAgentId(api.config) : undefined;
 
       const result = await api.runtime.agent.runEmbeddedPiAgent({
         sessionId,
-        sessionFile,
+        agentId,
         workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
         config: api.config,
         prompt: fullPrompt,

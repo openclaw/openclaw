@@ -1,6 +1,5 @@
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { getSessionEntry } from "../config/sessions/store.js";
 import { hasSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -95,17 +94,6 @@ export async function exportTrajectoryCommand(
     return;
   }
 
-  let sessionFile: string;
-  try {
-    sessionFile = createSqliteSessionTranscriptLocator({
-      agentId: targetAgentId,
-      sessionId: entry.sessionId,
-    });
-  } catch (error) {
-    runtime.error(`Failed to resolve session transcript: ${formatErrorMessage(error)}`);
-    runtime.exit(1);
-    return;
-  }
   if (!hasSqliteSessionTranscriptEvents({ agentId: targetAgentId, sessionId: entry.sessionId })) {
     runtime.error(
       `Session transcript has not been migrated into SQLite. Run ${formatCliCommand("openclaw doctor --fix")} and try again.`,
@@ -117,8 +105,8 @@ export async function exportTrajectoryCommand(
   let summary: TrajectoryCommandExportSummary;
   try {
     summary = await exportTrajectoryForCommand({
+      agentId: targetAgentId,
       outputPath: resolvedOpts.output,
-      sessionFile,
       sessionId: entry.sessionId,
       sessionKey,
       workspaceDir: path.resolve(resolvedOpts.workspace ?? process.cwd()),
