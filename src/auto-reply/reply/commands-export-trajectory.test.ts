@@ -210,19 +210,12 @@ describe("buildExportTrajectoryReply", () => {
     vi.clearAllMocks();
     hoisted.accessMock.mockImplementation(
       async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
-        if (file.toString() === "/tmp/target-store/session.jsonl") {
-          return;
-        }
         await actualAccess(file);
       },
     );
     hoisted.statMock.mockImplementation(
-      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
-        if (file.toString() === "/tmp/target-store/session.jsonl") {
-          return {};
-        }
-        return await actualStat(file);
-      },
+      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) =>
+        await actualStat(file),
     );
     hoisted.hasSqliteSessionTranscriptEventsMock.mockReturnValue(true);
   });
