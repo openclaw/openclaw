@@ -24,6 +24,20 @@ without scripting against the SDK directly; agents and hooks treat it as a
 deterministic substrate so byte-fidelity round-trips and the redaction
 sentinel guard apply uniformly across kinds.
 
+## Why enable it
+
+Enable `oc-path` when you want scripts, hooks, or local agent tooling to point
+at a precise piece of workspace state without inventing a parser for each file
+shape. A single `oc://` address can name a markdown frontmatter key, a section
+item, a JSONC config leaf, or a JSONL event field.
+
+That matters for maintainer workflows where the change should be small,
+auditable, and repeatable: inspect one value, find matching records, dry-run a
+write, then apply only that leaf while leaving comments, line endings, and
+nearby formatting alone. Keeping this as an opt-in plugin gives power users the
+addressing substrate without putting parser dependencies or CLI surface into
+core for installs that never need it.
+
 ## Where it runs
 
 The plugin runs **in-process inside the `openclaw` CLI** on the host where you
