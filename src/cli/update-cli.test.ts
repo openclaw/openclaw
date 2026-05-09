@@ -3049,6 +3049,52 @@ describe("update-cli", () => {
     expect(doctorCommand).not.toHaveBeenCalled();
   });
 
+  it("skips the post-refresh restart script when LaunchAgent already serves the expected package version", async () => {
+    const updatedRoot = createCaseDir("openclaw-updated-root");
+    const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
+    setupUpdatedRootRefresh({
+      entrypoints: [updatedEntrypoint],
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: updatedRoot,
+          before: { version: "2026.4.23" },
+          after: { version: "2026.4.24" },
+        }),
+    });
+    serviceLoaded.mockResolvedValue(true);
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: {
+        version: "2026.4.24",
+        connId: "updated-gateway",
+      },
+      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+      connectLatencyMs: 1,
+      error: null,
+      url: "ws://127.0.0.1:18789",
+    });
+
+    await updateCommand({ yes: true });
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), updatedEntrypoint, "gateway", "install", "--force"],
+      expect.objectContaining({ cwd: updatedRoot, timeoutMs: 60_000 }),
+    );
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), updatedEntrypoint, "gateway", "restart"],
+      expect.anything(),
+    );
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(probeGateway).toHaveBeenCalledWith(expect.objectContaining({ includeDetails: true }));
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
   it("fails a package update when the restarted gateway reports activated plugin load errors", async () => {
     const updatedRoot = createCaseDir("openclaw-updated-root");
     const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
