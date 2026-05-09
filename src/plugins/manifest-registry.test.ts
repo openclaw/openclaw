@@ -1877,7 +1877,7 @@ describe("loadPluginManifestRegistry", () => {
       ...(env ? { env } : {}),
     });
 
-    expect(registry.plugins).toEqual([]);
+    expect(registry.plugins).toStrictEqual([]);
     expectRegistryDiagnosticContains(registry, expectedMessage);
     if (expectWarn) {
       expect(registry.diagnostics.map((diag) => diag.level)).toContain("warn");
@@ -2352,7 +2352,7 @@ describe("loadPluginManifestRegistry", () => {
       }),
     });
 
-    expect(olderHost.plugins).toEqual([]);
+    expect(olderHost.plugins).toStrictEqual([]);
     expect(olderHost.diagnostics.map((diag) => diag.message)).toEqual(
       expect.arrayContaining([expect.stringContaining("this host is 2026.3.21")]),
     );
