@@ -146,7 +146,9 @@ export function applyNonInteractiveGatewayConfig(params: {
   if (authMode === "password") {
     const password = opts.gatewayPassword?.trim();
     if (!password) {
-      runtime.error("Missing --gateway-password for password auth.");
+      runtime.error(
+        "Missing --gateway-password for password auth. Pass --gateway-password or use --gateway-auth token.",
+      );
       runtime.exit(1);
       return null;
     }

@@ -413,7 +413,9 @@ export async function modelsAuthPasteTokenCommand(
   const agentDir = await resolveModelsAuthAgentDir(opts.agent);
   const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
-    throw new Error("Missing --provider.");
+    throw new Error(
+      `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
+    );
   }
   const provider = normalizeProviderId(rawProvider);
   const profileId =
