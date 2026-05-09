@@ -9,6 +9,7 @@ import {
   resolveAgentAvatar,
   resolvePublicAgentAvatarSource,
 } from "../../agents/identity-avatar.js";
+import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveTrustedGroupId } from "../../agents/pi-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
@@ -509,6 +510,24 @@ function dispatchAgentRunFromGateway(params: {
         params.context.chatAbortControllers.delete(params.runId);
       }
     });
+}
+
+function shouldSuppressAgentPromptPersistence(params: {
+  inputProvenance?: InputProvenance;
+  internalEvents?: AgentInternalEvent[];
+}): boolean {
+  if (
+    params.inputProvenance?.kind !== "inter_session" ||
+    params.inputProvenance.sourceTool !== "subagent_announce"
+  ) {
+    return false;
+  }
+  return (
+    params.internalEvents?.some(
+      (event) =>
+        event.type === AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION && event.source === "subagent",
+    ) === true
+  );
 }
 
 function yieldAfterAgentAcceptedAck(): Promise<void> {
@@ -1414,6 +1433,10 @@ export const agentHandlers: GatewayRequestHandlers = {
             acpTurnSource: request.acpTurnSource,
             internalEvents: request.internalEvents,
             inputProvenance,
+            suppressPromptPersistence: shouldSuppressAgentPromptPersistence({
+              inputProvenance,
+              internalEvents: request.internalEvents,
+            }),
             cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
             abortSignal: activeRunAbort.controller.signal,
             // Internal-only: allow workspace override for spawned subagent runs.
