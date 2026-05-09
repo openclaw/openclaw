@@ -494,6 +494,9 @@ export async function handleFeishuMessage(params: {
     feishuCfg?.historyLimit ?? cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const dispatchMode = feishuCfg?.dispatchMode ?? "auto";
+  log(
+    `[dm-busy-debug] feishu bot.ts entry account=${account.accountId} chat=${ctx.chatId} msg=${ctx.messageId} is_group=${isGroup} dispatch_mode=${dispatchMode} sender=${ctx.senderOpenId}`,
+  );
   const groupConfig = isGroup
     ? resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId })
     : undefined;
@@ -1426,6 +1429,9 @@ export async function handleFeishuMessage(params: {
         });
 
       log(`feishu[${account.accountId}]: group plugin dispatch mode enabled, skipping auto reply`);
+      log(
+        `[dm-busy-debug] branch=plugin-skip account=${account.accountId} chat=${ctx.chatId} msg=${ctx.messageId} -- openclaw reply suppressed, bot-company mailbox handles dispatch`,
+      );
 
       try {
         await core.channel.reply.dispatchReplyFromConfig({
@@ -1595,6 +1601,9 @@ export async function handleFeishuMessage(params: {
       };
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${effectiveSessionKey})`);
+      log(
+        `[dm-busy-debug] branch=single-agent account=${account.accountId} chat=${ctx.chatId} msg=${ctx.messageId} is_group=${isGroup} session_key=${effectiveSessionKey} agent=${route.agentId} -- openclaw reply pipeline runs (DM goes here)`,
+      );
       const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
         dispatcher,
         onSettled: () => {

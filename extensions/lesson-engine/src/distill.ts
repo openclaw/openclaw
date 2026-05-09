@@ -45,6 +45,30 @@ export class NativeProvider implements DistillLLMProvider {
   constructor(private readonly agentId: string = "builder") {}
 
   async complete(prompt: string): Promise<string> {
+    // Some execution contexts (e.g. tsx-run lesson-engine as a subprocess of the
+    // OpenClaw gateway) trigger a circular module initialisation cycle when
+    // openclaw/plugin-sdk/config-runtime is dynamically imported.  The cycle
+    // manifests as a TDZ ReferenceError ("Cannot access 'X' before
+    // initialization") coming from the bundled channel bootstrap registry.
+    // When that happens we transparently fall back to ClaudeCliProvider so the
+    // distill step keeps working.
+    try {
+      return await this._completeNative(prompt);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        msg.includes("before initialization") ||
+        msg.includes("circular") ||
+        msg.includes("Cannot access")
+      ) {
+        // Fall back to ClaudeCliProvider for this completion.
+        return new ClaudeCliProvider().complete(prompt);
+      }
+      throw err;
+    }
+  }
+
+  private async _completeNative(prompt: string): Promise<string> {
     const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
     const {
       prepareSimpleCompletionModelForAgent,

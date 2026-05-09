@@ -479,6 +479,9 @@ export async function runPreparedReply(
     shouldFollowup,
     queueMode: resolvedQueue.mode,
   });
+  logVerbose(
+    `[dm-busy-debug] get-reply-run session_key=${sessionKey ?? "<none>"} queue_key=${queueKey} active_session_id=${activeSessionId ?? "<none>"} is_active=${isActive} is_streaming=${isStreaming} queue_mode=${resolvedQueue.mode} should_followup=${shouldFollowup} action=${activeRunQueueAction}`,
+  );
   if (isActive && activeRunQueueAction === "run-now") {
     const activeSessionIdBeforeWait = activeSessionId ?? resolveActiveQueueSessionId();
     if (resolvedQueue.mode === "interrupt" && activeSessionIdBeforeWait) {

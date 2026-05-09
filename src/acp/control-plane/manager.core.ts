@@ -696,9 +696,17 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
+    const actorKeyForLog = normalizeActorKey(sessionKey);
+    const pendingBefore = this.actorQueue.getPendingCountForSession(actorKeyForLog);
+    logVerbose(
+      `[dm-busy-debug] acp.runTurn ENQUEUE session_key=${sessionKey} actor_key=${actorKeyForLog} request_id=${input.requestId ?? "<none>"} pending_before=${pendingBefore} mode=${input.mode}`,
+    );
     await this.withSessionActor(
       sessionKey,
       async () => {
+        logVerbose(
+          `[dm-busy-debug] acp.runTurn START session_key=${sessionKey} actor_key=${actorKeyForLog} request_id=${input.requestId ?? "<none>"} pending_now=${this.actorQueue.getPendingCountForSession(actorKeyForLog)}`,
+        );
         const turnStartedAt = Date.now();
         const actorKey = normalizeActorKey(sessionKey);
         const taskContext =

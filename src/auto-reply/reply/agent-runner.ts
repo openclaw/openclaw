@@ -15,6 +15,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -246,6 +247,9 @@ export async function runReplyAgent(params: {
   });
 
   if (activeRunQueueAction === "drop") {
+    logVerbose(
+      `[dm-busy-debug] agent-runner action=drop queue_key=${queueKey} session_key=${sessionKey ?? "<none>"} message=${followupRun.messageId ?? "<none>"} -- message dropped (heartbeat while busy)`,
+    );
     typing.cleanup();
     return undefined;
   }
@@ -258,6 +262,9 @@ export async function runReplyAgent(params: {
       "message-id",
       queuedRunFollowupTurn,
       false,
+    );
+    logVerbose(
+      `[dm-busy-debug] agent-runner action=enqueue-followup queue_key=${queueKey} session_key=${sessionKey ?? "<none>"} message=${followupRun.messageId ?? "<none>"} enqueued=${enqueued} run_active_now=${isRunActive?.() ?? "<undef>"}`,
     );
     // Re-check liveness after enqueue so a stale active snapshot cannot leave
     // the followup queue idle if the original run already finished.
