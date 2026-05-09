@@ -166,7 +166,7 @@ describe("models-config write serialization", () => {
       await expect(fs.access(path.join(result.agentDir, "models.json"))).resolves.toBeUndefined();
       await expect(
         fs.access(path.join(home, ".openclaw", "agents", "main", "agent", "models.json")),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
