@@ -4579,10 +4579,9 @@ describe("google-meet plugin", () => {
     expect(bridge.handleBargeIn).toHaveBeenCalled();
     expect(outputProcess.kill).toHaveBeenCalledWith("SIGKILL");
     expect(sendAudio).not.toHaveBeenCalledWith(Buffer.from([1, 2, 3, 4]));
-    expect(handle.getHealth()).toMatchObject({
-      clearCount: 1,
-      suppressedInputBytes: 4,
-    });
+    const health = handle.getHealth();
+    expect(health.clearCount).toBe(1);
+    expect(health.suppressedInputBytes).toBe(4);
 
     await handle.stop();
     expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
@@ -4681,44 +4680,37 @@ describe("google-meet plugin", () => {
       name: "openclaw_agent_consult",
       args: { question: "What should I say?" },
     });
-    expect(bridge.submitToolResult).toHaveBeenNthCalledWith(
-      1,
-      "tool-call-1",
-      expect.objectContaining({
-        status: "working",
-        tool: "openclaw_agent_consult",
-      }),
-      { willContinue: true },
-    );
+    expect(bridge.submitToolResult).toHaveBeenCalled();
+    const firstToolResultCall = bridge.submitToolResult.mock.calls[0];
+    expect(firstToolResultCall?.[0]).toBe("tool-call-1");
+    expect(firstToolResultCall?.[2]).toStrictEqual({ willContinue: true });
+    const progressPayload = requireRecord(firstToolResultCall?.[1], "node tool progress payload");
+    expect(progressPayload.status).toBe("working");
+    expect(progressPayload.tool).toBe("openclaw_agent_consult");
 
     await vi.waitFor(() => {
       expect(sendAudio).toHaveBeenCalledWith(Buffer.from([9, 8, 7]));
     });
     await vi.waitFor(() => {
-      expect(runtime.nodes.invoke).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nodeId: "node-1",
-          command: "googlemeet.chrome",
-          params: expect.objectContaining({
-            action: "pushAudio",
-            bridgeId: "bridge-1",
-            base64: Buffer.from([1, 2, 3]).toString("base64"),
-          }),
-        }),
-      );
+      const pushCall = runtime.nodes.invoke.mock.calls
+        .map(([call]) => call)
+        .find((call) => isRecord(call.params) && call.params.action === "pushAudio");
+      const push = requireRecord(pushCall, "node push audio call");
+      const params = requireRecord(push.params, "node push audio params");
+      expect(push.nodeId).toBe("node-1");
+      expect(push.command).toBe("googlemeet.chrome");
+      expect(params.bridgeId).toBe("bridge-1");
+      expect(params.base64).toBe(Buffer.from([1, 2, 3]).toString("base64"));
     });
     await vi.waitFor(() => {
-      expect(runtime.nodes.invoke).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nodeId: "node-1",
-          command: "googlemeet.chrome",
-          params: {
-            action: "clearAudio",
-            bridgeId: "bridge-1",
-          },
-          timeoutMs: 5_000,
-        }),
-      );
+      const clearCall = runtime.nodes.invoke.mock.calls
+        .map(([call]) => call)
+        .find((call) => isRecord(call.params) && call.params.action === "clearAudio");
+      const clear = requireRecord(clearCall, "node clear audio call");
+      expect(clear.nodeId).toBe("node-1");
+      expect(clear.command).toBe("googlemeet.chrome");
+      expect(clear.params).toStrictEqual({ action: "clearAudio", bridgeId: "bridge-1" });
+      expect(clear.timeoutMs).toBe(5_000);
     });
     await vi.waitFor(() => {
       expect(bridge.submitToolResult).toHaveBeenLastCalledWith(
@@ -4732,69 +4724,62 @@ describe("google-meet plugin", () => {
     expect(bridge.triggerGreeting).not.toHaveBeenCalled();
     handle.speak("Say exactly: hello from the node.");
     expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the node.");
-    expect(callbacks).toMatchObject({
-      audioFormat: {
-        encoding: "pcm16",
-        sampleRateHz: 24000,
-        channels: 1,
-      },
-      autoRespondToAudio: true,
-      tools: [
-        expect.objectContaining({
-          name: "openclaw_agent_consult",
-        }),
-      ],
+    if (!callbacks) {
+      throw new Error("Expected node realtime callbacks");
+    }
+    expect(callbacks.audioFormat).toStrictEqual({
+      encoding: "pcm16",
+      sampleRateHz: 24000,
+      channels: 1,
     });
-    expect(handle).toMatchObject({
-      type: "node-command-pair",
-      providerId: "openai",
-      nodeId: "node-1",
-      bridgeId: "bridge-1",
-    });
-    expect(handle.getHealth()).toMatchObject({
-      providerConnected: true,
-      realtimeReady: true,
-      audioInputActive: true,
-      audioOutputActive: true,
-      lastInputBytes: 3,
-      lastOutputBytes: 3,
-      realtimeTranscriptLines: 1,
-      lastRealtimeTranscriptRole: "assistant",
-      lastRealtimeTranscriptText: "How can I help from the node?",
-      lastRealtimeEventType: "server:response.done",
-      lastRealtimeEventDetail: "status=completed",
-      clearCount: 1,
-    });
-    const talkEvents = handle.getHealth().recentTalkEvents ?? [];
-    expect(talkEvents.map((event) => event.type)).toEqual(
-      expect.arrayContaining([
-        "session.started",
-        "session.ready",
-        "input.audio.delta",
-        "output.audio.delta",
-        "output.audio.done",
-        "output.text.done",
-        "tool.call",
-        "tool.progress",
-        "tool.result",
-        "turn.ended",
-      ]),
-    );
-    expect(talkEvents[0]).toMatchObject({
-      sessionId: "google-meet:meet-1:bridge-1:node-realtime",
-    });
+    expect(callbacks.autoRespondToAudio).toBe(true);
+    expect(callbacks.tools?.map((tool) => tool.name)).toContain("openclaw_agent_consult");
+    expect(handle.type).toBe("node-command-pair");
+    expect(handle.providerId).toBe("openai");
+    expect(handle.nodeId).toBe("node-1");
+    expect(handle.bridgeId).toBe("bridge-1");
+    const nodeHealth = handle.getHealth();
+    expect(nodeHealth.providerConnected).toBe(true);
+    expect(nodeHealth.realtimeReady).toBe(true);
+    expect(nodeHealth.audioInputActive).toBe(true);
+    expect(nodeHealth.audioOutputActive).toBe(true);
+    expect(nodeHealth.lastInputBytes).toBe(3);
+    expect(nodeHealth.lastOutputBytes).toBe(3);
+    expect(nodeHealth.realtimeTranscriptLines).toBe(1);
+    expect(nodeHealth.lastRealtimeTranscriptRole).toBe("assistant");
+    expect(nodeHealth.lastRealtimeTranscriptText).toBe("How can I help from the node?");
+    expect(nodeHealth.lastRealtimeEventType).toBe("server:response.done");
+    expect(nodeHealth.lastRealtimeEventDetail).toBe("status=completed");
+    expect(nodeHealth.clearCount).toBe(1);
+    const talkEvents = nodeHealth.recentTalkEvents ?? [];
+    const talkEventTypes = talkEvents.map((event) => event.type);
+    for (const type of [
+      "session.started",
+      "session.ready",
+      "input.audio.delta",
+      "output.audio.delta",
+      "output.audio.done",
+      "output.text.done",
+      "tool.call",
+      "tool.progress",
+      "tool.result",
+      "turn.ended",
+    ]) {
+      expect(talkEventTypes).toContain(type);
+    }
+    expect(talkEvents[0]?.sessionId).toBe("google-meet:meet-1:bridge-1:node-realtime");
 
     await handle.stop();
 
     expect(bridge.close).toHaveBeenCalled();
-    expect(runtime.nodes.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId: "node-1",
-        command: "googlemeet.chrome",
-        params: { action: "stop", bridgeId: "bridge-1" },
-        timeoutMs: 5_000,
-      }),
-    );
+    const stopCall = runtime.nodes.invoke.mock.calls
+      .map(([call]) => call)
+      .find((call) => isRecord(call.params) && call.params.action === "stop");
+    const stop = requireRecord(stopCall, "node stop call");
+    expect(stop.nodeId).toBe("node-1");
+    expect(stop.command).toBe("googlemeet.chrome");
+    expect(stop.params).toStrictEqual({ action: "stop", bridgeId: "bridge-1" });
+    expect(stop.timeoutMs).toBe(5_000);
   });
 
   it("keeps paired-node realtime audio alive after transient input pull failures", async () => {
