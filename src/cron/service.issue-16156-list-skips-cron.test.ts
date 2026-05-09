@@ -7,18 +7,18 @@ import {
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
-const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
+const { logger: noopLogger, makeStoreKey } = setupCronServiceSuite({
   prefix: "openclaw-cron-16156-",
   baseTimeIso: "2025-12-13T00:00:00.000Z",
 });
 
-async function writeJobsStore(storePath: string, jobs: unknown[]) {
-  await saveCronStore(storePath, { version: 1, jobs: jobs as CronJob[] });
+async function writeJobsStore(storeKey: string, jobs: unknown[]) {
+  await saveCronStore(storeKey, { version: 1, jobs: jobs as CronJob[] });
 }
 
-function createCronFromStorePath(storePath: string) {
+function createCronFromStoreKey(storeKey: string) {
   return new CronService({
-    storePath,
+    storeKey: storeKey,
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
@@ -39,9 +39,9 @@ function requireEnqueueSystemEventCall(
 
 describe("#16156: cron.list() must not silently advance past-due recurring jobs", () => {
   it("does not skip a cron job when list() is called while the job is past-due", async () => {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       logger: noopLogger,
     });
 
@@ -94,9 +94,9 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
   });
 
   it("does not skip a cron job when status() is called while the job is past-due", async () => {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       logger: noopLogger,
     });
 
@@ -137,11 +137,11 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
   });
 
   it("still fills missing nextRunAtMs via list() for enabled jobs", async () => {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
-    // Write a store file with a cron job that has no nextRunAtMs.
-    await writeJobsStore(store.storePath, [
+    // Seed a cron job row with no nextRunAtMs.
+    await writeJobsStore(store.storeKey, [
       {
         id: "missing-next",
         name: "missing next",
@@ -156,7 +156,7 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
       },
     ]);
 
-    const cron = createCronFromStorePath(store.storePath);
+    const cron = createCronFromStoreKey(store.storeKey);
 
     await cron.start();
 

@@ -46,10 +46,8 @@ function expectIsolatedRunJobId(
 describe("cron service ops regressions", () => {
   it("repairs missing job state during startup", async () => {
     const scheduledAt = Date.now() + 60_000;
-    const store = opsRegressionFixtures.makeStorePath();
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -76,7 +74,7 @@ describe("cron service ops regressions", () => {
   });
 
   it("skips forced manual runs while a timer-triggered run is in progress", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
+    const store = opsRegressionFixtures.makeStoreKey();
     const dueAt = Date.now() - 1;
     const job = createIsolatedRegressionJob({
       id: "timer-overlap",
@@ -86,7 +84,7 @@ describe("cron service ops regressions", () => {
       payload: { kind: "agentTurn", message: "long task" },
       state: { nextRunAtMs: dueAt },
     });
-    await writeCronJobs(store.storePath, [job]);
+    await writeCronJobs(store.storeKey, [job]);
 
     let resolveRun:
       | ((value: { status: "ok" | "error" | "skipped"; summary?: string; error?: string }) => void)
@@ -104,7 +102,7 @@ describe("cron service ops regressions", () => {
 
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -135,7 +133,7 @@ describe("cron service ops regressions", () => {
   });
 
   it("does not double-run a job when cron.run overlaps a due timer tick", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
+    const store = opsRegressionFixtures.makeStoreKey();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const job = createIsolatedRegressionJob({
       id: "manual-overlap-no-double-run",
@@ -145,7 +143,7 @@ describe("cron service ops regressions", () => {
       payload: { kind: "agentTurn", message: "overlap" },
       state: { nextRunAtMs: now },
     });
-    await writeCronJobs(store.storePath, [job]);
+    await writeCronJobs(store.storeKey, [job]);
 
     const runStarted = createDeferred<void>();
     const runFinished = createDeferred<void>();
@@ -165,7 +163,7 @@ describe("cron service ops regressions", () => {
 
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
@@ -191,12 +189,12 @@ describe("cron service ops regressions", () => {
   });
 
   it("manual cron.run preserves unrelated due jobs but advances already-executed stale slots", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
+    const store = opsRegressionFixtures.makeStoreKey();
     const nowMs = Date.now();
     const dueNextRunAtMs = nowMs - 1_000;
     const staleExecutedNextRunAtMs = nowMs - 2_000;
 
-    await writeCronJobs(store.storePath, [
+    await writeCronJobs(store.storeKey, [
       createIsolatedRegressionJob({
         id: "manual-target",
         name: "manual target",
@@ -228,7 +226,7 @@ describe("cron service ops regressions", () => {
 
     const state = createCronServiceState({
       cronEnabled: false,
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -248,7 +246,7 @@ describe("cron service ops regressions", () => {
   it("applies timeoutSeconds to manual cron.run isolated executions", async () => {
     vi.useFakeTimers();
     try {
-      const store = opsRegressionFixtures.makeStorePath();
+      const store = opsRegressionFixtures.makeStoreKey();
       const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
       const job = createIsolatedRegressionJob({
         id: "manual-timeout",
@@ -258,12 +256,12 @@ describe("cron service ops regressions", () => {
         payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
         state: { nextRunAtMs: scheduledAt },
       });
-      await writeCronJobs(store.storePath, [job]);
+      await writeCronJobs(store.storeKey, [job]);
 
       const abortAwareRunner = createAbortAwareIsolatedRunner();
       const state = createCronServiceState({
         cronEnabled: false,
-        storePath: store.storePath,
+        storeKey: store.storeKey,
         log: noopLogger,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
@@ -287,11 +285,11 @@ describe("cron service ops regressions", () => {
   });
 
   it("#17554: run() clears stale runningAtMs and executes the job", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
+    const store = opsRegressionFixtures.makeStoreKey();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const staleRunningAtMs = now - 2 * 60 * 60 * 1000 - 1;
 
-    await writeCronJobs(store.storePath, [
+    await writeCronJobs(store.storeKey, [
       {
         id: "stale-running",
         name: "stale-running",
@@ -314,7 +312,7 @@ describe("cron service ops regressions", () => {
     const enqueueSystemEvent = vi.fn();
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent,
@@ -336,7 +334,7 @@ describe("cron service ops regressions", () => {
     clearCommandLane(CommandLane.Cron);
     setCommandLaneConcurrency(CommandLane.Cron, 1);
 
-    const store = opsRegressionFixtures.makeStorePath();
+    const store = opsRegressionFixtures.makeStoreKey();
     const dueAt = Date.parse("2026-02-06T10:05:02.000Z");
     const first = createDueIsolatedJob({ id: "queued-first", nowMs: dueAt, nextRunAtMs: dueAt });
     const second = createDueIsolatedJob({
@@ -344,7 +342,7 @@ describe("cron service ops regressions", () => {
       nowMs: dueAt,
       nextRunAtMs: dueAt,
     });
-    await writeCronJobs(store.storePath, [first, second]);
+    await writeCronJobs(store.storeKey, [first, second]);
 
     let now = dueAt;
     let activeRuns = 0;
@@ -374,7 +372,7 @@ describe("cron service ops regressions", () => {
     });
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       cronConfig: { maxConcurrentRuns: 1 },
       log: noopLogger,
       nowMs: () => now,
@@ -418,12 +416,12 @@ describe("cron service ops regressions", () => {
     clearCommandLane(CommandLane.Cron);
     setCommandLaneConcurrency(CommandLane.Cron, 1);
 
-    const store = opsRegressionFixtures.makeStorePath();
+    const store = opsRegressionFixtures.makeStoreKey();
     const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
     const job = createDueIsolatedJob({ id: "queued-failure", nowMs: dueAt, nextRunAtMs: dueAt });
-    await writeCronJobs(store.storePath, [job]);
+    await writeCronJobs(store.storeKey, [job]);
     const state = createRunningCronServiceState({
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       log: noopLogger,
       nowMs: () => dueAt,
       jobs: [job],

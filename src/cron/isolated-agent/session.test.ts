@@ -274,6 +274,10 @@ describe("resolveCronSession", () => {
           subject: "old subject",
           groupChannel: "ops",
           space: "team",
+          origin: {
+            provider: "telegram",
+            to: "old-chat",
+          },
           acp: {
             backend: "acpx",
             agent: "codex",
@@ -342,6 +346,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.subject).toBeUndefined();
       expect(result.sessionEntry.groupChannel).toBeUndefined();
       expect(result.sessionEntry.space).toBeUndefined();
+      expect(result.sessionEntry.origin).toBeUndefined();
       expect(result.sessionEntry.acp).toBeUndefined();
       expect(result.sessionEntry.authProfileOverride).toBeUndefined();
       expect(result.sessionEntry.authProfileOverrideSource).toBeUndefined();

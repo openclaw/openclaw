@@ -11,10 +11,12 @@ const buildSessionLookup = (
     sessionId?: string;
     model?: string;
     modelProvider?: string;
-    lastChannel?: string;
-    lastTo?: string;
-    lastAccountId?: string;
-    lastThreadId?: string | number;
+    deliveryContext?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string | number;
+    };
     updatedAt?: number;
     label?: string;
     spawnedBy?: string;
@@ -29,10 +31,7 @@ const buildSessionLookup = (
     updatedAt: entry.updatedAt ?? Date.now(),
     model: entry.model,
     modelProvider: entry.modelProvider,
-    lastChannel: entry.lastChannel,
-    lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId,
+    deliveryContext: entry.deliveryContext,
     label: entry.label,
     spawnedBy: entry.spawnedBy,
     parentSessionKey: entry.parentSessionKey,
@@ -840,10 +839,12 @@ describe("voice transcript events", () => {
         label: "existing label",
         spawnedBy: "agent:main:parent",
         parentSessionKey: "agent:main:parent",
-        lastChannel: "discord",
-        lastTo: "thread-1",
-        lastAccountId: "acct-1",
-        lastThreadId: 42,
+        deliveryContext: {
+          channel: "discord",
+          to: "thread-1",
+          accountId: "acct-1",
+          threadId: 42,
+        },
       }),
     );
 
@@ -855,10 +856,12 @@ describe("voice transcript events", () => {
         label: "existing label",
         spawnedBy: "agent:main:parent",
         parentSessionKey: "agent:main:parent",
-        lastChannel: "discord",
-        lastTo: "thread-1",
-        lastAccountId: "acct-1",
-        lastThreadId: 42,
+        deliveryContext: {
+          channel: "discord",
+          to: "thread-1",
+          accountId: "acct-1",
+          threadId: 42,
+        },
       };
       const patch = await update(existing);
       updatedStore = {
@@ -883,10 +886,12 @@ describe("voice transcript events", () => {
       label: "existing label",
       spawnedBy: "agent:main:parent",
       parentSessionKey: "agent:main:parent",
-      lastChannel: "discord",
-      lastTo: "thread-1",
-      lastAccountId: "acct-1",
-      lastThreadId: 42,
+      deliveryContext: {
+        channel: "discord",
+        to: "thread-1",
+        accountId: "acct-1",
+        threadId: 42,
+      },
     });
   });
 });
@@ -1128,8 +1133,10 @@ describe("agent request events", () => {
     loadSessionEntryMock.mockReturnValueOnce({
       ...buildSessionLookup("agent:main:main", {
         sessionId: "sid-current",
-        lastChannel: "telegram",
-        lastTo: "123",
+        deliveryContext: {
+          channel: "telegram",
+          to: "123",
+        },
       }),
       canonicalKey: "agent:main:main",
     });

@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { rpcReq, testState, seedGatewaySessionEntries } from "./test-helpers.js";
@@ -11,7 +9,7 @@ import {
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir, openClient } = setupGatewaySessionsTestHarness();
 
 type MockCalls = {
   mock: { calls: unknown[][] };
@@ -80,23 +78,28 @@ function expectChangedBroadcast(
   return payloadRecord;
 }
 
+function sqliteTranscript(sessionId: string): string {
+  return sessionId;
+}
+
 test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     models: {
       "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
     },
   };
-  await fs.writeFile(
-    path.join(dir, "sess-parent.jsonl"),
-    `${JSON.stringify({ type: "session", version: 1, id: "sess-parent" })}\n`,
-    "utf-8",
-  );
-  await fs.writeFile(
-    path.join(dir, "sess-child.jsonl"),
-    [
-      JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
-      JSON.stringify({
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-parent",
+    events: [{ type: "session", version: 1, id: "sess-parent" }],
+  });
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-child",
+    events: [
+      { type: "session", version: 1, id: "sess-child" },
+      {
         message: {
           role: "assistant",
           provider: "anthropic",
@@ -108,18 +111,17 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
             cost: { total: 0.0042 },
           },
         },
-      }),
-      JSON.stringify({
+      },
+      {
         message: {
           role: "assistant",
           provider: "openclaw",
           model: "delivery-mirror",
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         },
-      }),
-    ].join("\n"),
-    "utf-8",
-  );
+      },
+    ],
+  });
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-parent"),
@@ -171,7 +173,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
 });
 
 test("sessions.list uses the gateway model catalog for effective thinking defaults", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     model: { primary: "test-provider/reasoner" },
   };
@@ -222,7 +224,7 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
 });
 
 test("sessions.list marks sessions with active abortable runs", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
@@ -256,7 +258,7 @@ test("sessions.list marks sessions with active abortable runs", async () => {
 });
 
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionFixtureDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};
   const now = Date.now();
   for (let i = 0; i < 11; i += 1) {
@@ -265,7 +267,6 @@ test("sessions.list yields before responding during bulk transcript hydration", 
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId,
-      transcriptPath: path.join(dir, `${sessionId}.jsonl`),
       events: [
         { type: "message", message: { role: "user", content: `title ${i}` } },
         { type: "message", message: { role: "assistant", content: `last ${i}` } },
@@ -319,7 +320,7 @@ test("sessions.list yields before responding during bulk transcript hydration", 
 });
 
 test("sessions.list does not block on slow model catalog discovery", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
@@ -363,11 +364,21 @@ test("sessions.list does not block on slow model catalog discovery", async () =>
 });
 
 test("sessions.changed mutation events include live usage metadata", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionFixtureDir();
+  await seedGatewaySessionEntries({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        modelProvider: "openai-codex",
+        model: "gpt-5.3-codex-spark",
+        contextTokens: 123_456,
+        totalTokens: 0,
+        totalTokensFresh: false,
+      }),
+    },
+  });
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath: path.join(dir, "sess-main.jsonl"),
     events: [
       {
         type: "message",
@@ -387,17 +398,6 @@ test("sessions.changed mutation events include live usage metadata", async () =>
         },
       },
     ],
-  });
-  await seedGatewaySessionEntries({
-    entries: {
-      main: sessionStoreEntry("sess-main", {
-        modelProvider: "openai-codex",
-        model: "gpt-5.3-codex-spark",
-        contextTokens: 123_456,
-        totalTokens: 0,
-        totalTokensFresh: false,
-      }),
-    },
   });
 
   const broadcastToConnIds = vi.fn();
@@ -436,17 +436,19 @@ test("sessions.changed mutation events include live usage metadata", async () =>
 });
 
 test("sessions.changed mutation events include live session setting metadata", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         verboseLevel: "on",
         responseUsage: "full",
         fastMode: true,
-        lastChannel: "telegram",
-        lastTo: "-100123",
-        lastAccountId: "acct-1",
-        lastThreadId: 42,
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100123",
+          accountId: "acct-1",
+          threadId: 42,
+        },
       }),
     },
   });
@@ -480,15 +482,17 @@ test("sessions.changed mutation events include live session setting metadata", a
     verboseLevel: "on",
     responseUsage: "full",
     fastMode: true,
-    lastChannel: "telegram",
-    lastTo: "-100123",
-    lastAccountId: "acct-1",
-    lastThreadId: 42,
+    deliveryContext: {
+      channel: "telegram",
+      to: "-100123",
+      accountId: "acct-1",
+      threadId: "42",
+    },
   });
 });
 
 test("sessions.changed mutation events include sendPolicy metadata", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
@@ -528,7 +532,7 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
 });
 
 test("sessions.changed mutation events include subagent ownership metadata", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       "subagent:child": sessionStoreEntry("sess-child", {

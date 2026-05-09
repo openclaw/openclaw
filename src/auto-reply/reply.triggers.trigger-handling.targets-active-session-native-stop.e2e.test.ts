@@ -576,7 +576,7 @@ describe("trigger handling", () => {
     });
   });
 
-  it("compacts worker sessions via the agent transcript scope", async () => {
+  it("compacts worker sessions via the agent transcript locator", async () => {
     await withTempHome(async (home) => {
       getCompactEmbeddedPiSessionMock().mockReset();
       mockSuccessfulCompaction();

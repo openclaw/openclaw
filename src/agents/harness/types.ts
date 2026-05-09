@@ -17,7 +17,7 @@ export type AgentHarnessSideQuestionParams = {
   agentDir: string;
   provider: string;
   model: string;
-  runtimeModel?: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
+  runtimeModel?: import("../pi-ai-contract.js").Model<import("../pi-ai-contract.js").Api>;
   question: string;
   sessionEntry: import("../../config/sessions.js").SessionEntry;
   sessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;

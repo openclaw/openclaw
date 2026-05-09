@@ -55,7 +55,6 @@ type CompactRuntimeContext = {
 
 type CompactParams = {
   sessionId?: string;
-  transcriptScope?: { agentId: string; sessionId: string };
   tokenBudget?: number;
   force?: boolean;
   compactionTarget?: string;
@@ -153,7 +152,6 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     const compactParams = compactCallAt(0);
     expect(compactParams.sessionId).toBe("test-session");
-    expect(compactParams.transcriptScope).toEqual({ agentId: "main", sessionId: "test-session" });
     expect(compactParams.tokenBudget).toBe(200000);
     expect(compactParams.force).toBe(true);
     expect(compactParams.compactionTarget).toBe("budget");
