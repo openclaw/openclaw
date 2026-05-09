@@ -6,19 +6,19 @@ import { assertSupportedJobSpec, findJobOrThrow } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded } from "./store.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite({
+const { logger, makeStoreKey } = setupCronServiceSuite({
   prefix: "cron-service-store-missing-session-target-",
 });
 
 const STORE_TEST_NOW = Date.parse("2026-03-23T12:00:00.000Z");
 
-async function writeSingleJobStore(storePath: string, job: Record<string, unknown>) {
-  await saveCronStore(storePath, { version: 1, jobs: [job as unknown as CronJob] });
+async function writeSingleJobStore(storeKey: string, job: Record<string, unknown>) {
+  await saveCronStore(storeKey, { version: 1, jobs: [job as unknown as CronJob] });
 }
 
-function createStoreTestState(storePath: string) {
+function createStoreTestState(storeKey: string) {
   return createCronServiceState({
-    storeKey: storePath,
+    storeKey: storeKey,
     cronEnabled: true,
     log: logger,
     nowMs: () => STORE_TEST_NOW,
@@ -30,9 +30,9 @@ function createStoreTestState(storePath: string) {
 
 describe("cron service store load: missing sessionTarget", () => {
   it("hydrates flat legacy cron rows before recomputing next runs", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
 
-    await writeSingleJobStore(storePath, {
+    await writeSingleJobStore(storeKey, {
       id: "legacy-flat-cron",
       name: "dbus-watchdog",
       kind: "cron",
@@ -45,7 +45,7 @@ describe("cron service store load: missing sessionTarget", () => {
       created_at: "2026-04-17T20:09:00Z",
     });
 
-    const state = createStoreTestState(storePath);
+    const state = createStoreTestState(storeKey);
     await ensureLoaded(state);
 
     const job = findJobOrThrow(state, "legacy-flat-cron");
@@ -65,9 +65,9 @@ describe("cron service store load: missing sessionTarget", () => {
   });
 
   it('defaults missing sessionTarget to "main" for systemEvent payloads', async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
 
-    await writeSingleJobStore(storePath, {
+    await writeSingleJobStore(storeKey, {
       id: "missing-session-target-system-event",
       name: "missing session target system event",
       enabled: true,
@@ -79,7 +79,7 @@ describe("cron service store load: missing sessionTarget", () => {
       state: {},
     });
 
-    const state = createStoreTestState(storePath);
+    const state = createStoreTestState(storeKey);
     await ensureLoaded(state);
 
     const job = findJobOrThrow(state, "missing-session-target-system-event");
@@ -88,9 +88,9 @@ describe("cron service store load: missing sessionTarget", () => {
   });
 
   it('defaults missing sessionTarget to "isolated" for agentTurn payloads', async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
 
-    await writeSingleJobStore(storePath, {
+    await writeSingleJobStore(storeKey, {
       id: "missing-session-target-agent-turn",
       name: "missing session target agent turn",
       enabled: true,
@@ -102,7 +102,7 @@ describe("cron service store load: missing sessionTarget", () => {
       state: {},
     });
 
-    const state = createStoreTestState(storePath);
+    const state = createStoreTestState(storeKey);
     await ensureLoaded(state);
 
     const job = findJobOrThrow(state, "missing-session-target-agent-turn");
@@ -118,9 +118,9 @@ describe("cron service store load: missing sessionTarget", () => {
   });
 
   it("warns once per jobId across repeated forceReload cycles", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
 
-    await writeSingleJobStore(storePath, {
+    await writeSingleJobStore(storeKey, {
       id: "log-dedupe-target",
       name: "log dedupe target",
       enabled: true,
@@ -133,7 +133,7 @@ describe("cron service store load: missing sessionTarget", () => {
     });
 
     const warnSpy = vi.spyOn(logger, "warn");
-    const state = createStoreTestState(storePath);
+    const state = createStoreTestState(storeKey);
 
     await ensureLoaded(state);
     await ensureLoaded(state, { forceReload: true });

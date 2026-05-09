@@ -7,7 +7,7 @@ import type { CronJob } from "../../cron/types.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite({
+const { logger, makeStoreKey } = setupCronServiceSuite({
   prefix: "cron-service-timer-seam",
 });
 
@@ -33,19 +33,19 @@ afterEach(() => {
 
 describe("cron service timer seam coverage", () => {
   it("persists the next schedule and hands off next-heartbeat main jobs", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
     await writeCronStoreSnapshot({
-      storePath: storePath,
+      storeKey,
       jobs: [createDueMainJob({ now, wakeMode: "next-heartbeat" })],
     });
 
     const state = createCronServiceState({
-      storeKey: storePath,
+      storeKey,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
@@ -70,7 +70,7 @@ describe("cron service timer seam coverage", () => {
       heartbeat: { target: "last" },
     });
 
-    const persisted = await loadCronStore(storePath);
+    const persisted = await loadCronStore(storeKey);
     const job = persisted.jobs[0];
     if (!job) {
       throw new Error("expected persisted heartbeat cron job");
@@ -108,14 +108,14 @@ describe("cron service timer seam coverage", () => {
   });
 
   it("keeps scheduler progress when task ledger creation fails", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const ledgerError = new Error("disk full");
 
     await writeCronStoreSnapshot({
-      storePath: storePath,
+      storeKey,
       jobs: [createDueMainJob({ now, wakeMode: "next-heartbeat" })],
     });
 
@@ -126,7 +126,7 @@ describe("cron service timer seam coverage", () => {
       });
 
     const state = createCronServiceState({
-      storeKey: storePath,
+      storeKey,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
@@ -151,13 +151,13 @@ describe("cron service timer seam coverage", () => {
   });
 
   it("reloads externally edited split-store schedules without firing stale slots", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const now = Date.parse("2026-03-23T06:00:00.000Z");
     const staleNextRunAtMs = now;
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
 
-    await saveCronStore(storePath, {
+    await saveCronStore(storeKey, {
       version: 1,
       jobs: [
         {
@@ -175,7 +175,7 @@ describe("cron service timer seam coverage", () => {
       ],
     });
 
-    await saveCronStore(storePath, {
+    await saveCronStore(storeKey, {
       version: 1,
       jobs: [
         {
@@ -194,7 +194,7 @@ describe("cron service timer seam coverage", () => {
     });
 
     const state = createCronServiceState({
-      storeKey: storePath,
+      storeKey,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
@@ -208,7 +208,7 @@ describe("cron service timer seam coverage", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
 
-    const persisted = await loadCronStore(storePath);
+    const persisted = await loadCronStore(storeKey);
     const job = persisted.jobs[0];
     expect(job?.schedule).toEqual({ kind: "cron", expr: "0 7 * * *", tz: "UTC" });
     expect(job?.state.lastStatus).toBeUndefined();
