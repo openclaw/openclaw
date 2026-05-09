@@ -12,6 +12,7 @@ import {
   runOpenClawCompileCacheRespawnPlan,
   shouldEnableOpenClawCompileCache,
 } from "./entry.compile-cache.js";
+import { OPENCLAW_RESPAWN_PARENT_PID } from "./process/child-process-bridge.js";
 
 describe("entry compile cache", () => {
   const tempDirs: string[] = [];
@@ -152,7 +153,10 @@ describe("entry compile cache", () => {
       ["/repo/openclaw/dist/entry.js", "status"],
       {
         stdio: "inherit",
-        env: { NODE_DISABLE_COMPILE_CACHE: "1" },
+        env: {
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          [OPENCLAW_RESPAWN_PARENT_PID]: String(process.pid),
+        },
       },
     );
     expect(attachChildProcessBridge.mock.calls[0]?.[0]).toBe(child);

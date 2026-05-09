@@ -271,6 +271,64 @@ describe("openclaw launcher", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "terminates source-checkout compile-cache respawn children after parent SIGKILL",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await addGitMarker(fixtureRoot);
+      const childInfoPath = path.join(fixtureRoot, "child-info.json");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(
+            childInfoPath,
+          )}, JSON.stringify({ pid: process.pid, parentPid: process.env.OPENCLAW_RESPAWN_PARENT_PID, ppid: process.ppid }) + "\\n");`,
+          'process.title = "openclaw-launcher-parent-death-test-child";',
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+        cwd: fixtureRoot,
+        env: launcherEnv({
+          NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+        }),
+        stdio: "ignore",
+      });
+      let respawnChildPid: number | undefined;
+
+      try {
+        const childInfo = JSON.parse(await waitForFile(childInfoPath, 5000)) as {
+          pid: number;
+          parentPid?: string;
+          ppid: number;
+        };
+        respawnChildPid = childInfo.pid;
+        expect(childInfo.parentPid).toBe(String(launcher.pid));
+        expect(childInfo.ppid).toBe(launcher.pid);
+
+        launcher.kill("SIGKILL");
+
+        await waitUntil(
+          () => !isProcessAlive(launcher.pid) && !isProcessAlive(respawnChildPid),
+          5000,
+        );
+        expect(isProcessAlive(launcher.pid)).toBe(false);
+        expect(isProcessAlive(respawnChildPid)).toBe(false);
+      } finally {
+        if (isProcessAlive(respawnChildPid)) {
+          process.kill(respawnChildPid!, "SIGKILL");
+        }
+        if (isProcessAlive(launcher.pid)) {
+          process.kill(launcher.pid!, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "respawns symlinked source-checkout launchers without inherited NODE_COMPILE_CACHE",
     async () => {
       const fixtureRoot = await makeLauncherFixture(fixtureRoots);

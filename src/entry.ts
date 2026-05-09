@@ -17,6 +17,7 @@ import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
+import { installChildProcessParentDeathGuard } from "./process/child-process-bridge.js";
 
 const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
@@ -81,6 +82,7 @@ if (
 ) {
   // Imported as a dependency — skip all entry-point side effects.
 } else {
+  installChildProcessParentDeathGuard();
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
   const waitingForCompileCacheRespawn = respawnWithoutOpenClawCompileCacheIfNeeded({

@@ -6,7 +6,10 @@ import {
   shouldSkipStartupEnvironmentRespawnForArgv,
 } from "./cli/respawn-policy.js";
 import { isTruthyEnvValue } from "./infra/env.js";
-import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+import {
+  attachChildProcessBridge,
+  withChildProcessParentGuardEnv,
+} from "./process/child-process-bridge.js";
 
 export const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 export const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
@@ -138,7 +141,7 @@ export function runCliRespawnPlan(
 ): ChildProcess {
   const child = runtime.spawn(plan.command, plan.argv, {
     stdio: "inherit",
-    env: plan.env,
+    env: withChildProcessParentGuardEnv({ env: plan.env }),
   });
   let signalExitTimer: NodeJS.Timeout | undefined;
   let signalForceKillTimer: NodeJS.Timeout | undefined;

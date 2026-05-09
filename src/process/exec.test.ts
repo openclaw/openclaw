@@ -7,6 +7,9 @@ import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 const spawnMock = vi.hoisted(() => vi.fn());
 
 let attachChildProcessBridge: typeof import("./child-process-bridge.js").attachChildProcessBridge;
+let installChildProcessParentDeathGuard: typeof import("./child-process-bridge.js").installChildProcessParentDeathGuard;
+let withChildProcessParentGuardEnv: typeof import("./child-process-bridge.js").withChildProcessParentGuardEnv;
+let OPENCLAW_RESPAWN_PARENT_PID: typeof import("./child-process-bridge.js").OPENCLAW_RESPAWN_PARENT_PID;
 let resolveCommandEnv: typeof import("./exec.js").resolveCommandEnv;
 let resolveProcessExitCode: typeof import("./exec.js").resolveProcessExitCode;
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
@@ -26,7 +29,12 @@ async function loadExecModules(options?: { mockSpawn?: boolean }) {
   } else {
     vi.doUnmock("node:child_process");
   }
-  ({ attachChildProcessBridge } = await import("./child-process-bridge.js"));
+  ({
+    attachChildProcessBridge,
+    installChildProcessParentDeathGuard,
+    withChildProcessParentGuardEnv,
+    OPENCLAW_RESPAWN_PARENT_PID,
+  } = await import("./child-process-bridge.js"));
   ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, shouldSpawnWithShell } =
     await import("./exec.js"));
 }
@@ -247,5 +255,56 @@ describe("attachChildProcessBridge", () => {
 
     // Detached already via exit; should remain a safe no-op.
     detach();
+  });
+});
+
+describe("child process parent-death guard", () => {
+  it("adds the parent pid to Unix child environments", async () => {
+    await loadExecModules();
+
+    expect(
+      withChildProcessParentGuardEnv({
+        env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
+        parentPid: 12345,
+        platform: "linux",
+      }),
+    ).toEqual({
+      OPENCLAW_NODE_OPTIONS_READY: "1",
+      [OPENCLAW_RESPAWN_PARENT_PID]: "12345",
+    });
+  });
+
+  it("exits when a guarded child is reparented", async () => {
+    await loadExecModules();
+    let ppid = 12345;
+    let intervalCallback: (() => void) | undefined;
+    const timer = { unref: vi.fn() } as unknown as ReturnType<typeof setInterval>;
+    const clearInterval = vi.fn();
+    const exit = vi.fn();
+
+    const guard = installChildProcessParentDeathGuard({
+      intervalMs: 10,
+      runtime: {
+        env: { [OPENCLAW_RESPAWN_PARENT_PID]: "12345" },
+        exit: exit as unknown as (code?: number) => never,
+        pid: 67890,
+        platform: "linux",
+        ppid: () => ppid,
+        setInterval: vi.fn((callback: () => void) => {
+          intervalCallback = callback;
+          return timer;
+        }) as unknown as typeof setInterval,
+        clearInterval,
+      },
+    });
+
+    expect(guard).not.toBeNull();
+    expect(exit).not.toHaveBeenCalled();
+
+    ppid = 1;
+    intervalCallback?.();
+
+    expect(clearInterval).toHaveBeenCalledWith(timer);
+    expect(exit).toHaveBeenCalledWith(1);
   });
 });

@@ -3,7 +3,10 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+import {
+  attachChildProcessBridge,
+  withChildProcessParentGuardEnv,
+} from "./process/child-process-bridge.js";
 
 const COMPILE_CACHE_RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
 const COMPILE_CACHE_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
@@ -164,7 +167,7 @@ export function runOpenClawCompileCacheRespawnPlan(
 ): ChildProcess {
   const child = runtime.spawn(plan.command, plan.args, {
     stdio: "inherit",
-    env: plan.env,
+    env: withChildProcessParentGuardEnv({ env: plan.env }),
   });
   // Give the child a moment to honor forwarded signals, then exit the parent so
   // a child that ignores SIGTERM cannot keep the compile-cache wrapper alive indefinitely.
