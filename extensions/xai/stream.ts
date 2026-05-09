@@ -155,6 +155,10 @@ function normalizeXaiResponsesToolResultPayload(
   payloadObj.input = normalizedInput;
 }
 
+function isReasoningCapableXaiModel(model: { reasoning?: unknown }): boolean {
+  return model.reasoning === true;
+}
+
 export function createXaiToolPayloadCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
@@ -170,9 +174,18 @@ export function createXaiToolPayloadCompatibilityWrapper(
             payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
           }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
-          delete payloadObj.reasoning;
-          delete payloadObj.reasoningEffort;
-          delete payloadObj.reasoning_effort;
+          // Reasoning-capable Grok models accept `reasoning` / `reasoning_effort`
+          // and need them to actually adjust thinking depth. Non-reasoning xAI
+          // routes still reject these fields with invalid-effort errors, so we
+          // continue stripping them there. The runtime-compat layer drives
+          // whether the upstream pi-ai providers populate these fields in the
+          // first place; this wrapper is the safety net that keeps stale or
+          // mis-routed reasoning values from reaching non-reasoning endpoints.
+          if (!isReasoningCapableXaiModel(model)) {
+            delete payloadObj.reasoning;
+            delete payloadObj.reasoningEffort;
+            delete payloadObj.reasoning_effort;
+          }
         }
         return originalOnPayload?.(payload, model);
       },

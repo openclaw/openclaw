@@ -223,11 +223,11 @@ describe("xai provider plugin", () => {
     ).toMatchObject({
       thinkingLevelMap: {
         off: null,
-        minimal: null,
-        low: null,
-        medium: null,
-        high: null,
-        xhigh: null,
+        minimal: "low",
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "high",
       },
       compat: {
         toolSchemaProfile: "xai",

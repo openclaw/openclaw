@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Providers/xAI: forward `reasoning_effort` to reasoning-capable Grok models (e.g. `xai/grok-4.3`, `xai/grok-4-1-fast-reasoning`, `xai/grok-4.20-*-reasoning`) so `/think low|medium|high` actually adjusts thinking depth on the wire. The runtime-compat layer now maps thinking levels to xAI's `low|medium|high` effort values for reasoning routes (and keeps non-reasoning xAI models on the off-only behavior introduced earlier in this changelog), and the stream wrapper only strips `reasoning`/`reasoning_effort` for non-reasoning routes. Fixes #79210.
+
 ### Fixes
 
 - Plugin SDK: keep activated linked plugin runtime facades loadable when bundled plugin fallback is disabled. Thanks @shakkernerd.
