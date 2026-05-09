@@ -1284,6 +1284,13 @@ export const agentHandlers: GatewayRequestHandlers = {
         typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined,
       kind: "agent",
     });
+    if (!activeRunAbort.registered && context.chatAbortControllers.has(runId)) {
+      respond(true, { runId, status: "in_flight" as const }, undefined, {
+        cached: true,
+        runId,
+      });
+      return;
+    }
 
     const accepted = {
       runId,

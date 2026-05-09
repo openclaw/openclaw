@@ -84,16 +84,29 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
+    const isActiveRunDedupeKey = (key: string) => {
+      if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
+        return false;
+      }
+      const runId = key.slice(key.indexOf(":") + 1);
+      const entry = runId ? params.chatAbortControllers.get(runId) : undefined;
+      if (!entry) {
+        return false;
+      }
+      return key.startsWith("agent:") ? entry.kind === "agent" : entry.kind !== "agent";
+    };
     for (const [k, v] of params.dedupe) {
+      if (isActiveRunDedupeKey(k)) {
+        continue;
+      }
       if (now - v.ts > DEDUPE_TTL_MS) {
         params.dedupe.delete(k);
       }
     }
     if (params.dedupe.size > DEDUPE_MAX) {
       const excess = params.dedupe.size - DEDUPE_MAX;
-      // Keep overflow eviction aligned with the entry timestamp, not Map
-      // insertion order, so refresh/reinsert paths still prune the oldest data.
       const oldestKeys = [...params.dedupe.entries()]
+        .filter(([key]) => !isActiveRunDedupeKey(key))
         .toSorted(([, left], [, right]) => left.ts - right.ts)
         .slice(0, excess)
         .map(([key]) => key);
