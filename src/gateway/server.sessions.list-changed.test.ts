@@ -1,6 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { rpcReq, testState, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
@@ -13,23 +12,30 @@ import {
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
+function sqliteTranscript(sessionId: string): string {
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
+}
+
 test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionStoreDir();
   testState.agentConfig = {
     models: {
       "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
     },
   };
-  await fs.writeFile(
-    path.join(dir, "sess-parent.jsonl"),
-    `${JSON.stringify({ type: "session", version: 1, id: "sess-parent" })}\n`,
-    "utf-8",
-  );
-  await fs.writeFile(
-    path.join(dir, "sess-child.jsonl"),
-    [
-      JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
-      JSON.stringify({
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-parent",
+    transcriptPath: sqliteTranscript("sess-parent"),
+    events: [{ type: "session", version: 1, id: "sess-parent" }],
+  });
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-child",
+    transcriptPath: sqliteTranscript("sess-child"),
+    events: [
+      { type: "session", version: 1, id: "sess-child" },
+      {
         message: {
           role: "assistant",
           provider: "anthropic",
@@ -41,18 +47,17 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
             cost: { total: 0.0042 },
           },
         },
-      }),
-      JSON.stringify({
+      },
+      {
         message: {
           role: "assistant",
           provider: "openclaw",
           model: "delivery-mirror",
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         },
-      }),
-    ].join("\n"),
-    "utf-8",
-  );
+      },
+    ],
+  });
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-parent"),
@@ -206,7 +211,7 @@ test("sessions.list marks sessions with active abortable runs", async () => {
 });
 
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionStoreDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};
   const now = Date.now();
   for (let i = 0; i < 11; i += 1) {
@@ -215,7 +220,7 @@ test("sessions.list yields before responding during bulk transcript hydration", 
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId,
-      transcriptPath: path.join(dir, `${sessionId}.jsonl`),
+      transcriptPath: sqliteTranscript(sessionId),
       events: [
         { type: "message", message: { role: "user", content: `title ${i}` } },
         { type: "message", message: { role: "assistant", content: `last ${i}` } },
@@ -325,11 +330,11 @@ test("sessions.list does not block on slow model catalog discovery", async () =>
 });
 
 test("sessions.changed mutation events include live usage metadata", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionStoreDir();
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath: path.join(dir, "sess-main.jsonl"),
+    transcriptPath: sqliteTranscript("sess-main"),
     events: [
       {
         type: "message",
