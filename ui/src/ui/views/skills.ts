@@ -75,6 +75,7 @@ export type SkillsProps = {
   onClawHubDetailOpen: (slug: string) => void;
   onClawHubDetailClose: () => void;
   onClawHubInstall: (slug: string) => void;
+  onClawHubUpdate: (skillKey: string, slug: string) => void;
 };
 
 type StatusTabDef = { id: SkillsStatusFilter; label: string };
@@ -105,6 +106,41 @@ function skillStatusClass(skill: SkillStatusEntry): string {
     return "muted";
   }
   return skill.eligible ? "ok" : "warn";
+}
+
+function resolveClawHubSlugFromSource(source: string): string | null {
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const clawhubPrefix = "clawhub:";
+  if (trimmed.toLowerCase().startsWith(clawhubPrefix)) {
+    const slug = trimmed.slice(clawhubPrefix.length).trim();
+    return slug || null;
+  }
+  try {
+    const url = new URL(trimmed, window.location.href);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    if (url.hostname !== "clawhub.ai" && !url.hostname.endsWith(".clawhub.ai")) {
+      return null;
+    }
+    const [, section, slug] = url.pathname.split("/");
+    if (section !== "skills") {
+      return null;
+    }
+    return slug ? decodeURIComponent(slug) : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderSkillSource(source: string) {
+  const href = safeExternalHref(source);
+  return href
+    ? html`<a href="${href}" target="_blank" rel="noopener noreferrer">${source}</a>`
+    : source;
 }
 
 export function renderSkills(props: SkillsProps) {
@@ -429,6 +465,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
   const message = props.messages[skill.skillKey] ?? null;
   const canInstall = skill.install.length > 0 && skill.missing.bins.length > 0;
   const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
+  const clawhubSlug = resolveClawHubSlugFromSource(skill.source);
   const missing = computeSkillMissing(skill);
   const reasons = computeSkillReasons(skill);
 
@@ -559,7 +596,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
           <div
             style="border-top: 1px solid var(--border); padding-top: 12px; display: grid; gap: 6px; font-size: 12px; color: var(--muted);"
           >
-            <div><span style="font-weight: 600;">Source:</span> ${skill.source}</div>
+            <div><span style="font-weight: 600;">Source:</span> ${renderSkillSource(skill.source)}</div>
             <div style="font-family: var(--mono); word-break: break-all;">${skill.filePath}</div>
             ${(() => {
               const safeHref = safeExternalHref(skill.homepage);
@@ -571,6 +608,17 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                   </div>`
                 : nothing;
             })()}
+            ${clawhubSlug
+              ? html`<div style="margin-top: 6px;">
+                  <button
+                    class="btn btn--sm"
+                    ?disabled=${busy}
+                    @click=${() => props.onClawHubUpdate(skill.skillKey, clawhubSlug)}
+                  >
+                    ${busy ? "Checking…" : "Check for updates"}
+                  </button>
+                </div>`
+              : nothing}
           </div>
         </div>
       </div>

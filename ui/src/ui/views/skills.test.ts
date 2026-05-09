@@ -86,6 +86,7 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     onClawHubDetailOpen: () => undefined,
     onClawHubDetailClose: () => undefined,
     onClawHubInstall: () => undefined,
+    onClawHubUpdate: () => undefined,
     ...overrides,
   };
 }
@@ -249,6 +250,52 @@ describe("renderSkills", () => {
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
   });
+
+  it("renders ClawHub skill sources as external links and routes update checks", async () => {
+    const container = document.createElement("div");
+    const showModal = vi.fn(function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    const onClawHubUpdate = vi.fn();
+
+    installDialogMethod("showModal", showModal);
+
+    render(
+      renderSkills(
+        createProps({
+          detailKey: "repo-skill",
+          onClawHubUpdate,
+          report: {
+            workspaceDir: "/tmp/workspace",
+            managedSkillsDir: "/tmp/skills",
+            skills: [
+              createSkill({
+                source: "https://clawhub.ai/skills/self-improving-agent",
+              }),
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const sourceLink = container.querySelector<HTMLAnchorElement>(
+      'a[href="https://clawhub.ai/skills/self-improving-agent"]',
+    );
+    expect(sourceLink?.target).toBe("_blank");
+    expect(sourceLink?.rel).toContain("noopener");
+    expect(sourceLink?.rel).toContain("noreferrer");
+
+    const updateButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => normalizeText(button).includes("Check for updates"),
+    );
+    updateButton?.click();
+
+    expect(onClawHubUpdate).toHaveBeenCalledTimes(1);
+    expect(onClawHubUpdate).toHaveBeenCalledWith("repo-skill", "self-improving-agent");
+  });
+
 });
 
 function installDialogMethod(

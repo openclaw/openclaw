@@ -278,3 +278,40 @@ export async function installFromClawHub(state: SkillsState, slug: string) {
     state.clawhubInstallSlug = null;
   }
 }
+
+export async function updateFromClawHub(state: SkillsState, skillKey: string, slug: string) {
+  await runSkillMutation(state, skillKey, async (client) => {
+    const result = await client.request<{
+      config?: {
+        source?: "clawhub";
+        results?: Array<{
+          ok: boolean;
+          slug?: string;
+          previousVersion?: string | null;
+          version?: string;
+          changed?: boolean;
+          error?: string;
+        }>;
+      };
+    }>("skills.update", { source: "clawhub", slug });
+    const update = result?.config?.results?.find((entry) => entry.slug === slug);
+    if (update?.changed) {
+      return {
+        kind: "success",
+        message: `Updated ${slug}${update.previousVersion ? ` from v${update.previousVersion}` : ""}${
+          update.version ? ` to v${update.version}` : ""
+        }`,
+      };
+    }
+    if (update?.version) {
+      return {
+        kind: "success",
+        message: `${slug} is already up to date at v${update.version}`,
+      };
+    }
+    return {
+      kind: "success",
+      message: `Checked ${slug} for updates`,
+    };
+  });
+}
