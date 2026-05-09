@@ -399,12 +399,12 @@ function cloneCheckpointSessionEntry(params: {
   };
 }
 
-function ensureSessionTranscriptFile(params: {
+function ensureSessionTranscriptLocator(params: {
   sessionId: string;
   agentId: string;
-}): { ok: true; transcriptPath: string } | { ok: false; error: string } {
+}): { ok: true; transcriptLocator: string } | { ok: false; error: string } {
   try {
-    const transcriptPath = createSqliteSessionTranscriptLocator({
+    const transcriptLocator = createSqliteSessionTranscriptLocator({
       agentId: params.agentId,
       sessionId: params.sessionId,
     });
@@ -424,7 +424,7 @@ function ensureSessionTranscriptFile(params: {
         event: header,
       });
     }
-    return { ok: true, transcriptPath };
+    return { ok: true, transcriptLocator };
   } catch (err) {
     return {
       ok: false,
@@ -1162,7 +1162,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, created.error);
       return;
     }
-    const ensured = ensureSessionTranscriptFile({
+    const ensured = ensureSessionTranscriptLocator({
       sessionId: created.entry.sessionId,
       agentId: targetAgentId,
     });
@@ -1180,7 +1180,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const createdEntry = created.entry;
-    const createdTranscriptLocator = ensured.transcriptPath;
+    const createdTranscriptLocator = ensured.transcriptLocator;
 
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     let runPayload: Record<string, unknown> | undefined;
@@ -1953,13 +1953,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const transcriptPath = resolveSessionTranscriptCandidates(
+    const transcriptLocator = resolveSessionTranscriptCandidates(
       sessionId,
       undefined,
       target.agentId,
     )[0];
     if (
-      !transcriptPath ||
+      !transcriptLocator ||
       !hasSqliteSessionTranscriptEvents({
         agentId: target.agentId,
         sessionId,
@@ -2001,7 +2001,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         sessionId,
         sessionKey: target.canonicalKey,
         allowGatewaySubagentBinding: true,
-        transcriptLocator: transcriptPath,
+        transcriptLocator,
         workspaceDir,
         config: cfg,
         provider: resolvedModel.provider,
