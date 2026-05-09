@@ -1341,8 +1341,8 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
   it("uses the context-engine loop checkpoint for final afterTurn", async () => {
     const afterTurn = vi.fn(async () => {});
     hoisted.installContextEngineLoopHookMock.mockImplementation((...args: unknown[]) => {
-      const params = args[0] as { onDeliveredMessageCount?: (messageCount: number) => void };
-      params.onDeliveredMessageCount?.(2);
+      const params = args[0] as { onAfterTurnCheckpoint?: (messageCount: number) => void };
+      params.onAfterTurnCheckpoint?.(2);
       return () => {};
     });
 
@@ -1356,10 +1356,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
       tempPaths,
       sessionMessages: [seedMessage],
       sessionPrompt: async (session) => {
-        session.messages = [
-          ...session.messages,
-          { role: "assistant", content: "done", timestamp: 2 } as AgentMessage,
-        ];
+        session.messages = [...session.messages, doneMessage];
       },
     });
 
