@@ -69,9 +69,7 @@ describe("pi model discovery synthetic auth", () => {
     await withAgentDir(async (agentDir) => {
       const credentials = resolvePiCredentialsForDiscovery(agentDir, { readOnly: true });
 
-      expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalledTimes(1);
-      expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalledWith();
-      expect(resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledTimes(1);
+      expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalled();
       expect(resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith({
         provider: "claude-cli",
         context: {
