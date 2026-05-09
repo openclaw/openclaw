@@ -168,30 +168,26 @@ function writeStoredIdentity(filePath: string, stored: StoredDeviceIdentity): vo
 export function loadOrCreateDeviceIdentity(
   filePath: string = resolveDefaultIdentityPath(),
 ): DeviceIdentity {
-  try {
-    const parsed = readStoredIdentity(filePath);
-    if (parsed) {
-      const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
-      if (derivedId && derivedId !== parsed.deviceId) {
-        const updated: StoredDeviceIdentity = {
-          ...parsed,
-          deviceId: derivedId,
-        };
-        writeStoredIdentity(filePath, updated);
-        return {
-          deviceId: derivedId,
-          publicKeyPem: parsed.publicKeyPem,
-          privateKeyPem: parsed.privateKeyPem,
-        };
-      }
+  const parsed = readStoredIdentity(filePath);
+  if (parsed) {
+    const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
+    if (derivedId && derivedId !== parsed.deviceId) {
+      const updated: StoredDeviceIdentity = {
+        ...parsed,
+        deviceId: derivedId,
+      };
+      writeStoredIdentity(filePath, updated);
       return {
-        deviceId: parsed.deviceId,
+        deviceId: derivedId,
         publicKeyPem: parsed.publicKeyPem,
         privateKeyPem: parsed.privateKeyPem,
       };
     }
-  } catch {
-    // fall through to regenerate
+    return {
+      deviceId: parsed.deviceId,
+      publicKeyPem: parsed.publicKeyPem,
+      privateKeyPem: parsed.privateKeyPem,
+    };
   }
 
   assertNoUnimportedLegacyIdentity(filePath);

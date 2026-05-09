@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { importLegacyDeviceIdentityFileToSqlite } from "../commands/doctor/legacy/device-identity.js";
-import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import {
+  restoreStateDirEnv,
+  setStateDirEnv,
+  snapshotStateDirEnv,
+  withStateDirEnv,
+} from "../test-helpers/state-dir-env.js";
 import {
   DeviceIdentityMigrationRequiredError,
   loadDeviceIdentityIfPresent,
@@ -93,5 +99,20 @@ describe("device identity state dir defaults", () => {
         DeviceIdentityMigrationRequiredError,
       );
     });
+  });
+
+  it("fails closed when the SQLite identity store cannot be opened", async () => {
+    const snapshot = snapshotStateDirEnv();
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-identity-state-file-"));
+    const blockedStateDir = path.join(tempRoot, "state");
+    try {
+      await fs.writeFile(blockedStateDir, "not a directory", "utf8");
+      setStateDirEnv(blockedStateDir);
+
+      expect(() => loadOrCreateDeviceIdentity()).toThrow();
+    } finally {
+      restoreStateDirEnv(snapshot);
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });
