@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
   deleteSessionEntry,
   listSessionEntries,
@@ -774,27 +775,25 @@ describe("doctor state integrity oauth dir checks", () => {
   });
 
   it("keeps the heartbeat main-session helper conservative", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-main-helper-"));
-    try {
-      const transcriptPath = path.join(tempDir, "session.jsonl");
-      replaceSqliteSessionTranscriptEvents({
-        agentId: "main",
-        sessionId: "session",
-        transcriptPath,
-        events: [
-          { message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT } },
-          { message: { role: "assistant", content: "HEARTBEAT_OK" } },
-        ],
-      });
-      const entry: SessionEntry = { sessionId: "session", updatedAt: 1 };
-      expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })?.reason).toBe(
-        "transcript",
-      );
-      entry.lastInteractionAt = 2;
-      expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })).toBeNull();
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    const transcriptPath = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "session",
+    });
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "session",
+      transcriptPath,
+      events: [
+        { message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT } },
+        { message: { role: "assistant", content: "HEARTBEAT_OK" } },
+      ],
+    });
+    const entry: SessionEntry = { sessionId: "session", updatedAt: 1 };
+    expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })).toMatchObject({
+      reason: "transcript",
+    });
+    entry.lastInteractionAt = 2;
+    expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })).toBeNull();
   });
 
   it("moves store entries and clears matching TUI pointers without touching others", async () => {

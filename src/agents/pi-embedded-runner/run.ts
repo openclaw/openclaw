@@ -4,6 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
@@ -472,6 +473,18 @@ export async function runEmbeddedPiAgent(
   });
   if (effectiveSessionKey !== params.sessionKey) {
     params = { ...params, sessionKey: effectiveSessionKey };
+  }
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const sqliteTranscriptLocator = createSqliteSessionTranscriptLocator({
+    agentId: sessionAgentId,
+    sessionId: params.sessionId,
+  });
+  if (params.transcriptLocator !== sqliteTranscriptLocator) {
+    params = { ...params, transcriptLocator: sqliteTranscriptLocator };
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);

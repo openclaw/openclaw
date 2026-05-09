@@ -5,6 +5,7 @@ import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { createSqliteSessionTranscriptLocator } from "../../../config/sessions/paths.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -860,6 +861,13 @@ export async function runEmbeddedAttempt(
     config: params.config,
     agentId: params.agentId,
   });
+  const sqliteTranscriptLocator = createSqliteSessionTranscriptLocator({
+    agentId: sessionAgentId,
+    sessionId: params.sessionId,
+  });
+  if (params.transcriptLocator !== sqliteTranscriptLocator) {
+    params = { ...params, transcriptLocator: sqliteTranscriptLocator };
+  }
   const runArtifactStore = createRunArtifactStoreBestEffort({
     agentId: sessionAgentId,
     runId: params.runId,

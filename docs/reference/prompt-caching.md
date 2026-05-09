@@ -308,15 +308,12 @@ Why the assertions differ:
 diagnostics:
   cacheTrace:
     enabled: true
-    filePath: "~/Desktop/cache-trace.jsonl" # optional export/debug override
     includeMessages: false # default true
     includePrompt: false # default true
     includeSystem: false # default true
 ```
 
-Defaults:
-
-- `filePath`: unset by default; cache trace events are stored in the SQLite state database. Set this only when you need an explicit JSONL export/debug file.
+- Cache trace events are stored in the SQLite state database.
 - `includeMessages`: `true`
 - `includePrompt`: `true`
 - `includeSystem`: `true`
@@ -324,7 +321,6 @@ Defaults:
 ### Env toggles (one-off debugging)
 
 - `OPENCLAW_CACHE_TRACE=1` enables cache tracing.
-- `OPENCLAW_CACHE_TRACE_FILE=/path/to/cache-trace.jsonl` writes an explicit JSONL export/debug file instead of the SQLite diagnostic store.
 - `OPENCLAW_CACHE_TRACE_MESSAGES=0|1` toggles full message payload capture.
 - `OPENCLAW_CACHE_TRACE_PROMPT=0|1` toggles prompt text capture.
 - `OPENCLAW_CACHE_TRACE_SYSTEM=0|1` toggles system prompt capture.

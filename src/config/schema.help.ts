@@ -660,9 +660,7 @@ export const FIELD_HELP: Record<string, string> = {
   "diagnostics.otel.captureContent.systemPrompt":
     "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
   "diagnostics.cacheTrace.enabled":
-    "Log cache trace snapshots for embedded agent runs (default: false).",
-  "diagnostics.cacheTrace.filePath":
-    "Optional JSONL export path for cache trace logs. When unset, cache trace events are stored in SQLite state.",
+    "Store cache trace snapshots for embedded agent runs in SQLite state (default: false).",
   "diagnostics.cacheTrace.includeMessages":
     "Include full message payloads in trace output (default: true).",
   "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",

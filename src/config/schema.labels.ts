@@ -63,7 +63,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.otel.captureContent.toolOutputs": "OpenTelemetry Tool Outputs Capture",
   "diagnostics.otel.captureContent.systemPrompt": "OpenTelemetry System Prompt Capture",
   "diagnostics.cacheTrace.enabled": "Cache Trace Enabled",
-  "diagnostics.cacheTrace.filePath": "Cache Trace File Path",
   "diagnostics.cacheTrace.includeMessages": "Cache Trace Include Messages",
   "diagnostics.cacheTrace.includePrompt": "Cache Trace Include Prompt",
   "diagnostics.cacheTrace.includeSystem": "Cache Trace Include System",

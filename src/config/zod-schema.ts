@@ -435,7 +435,6 @@ export const OpenClawSchema = z
         cacheTrace: z
           .object({
             enabled: z.boolean().optional(),
-            filePath: z.string().optional(),
             includeMessages: z.boolean().optional(),
             includePrompt: z.boolean().optional(),
             includeSystem: z.boolean().optional(),

@@ -257,7 +257,6 @@ export type DiagnosticsOtelConfig = {
 
 export type DiagnosticsCacheTraceConfig = {
   enabled?: boolean;
-  filePath?: string;
   includeMessages?: boolean;
   includePrompt?: boolean;
   includeSystem?: boolean;

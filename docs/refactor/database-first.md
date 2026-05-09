@@ -49,6 +49,13 @@ This migration has one canonical runtime shape:
 - Runtime startup, hot reply paths, compaction, reset, recovery, diagnostics,
   TTS, memory hooks, subagents, and plugin command routing must derive transcript
   handles from SQLite identity or pass `{agentId, sessionId}` directly.
+- `runEmbeddedPiAgent(...)` and the inner embedded attempt must not honor
+  file-shaped transcript locator inputs. They derive the SQLite transcript
+  handle from `{agentId, sessionId}` before worker dispatch or model execution,
+  so stale callers cannot make the runner write JSON/JSONL transcripts.
+- Runner diagnostics must store runtime/cache/payload trace records in SQLite.
+  Runtime diagnostics must not expose JSONL file override knobs; export/debug
+  commands can materialize files explicitly from database rows.
 
 Implementation work should keep deleting code until these statements are true
 without exceptions outside doctor/import/export/debug boundaries.
@@ -322,6 +329,14 @@ The remaining cleanup is mostly consolidation and deletion:
   `resolveSessionTranscriptTarget` derives any temporary boundary handle from
   `agentId`, `sessionId`, and optional topic metadata; doctor is the only code
   that imports legacy transcript file names.
+- Embedded PI runs canonicalize any incoming transcript handle to the SQLite
+  `{agentId, sessionId}` identity before worker launch and again before the
+  attempt touches transcript state. A stale `/tmp/*.jsonl` input cannot select a
+  runtime write target.
+- Cache trace and Anthropic payload diagnostics now write to SQLite diagnostic
+  KV rows only. The old `diagnostics.cacheTrace.filePath`,
+  `OPENCLAW_CACHE_TRACE_FILE`, and `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE`
+  JSONL override paths are removed.
 - Cron persistence now reconciles SQLite `cron_jobs` rows instead of
   deleting/reinserting the whole job table on each save. Plugin target
   writebacks update matching cron rows directly and keep runtime cron state in
