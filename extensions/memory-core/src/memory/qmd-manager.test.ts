@@ -29,6 +29,10 @@ const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProvi
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 interface MockChild extends EventEmitter {
   stdout: EventEmitter;
   stderr: EventEmitter;
@@ -4969,7 +4973,7 @@ describe("QmdMemoryManager", () => {
             await fs.rm(defaultModelsDir, { recursive: true, force: true });
           },
           assert: async () => {
-            await expect(fs.lstat(customModelsDir)).rejects.toThrow();
+            await expectPathMissing(customModelsDir);
             expect(logWarnMock).not.toHaveBeenCalledWith(
               expect.stringContaining("failed to symlink qmd models directory"),
             );

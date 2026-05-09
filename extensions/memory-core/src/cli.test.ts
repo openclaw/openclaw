@@ -21,6 +21,10 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   })),
 );
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 vi.mock("./cli.host.runtime.js", async () => {
   const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
     import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
@@ -589,7 +593,7 @@ describe("memory cli", () => {
       await runMemoryCli(["status", "--fix"]);
 
       expectLogged(log, "Repair: rewrote store");
-      await expect(fs.stat(lockPath)).rejects.toThrow();
+      await expectPathMissing(lockPath);
       const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
         entries: Record<string, { conceptTags?: string[] }>;
       };
