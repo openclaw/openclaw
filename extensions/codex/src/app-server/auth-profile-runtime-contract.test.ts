@@ -6,7 +6,6 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness";
 import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { createSqliteSessionTranscriptLocator } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
@@ -16,16 +15,15 @@ import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 
-function testSessionFile(suffix: string = AUTH_PROFILE_RUNTIME_CONTRACT.sessionId): string {
-  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: suffix });
+function testSessionId(suffix: string = AUTH_PROFILE_RUNTIME_CONTRACT.sessionId): string {
+  return suffix;
 }
 
-function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
+function createParams(sessionId: string, workspaceDir: string): EmbeddedRunAttemptParams {
   return {
     prompt: AUTH_PROFILE_RUNTIME_CONTRACT.workspacePrompt,
-    sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
-    sessionKey: AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey,
-    sessionFile,
+    sessionKey: `agent:main:${sessionId}`,
+    sessionId,
     workspaceDir,
     runId: AUTH_PROFILE_RUNTIME_CONTRACT.runId,
     provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
@@ -157,8 +155,8 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
 
   it("passes the exact OpenAI Codex auth profile into app-server startup", async () => {
     const harness = createCodexAuthProfileHarness({ startMethod: "thread/start" });
-    const sessionFile = testSessionFile();
-    const params = createParams(sessionFile, tmpDir);
+    const sessionId = testSessionId();
+    const params = createParams(sessionId, tmpDir);
     params.authProfileId = AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId;
     params.agentDir = tmpDir;
 
@@ -178,15 +176,18 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
 
   it("reuses a bound OpenAI Codex auth profile when resume params omit authProfileId", async () => {
     const harness = createCodexAuthProfileHarness({ startMethod: "thread/resume" });
-    const sessionFile = testSessionFile("auth-profile-resume");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-auth-contract",
-      cwd: tmpDir,
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-      dynamicToolsFingerprint: "[]",
-    });
+    const sessionId = testSessionId("auth-profile-resume");
+    await writeCodexAppServerBinding(
+      { sessionKey: `agent:main:${sessionId}`, sessionId },
+      {
+        threadId: "thread-auth-contract",
+        cwd: tmpDir,
+        authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+        dynamicToolsFingerprint: "[]",
+      },
+    );
     // authProfileId is intentionally omitted to exercise the resume-bound profile path.
-    const params = createParams(sessionFile, tmpDir);
+    const params = createParams(sessionId, tmpDir);
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
@@ -203,14 +204,17 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
 
   it("prefers an explicit runtime auth profile over a stale persisted binding", async () => {
     const harness = createCodexAuthProfileHarness({ startMethod: "thread/resume" });
-    const sessionFile = testSessionFile("auth-profile-abort");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-auth-contract",
-      cwd: tmpDir,
-      authProfileId: "openai-codex:stale",
-      dynamicToolsFingerprint: "[]",
-    });
-    const params = createParams(sessionFile, tmpDir);
+    const sessionId = testSessionId("auth-profile-abort");
+    await writeCodexAppServerBinding(
+      { sessionKey: `agent:main:${sessionId}`, sessionId },
+      {
+        threadId: "thread-auth-contract",
+        cwd: tmpDir,
+        authProfileId: "openai-codex:stale",
+        dynamicToolsFingerprint: "[]",
+      },
+    );
+    const params = createParams(sessionId, tmpDir);
     params.authProfileId = AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId;
 
     const run = runCodexAppServerAttempt(params);
@@ -226,7 +230,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     await run;
 
     await expect(
-      readCodexAppServerBinding({ sessionKey: params.sessionKey, sessionFile }),
+      readCodexAppServerBinding({ sessionKey: params.sessionKey, sessionId }),
     ).resolves.toMatchObject({
       authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });

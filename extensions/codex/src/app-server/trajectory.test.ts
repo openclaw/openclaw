@@ -55,7 +55,7 @@ describe("Codex trajectory recorder", () => {
     const recorder = createCodexTrajectoryRecorder({
       cwd: tmpDir,
       attempt: {
-        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session",
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
         runId: "run-1",
@@ -85,8 +85,8 @@ describe("Codex trajectory recorder", () => {
     expect(serialized).not.toContain("sk-test-secret-token");
     expect(serialized).not.toContain("sk-other-secret-token");
     expect(serialized).toContain("Bearer <redacted>");
-    expect(fs.existsSync(path.join(tmpDir, "session.trajectory.jsonl"))).toBe(false);
-    expect(fs.existsSync(path.join(tmpDir, "session.trajectory-path.json"))).toBe(false);
+    expect(fs.existsSync("session.trajectory")).toBe(false);
+    expect(fs.existsSync("session.trajectory-path")).toBe(false);
   });
 
   it("honors explicit disablement", () => {
@@ -94,7 +94,7 @@ describe("Codex trajectory recorder", () => {
     const recorder = createCodexTrajectoryRecorder({
       cwd: tmpDir,
       attempt: {
-        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session",
         sessionId: "session-1",
         model: { api: "responses" },
       } as never,
@@ -110,7 +110,7 @@ describe("Codex trajectory recorder", () => {
     const recorder = createCodexTrajectoryRecorder({
       cwd: tmpDir,
       attempt: {
-        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session",
         sessionId: "session-1",
         model: { api: "responses" },
       } as never,

@@ -72,7 +72,7 @@ describe("codex app-server session binding", () => {
   });
 
   it("round-trips plugin app policy context with app ids as record keys", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
+    const sessionId = "session";
     const pluginAppPolicyContext = {
       fingerprint: "plugin-policy-1",
       apps: {
@@ -88,23 +88,23 @@ describe("codex app-server session binding", () => {
         "google-calendar": ["google-calendar-app"],
       },
     };
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCodexAppServerBinding(sessionId, {
       threadId: "thread-123",
       cwd: tempDir,
       pluginAppPolicyContext,
     });
 
-    const binding = await readCodexAppServerBinding(sessionFile);
+    const binding = await readCodexAppServerBinding(sessionId);
 
     expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
   it("rejects old plugin app policy entries that duplicate the app id", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
-    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionFile, {
+    const sessionId = "session";
+    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionId, {
       schemaVersion: 1,
       threadId: "thread-123",
-      sessionFile,
+      sessionId,
       cwd: tempDir,
       pluginAppPolicyContext: {
         fingerprint: "plugin-policy-1",
@@ -126,49 +126,38 @@ describe("codex app-server session binding", () => {
       updatedAt: "2026-05-03T00:00:00.000Z",
     });
 
-    const binding = await readCodexAppServerBinding(sessionFile);
+    const binding = await readCodexAppServerBinding(sessionId);
 
     expect(binding?.pluginAppPolicyContext).toBeUndefined();
   });
 
-  it("keys new bindings by OpenClaw session key instead of transcript path", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
+  it("keys new bindings by OpenClaw session id and stores the session key as metadata", async () => {
+    const sessionId = "session";
     const sessionKey = "agent:main:codex-thread";
     await writeCodexAppServerBinding(
-      { sessionKey, sessionFile },
+      { sessionKey, sessionId },
       {
         threadId: "thread-session-key",
         cwd: tempDir,
       },
     );
 
-    await expect(readCodexAppServerBinding({ sessionKey })).resolves.toMatchObject({
+    await expect(readCodexAppServerBinding({ sessionKey, sessionId })).resolves.toMatchObject({
       threadId: "thread-session-key",
       sessionKey,
-      sessionFile,
+      sessionId,
     });
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
-  });
-
-  it("can read legacy transcript-path keyed bindings through the session identity", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
-    const sessionKey = "agent:main:legacy-codex-thread";
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-legacy",
-      cwd: tempDir,
-    });
-
-    await expect(readCodexAppServerBinding({ sessionKey, sessionFile })).resolves.toMatchObject({
-      threadId: "thread-legacy",
+    await expect(readCodexAppServerBinding(sessionId)).resolves.toMatchObject({
+      threadId: "thread-session-key",
       sessionKey,
-      sessionFile,
+      sessionId,
     });
   });
 
   it("does not persist public OpenAI as the provider for Codex-native auth bindings", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
+    const sessionId = "session";
     await writeCodexAppServerBinding(
-      sessionFile,
+      sessionId,
       {
         threadId: "thread-123",
         cwd: tempDir,
@@ -179,7 +168,7 @@ describe("codex app-server session binding", () => {
       nativeAuthLookup,
     );
 
-    const binding = await readCodexAppServerBinding(sessionFile, nativeAuthLookup);
+    const binding = await readCodexAppServerBinding(sessionId, nativeAuthLookup);
 
     expect(binding).toMatchObject({
       threadId: "thread-123",
@@ -190,11 +179,11 @@ describe("codex app-server session binding", () => {
   });
 
   it("normalizes older Codex-native bindings that stored public OpenAI provider", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
-    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionFile, {
+    const sessionId = "session";
+    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionId, {
       schemaVersion: 1,
       threadId: "thread-123",
-      sessionFile,
+      sessionId,
       cwd: tempDir,
       authProfileId: "work",
       model: "gpt-5.4-mini",
@@ -203,33 +192,33 @@ describe("codex app-server session binding", () => {
       updatedAt: "2026-05-03T00:00:00.000Z",
     });
 
-    const binding = await readCodexAppServerBinding(sessionFile, nativeAuthLookup);
+    const binding = await readCodexAppServerBinding(sessionId, nativeAuthLookup);
 
     expect(binding?.authProfileId).toBe("work");
     expect(binding?.modelProvider).toBeUndefined();
   });
 
   it("normalizes legacy fast service tier bindings to Codex priority", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
-    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionFile, {
+    const sessionId = "session";
+    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionId, {
       schemaVersion: 1,
       threadId: "thread-123",
-      sessionFile,
+      sessionId,
       cwd: tempDir,
       serviceTier: "fast",
       createdAt: "2026-05-03T00:00:00.000Z",
       updatedAt: "2026-05-03T00:00:00.000Z",
     });
 
-    const binding = await readCodexAppServerBinding(sessionFile);
+    const binding = await readCodexAppServerBinding(sessionId);
 
     expect(binding?.serviceTier).toBe("priority");
   });
 
   it("does not infer native Codex auth from the profile id prefix", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
+    const sessionId = "session";
     await writeCodexAppServerBinding(
-      sessionFile,
+      sessionId,
       {
         threadId: "thread-123",
         cwd: tempDir,
@@ -251,7 +240,7 @@ describe("codex app-server session binding", () => {
       },
     );
 
-    const binding = await readCodexAppServerBinding(sessionFile, {
+    const binding = await readCodexAppServerBinding(sessionId, {
       authProfileStore: {
         version: 1,
         profiles: {
@@ -268,8 +257,8 @@ describe("codex app-server session binding", () => {
   });
 
   it("clears missing bindings without throwing", async () => {
-    const sessionFile = path.join(tempDir, "missing.json");
-    await clearCodexAppServerBinding(sessionFile);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+    const sessionId = "missing";
+    await clearCodexAppServerBinding(sessionId);
+    await expect(readCodexAppServerBinding(sessionId)).resolves.toBeUndefined();
   });
 });

@@ -4,7 +4,6 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
-import { createSqliteSessionTranscriptLocator } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -18,15 +17,10 @@ type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNoti
 async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-delivery-contract-"));
   tempDirs.add(tempDir);
-  const sessionFile = createSqliteSessionTranscriptLocator({
-    agentId: "main",
-    sessionId: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.sessionId,
-  });
   return {
     prompt: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.prompt,
     sessionId: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.sessionId,
     sessionKey: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.sessionKey,
-    sessionFile,
     workspaceDir: tempDir,
     runId: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.runId,
     provider: "codex",

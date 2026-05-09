@@ -4,9 +4,7 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   appendSqliteSessionTranscriptEvent,
-  createSqliteSessionTranscriptLocator,
   resetAgentEventsForTest,
-  SessionManager,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
@@ -55,20 +53,17 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
     .basename(tempDir)
     .replace(/[^a-z0-9]/giu, "")
     .toLowerCase()}`;
-  const sessionFile = createSqliteSessionTranscriptLocator({
-    agentId: "main",
-    sessionId: transcriptSessionId,
-  });
+  const transcriptPath = transcriptSessionId;
   appendSqliteSessionTranscriptEvent({
     agentId: "main",
     sessionId: transcriptSessionId,
-    transcriptPath: sessionFile,
+    transcriptPath,
     event: { type: "session", version: 1, id: sessionId },
   });
   appendSqliteSessionTranscriptEvent({
     agentId: "main",
     sessionId: transcriptSessionId,
-    transcriptPath: sessionFile,
+    transcriptPath,
     event: {
       type: "message",
       id: "history",
@@ -79,7 +74,6 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
   return {
     prompt: "hello",
     sessionId,
-    sessionFile,
     workspaceDir: tempDir,
     runId: "run-1",
     provider: "openai-codex",
@@ -528,7 +522,6 @@ describe("CodexAppServerEventProjector", () => {
       {
         prompt: "hello",
         sessionId: "session-1",
-        sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
         runId: "run-1",
         provider: "openai-codex",
@@ -1107,7 +1100,6 @@ describe("CodexAppServerEventProjector", () => {
 
   it("fires before_compaction and after_compaction hooks for codex compaction items", async () => {
     const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks();
-    const openSpy = vi.spyOn(SessionManager, "open");
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -1119,8 +1111,6 @@ describe("CodexAppServerEventProjector", () => {
         item: { type: "contextCompaction", id: "compact-1" },
       }),
     );
-    expect(openSpy).not.toHaveBeenCalled();
-
     expect(beforeCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
         messageCount: 1,

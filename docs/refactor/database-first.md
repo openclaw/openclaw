@@ -90,6 +90,9 @@ proceed with these assumptions:
   legacy doctor inputs only, and `sqlite-transcript://...` strings are external
   handles derived from row identity when a protocol, hook, export, or plugin
   boundary still needs a string.
+- Codex app-server bindings use the OpenClaw `sessionId` as the canonical
+  SQLite key. `sessionKey` is metadata for routing/display and must not replace
+  the durable session id or resurrect transcript-file identity.
 - Backup output should remain one archive file. Database contents should enter
   that archive as compact SQLite snapshots, not raw live WAL sidecars.
 - Transcript search is useful but not required for the first database-first
