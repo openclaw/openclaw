@@ -188,6 +188,7 @@ Docs: https://docs.openclaw.ai
 - Agents/context engine: invalidate cached assembled context views when source history shrinks or assembly fails, preventing stale pre-reset history from being reused. Fixes #77968. (#78163) Thanks @brokemac79 and @ChrisBot2026.
 - Plugin SDK: add a generic `api.runtime.llm.complete` host completion helper with runtime-derived caller attribution, config-gated model/agent overrides, session-bound context-engine access, request-scoped config, audit metadata, and normalized usage attribution. (#64294) Thanks @DaevMithran.
 - Control UI/exec approvals: highlight parsed shell command fragments that may deserve extra review in approval prompts. (#77153) Thanks @jesse-merhi.
+- Channels/iMessage: honor `channels.imessage.groups.<chat_id>.systemPrompt` (and the `groups["*"]` wildcard) by forwarding it as `GroupSystemPrompt` on inbound group turns, mirroring the byte-identical resolver semantic from WhatsApp where defining the key as an empty string on a specific group suppresses the wildcard fallback. Brings iMessage to parity with the per-group `systemPrompt` pattern already supported by Discord, Telegram, IRC, Slack, GoogleChat, and the retired BlueBubbles channel. Fixes #78285. (#79383) Thanks @omarshahine.
 
 ### Breaking
 

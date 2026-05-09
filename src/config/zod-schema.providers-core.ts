@@ -1432,6 +1432,7 @@ export const IMessageAccountSchemaBase = z
             requireMention: z.boolean().optional(),
             tools: ToolPolicySchema,
             toolsBySender: ToolPolicyBySenderSchema,
+            systemPrompt: z.string().optional(),
           })
           .strict()
           .optional(),

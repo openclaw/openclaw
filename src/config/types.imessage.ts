@@ -106,6 +106,14 @@ export type IMessageAccountConfig = {
       requireMention?: boolean;
       tools?: GroupToolPolicyConfig;
       toolsBySender?: GroupToolPolicyBySenderConfig;
+      /**
+       * Per-group system prompt. Injected into the agent's system prompt on
+       * every turn that handles a message in that group. Matches the shape
+       * already supported by Discord, Telegram, IRC, Slack, GoogleChat, and
+       * other group-capable channels. The wildcard `groups["*"]` entry is
+       * also honored.
+       */
+      systemPrompt?: string;
     }
   >;
   /** Heartbeat visibility settings for this channel. */
