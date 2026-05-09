@@ -67,7 +67,7 @@ describe("sendToNative", () => {
   });
 
   it("does nothing outside WebView2", () => {
-    expect(() => sendToNative({ type: "ready" })).not.toThrow();
+    expect(sendToNative({ type: "ready" })).toBeUndefined();
   });
 });
 
@@ -94,7 +94,7 @@ describe("initNativeBridge", () => {
     const host = makeHost();
     const cleanup = initNativeBridge(host);
     expect(host.handleChatDraftChange).not.toHaveBeenCalled();
-    expect(() => cleanup()).not.toThrow();
+    expect(cleanup()).toBeUndefined();
   });
 
   it("calls handleChatDraftChange for a valid draft-text message", () => {
