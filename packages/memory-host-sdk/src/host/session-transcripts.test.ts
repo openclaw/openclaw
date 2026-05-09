@@ -8,6 +8,7 @@ import {
 } from "./openclaw-runtime-session.js";
 import {
   buildSessionTranscriptEntry,
+  createSqliteSessionTranscriptRef,
   listSessionTranscriptsForAgent,
   readSessionTranscriptDeltaStats,
   sessionPathForTranscript,
@@ -20,7 +21,7 @@ let originalStateDir: string | undefined;
 let fixtureId = 0;
 
 function sqliteTranscriptLocator(agentId: string, sessionId: string): string {
-  return `sqlite-transcript://${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}.jsonl`;
+  return createSqliteSessionTranscriptRef({ agentId, sessionId });
 }
 
 beforeAll(() => {
@@ -74,7 +75,7 @@ function seedTranscript(params: {
     events: params.events,
     now: () => params.now ?? 1_770_000_000_000,
   });
-  return transcriptPath ?? sqliteTranscriptLocator(agentId, params.sessionId);
+  return sqliteTranscriptLocator(agentId, params.sessionId);
 }
 
 describe("listSessionTranscriptsForAgent", () => {
@@ -109,18 +110,33 @@ describe("listSessionTranscriptsForAgent", () => {
     expect(entry?.content).toBe("User: Stored only in SQLite");
     expect(entry?.path).toBe("sessions/main/sqlite-only.jsonl");
   });
+
+  it("ignores remembered legacy transcript paths when listing active SQLite transcripts", async () => {
+    const legacyPath = path.join(tmpDir, "agents", "main", "sessions", "remembered.jsonl");
+    seedTranscript({
+      sessionId: "remembered",
+      transcriptPath: legacyPath,
+      events: [{ type: "message", message: { role: "user", content: "remembered path" } }],
+    });
+
+    await expect(listSessionTranscriptsForAgent("main")).resolves.toEqual([
+      "sqlite-transcript://main/remembered.jsonl",
+    ]);
+  });
 });
 
 describe("sessionPathForTranscript", () => {
-  it("includes the owning agent id when the transcript lives under an agent sessions dir", () => {
-    const absPath = path.join(tmpDir, "agents", "main", "sessions", "active-session.jsonl");
-
-    expect(sessionPathForTranscript(absPath)).toBe("sessions/main/active-session.jsonl");
+  it("formats canonical SQLite locators as stable session export paths", () => {
+    expect(
+      sessionPathForTranscript(
+        createSqliteSessionTranscriptRef({ agentId: "main", sessionId: "active-session" }),
+      ),
+    ).toBe("sessions/main/active-session.jsonl");
   });
 
-  it("keeps the legacy basename-only path when the agent owner cannot be derived", () => {
+  it("does not preserve legacy filesystem paths as session export identity", () => {
     expect(sessionPathForTranscript(path.join(tmpDir, "loose-session.jsonl"))).toBe(
-      "sessions/loose-session.jsonl",
+      "sessions/unknown.jsonl",
     );
   });
 });
@@ -197,17 +213,12 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const checkpointEntry = requireSessionTranscriptEntry(
-      await buildSessionTranscriptEntry(checkpointPath),
-    );
-
-    expect(checkpointEntry.content).toBe("");
-    expect(checkpointEntry.lineMap).toEqual([]);
+    await expect(buildSessionTranscriptEntry(checkpointPath)).resolves.toBeNull();
   });
 
   it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
     const archivePath = path.join(tmpDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    seedTranscript({
+    const transcriptRef = seedTranscript({
       sessionId: "cron-run-deleted",
       transcriptPath: archivePath,
       events: [
@@ -225,7 +236,7 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(archivePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(transcriptRef));
 
     expect(entry.content).toBe("");
     expect(entry.lineMap).toEqual([]);
@@ -234,7 +245,7 @@ describe("buildSessionTranscriptEntry", () => {
 
   it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
     const archivePath = path.join(tmpDir, "cron-run.jsonl.reset.2026-02-16T22-26-33.000Z");
-    seedTranscript({
+    const transcriptRef = seedTranscript({
       sessionId: "cron-run-reset",
       transcriptPath: archivePath,
       events: [
@@ -249,7 +260,7 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(archivePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(transcriptRef));
 
     expect(entry.content).toBe("");
     expect(entry.lineMap).toEqual([]);
