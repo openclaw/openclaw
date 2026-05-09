@@ -474,7 +474,7 @@ async function installPluginFromManagedNpmRoot(
       if (
         installedParsed &&
         requestedParsed &&
-        compareComparableSemver(installedParsed, requestedParsed) >= 0
+        (compareComparableSemver(installedParsed, requestedParsed) ?? -1) >= 0
       ) {
         logger.info?.(
           `Plugin ${params.packageName}@${installedVersion} already installed (requested ${params.npmResolution.version}); skipping.`,
