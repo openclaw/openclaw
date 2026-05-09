@@ -52,6 +52,10 @@ const launchdRestartHandoffState = vi.hoisted(() => ({
     (_params: unknown) => { ok: boolean; pid?: number; detail?: string }
   >(() => ({ ok: true, pid: 7331 })),
 }));
+const callOrderState = vi.hoisted(() => ({ events: [] as string[] }));
+const logRetentionState = vi.hoisted(() => ({
+  applyGatewayLogRetention: vi.fn<(env: Record<string, string | undefined>) => Promise<unknown>>(),
+}));
 const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number) => number[]>(() => []),
 );
@@ -210,9 +214,22 @@ vi.mock("./exec-file.js", () => ({
 vi.mock("./launchd-restart-handoff.js", () => ({
   isCurrentProcessLaunchdServiceLabel: (label: string) =>
     launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel(label),
-  scheduleDetachedLaunchdRestartHandoff: (params: unknown) =>
-    launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff(params),
+  scheduleDetachedLaunchdRestartHandoff: (params: unknown) => {
+    callOrderState.events.push("handoff");
+    return launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff(params);
+  },
 }));
+
+vi.mock("./log-retention.js", async () => {
+  const actual = await vi.importActual<typeof import("./log-retention.js")>("./log-retention.js");
+  return {
+    ...actual,
+    applyGatewayLogRetention: (env: Record<string, string | undefined>) => {
+      callOrderState.events.push("retention");
+      return logRetentionState.applyGatewayLogRetention(env);
+    },
+  };
+});
 
 vi.mock("../infra/restart-stale-pids.js", () => ({
   cleanStaleGatewayProcessesSync: (port?: number) => cleanStaleGatewayProcessesSync(port),
@@ -313,6 +330,13 @@ beforeEach(() => {
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
     ok: true,
     pid: 7331,
+  });
+  callOrderState.events.length = 0;
+  logRetentionState.applyGatewayLogRetention.mockReset();
+  logRetentionState.applyGatewayLogRetention.mockResolvedValue({
+    stdout: { rotated: false, reason: "missing" },
+    stderr: { rotated: false, reason: "missing" },
+    limits: { maxBytes: 0, archives: 0 },
   });
   vi.clearAllMocks();
 });
@@ -969,6 +993,29 @@ describe("launchd install", () => {
       waitForPid: process.pid,
     });
     expect(state.launchctlCalls).toStrictEqual([]);
+  });
+
+  it("rotates oversize launchd-owned logs before scheduling the self-handoff", async () => {
+    const env = createDefaultLaunchdEnv();
+    launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReturnValue(true);
+
+    await restartLaunchAgent({ env, stdout: new PassThrough() });
+
+    expect(logRetentionState.applyGatewayLogRetention).toHaveBeenCalledTimes(1);
+    expect(logRetentionState.applyGatewayLogRetention).toHaveBeenCalledWith(env);
+    expect(callOrderState.events).toStrictEqual(["retention", "handoff"]);
+  });
+
+  it("rotates oversize launchd-owned logs before kickstart on direct restarts", async () => {
+    const env = createDefaultLaunchdEnv();
+
+    await restartLaunchAgent({ env, stdout: new PassThrough() });
+
+    expect(logRetentionState.applyGatewayLogRetention).toHaveBeenCalledWith(env);
+    const retentionIndex = callOrderState.events.indexOf("retention");
+    const kickstartIndex = state.launchctlCalls.findIndex((call) => call[0] === "kickstart");
+    expect(retentionIndex).toBeGreaterThanOrEqual(0);
+    expect(kickstartIndex).toBeGreaterThanOrEqual(0);
   });
 
   it("surfaces detached handoff failures", async () => {

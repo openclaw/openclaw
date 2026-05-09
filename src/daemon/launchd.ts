@@ -20,6 +20,7 @@ import {
   isCurrentProcessLaunchdServiceLabel,
   scheduleDetachedLaunchdRestartHandoff,
 } from "./launchd-restart-handoff.js";
+import { applyGatewayLogRetention } from "./log-retention.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { resolveGatewayLogPaths } from "./restart-logs.js";
@@ -667,6 +668,7 @@ async function writeLaunchAgentPlist({
 }: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ plistPath: string; stdoutPath: string }> {
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
   await ensureSecureDirectory(logDir);
+  await applyGatewayLogRetention(env);
 
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
@@ -776,6 +778,7 @@ async function rewriteLaunchAgentPlistForRestart({
 
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
   await ensureSecureDirectory(logDir);
+  await applyGatewayLogRetention(env);
 
   const serviceDescription = resolveGatewayServiceDescription({
     env,
@@ -830,6 +833,13 @@ export async function restartLaunchAgent({
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
   const serviceTarget = `${domain}/${label}`;
+
+  // Rotate before any restart path runs, so both the direct kickstart and the
+  // detached self-handoff caps the unbounded launchd-owned stdout/stderr sinks
+  // before the new process starts appending to them. The detached handoff only
+  // runs `launchctl enable/kickstart/bootstrap` on a delay, so if we waited
+  // until after that branch returned an in-process restart would never rotate.
+  await applyGatewayLogRetention(serviceEnv);
 
   // Restart requests issued from inside the managed gateway process tree need a
   // detached handoff. A direct `kickstart -k` would terminate the caller before
