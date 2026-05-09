@@ -102,9 +102,12 @@ describe("memory cli", () => {
   const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
 
   function expectCliSync(sync: ReturnType<typeof vi.fn>) {
-    expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-    );
+    const syncCall = sync.mock.calls[0]?.[0] as
+      | { reason?: unknown; force?: unknown; progress?: unknown }
+      | undefined;
+    expect(syncCall?.reason).toBe("cli");
+    expect(syncCall?.force).toBe(false);
+    expect(typeof syncCall?.progress).toBe("function");
   }
 
   function makeMemoryStatus(overrides: Record<string, unknown> = {}) {
