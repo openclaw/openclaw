@@ -54,7 +54,7 @@ If invoked from a non-DM context, refuse silently.
 
 | Tier | Operations | Behaviour |
 |---|---|---|
-| **Auto** (read-only) | `list_guilds`, `guild_state`, `list_channels`, `list_cases` | Execute immediately, return JSON to the user. |
+| **Auto** (read-only) | `list_guilds`, `guild_state`, `list_channels`, `list_cases`, `deploy_status`, `recent_errors`, `scheduled_runs`, `search_docs`, `fetch_page`, `sitemap` | Execute immediately, return JSON / text to the user. |
 | **Gated** (destructive) | `ban`, `kick`, `timeout`, `warn` | DM the operator with action summary + Approve/Deny buttons. Execute ONLY after `Approve`. Timeout 5 min. |
 
 **Never auto-execute a gated op.** The dashboard's audit trail (ModerationCase) cannot be undone — the gate is the only safety net.
@@ -92,6 +92,69 @@ curl -sf -H "Authorization: Bearer $SLOTHLEE_API_TOKEN" \
 curl -sf -H "Authorization: Bearer $SLOTHLEE_API_TOKEN" \
   "$SLOTHLEE_API_BASE/api/public/v1/guilds/<guild_id>/moderation/cases?per_page=25"
 ```
+
+### System health snapshot
+
+Compact "is everything OK?" — release tag, bot online, guild + member counts, latency. No Railway API call required.
+
+```bash
+curl -sf -H "Authorization: Bearer $SLOTHLEE_API_TOKEN" \
+  "$SLOTHLEE_API_BASE/api/public/v1/system/deploy-status"
+```
+
+### Recent errors
+
+Defaults to `ai_tool_call` source (most relevant for the assistant). Pass `?source=all` to see every category, or `?source=<name>` (e.g. `slash_command`, `worker`) to filter.
+
+```bash
+curl -sf -H "Authorization: Bearer $SLOTHLEE_API_TOKEN" \
+  "$SLOTHLEE_API_BASE/api/public/v1/system/errors?limit=20"
+```
+
+Tracebacks only included when the calling token's user is a platform owner.
+
+### Scheduled-AI run review queue
+
+Surface scheduled-task runs that have un-decided pending tool calls awaiting operator review. Use `?status=pending` to find ones the operator should approve/deny.
+
+```bash
+curl -sf -H "Authorization: Bearer $SLOTHLEE_API_TOKEN" \
+  "$SLOTHLEE_API_BASE/api/public/v1/system/scheduled-runs?status=pending"
+```
+
+Other statuses: `running`, `success`, `failure`. No filter = most recent regardless of state.
+
+### Search the marketing site / docs
+
+The homepage (`https://slothlee.xyz/homepage/`) ships with **Pagefind** built into the static export. Skill can search the published pages without any dashboard API:
+
+```bash
+# 1. Fetch the Pagefind index
+curl -sf "https://slothlee.xyz/homepage/pagefind/pagefind-entry.json" \
+  | jq -r '.languages.en.hash'
+
+# 2. Use Pagefind via Node directly (works inside Openclaw's container)
+#    or call a known recipe page directly:
+curl -sf "https://slothlee.xyz/homepage/pricing/" | grep -oE '<title>[^<]+</title>'
+```
+
+For free-text answers, **prefer fetching a specific page** (cheaper than running the index):
+
+```bash
+curl -sf "https://slothlee.xyz/homepage/<slug>/" \
+  | sed -n '/<main/,/<\/main>/p' \
+  | sed 's/<[^>]*>//g'  # strip tags for the LLM
+```
+
+Common slugs: `/`, `/pricing`, `/blog`, `/features/automod`, `/for/gaming-servers`, `/vs/mee6`.
+
+### Sitemap
+
+```bash
+curl -sf "https://slothlee.xyz/homepage/sitemap.xml"
+```
+
+Use this to discover new pages the LLM should know about.
 
 ## Gated-tier operations
 
