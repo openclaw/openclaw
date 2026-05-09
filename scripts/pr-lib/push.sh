@@ -102,20 +102,27 @@ mutation($input: CreateCommitOnBranchInput!) {
 GRAPHQL
 )
 
+  local additions_file deletions_file
+  additions_file=$(mktemp)
+  deletions_file=$(mktemp)
+  printf '%s\n' "$additions" >"$additions_file"
+  printf '%s\n' "$deletions" >"$deletions_file"
+
   local variables
   variables=$(jq -n \
     --arg nwo "$repo_nwo" \
     --arg branch "$branch" \
     --arg oid "$expected_oid" \
     --arg headline "$commit_headline" \
-    --argjson additions "$additions" \
-    --argjson deletions "$deletions" \
+    --slurpfile additions "$additions_file" \
+    --slurpfile deletions "$deletions_file" \
     '{input: {
       branch: { repositoryNameWithOwner: $nwo, branchName: $branch },
       message: { headline: $headline },
-      fileChanges: { additions: $additions, deletions: $deletions },
+      fileChanges: { additions: $additions[0], deletions: $deletions[0] },
       expectedHeadOid: $oid
     }}')
+  rm -f "$additions_file" "$deletions_file"
 
   local result
   result=$(gh api graphql -f query="$query" --input - <<< "$variables" 2>&1) || {
