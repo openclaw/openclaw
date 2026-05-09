@@ -102,11 +102,11 @@ export type SessionContext = {
 };
 
 export type SessionInfo = {
-  path: string;
   id: string;
+  transcriptScope: SessionTranscriptScope;
   cwd: string;
   name?: string;
-  parentSessionPath?: string;
+  parentSession?: string;
   created: Date;
   modified: Date;
   messageCount: number;
@@ -127,12 +127,11 @@ type PersistableSessionMessage = Exclude<
 >;
 
 export type SessionManager = {
-  newSession(options?: { id?: string; parentSession?: string }): string | undefined;
+  newSession(options?: { id?: string; parentSession?: string }): SessionTranscriptScope | undefined;
   isPersisted(): boolean;
   getCwd(): string;
   getSessionId(): string;
   getTranscriptScope(): SessionTranscriptScope | undefined;
-  getTranscriptLocator(): string | undefined;
   appendMessage(message: PersistableSessionMessage): string;
   appendThinkingLevelChange(thinkingLevel: string): string;
   appendModelChange(provider: string, modelId: string): string;
@@ -175,5 +174,5 @@ export type SessionManager = {
     details?: unknown,
     fromHook?: boolean,
   ): string;
-  createBranchedSession(leafId: string): string | undefined;
+  createBranchedSession(leafId: string): SessionTranscriptScope | undefined;
 };
