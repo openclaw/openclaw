@@ -102,9 +102,32 @@ describe("status-runtime-shared", () => {
   });
 
   it("resolves usage summaries with the provided timeout", async () => {
-    await resolveStatusUsageSummary(1234);
+    await resolveStatusUsageSummary({
+      timeoutMs: 1234,
+      config: { gateway: {} },
+    });
 
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({ timeoutMs: 1234 });
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 1234,
+        config: { gateway: {} },
+        agentDir: expect.stringContaining("main"),
+      }),
+    );
+  });
+
+  it("resolves usage summaries with explicit agent scope", async () => {
+    await resolveStatusUsageSummary({
+      timeoutMs: 2345,
+      config: { gateway: {} },
+      agentDir: "/tmp/status-agent",
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      timeoutMs: 2345,
+      config: { gateway: {} },
+      agentDir: "/tmp/status-agent",
+    });
   });
 
   it("resolves gateway health with the shared probe call shape", async () => {
@@ -205,7 +228,13 @@ describe("status-runtime-shared", () => {
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
     });
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({ timeoutMs: 1234 });
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 1234,
+        config: { gateway: {} },
+        agentDir: expect.stringContaining("main"),
+      }),
+    );
     expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
       method: "health",
       params: { probe: true },
