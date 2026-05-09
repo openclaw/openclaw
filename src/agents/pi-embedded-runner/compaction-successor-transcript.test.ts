@@ -9,7 +9,7 @@ import { SessionManager } from "../transcript/session-transcript-contract.js";
 import { readTranscriptState } from "../transcript/transcript-state.js";
 import {
   rotateTranscriptAfterCompaction,
-  rotateTranscriptFileAfterCompaction,
+  rotateSqliteTranscriptAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
@@ -39,8 +39,8 @@ function makeAssistant(text: string, timestamp: number) {
   });
 }
 
-async function loadState(sessionFile: string) {
-  return await readTranscriptState(sessionFile);
+async function loadState(transcriptLocator: string) {
+  return await readTranscriptState(transcriptLocator);
 }
 
 type TranscriptEntry = ReturnType<SessionManager["getEntries"]>[number];
@@ -75,7 +75,7 @@ function requireEntryByType<T extends TranscriptEntry["type"]>(
 
 function createCompactedSession(sessionDir: string): {
   manager: SessionManager;
-  sessionFile: string;
+  transcriptLocator: string;
   firstKeptId: string;
   oldUserId: string;
 } {
@@ -92,29 +92,29 @@ function createCompactedSession(sessionDir: string): {
   manager.appendCompaction("Summary of old user and old assistant.", firstKeptId, 5000);
   manager.appendMessage({ role: "user", content: "post user", timestamp: 5 });
   manager.appendMessage(makeAssistant("post assistant", 6));
-  return { manager, sessionFile: manager.getSessionFile()!, firstKeptId, oldUserId };
+  return { manager, transcriptLocator: manager.getTranscriptLocator()!, firstKeptId, oldUserId };
 }
 
 describe("rotateTranscriptAfterCompaction", () => {
   it("can rotate a persisted transcript without opening a manager", async () => {
     const dir = await createTmpDir();
-    const { sessionFile } = createCompactedSession(dir);
+    const { transcriptLocator } = createCompactedSession(dir);
 
     const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
-      throw new Error("SessionManager.open should not be used for file rotation");
+      throw new Error("SessionManager.open should not be used for SQLite rotation");
     });
-    const result = await rotateTranscriptFileAfterCompaction({
-      sessionFile,
+    const result = await rotateSqliteTranscriptAfterCompaction({
+      transcriptLocator,
       now: () => new Date("2026-04-27T12:00:00.000Z"),
     });
     openSpy.mockRestore();
 
     expect(result.rotated).toBe(true);
-    expect(result.sessionFile).toBeTruthy();
+    expect(result.transcriptLocator).toBeTruthy();
 
-    const successor = await loadState(result.sessionFile!);
+    const successor = await loadState(result.transcriptLocator!);
     expect(successor.getHeader()).toMatchObject({
-      parentSession: sessionFile,
+      parentSession: transcriptLocator,
       cwd: dir,
     });
     expect(successor.buildSessionContext().messages.length).toBeGreaterThan(0);
@@ -122,26 +122,26 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {
     const dir = await createTmpDir();
-    const { manager, sessionFile, firstKeptId, oldUserId } = createCompactedSession(dir);
+    const { manager, transcriptLocator, firstKeptId, oldUserId } = createCompactedSession(dir);
     const originalEntryCount = manager.getEntries().length;
     const originalEntries = manager.getEntries();
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile,
+      transcriptLocator,
       now: () => new Date("2026-04-27T12:00:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
     expect(result.sessionId).toBeTruthy();
-    expect(result.sessionFile).toBeTruthy();
-    expect(result.sessionFile).not.toBe(sessionFile);
-    expect((await loadState(sessionFile)).getEntries()).toEqual(originalEntries);
+    expect(result.transcriptLocator).toBeTruthy();
+    expect(result.transcriptLocator).not.toBe(transcriptLocator);
+    expect((await loadState(transcriptLocator)).getEntries()).toEqual(originalEntries);
 
-    const successor = await loadState(result.sessionFile!);
+    const successor = await loadState(result.transcriptLocator!);
     expect(successor.getHeader()).toMatchObject({
       id: result.sessionId,
-      parentSession: sessionFile,
+      parentSession: transcriptLocator,
       cwd: dir,
     });
     expect(successor.getEntries().length).toBeLessThan(originalEntryCount);
@@ -189,12 +189,12 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      transcriptLocator: manager.getTranscriptLocator()!,
       now: () => new Date("2026-04-27T12:05:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = await loadState(result.sessionFile!);
+    const successor = await loadState(result.transcriptLocator!);
     const entries = successor.getEntries();
     expect(entries.find((entry) => entry.id === staleModelId)).toBeUndefined();
     expect(entries.find((entry) => entry.id === staleThinkingId)).toBeUndefined();
@@ -236,12 +236,12 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      transcriptLocator: manager.getTranscriptLocator()!,
       now: () => new Date("2026-04-27T12:10:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = await loadState(result.sessionFile!);
+    const successor = await loadState(result.transcriptLocator!);
     const entries = successor.getEntries();
     expect(entries.find((entry) => entry.id === firstDuplicateId)).toBeDefined();
     expect(entries.find((entry) => entry.id === secondDuplicateId)).toBeUndefined();
@@ -257,20 +257,20 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      transcriptLocator: manager.getTranscriptLocator()!,
     });
 
     expect(result.rotated).toBe(false);
     expect(result.reason).toBe("no compaction entry");
   });
 
-  it("rejects filesystem transcript locators without creating successor files", async () => {
+  it("rejects non-SQLite transcript locators", async () => {
     const dir = await createTmpDir();
     const { manager } = createCompactedSession(dir);
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: path.join(dir, "legacy-session.jsonl"),
+      transcriptLocator: "legacy-transcript-handle",
       now: () => new Date("2026-04-27T12:15:00.000Z"),
     });
 
@@ -278,9 +278,6 @@ describe("rotateTranscriptAfterCompaction", () => {
       rotated: false,
       reason: "transcript not in SQLite",
     });
-    await expect(
-      fs.stat(path.join(dir, "2026-04-27T12-15-00-000Z_legacy-session.jsonl")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("uses a refreshed manager after manual boundary hardening", async () => {
@@ -295,11 +292,13 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
     manager.appendMessage(makeAssistant("detailed recent answer", 4));
     const compactionId = manager.appendCompaction("fresh manual summary", recentTailId, 200);
-    const sessionFile = manager.getSessionFile();
-    expect(sessionFile).toBeTruthy();
-    const staleManager = await loadState(sessionFile!);
+    const transcriptLocator = manager.getTranscriptLocator();
+    expect(transcriptLocator).toBeTruthy();
+    const staleManager = await loadState(transcriptLocator!);
 
-    const hardened = await hardenManualCompactionBoundary({ sessionFile: sessionFile! });
+    const hardened = await hardenManualCompactionBoundary({
+      transcriptLocator: transcriptLocator!,
+    });
     expect(hardened.applied).toBe(true);
     const staleLeaf = staleManager.getLeafEntry();
     expect(staleLeaf?.type).toBe("compaction");
@@ -309,13 +308,13 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(staleLeaf.firstKeptEntryId).toBe(recentTailId);
 
     const result = await rotateTranscriptAfterCompaction({
-      sessionManager: await loadState(sessionFile!),
-      sessionFile: sessionFile!,
+      sessionManager: await loadState(transcriptLocator!),
+      transcriptLocator: transcriptLocator!,
       now: () => new Date("2026-04-27T12:30:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = await loadState(result.sessionFile!);
+    const successor = await loadState(result.transcriptLocator!);
     const successorText = JSON.stringify(successor.buildSessionContext().messages);
     expect(successorText).toContain("fresh manual summary");
     expect(successorText).not.toContain("recent question");
@@ -353,15 +352,15 @@ describe("rotateTranscriptAfterCompaction", () => {
     manager.appendCompaction("Summary of main branch.", firstKeptId, 5000);
     manager.appendMessage({ role: "user", content: "next", timestamp: 7 });
 
-    const sessionFile = manager.getSessionFile()!;
+    const transcriptLocator = manager.getTranscriptLocator()!;
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile,
+      transcriptLocator,
       now: () => new Date("2026-04-27T12:45:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = await loadState(result.sessionFile!);
+    const successor = await loadState(result.transcriptLocator!);
     const allEntries = successor.getEntries();
     const branchSummary = requireEntryByIdAndType(
       allEntries,
@@ -417,12 +416,12 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      transcriptLocator: manager.getTranscriptLocator()!,
       now: () => new Date("2026-04-27T13:00:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = await loadState(result.sessionFile!);
+    const successor = await loadState(result.transcriptLocator!);
     const entries = successor.getEntries();
     const indexById = new Map(entries.map((entry, index) => [entry.id, index]));
     expect(indexById.get(branchFromId)).toBeLessThan(indexById.get(branchSummaryId)!);

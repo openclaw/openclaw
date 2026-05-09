@@ -105,7 +105,11 @@ export type RunEmbeddedPiAgentParams = {
   forceHeartbeatTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
-  sessionFile: string;
+  /**
+   * Deprecated boundary hint. `runEmbeddedPiAgent()` always derives the active
+   * SQLite transcript locator from `{agentId, sessionId}` before it writes.
+   */
+  transcriptLocator: string;
   workspaceDir: string;
   agentDir?: string;
   config?: OpenClawConfig;
