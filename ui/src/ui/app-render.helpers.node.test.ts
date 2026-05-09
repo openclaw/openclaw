@@ -905,10 +905,37 @@ describe("pinned chats", () => {
       },
     } as unknown as AppViewState;
 
-    expect(resolvePinnedChatEntries(state).map((entry) => entry.label)).toEqual([
+    const entries = resolvePinnedChatEntries(state);
+    expect(entries.map((entry) => entry.label)).toEqual([
       "Subagent: worker · subagent:one",
       "Subagent: worker · subagent:two",
     ]);
+    expect(entries.map((entry) => entry.editLabel)).toEqual(["worker", "worker"]);
+  });
+
+  it("uses the raw display name as the pinned chat rename draft fallback", () => {
+    const state = {
+      sessionKey: "agent:main:subagent:one",
+      settings: {
+        pinnedSessionKeys: ["agent:main:subagent:one"],
+      },
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {
+          modelProvider: "openai",
+          model: "gpt-5",
+          contextTokens: null,
+        },
+        sessions: [row({ key: "agent:main:subagent:one", displayName: "Worker display" })],
+      },
+    } as unknown as AppViewState;
+
+    const [entry] = resolvePinnedChatEntries(state);
+
+    expect(entry.label).toBe("Subagent: Worker display");
+    expect(entry.editLabel).toBe("Worker display");
   });
 
   it("pins and unpins sessions without duplicates", () => {

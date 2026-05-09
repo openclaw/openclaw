@@ -443,11 +443,28 @@ export function reorderPinnedChatSession(state: AppViewState, fromKey: string, t
 type PinnedChatEntry = {
   key: string;
   label: string;
+  editLabel: string;
   scopeLabel: string;
   active: boolean;
   missing: boolean;
   status: SessionsListResult["sessions"][number]["status"] | null;
 };
+
+function resolvePinnedChatEditLabel(
+  key: string,
+  row: SessionsListResult["sessions"][number],
+  fallbackLabel: string,
+): string {
+  const label = normalizeOptionalString(row.label);
+  if (label && label !== key) {
+    return label;
+  }
+  const displayName = normalizeOptionalString(row.displayName);
+  if (displayName && displayName !== key) {
+    return displayName;
+  }
+  return fallbackLabel;
+}
 
 export function resolvePinnedChatEntries(state: AppViewState): PinnedChatEntry[] {
   const rows = state.sessionsResult?.sessions ?? [];
@@ -460,9 +477,11 @@ export function resolvePinnedChatEntries(state: AppViewState): PinnedChatEntry[]
     const row = byKey.get(key);
     const scopeLabel = normalizeOptionalString(parseAgentSessionKey(key)?.rest) ?? key;
     const label = row ? resolveSessionDisplayName(key, row) : scopeLabel;
+    const editLabel = row ? resolvePinnedChatEditLabel(key, row, label) : scopeLabel;
     return {
       key,
       label,
+      editLabel,
       scopeLabel,
       active: key === state.sessionKey,
       missing: !row,
@@ -671,18 +690,22 @@ export function renderSidebarPinnedChats(state: AppViewState) {
                         >
                         <span class="nav-item__text">${entry.label}</span>
                       </button>
-                      <button
-                        class="sidebar-pinned-chats__remove"
-                        type="button"
-                        title="Rename chat"
-                        aria-label="Rename chat"
-                        @click=${(event: Event) => {
-                          event.stopPropagation();
-                          startPinnedSessionRename(state, entry.key, entry.label);
-                        }}
-                      >
-                        ${icons.edit}
-                      </button>
+                      ${entry.missing
+                        ? nothing
+                        : html`
+                            <button
+                              class="sidebar-pinned-chats__remove"
+                              type="button"
+                              title="Rename chat"
+                              aria-label="Rename chat"
+                              @click=${(event: Event) => {
+                                event.stopPropagation();
+                                startPinnedSessionRename(state, entry.key, entry.editLabel);
+                              }}
+                            >
+                              ${icons.edit}
+                            </button>
+                          `}
                       <span
                         class="sidebar-pinned-chats__status ${resolvePinnedChatStatusTone(
                           entry.status,

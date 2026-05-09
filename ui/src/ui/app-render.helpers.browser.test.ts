@@ -1,7 +1,11 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";
-import { renderChatControls, renderChatMobileToggle } from "./app-render.helpers.ts";
+import {
+  renderChatControls,
+  renderChatMobileToggle,
+  renderSidebarPinnedChats,
+} from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import type { SessionsListResult } from "./types.ts";
 
@@ -44,6 +48,8 @@ function createState(overrides: Partial<AppViewState> = {}) {
       chatFocusMode: false,
       chatShowThinking: false,
       chatShowToolCalls: true,
+      pinnedSessionKeys: [],
+      pinnedSessionSlotCount: 3,
     },
     applySettings: () => undefined,
     chatMobileControlsOpen: false,
@@ -88,6 +94,65 @@ function requireElement<T extends Element>(element: T | null | undefined, label:
   }
   return element;
 }
+
+describe("sidebar pinned chats (browser)", () => {
+  it("does not render rename controls for missing pinned chats", async () => {
+    const state = createState({
+      settings: {
+        ...createState().settings,
+        pinnedSessionKeys: ["agent:main:subagent:missing"],
+        pinnedSessionSlotCount: 3,
+      },
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 0,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [],
+      },
+    });
+    const container = document.createElement("div");
+
+    render(renderSidebarPinnedChats(state), container);
+    await Promise.resolve();
+
+    expect(container.querySelector('[aria-label="Rename chat"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Unpin chat"]')).toBeInstanceOf(HTMLButtonElement);
+  });
+
+  it("starts pinned chat rename from the raw label", async () => {
+    const state = createState({
+      settings: {
+        ...createState().settings,
+        pinnedSessionKeys: ["agent:main:subagent:one", "agent:main:subagent:two"],
+        pinnedSessionSlotCount: 3,
+      },
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          row({ key: "agent:main:subagent:one", label: "worker" }),
+          row({ key: "agent:main:subagent:two", label: "worker" }),
+        ],
+      },
+    });
+    const container = document.createElement("div");
+
+    render(renderSidebarPinnedChats(state), container);
+    await Promise.resolve();
+
+    const renameButton = requireButton(
+      container.querySelector<HTMLButtonElement>('[aria-label="Rename chat"]'),
+      "rename chat",
+    );
+    renameButton.click();
+
+    expect(state.sidebarPinnedSessionEditingKey).toBe("agent:main:subagent:one");
+    expect(state.sidebarPinnedSessionRenameDraft).toBe("worker");
+  });
+});
 
 describe("chat header controls (browser)", () => {
   it("renders explicit hover tooltip metadata for the top-right action buttons", async () => {
