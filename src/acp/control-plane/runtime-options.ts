@@ -422,7 +422,8 @@ export function inferRuntimeOptionPatchFromConfigOption(
   if (
     normalizedKey === "approval_policy" ||
     normalizedKey === "permission_profile" ||
-    normalizedKey === "permissions"
+    normalizedKey === "permissions" ||
+    normalizedKey === "permission_mode"
   ) {
     return { permissionProfile: validateRuntimePermissionProfileInput(validated.value) };
   }

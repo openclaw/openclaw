@@ -3326,6 +3326,39 @@ describe("AcpSessionManager", () => {
     expect(nextOptions).toEqual({ thinking: "high" });
   });
 
+  it("persists explicit native permission_mode config updates as canonical permission profiles", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option", "session/status"],
+      configOptionKeys: ["permission_mode"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: readySessionMeta({ agent: "claude" }),
+    });
+
+    const manager = new AcpSessionManager();
+    const nextOptions = await manager.setSessionConfigOption({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      key: "permission_mode",
+      value: "strict",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "permission_mode",
+        value: "strict",
+      }),
+    );
+    expect(nextOptions).toEqual({ permissionProfile: "strict" });
+  });
+
   it("rejects invalid runtime option values before backend controls run", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
