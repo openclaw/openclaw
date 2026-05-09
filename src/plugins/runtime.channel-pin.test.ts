@@ -259,4 +259,50 @@ describe("channel registry pinning", () => {
 
     expect(observed.toSorted()).toEqual(["replacement:approval", "startup:approval"]);
   });
+
+  it("dedupes the agent-event bridge across multiple runtime module instances", async () => {
+    const observed: string[] = [];
+    const runtimeA = await import(new URL("./runtime.ts?runtimeA", import.meta.url).href);
+    const runtimeB = await import(new URL("./runtime.ts?runtimeB", import.meta.url).href);
+    const startup = createEmptyPluginRegistry();
+    startup.agentEventSubscriptions = [
+      {
+        pluginId: "startup-plugin",
+        pluginName: "Startup Plugin",
+        source: "test",
+        subscription: {
+          id: "startup-subscription",
+          handle: (event) => {
+            observed.push(`startup:${event.stream}`);
+          },
+        },
+      },
+    ];
+    const replacement = createEmptyPluginRegistry();
+    replacement.agentEventSubscriptions = [
+      {
+        pluginId: "replacement-plugin",
+        pluginName: "Replacement Plugin",
+        source: "test",
+        subscription: {
+          id: "replacement-subscription",
+          handle: (event) => {
+            observed.push(`replacement:${event.stream}`);
+          },
+        },
+      },
+    ];
+
+    runtimeA.setActivePluginRegistry(startup);
+    runtimeA.pinActivePluginChannelRegistry(startup);
+    runtimeB.setActivePluginRegistry(replacement);
+
+    emitAgentEvent({
+      runId: "run-cross-module-pinned-agent-events",
+      stream: "approval",
+      data: { state: "queued" },
+    });
+
+    expect(observed.toSorted()).toEqual(["replacement:approval", "startup:approval"]);
+  });
 });

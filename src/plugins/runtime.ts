@@ -38,6 +38,7 @@ const state: RegistryState = (() => {
         pinned: false,
         version: 0,
       },
+      agentEventBridgeUnsubscribe: undefined,
       key: null,
       workspaceDir: null,
       runtimeSubagentMode: "default",
@@ -47,8 +48,6 @@ const state: RegistryState = (() => {
   }
   return registryState;
 })();
-
-let pluginAgentEventUnsubscribe: (() => void) | undefined;
 
 function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): boolean {
   if (!registry) {
@@ -132,12 +131,12 @@ function collectLivePluginAgentEventRegistries(): PluginRegistry[] {
 }
 
 function syncPluginAgentEventBridge(): void {
-  pluginAgentEventUnsubscribe?.();
-  pluginAgentEventUnsubscribe = undefined;
+  state.agentEventBridgeUnsubscribe?.();
+  state.agentEventBridgeUnsubscribe = undefined;
   if (collectLivePluginAgentEventRegistries().length === 0) {
     return;
   }
-  pluginAgentEventUnsubscribe = onAgentEvent((event) => {
+  state.agentEventBridgeUnsubscribe = onAgentEvent((event) => {
     for (const registry of collectLivePluginAgentEventRegistries()) {
       dispatchPluginAgentEventSubscriptions({ registry, event });
     }
