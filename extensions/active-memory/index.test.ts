@@ -2625,7 +2625,7 @@ describe("active-memory plugin", () => {
     ).resolves.toMatchObject({ backend: "qmd", hits: 1 });
   });
 
-  it("caches ok and empty results but not timeout_partial results", () => {
+  it("caches ok results but not empty or timeout_partial results", () => {
     expect(
       __testing.shouldCacheResult({
         status: "timeout_partial",
@@ -2647,10 +2647,10 @@ describe("active-memory plugin", () => {
         elapsedMs: 1,
         summary: null,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("caches empty recall results", async () => {
+  it("does not cache empty recall results allowing retry on next turn", async () => {
     api.pluginConfig = {
       agents: ["main"],
       logging: true,
@@ -2679,7 +2679,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
@@ -2688,7 +2688,7 @@ describe("active-memory plugin", () => {
         (line: string) =>
           line.includes(" cached status=empty ") || line.includes(" cached status=empty"),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("surfaces timeout_partial summaries in status lines, metadata, and prompt prefixes", () => {
@@ -2911,7 +2911,7 @@ describe("active-memory plugin", () => {
     expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + HARD_DEADLINE_MARGIN_MS);
   });
 
-  it("fast-fails terminal zero-hit memory_search results without waiting for recall timeout", async () => {
+  it("does not fast-fail terminal zero-hit memory_search results, allowing the agent to retry with a broader query", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
     __testing.setMinimumTimeoutMsForTests(1);
     __testing.setSetupGraceTimeoutMsForTests(0);
@@ -2947,11 +2947,11 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expectLinesToContain(infoLines, "done status=empty");
-    expectLinesNotToContain(infoLines, "done status=timeout");
+    // Zero-hit results no longer cause an early exit; the agent runs until the timeout fires.
+    expectLinesToContain(infoLines, "done status=timeout");
+    expectLinesNotToContain(infoLines, "done status=empty");
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
-      expect.stringContaining("🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0"),
+      expect.stringContaining("🧩 Active Memory: status=timeout"),
     ]);
   });
 
@@ -3039,10 +3039,10 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expectLinesToContain(infoLines, "done status=empty");
+    expectLinesToContain(infoLines, "done status=unavailable");
     expectLinesNotToContain(infoLines, "done status=timeout");
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=unavailable"),
       expect.stringContaining(
         "🔎 Active Memory Debug: Memory search is unavailable due to an embedding/provider error. Check the embedding provider configuration, then retry memory_search.",
       ),

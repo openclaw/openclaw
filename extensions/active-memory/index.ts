@@ -261,7 +261,7 @@ type RecallSubagentResult = {
 };
 
 type TerminalMemorySearchResult = {
-  status: "empty";
+  status: "empty" | "unavailable";
   searchDebug?: ActiveMemorySearchDebug;
 };
 
@@ -1400,7 +1400,7 @@ function toSingleLineLogValue(value: unknown): string {
 }
 
 function shouldCacheResult(result: ActiveRecallResult): boolean {
-  return result.status === "ok" || result.status === "empty";
+  return result.status === "ok" && Boolean(result.summary && result.summary.length > 0);
 }
 
 function resolveStatusUpdateAgentId(ctx: { agentId?: string; sessionKey?: string }): string {
@@ -1747,9 +1747,8 @@ function extractTerminalMemorySearchResultFromSessionRecord(
     disabled || Boolean(debug?.warning) || Boolean(debug?.error) || Boolean(details?.error);
   const debugHits =
     typeof debug?.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined;
-  const zeroHitSearch = results !== undefined ? results.length === 0 : debugHits === 0;
-  if (unavailable || zeroHitSearch) {
-    return { status: "empty", searchDebug: debug };
+  if (unavailable) {
+    return { status: "unavailable", searchDebug: debug };
   }
   return undefined;
 }
