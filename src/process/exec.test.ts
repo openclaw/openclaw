@@ -282,10 +282,11 @@ describe("child process parent-death guard", () => {
     const clearInterval = vi.fn();
     const exit = vi.fn();
 
+    const env = { [OPENCLAW_RESPAWN_PARENT_PID]: "12345" };
     const guard = installChildProcessParentDeathGuard({
       intervalMs: 10,
       runtime: {
-        env: { [OPENCLAW_RESPAWN_PARENT_PID]: "12345" },
+        env,
         exit: exit as unknown as (code?: number) => never,
         pid: 67890,
         platform: "linux",
@@ -299,6 +300,7 @@ describe("child process parent-death guard", () => {
     });
 
     expect(guard).not.toBeNull();
+    expect(env).toEqual({});
     expect(exit).not.toHaveBeenCalled();
 
     ppid = 1;
@@ -306,5 +308,34 @@ describe("child process parent-death guard", () => {
 
     expect(clearInterval).toHaveBeenCalledWith(timer);
     expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("consumes the guard env before generic child env inheritance", async () => {
+    await loadExecModules();
+    const env = {
+      [OPENCLAW_RESPAWN_PARENT_PID]: "12345",
+      OPENCLAW_NODE_OPTIONS_READY: "1",
+    };
+
+    const guard = installChildProcessParentDeathGuard({
+      runtime: {
+        env,
+        exit: vi.fn() as unknown as (code?: number) => never,
+        pid: 67890,
+        platform: "linux",
+        ppid: () => 12345,
+        setInterval: vi.fn(() => ({ unref: vi.fn() })) as unknown as typeof setInterval,
+        clearInterval: vi.fn(),
+      },
+    });
+
+    expect(guard).not.toBeNull();
+    expect(env).toEqual({ OPENCLAW_NODE_OPTIONS_READY: "1" });
+    expect(
+      resolveCommandEnv({
+        argv: ["openclaw", "status"],
+        baseEnv: env,
+      }),
+    ).not.toHaveProperty(OPENCLAW_RESPAWN_PARENT_PID);
   });
 });

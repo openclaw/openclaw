@@ -60,6 +60,7 @@ export function installChildProcessParentDeathGuard(
     return null;
   }
   const parentPid = Number(runtime.env[OPENCLAW_RESPAWN_PARENT_PID]);
+  delete runtime.env[OPENCLAW_RESPAWN_PARENT_PID];
   if (!Number.isSafeInteger(parentPid) || parentPid <= 0 || parentPid === runtime.pid) {
     return null;
   }
