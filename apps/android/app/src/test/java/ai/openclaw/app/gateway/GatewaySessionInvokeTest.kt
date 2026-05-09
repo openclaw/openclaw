@@ -583,6 +583,46 @@ class GatewaySessionInvokeTest {
       }
     }
 
+  @Test
+  fun sendNodeEvent_returnsFalseWhenCalledBeforeConnectHandshakeCompletes() =
+    runBlocking {
+      val json = testJson()
+      val connectRequestReceived = CompletableDeferred<Unit>()
+      val allowConnectResponse = CompletableDeferred<Unit>()
+      val lastDisconnect = AtomicReference("")
+
+      val server =
+        startGatewayServer(json) { webSocket, id, method, _ ->
+          when (method) {
+            "connect" -> {
+              connectRequestReceived.complete(Unit)
+              runBlocking { allowConnectResponse.await() }
+              webSocket.send(connectResponseFrame(id))
+              webSocket.close(1000, "done")
+            }
+          }
+        }
+
+      val connected = CompletableDeferred<Unit>()
+      val harness = createNodeHarness(connected, lastDisconnect) { GatewaySession.InvokeResult.ok("{}") }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(TEST_TIMEOUT_MS) { connectRequestReceived.await() }
+
+        val sentBeforeHandshake = harness.session.sendNodeEvent(
+          event = "node.event",
+          payloadJson = null,
+        )
+        assertEquals(false, sentBeforeHandshake)
+
+        allowConnectResponse.complete(Unit)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
   private fun testJson(): Json = Json { ignoreUnknownKeys = true }
 
   private fun createNodeHarness(
