@@ -38,6 +38,9 @@ import type {
   PluginHookBeforeCompactionEvent,
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
+  PluginHookInboundActivityContext,
+  PluginHookInboundActivityEvent,
+  PluginHookInboundActivityResult,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
@@ -112,6 +115,9 @@ export type {
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
+  PluginHookInboundActivityContext,
+  PluginHookInboundActivityEvent,
+  PluginHookInboundActivityResult,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
@@ -941,6 +947,21 @@ export function createHookRunner(
   // =========================================================================
 
   /**
+   * Run inbound_activity hook.
+   * Allows plugins to observe and adjust pending channel inbound debounce state.
+   */
+  async function runInboundActivity(
+    event: PluginHookInboundActivityEvent,
+    ctx: PluginHookInboundActivityContext,
+  ): Promise<PluginHookInboundActivityResult | undefined> {
+    return runModifyingHook<"inbound_activity", PluginHookInboundActivityResult>(
+      "inbound_activity",
+      event,
+      ctx,
+    );
+  }
+
+  /**
    * Run inbound_claim hook.
    * Allows plugins to claim an inbound event before commands/agent dispatch.
    */
@@ -1492,6 +1513,7 @@ export function createHookRunner(
     // Lifecycle gate hooks
     runBeforeAgentRun,
     // Message hooks
+    runInboundActivity,
     runInboundClaim,
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
