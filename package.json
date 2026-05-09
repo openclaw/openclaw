@@ -45,6 +45,7 @@
     "!dist/extensions/line/**",
     "!dist/extensions/lobster/**",
     "!dist/extensions/memory-lancedb/**",
+    "!dist/extensions/matrix/**",
     "!dist/extensions/msteams/**",
     "!dist/extensions/nextcloud-talk/**",
     "!dist/extensions/nostr/**",
