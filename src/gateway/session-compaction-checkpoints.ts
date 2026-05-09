@@ -12,7 +12,6 @@ import type {
   SessionCompactionCheckpointReason,
   SessionEntry,
 } from "../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
   deleteSqliteSessionTranscript,
   deleteSqliteSessionTranscriptSnapshot,
@@ -33,13 +32,11 @@ export type CapturedCompactionCheckpointSnapshot = {
   agentId: string;
   sourceSessionId: string;
   sessionId: string;
-  transcriptLocator?: string;
   leafId: string;
 };
 
 type ForkedCompactionCheckpointTranscript = {
   sessionId: string;
-  transcriptLocator: string;
 };
 
 function trimSessionCheckpoints(checkpoints: SessionCompactionCheckpoint[] | undefined): {
@@ -127,14 +124,8 @@ function latestEntryId(entries: readonly PiTranscriptEntry[]): string | null {
   return null;
 }
 
-function createCheckpointVirtualTranscriptLocator(params: {
-  agentId: string;
-  checkpointId: string;
-}): string | undefined {
-  return createSqliteSessionTranscriptLocator({
-    agentId: params.agentId,
-    sessionId: params.checkpointId,
-  });
+function formatTranscriptParentReference(params: { agentId: string; sessionId: string }): string {
+  return `agent-db:${params.agentId}:transcript_events:${params.sessionId}`;
 }
 
 export async function readSessionLeafIdFromTranscriptAsync(
@@ -151,7 +142,6 @@ export async function readSessionLeafIdFromTranscriptAsync(
 export async function forkCompactionCheckpointTranscriptAsync(params: {
   sourceSessionId: string;
   agentId: string;
-  parentTranscriptLocator?: string;
   targetCwd?: string;
 }): Promise<ForkedCompactionCheckpointTranscript | null> {
   const entries = loadTranscriptEntriesFromSqlite({
@@ -171,20 +161,16 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
   const sessionId = randomUUID();
   const timestamp = new Date().toISOString();
   const agentId = params.agentId.trim() || DEFAULT_AGENT_ID;
-  const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId, sessionId });
-  const parentTranscriptLocator =
-    params.parentTranscriptLocator ??
-    createSqliteSessionTranscriptLocator({
-      agentId,
-      sessionId: params.sourceSessionId,
-    });
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
     id: sessionId,
     timestamp,
     cwd: targetCwd,
-    parentSession: parentTranscriptLocator,
+    parentSession: formatTranscriptParentReference({
+      agentId,
+      sessionId: params.sourceSessionId,
+    }),
   };
 
   try {
@@ -196,7 +182,7 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
         ...entries.filter((entry) => (entry as { type?: unknown }).type !== "session"),
       ],
     });
-    return { sessionId, transcriptLocator };
+    return { sessionId };
   } catch {
     return null;
   }
@@ -210,19 +196,12 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
   agentId: string;
   sessionId: string;
   sessionManager?: Pick<SessionManager, "getEntries" | "getHeader" | "getLeafId">;
-  transcriptLocator?: string;
   maxBytes?: number;
 }): Promise<CapturedCompactionCheckpointSnapshot | null> {
   const getLeafId =
     params.sessionManager && typeof params.sessionManager.getLeafId === "function"
       ? params.sessionManager.getLeafId.bind(params.sessionManager)
       : null;
-  const sourceTranscriptLocator =
-    params.transcriptLocator ??
-    createSqliteSessionTranscriptLocator({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    });
   if (params.sessionManager && !getLeafId) {
     return null;
   }
@@ -250,15 +229,14 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
   }
   const snapshotSessionId = randomUUID();
   const snapshotAgentId = params.agentId.trim() || DEFAULT_AGENT_ID;
-  const snapshotTranscriptLocator = createCheckpointVirtualTranscriptLocator({
-    agentId: snapshotAgentId,
-    checkpointId: snapshotSessionId,
-  });
   const snapshotHeader: SessionHeader = {
     ...sourceHeader,
     id: snapshotSessionId,
     timestamp: new Date().toISOString(),
-    parentSession: sourceTranscriptLocator,
+    parentSession: formatTranscriptParentReference({
+      agentId: snapshotAgentId,
+      sessionId: sourceHeader.id,
+    }),
   };
   replaceSqliteSessionTranscriptEvents({
     agentId: snapshotAgentId,
@@ -276,15 +254,14 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
     eventCount: entries.length,
     metadata: {
       leafId,
-      sourceTranscriptLocator,
-      ...(snapshotTranscriptLocator ? { snapshotTranscriptLocator } : {}),
+      sourceSessionId: sourceHeader.id,
+      snapshotSessionId,
     },
   });
   return {
     agentId: snapshotAgentId,
     sourceSessionId: sourceHeader.id,
     sessionId: snapshotSessionId,
-    transcriptLocator: snapshotTranscriptLocator,
     leafId,
   };
 }
@@ -316,7 +293,6 @@ export async function persistSessionCompactionCheckpoint(params: {
   firstKeptEntryId?: string;
   tokensBefore?: number;
   tokensAfter?: number;
-  postTranscriptLocator?: string;
   postLeafId?: string;
   postEntryId?: string;
   createdAt?: number;
@@ -340,16 +316,10 @@ export async function persistSessionCompactionCheckpoint(params: {
       : {}),
     preCompaction: {
       sessionId: params.snapshot.sessionId,
-      ...(params.snapshot.transcriptLocator?.trim()
-        ? { transcriptLocator: params.snapshot.transcriptLocator.trim() }
-        : {}),
       leafId: params.snapshot.leafId,
     },
     postCompaction: {
       sessionId: params.sessionId,
-      ...(params.postTranscriptLocator?.trim()
-        ? { transcriptLocator: params.postTranscriptLocator.trim() }
-        : {}),
       ...(params.postLeafId?.trim() ? { leafId: params.postLeafId.trim() } : {}),
       ...(params.postEntryId?.trim() ? { entryId: params.postEntryId.trim() } : {}),
     },

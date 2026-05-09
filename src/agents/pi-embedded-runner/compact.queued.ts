@@ -137,7 +137,6 @@ export async function compactEmbeddedPiSession(
           ? await captureCompactionCheckpointSnapshotAsync({
               agentId: sessionAgentId,
               sessionId: params.sessionId,
-              transcriptLocator,
             })
           : null;
         const hookRunner = engineOwnsCompaction
@@ -236,7 +235,6 @@ export async function compactEmbeddedPiSession(
                 firstKeptEntryId: result.result?.firstKeptEntryId,
                 tokensBefore: result.result?.tokensBefore,
                 tokensAfter: result.result?.tokensAfter,
-                postTranscriptLocator: postCompactionTranscriptLocator,
                 postLeafId,
                 postEntryId: postLeafId,
               });

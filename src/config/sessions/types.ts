@@ -90,7 +90,6 @@ export type SessionCompactionCheckpointReason =
 
 export type SessionCompactionTranscriptReference = {
   sessionId: string;
-  transcriptLocator?: string;
   leafId?: string;
   entryId?: string;
 };

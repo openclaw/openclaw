@@ -392,10 +392,6 @@ export async function createCheckpointFixture(dir: string) {
   if (!preCompactionLeafId) {
     throw new Error("expected persisted session leaf before compaction");
   }
-  const transcriptLocator = session.getTranscriptLocator();
-  if (!transcriptLocator) {
-    throw new Error("expected persisted transcript locator");
-  }
   const header = session.getHeader();
   if (!header?.id) {
     throw new Error("expected persisted session header");
@@ -404,10 +400,8 @@ export async function createCheckpointFixture(dir: string) {
     agentId: "main",
     sessionId: header.id,
     sessionManager: session,
-    transcriptLocator,
   });
-  const preCompactionTranscriptLocator = checkpointSnapshot?.transcriptLocator;
-  if (!preCompactionTranscriptLocator) {
+  if (!checkpointSnapshot?.sessionId) {
     throw new Error("expected persisted checkpoint snapshot");
   }
   const preCompactionSession = await readTranscriptStateForSession({
@@ -426,10 +420,8 @@ export async function createCheckpointFixture(dir: string) {
   return {
     session,
     sessionId: session.getSessionId(),
-    transcriptLocator,
     preCompactionSession,
     preCompactionSessionId,
-    preCompactionTranscriptLocator,
     preCompactionLeafId,
     postCompactionLeafId,
   };
