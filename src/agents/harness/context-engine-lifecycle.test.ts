@@ -149,4 +149,63 @@ describe("harness context engine lifecycle", () => {
       }),
     );
   });
+
+  it("uses the updated loop fence so final afterTurn does not replay mid-loop messages", async () => {
+    const beforePromptUser = textMessage("user", "old ask", 1);
+    const firstToolResult = textMessage("assistant", "mid-loop committed", 2);
+    const finalAssistant = textMessage("assistant", "final answer", 3);
+    const afterTurn = vi.fn(async () => {});
+
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: createContextEngine({ afterTurn }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: sessionParams.sessionKey,
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [beforePromptUser, firstToolResult, finalAssistant],
+      prePromptMessageCount: 2,
+      tokenBudget: 2048,
+      runtimeContext: {},
+      runMaintenance: async () => undefined,
+      warn: () => {},
+    });
+
+    expect(afterTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [beforePromptUser, firstToolResult, finalAssistant],
+        prePromptMessageCount: 2,
+      }),
+    );
+  });
+
+  it("uses the updated loop fence so ingestBatch only receives the final delta", async () => {
+    const beforePromptUser = textMessage("user", "old ask", 1);
+    const firstToolResult = textMessage("assistant", "mid-loop committed", 2);
+    const finalAssistant = textMessage("assistant", "final answer", 3);
+    const ingestBatch = vi.fn(async () => ({ ingestedCount: 1 }));
+
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: createContextEngine({ ingestBatch }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: sessionParams.sessionKey,
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [beforePromptUser, firstToolResult, finalAssistant],
+      prePromptMessageCount: 2,
+      tokenBudget: 2048,
+      runtimeContext: {},
+      runMaintenance: async () => undefined,
+      warn: () => {},
+    });
+
+    expect(ingestBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [finalAssistant],
+      }),
+    );
+  });
 });

@@ -425,6 +425,7 @@ describe("installContextEngineLoopHook", () => {
       messages: AgentMessage[];
       prePromptMessageCount: number;
     }) => Record<string, unknown> | undefined,
+    onLastSeenLengthChange?: (lastSeenLength: number) => void,
   ): () => void {
     return installContextEngineLoopHook({
       agent,
@@ -436,6 +437,7 @@ describe("installContextEngineLoopHook", () => {
       modelId,
       ...(prePromptCount !== undefined ? { getPrePromptMessageCount: () => prePromptCount } : {}),
       ...(getRuntimeContext ? { getRuntimeContext } : {}),
+      ...(onLastSeenLengthChange ? { onLastSeenLengthChange } : {}),
     });
   }
 
@@ -556,7 +558,10 @@ describe("installContextEngineLoopHook", () => {
   it("advances the fence across multiple iterations", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();
-    installHook(agent, engine);
+    const lastSeenLengths: number[] = [];
+    installHook(agent, engine, undefined, undefined, (lastSeenLength) => {
+      lastSeenLengths.push(lastSeenLength);
+    });
 
     const batch0 = [makeUser("h1"), makeToolResult("c1", "r1")];
     await callTransform(agent, batch0);
@@ -570,6 +575,7 @@ describe("installContextEngineLoopHook", () => {
     expect(engine.afterTurn).toHaveBeenCalledTimes(2);
     expect(engine.afterTurn.mock.calls[0]?.[0]?.prePromptMessageCount).toBe(2);
     expect(engine.afterTurn.mock.calls[1]?.[0]?.prePromptMessageCount).toBe(4);
+    expect(lastSeenLengths).toEqual([2, 4, 6]);
   });
 
   it("skips afterTurn and assemble when messages have not changed", async () => {

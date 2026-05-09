@@ -946,6 +946,48 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectCalledWithSessionKey(ingestBatch, sessionKey);
   });
 
+  it("passes the loop-updated fence to final afterTurn so mid-loop messages are not replayed", async () => {
+    const midLoopMessage = { role: "assistant", content: "mid-loop committed", timestamp: 2 };
+    const finalMessage = { role: "assistant", content: "final answer", timestamp: 3 };
+    const afterTurn = vi.fn(
+      async (_params: { messages: AgentMessage[]; prePromptMessageCount: number }) => {},
+    );
+    hoisted.installContextEngineLoopHookMock.mockImplementation((params: unknown) => {
+      (
+        params as {
+          onLastSeenLengthChange?: (lastSeenLength: number) => void;
+        }
+      ).onLastSeenLengthChange?.(2);
+      return () => {};
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        ...createContextEngineBootstrapAndAssemble(),
+        info: { ownsCompaction: true },
+        afterTurn,
+      }),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [seedMessage],
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          midLoopMessage as AgentMessage,
+          finalMessage as AgentMessage,
+        ];
+      },
+    });
+
+    const finalAfterTurnCall = afterTurn.mock.calls.at(-1)?.[0];
+    expect(finalAfterTurnCall).toBeDefined();
+    const finalAfterTurnParams = finalAfterTurnCall as NonNullable<typeof finalAfterTurnCall>;
+    expect(finalAfterTurnParams.prePromptMessageCount).toBe(2);
+    expect(finalAfterTurnParams.messages.slice(finalAfterTurnParams.prePromptMessageCount)).toEqual(
+      [finalMessage],
+    );
+  });
+
   it("forwards sessionKey to per-message ingest when ingestBatch is absent", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const ingest = vi.fn(async (_params: { sessionKey?: string; message: AgentMessage }) => ({

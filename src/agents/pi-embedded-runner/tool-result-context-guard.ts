@@ -244,6 +244,7 @@ export function installContextEngineLoopHook(params: {
     messages: AgentMessage[];
     prePromptMessageCount: number;
   }) => ContextEngineRuntimeContext | undefined;
+  onLastSeenLengthChange?: (lastSeenLength: number) => void;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const mutableAgent = params.agent as GuardableAgentRecord;
@@ -286,6 +287,7 @@ export function installContextEngineLoopHook(params: {
     const hasNewMessages = sourceMessages.length > prePromptMessageCount;
     if (!hasNewMessages) {
       lastSeenLength = prePromptMessageCount;
+      params.onLastSeenLengthChange?.(lastSeenLength);
       lastSourceMessages = sourceMessages;
       return lastAssembledView ?? sourceMessages;
     }
@@ -324,6 +326,7 @@ export function installContextEngineLoopHook(params: {
         }
       }
       lastSeenLength = sourceMessages.length;
+      params.onLastSeenLengthChange?.(lastSeenLength);
       lastSourceMessages = sourceMessages;
       const assembled = await contextEngine.assemble({
         sessionId,
@@ -341,6 +344,7 @@ export function installContextEngineLoopHook(params: {
       // Best-effort: any engine failure falls through to the raw source
       // messages so the tool loop still makes forward progress.
       lastSeenLength = prePromptMessageCount;
+      params.onLastSeenLengthChange?.(lastSeenLength);
       lastAssembledView = null;
       lastSourceMessages = sourceMessages;
     }
