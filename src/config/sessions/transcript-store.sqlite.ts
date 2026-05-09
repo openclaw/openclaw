@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type { Insertable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -14,13 +13,11 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
-import { parseSqliteSessionTranscriptLocator } from "./paths.js";
+  createSqliteSessionTranscriptLocator,
+  parseSqliteSessionTranscriptLocator,
+} from "./paths.js";
 
 export type SqliteSessionTranscriptEvent = {
   seq: number;
@@ -79,10 +76,8 @@ export type SqliteSessionTranscriptSnapshot = SqliteSessionTranscriptScope & {
   metadata: unknown;
 };
 
-type TranscriptFilesTable = OpenClawStateKyselyDatabase["transcript_files"];
 type TranscriptEventsTable = OpenClawAgentKyselyDatabase["transcript_events"];
 type TranscriptEventIdentitiesTable = OpenClawAgentKyselyDatabase["transcript_event_identities"];
-type StateTranscriptDatabase = Pick<OpenClawStateKyselyDatabase, "transcript_files">;
 type AgentTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "transcript_event_identities" | "transcript_events" | "transcript_snapshots"
@@ -117,28 +112,8 @@ function parseCreatedAt(value: unknown): number {
   return typeof value === "bigint" ? Number(value) : Number(value);
 }
 
-function getStateTranscriptKysely(db: import("node:sqlite").DatabaseSync) {
-  return getNodeSqliteKysely<StateTranscriptDatabase>(db);
-}
-
 function getAgentTranscriptKysely(db: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<AgentTranscriptDatabase>(db);
-}
-
-function bindTranscriptFile(params: {
-  agentId: string;
-  sessionId: string;
-  path: string;
-  importedAt?: number;
-  exportedAt?: number;
-}): Insertable<TranscriptFilesTable> {
-  return {
-    agent_id: params.agentId,
-    session_id: params.sessionId,
-    path: params.path,
-    imported_at: params.importedAt ?? null,
-    exported_at: params.exportedAt ?? null,
-  };
 }
 
 function bindTranscriptEvent(params: {
@@ -245,48 +220,6 @@ function insertTranscriptEvent(params: {
   upsertTranscriptEventIdentity(params);
 }
 
-function rememberTranscriptFile(params: {
-  agentId: string;
-  sessionId: string;
-  transcriptPath?: string;
-  importedAt?: number;
-  exportedAt?: number;
-  options?: OpenClawStateDatabaseOptions;
-}): void {
-  const transcriptPath = params.transcriptPath?.trim();
-  if (!transcriptPath) {
-    return;
-  }
-  if (parseSqliteSessionTranscriptLocator(transcriptPath)) {
-    return;
-  }
-  const resolvedTranscriptPath = path.resolve(transcriptPath);
-  runOpenClawStateWriteTransaction((database) => {
-    executeSqliteQuerySync(
-      database.db,
-      getStateTranscriptKysely(database.db)
-        .insertInto("transcript_files")
-        .values(
-          bindTranscriptFile({
-            agentId: params.agentId,
-            sessionId: params.sessionId,
-            path: resolvedTranscriptPath,
-            importedAt: params.importedAt,
-            exportedAt: params.exportedAt,
-          }),
-        )
-        .onConflict((conflict) =>
-          conflict.columns(["agent_id", "session_id", "path"]).doUpdateSet({
-            imported_at: (eb) =>
-              eb.fn.coalesce("excluded.imported_at", "transcript_files.imported_at"),
-            exported_at: (eb) =>
-              eb.fn.coalesce("excluded.exported_at", "transcript_files.exported_at"),
-          }),
-        ),
-    );
-  }, params.options);
-}
-
 export function resolveSqliteSessionTranscriptScopeForPath(
   options: OpenClawStateDatabaseOptions & { transcriptPath: string },
 ): SqliteSessionTranscriptScope | undefined {
@@ -294,24 +227,7 @@ export function resolveSqliteSessionTranscriptScopeForPath(
   if (parsedLocator) {
     return parsedLocator;
   }
-  const transcriptPath = path.resolve(options.transcriptPath);
-  const database = openOpenClawStateDatabase(options);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    getStateTranscriptKysely(database.db)
-      .selectFrom("transcript_files")
-      .select(["agent_id", "session_id"])
-      .where("path", "=", transcriptPath)
-      .orderBy((eb) => eb.fn.coalesce("imported_at", "exported_at", eb.lit(0)), "desc")
-      .limit(1),
-  );
-  if (typeof row?.agent_id !== "string" || typeof row.session_id !== "string") {
-    return undefined;
-  }
-  return {
-    agentId: normalizeAgentId(row.agent_id),
-    sessionId: normalizeSessionId(row.session_id),
-  };
+  return undefined;
 }
 
 export function resolveSqliteSessionTranscriptScope(
@@ -352,47 +268,17 @@ export function resolveSqliteSessionTranscriptScope(
 export function listSqliteSessionTranscriptFiles(
   options: OpenClawStateDatabaseOptions = {},
 ): SqliteSessionTranscriptFile[] {
-  const database = openOpenClawStateDatabase(options);
-  return executeSqliteQuerySync(
-    database.db,
-    getStateTranscriptKysely(database.db)
-      .selectFrom("transcript_files as files")
-      .select((eb) => [
-        "files.agent_id",
-        "files.session_id",
-        "files.path",
-        eb
-          .fn<number | bigint>("MAX", [
-            eb.fn.coalesce("files.imported_at", eb.lit(0)),
-            eb.fn.coalesce("files.exported_at", eb.lit(0)),
-          ])
-          .as("updated_at"),
-      ])
-      .groupBy(["files.agent_id", "files.session_id", "files.path"])
-      .orderBy("updated_at", "desc")
-      .orderBy("files.path", "asc"),
-  ).rows.flatMap((row) => {
-    const record = row;
-    if (
-      typeof record.agent_id !== "string" ||
-      typeof record.session_id !== "string" ||
-      typeof record.path !== "string"
-    ) {
-      return [];
-    }
-    const updatedAt =
-      typeof record.updated_at === "bigint"
-        ? Number(record.updated_at)
-        : Number(record.updated_at ?? 0);
-    return [
-      {
-        agentId: normalizeAgentId(record.agent_id),
-        sessionId: normalizeSessionId(record.session_id),
-        path: record.path,
-        updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
-      },
-    ];
-  });
+  return listSqliteSessionTranscripts(options).map((transcript) => ({
+    agentId: transcript.agentId,
+    sessionId: transcript.sessionId,
+    path:
+      transcript.path ??
+      createSqliteSessionTranscriptLocator({
+        agentId: transcript.agentId,
+        sessionId: transcript.sessionId,
+      }),
+    updatedAt: transcript.updatedAt,
+  }));
 }
 
 export function listSqliteSessionTranscripts(
@@ -407,32 +293,12 @@ export function listSqliteSessionTranscripts(
       ]
     : listOpenClawRegisteredAgentDatabases(options);
   const transcripts: SqliteSessionTranscript[] = [];
-  const stateDatabase = openOpenClawStateDatabase(options);
   for (const agentDatabase of agentDatabases) {
     const database = openOpenClawAgentDatabase({
       ...options,
       agentId: agentDatabase.agentId,
       ...(agentDatabase.path ? { path: agentDatabase.path } : {}),
     });
-    const transcriptPaths = new Map<string, string>();
-    for (const row of executeSqliteQuerySync(
-      stateDatabase.db,
-      getStateTranscriptKysely(stateDatabase.db)
-        .selectFrom("transcript_files")
-        .select(["session_id", "path"])
-        .where("agent_id", "=", agentDatabase.agentId)
-        .orderBy("session_id", "asc")
-        .orderBy((eb) => eb.fn.coalesce("imported_at", "exported_at", eb.lit(0)), "desc")
-        .orderBy("path", "asc"),
-    ).rows) {
-      if (
-        typeof row.session_id === "string" &&
-        typeof row.path === "string" &&
-        !transcriptPaths.has(row.session_id)
-      ) {
-        transcriptPaths.set(row.session_id, row.path);
-      }
-    }
     transcripts.push(
       ...executeSqliteQuerySync(
         database.db,
@@ -459,12 +325,14 @@ export function listSqliteSessionTranscripts(
           typeof record.event_count === "bigint"
             ? Number(record.event_count)
             : Number(record.event_count ?? 0);
-        const path = transcriptPaths.get(record.session_id);
         return [
           {
             agentId: agentDatabase.agentId,
             sessionId: normalizeSessionId(record.session_id),
-            path,
+            path: createSqliteSessionTranscriptLocator({
+              agentId: agentDatabase.agentId,
+              sessionId: normalizeSessionId(record.session_id),
+            }),
             updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
             eventCount: Number.isFinite(eventCount) ? eventCount : 0,
           },
@@ -537,13 +405,6 @@ export function appendSqliteSessionTranscriptEvent(
     return nextSeq;
   }, options);
 
-  rememberTranscriptFile({
-    agentId,
-    sessionId,
-    transcriptPath: options.transcriptPath,
-    importedAt: now,
-    options,
-  });
   return { seq };
 }
 
@@ -631,13 +492,6 @@ export function appendSqliteSessionTranscriptMessage(
     return newMessageId;
   }, options);
 
-  rememberTranscriptFile({
-    agentId,
-    sessionId,
-    transcriptPath: options.transcriptPath,
-    importedAt: now,
-    options,
-  });
   return { messageId };
 }
 
@@ -658,13 +512,6 @@ export function replaceSqliteSessionTranscriptEvents(
     });
   }, options);
 
-  rememberTranscriptFile({
-    agentId,
-    sessionId,
-    transcriptPath: options.transcriptPath,
-    importedAt: now,
-    options,
-  });
   return { replaced: options.events.length };
 }
 
@@ -784,7 +631,7 @@ export function deleteSqliteSessionTranscriptSnapshot(
 export function deleteSqliteSessionTranscript(
   options: SqliteSessionTranscriptStoreOptions,
 ): boolean {
-  const { agentId, sessionId } = normalizeTranscriptScope(options);
+  const { sessionId } = normalizeTranscriptScope(options);
   const removed = runOpenClawAgentWriteTransaction((database) => {
     executeSqliteQuerySync(
       database.db,
@@ -799,15 +646,6 @@ export function deleteSqliteSessionTranscript(
         .where("session_id", "=", sessionId),
     );
     return Number(events.numAffectedRows ?? 0) > 0;
-  }, options);
-  runOpenClawStateWriteTransaction((database) => {
-    executeSqliteQuerySync(
-      database.db,
-      getStateTranscriptKysely(database.db)
-        .deleteFrom("transcript_files")
-        .where("agent_id", "=", agentId)
-        .where("session_id", "=", sessionId),
-    );
   }, options);
   return removed;
 }
