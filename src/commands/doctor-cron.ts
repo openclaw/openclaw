@@ -3,17 +3,7 @@ import fs from "node:fs/promises";
 import { promisify } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  importLegacyCronRunLogFilesToSqlite,
-  legacyCronRunLogFilesExist,
-  resolveCronRunLogPruneOptions,
-} from "../cron/run-log.js";
-import {
-  importLegacyCronStateFileToSqlite,
-  legacyCronStoreFileExists,
-  legacyCronStateFileExists,
-  loadLegacyCronStoreForMigration,
-} from "../cron/store-legacy.js";
+import { resolveCronRunLogPruneOptions } from "../cron/run-log.js";
 import { resolveCronStorePath, loadCronStore, saveCronStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import {
@@ -28,6 +18,16 @@ import {
 } from "./doctor-cron-dreaming-payload-migration.js";
 import { normalizeStoredCronJobs } from "./doctor-cron-store-migration.js";
 import type { DoctorPrompter, DoctorOptions } from "./doctor-prompter.js";
+import {
+  importLegacyCronRunLogFilesToSqlite,
+  legacyCronRunLogFilesExist,
+} from "./doctor/legacy/cron-run-log.js";
+import {
+  importLegacyCronStateFileToSqlite,
+  legacyCronStoreFileExists,
+  legacyCronStateFileExists,
+  loadLegacyCronStoreForMigration,
+} from "./doctor/legacy/cron-store.js";
 
 type CronDoctorOutcome = {
   changed: boolean;

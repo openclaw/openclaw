@@ -1,9 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Insertable } from "kysely";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
-import { pathExists, root as fsRoot } from "../infra/fs-safe.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -86,19 +84,6 @@ function assertSafeCronRunLogJobId(jobId: string): string {
     throw new Error("invalid cron run log job id");
   }
   return trimmed;
-}
-
-export async function legacyCronRunLogFilesExist(storePath: string): Promise<boolean> {
-  const runsDir = path.resolve(path.dirname(path.resolve(storePath)), "runs");
-  if (!(await pathExists(runsDir))) {
-    return false;
-  }
-  const runsRoot = await fsRoot(runsDir).catch(() => null);
-  if (!runsRoot) {
-    return false;
-  }
-  const files = await runsRoot.list(".", { withFileTypes: true }).catch(() => []);
-  return files.some((entry) => entry.isFile && entry.name.endsWith(".jsonl"));
 }
 
 const writesByStoreKey = new Map<string, Promise<void>>();
@@ -370,7 +355,7 @@ function normalizeDeliveryStatuses(opts?: {
   return null;
 }
 
-function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunLogEntry[] {
+export function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunLogEntry[] {
   const jobId = normalizeOptionalString(opts?.jobId);
   if (!raw.trim()) {
     return [];
@@ -608,41 +593,4 @@ export async function readCronRunLogEntriesPageAllFromSqlite(
     }
   }
   return page;
-}
-
-export async function importLegacyCronRunLogFilesToSqlite(params: {
-  storePath: string;
-  opts?: { maxBytes?: number; keepLines?: number };
-}): Promise<{ imported: number; files: number; removedDir?: string }> {
-  const runsDir = path.resolve(path.dirname(path.resolve(params.storePath)), "runs");
-  if (!(await pathExists(runsDir))) {
-    return { imported: 0, files: 0 };
-  }
-  const runsRoot = await fsRoot(runsDir).catch(() => null);
-  if (!runsRoot) {
-    return { imported: 0, files: 0 };
-  }
-  const files = (await runsRoot.list(".", { withFileTypes: true }).catch(() => []))
-    .filter((entry) => entry.isFile && entry.name.endsWith(".jsonl"))
-    .map((entry) => entry.name);
-  let imported = 0;
-  for (const fileName of files) {
-    const raw = await runsRoot.readText(fileName).catch(() => "");
-    for (const entry of parseAllRunLogEntries(raw)) {
-      await appendCronRunLogToSqlite(params.storePath, entry, params.opts);
-      imported++;
-    }
-    await fs.rm(path.join(runsDir, fileName), { force: true }).catch(() => undefined);
-  }
-  let removedDir: string | undefined;
-  try {
-    const remaining = await runsRoot.list(".", { withFileTypes: true });
-    if (remaining.length === 0) {
-      await fs.rmdir(runsDir);
-      removedDir = runsDir;
-    }
-  } catch {
-    // best-effort cleanup only
-  }
-  return { imported, files: files.length, removedDir };
 }

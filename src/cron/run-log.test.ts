@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { importLegacyCronRunLogFilesToSqlite } from "../commands/doctor/legacy/cron-run-log.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   appendCronRunLogToSqlite,
   DEFAULT_CRON_RUN_LOG_KEEP_LINES,
   DEFAULT_CRON_RUN_LOG_MAX_BYTES,
-  importLegacyCronRunLogFilesToSqlite,
   readCronRunLogEntriesFromSqliteSync,
   readCronRunLogEntriesPageAllFromSqlite,
   readCronRunLogEntriesPageFromSqlite,

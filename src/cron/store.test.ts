@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   importLegacyCronStateFileToSqlite,
   importLegacyCronStoreToSqlite,
   loadLegacyCronStoreForMigration,
-} from "./store-legacy.js";
+} from "../commands/doctor/legacy/cron-store.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   loadCronStore,
   loadCronStoreSync,

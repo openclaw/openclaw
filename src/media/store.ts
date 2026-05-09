@@ -1,6 +1,5 @@
 import "../infra/fs-safe-defaults.js";
 import crypto from "node:crypto";
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -52,13 +51,6 @@ type MediaBlobRow = {
   created_at: number;
   updated_at: number;
 };
-export type LegacyMediaImportResult = {
-  files: number;
-  imported: number;
-  removed: number;
-  skipped: number;
-};
-
 const defaultHttpRequestImpl: RequestImpl = httpRequest;
 const defaultHttpsRequestImpl: RequestImpl = httpsRequest;
 const defaultResolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = resolvePinnedHostname;
@@ -130,62 +122,6 @@ function getMediaBlobRow(params: { subdir: string; id: string }): MediaBlobRow |
       .where("id", "=", params.id),
   );
   return row ? mediaBlobRowFromDb(row) : undefined;
-}
-
-async function legacyMediaFileCandidates(
-  root: string,
-): Promise<Array<{ path: string; subdir: string; id: string }>> {
-  const candidates: Array<{ path: string; subdir: string; id: string }> = [];
-  async function visit(dir: string): Promise<void> {
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch (error) {
-      if (isMissingPathError(error)) {
-        return;
-      }
-      throw error;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await visit(entryPath);
-        continue;
-      }
-      if (!entry.isFile()) {
-        continue;
-      }
-      const relativeDir = path.relative(root, dir);
-      const posixRelativeDir = relativeDir.split(path.sep).join("/");
-      if (
-        posixRelativeDir === "outgoing/records" ||
-        posixRelativeDir.startsWith("outgoing/records/")
-      ) {
-        continue;
-      }
-      const subdir = relativeDir === "" ? "" : relativeDir;
-      candidates.push({ path: entryPath, subdir, id: entry.name });
-    }
-  }
-  await visit(root);
-  return candidates;
-}
-
-async function pruneEmptyMediaDirs(dir: string, root: string): Promise<void> {
-  if (dir === root || !dir.startsWith(root + path.sep)) {
-    return;
-  }
-  let entries: string[];
-  try {
-    entries = await fs.readdir(dir);
-  } catch {
-    return;
-  }
-  if (entries.length > 0) {
-    return;
-  }
-  await fs.rmdir(dir).catch(() => {});
-  await pruneEmptyMediaDirs(path.dirname(dir), root);
 }
 
 function upsertMediaBlob(params: {
@@ -284,53 +220,6 @@ export async function ensureMediaDir() {
   const mediaDir = resolveMediaMaterializationRoot();
   await fs.mkdir(mediaDir, { recursive: true, mode: 0o700 });
   return mediaDir;
-}
-
-export async function legacyMediaFilesExist(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<boolean> {
-  const root = resolveMediaDir(env);
-  const candidates = await legacyMediaFileCandidates(root);
-  return candidates.length > 0;
-}
-
-export async function importLegacyMediaFilesToSqlite(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<LegacyMediaImportResult> {
-  const root = resolveMediaDir(env);
-  const candidates = await legacyMediaFileCandidates(root);
-  const result: LegacyMediaImportResult = {
-    files: candidates.length,
-    imported: 0,
-    removed: 0,
-    skipped: 0,
-  };
-
-  for (const candidate of candidates) {
-    try {
-      const safeSubdir = resolveMediaSubdir(candidate.subdir, "importLegacyMediaFilesToSqlite");
-      resolveMediaRelativePath(candidate.id, safeSubdir, "importLegacyMediaFilesToSqlite");
-      const { buffer } = await readLocalFileSafely({
-        filePath: candidate.path,
-        maxBytes: MAX_BYTES,
-      });
-      const contentType = await detectMime({ buffer, filePath: candidate.path });
-      upsertMediaBlob({
-        subdir: safeSubdir,
-        id: candidate.id,
-        buffer,
-        contentType,
-      });
-      result.imported += 1;
-      await fs.rm(candidate.path, { force: true });
-      result.removed += 1;
-      await pruneEmptyMediaDirs(path.dirname(candidate.path), root);
-    } catch {
-      result.skipped += 1;
-    }
-  }
-
-  return result;
 }
 
 function findErrorWithCode(err: unknown, code: string): NodeJS.ErrnoException | undefined {
@@ -515,14 +404,14 @@ function buildSavedMediaResult(params: {
   };
 }
 
-async function writeSavedMediaBuffer(params: {
+export async function saveMediaBufferWithId(params: {
   subdir: string;
   id: string;
   buffer: Buffer;
   contentType?: string;
 }): Promise<string> {
-  const safeSubdir = resolveMediaSubdir(params.subdir, "writeSavedMediaBuffer");
-  resolveMediaRelativePath(params.id, params.subdir, "writeSavedMediaBuffer");
+  const safeSubdir = resolveMediaSubdir(params.subdir, "saveMediaBufferWithId");
+  resolveMediaRelativePath(params.id, params.subdir, "saveMediaBufferWithId");
   upsertMediaBlob({
     subdir: safeSubdir,
     id: params.id,
@@ -629,7 +518,7 @@ export async function saveMediaSource(
     const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
     const id = buildSavedMediaId({ baseId, ext });
     const materializedPath = await retryAfterRecreatingDir(dir, () =>
-      writeSavedMediaBuffer({ subdir, id, buffer, contentType: mime }),
+      saveMediaBufferWithId({ subdir, id, buffer, contentType: mime }),
     );
     return buildSavedMediaResult({
       dir,
@@ -644,7 +533,7 @@ export async function saveMediaSource(
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = buildSavedMediaId({ baseId, ext });
-    const materializedPath = await writeSavedMediaBuffer({ subdir, id, buffer, contentType: mime });
+    const materializedPath = await saveMediaBufferWithId({ subdir, id, buffer, contentType: mime });
     return buildSavedMediaResult({
       dir,
       id,
@@ -677,7 +566,7 @@ export async function saveMediaBuffer(
   const ext =
     headerExt ?? extensionForMime(mime) ?? safeOriginalFilenameExtension(originalFilename) ?? "";
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
-  const materializedPath = await writeSavedMediaBuffer({ subdir, id, buffer, contentType: mime });
+  const materializedPath = await saveMediaBufferWithId({ subdir, id, buffer, contentType: mime });
   return buildSavedMediaResult({
     dir,
     id,
