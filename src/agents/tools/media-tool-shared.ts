@@ -10,9 +10,9 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { buildInlineProviderModels } from "../pi-embedded-runner/model.inline-provider.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { normalizeModelRef } from "../model-selection.js";
+import { buildInlineProviderModels } from "../pi-embedded-runner/model.inline-provider.js";
 import { normalizeProviderId } from "../provider-id.js";
 import {
   ToolInputError,
