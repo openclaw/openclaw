@@ -2,17 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
   exportSqliteSessionTranscriptJsonl,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   BLANK_USER_FALLBACK_TEXT,
-  repairTranscriptStateIfNeeded,
+  repairTranscriptSessionStateIfNeeded,
 } from "./transcript-state-repair.js";
 
 function buildSessionHeaderAndMessage() {
@@ -34,17 +32,15 @@ function buildSessionHeaderAndMessage() {
 }
 
 const tempDirs: string[] = [];
+const TEST_SCOPE = { agentId: "main", sessionId: "session-1" } as const;
 
-async function createTempSessionPath() {
+async function createTempTranscriptScope() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-repair-"));
   tempDirs.push(dir);
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   return {
     dir,
-    file: createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: "session-1",
-    }),
+    scope: TEST_SCOPE,
   };
 }
 
@@ -55,7 +51,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
-function writeTranscriptEvents(file: string, events: unknown[]) {
+function writeTranscriptEvents(scope: typeof TEST_SCOPE, events: unknown[]) {
   const sessionId =
     events.find((event): event is { type: "session"; id: string } =>
       Boolean(
@@ -66,48 +62,54 @@ function writeTranscriptEvents(file: string, events: unknown[]) {
       ),
     )?.id ?? "session-1";
   replaceSqliteSessionTranscriptEvents({
-    agentId: "main",
+    agentId: scope.agentId,
     sessionId,
     events,
   });
 }
 
-async function readTranscriptJsonl(file: string): Promise<string> {
-  const scope = resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: file });
-  return scope ? exportSqliteSessionTranscriptJsonl(scope) : "";
+async function readTranscriptJsonl(scope: typeof TEST_SCOPE): Promise<string> {
+  return exportSqliteSessionTranscriptJsonl(scope);
 }
 
-describe("repairTranscriptStateIfNeeded", () => {
+describe("repairTranscriptSessionStateIfNeeded", () => {
   it("rewrites SQLite transcripts that contain malformed messages", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
 
-    writeTranscriptEvents(file, [
+    writeTranscriptEvents(scope, [
       header,
       message,
       { type: "message", id: "corrupt", message: { role: null, content: "bad" } },
     ]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
 
-    const repaired = await readTranscriptJsonl(file);
+    const repaired = await readTranscriptJsonl(scope);
     expect(repaired.trim().split("\n")).toHaveLength(2);
   });
 
   it("warns and skips repair when the session header is invalid", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const badHeader = {
       type: "message",
       id: "msg-1",
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "hello" },
     };
-    writeTranscriptEvents(file, [badHeader]);
+    writeTranscriptEvents(scope, [badHeader]);
 
     const warn = vi.fn();
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file, warn });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      warn,
+    });
 
     expect(result.repaired).toBe(false);
     expect(result.reason).toBe("invalid session header");
@@ -115,19 +117,8 @@ describe("repairTranscriptStateIfNeeded", () => {
     expect(warn.mock.calls[0]?.[0]).toContain("invalid session header");
   });
 
-  it("returns a detailed reason when read errors are not ENOENT", async () => {
-    const { dir } = await createTempSessionPath();
-    const warn = vi.fn();
-
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: dir, warn });
-
-    expect(result.repaired).toBe(false);
-    expect(result.reason).toBe("missing SQLite transcript");
-    expect(warn).not.toHaveBeenCalled();
-  });
-
   it("rewrites persisted assistant messages with empty content arrays", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
     const poisonedAssistantEntry = {
       type: "message",
@@ -153,10 +144,14 @@ describe("repairTranscriptStateIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "retry" },
     };
-    writeTranscriptEvents(file, [header, message, poisonedAssistantEntry, followUp]);
+    writeTranscriptEvents(scope, [header, message, poisonedAssistantEntry, followUp]);
 
     const debug = vi.fn();
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file, debug });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      debug,
+    });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(0);
@@ -166,7 +161,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
     expect(debugMessage).not.toContain("dropped");
 
-    const repaired = await readTranscriptJsonl(file);
+    const repaired = await readTranscriptJsonl(scope);
     const repairedLines = repaired.trim().split("\n");
     expect(repairedLines).toHaveLength(4);
     const repairedEntry: { message: { content: { type: string; text: string }[] } } = JSON.parse(
@@ -178,7 +173,7 @@ describe("repairTranscriptStateIfNeeded", () => {
   });
 
   it("rewrites blank-only user text messages to synthetic placeholder instead of dropping", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
     const blankUserEntry = {
       type: "message",
@@ -190,17 +185,21 @@ describe("repairTranscriptStateIfNeeded", () => {
         content: [{ type: "text", text: "" }],
       },
     };
-    writeTranscriptEvents(file, [header, blankUserEntry, message]);
+    writeTranscriptEvents(scope, [header, blankUserEntry, message]);
 
     const debug = vi.fn();
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file, debug });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      debug,
+    });
 
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
     expect(result.droppedBlankUserMessages).toBe(0);
     expect(debug.mock.calls[0]?.[0]).toContain("rewrote 1 user message(s)");
 
-    const repaired = await readTranscriptJsonl(file);
+    const repaired = await readTranscriptJsonl(scope);
     const repairedLines = repaired.trim().split("\n");
     expect(repairedLines).toHaveLength(3);
     const rewrittenEntry = JSON.parse(repairedLines[1]);
@@ -211,7 +210,7 @@ describe("repairTranscriptStateIfNeeded", () => {
   });
 
   it("rewrites blank string-content user messages to placeholder", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
     const blankStringUserEntry = {
       type: "message",
@@ -223,14 +222,17 @@ describe("repairTranscriptStateIfNeeded", () => {
         content: "   ",
       },
     };
-    writeTranscriptEvents(file, [header, blankStringUserEntry, message]);
+    writeTranscriptEvents(scope, [header, blankStringUserEntry, message]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
 
-    const repaired = await readTranscriptJsonl(file);
+    const repaired = await readTranscriptJsonl(scope);
     const repairedLines = repaired.trim().split("\n");
     expect(repairedLines).toHaveLength(3);
     const rewrittenEntry = JSON.parse(repairedLines[1]);
@@ -238,7 +240,7 @@ describe("repairTranscriptStateIfNeeded", () => {
   });
 
   it("removes blank user text blocks while preserving media blocks", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header } = buildSessionHeaderAndMessage();
     const mediaUserEntry = {
       type: "message",
@@ -253,13 +255,16 @@ describe("repairTranscriptStateIfNeeded", () => {
         ],
       },
     };
-    writeTranscriptEvents(file, [header, mediaUserEntry]);
+    writeTranscriptEvents(scope, [header, mediaUserEntry]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
-    const repaired = await readTranscriptJsonl(file);
+    const repaired = await readTranscriptJsonl(scope);
     const repairedEntry = JSON.parse(repaired.trim().split("\n")[1] ?? "{}");
     expect(repairedEntry.message.content).toEqual([
       { type: "image", data: "AA==", mimeType: "image/png" },
@@ -267,7 +272,7 @@ describe("repairTranscriptStateIfNeeded", () => {
   });
 
   it("reports both drops and rewrites in the debug message when both occur", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header } = buildSessionHeaderAndMessage();
     const poisonedAssistantEntry = {
       type: "message",
@@ -284,14 +289,18 @@ describe("repairTranscriptStateIfNeeded", () => {
         stopReason: "error",
       },
     };
-    writeTranscriptEvents(file, [
+    writeTranscriptEvents(scope, [
       header,
       poisonedAssistantEntry,
       { type: "message", id: "corrupt", message: { role: null, content: "bad" } },
     ]);
 
     const debug = vi.fn();
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file, debug });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      debug,
+    });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
@@ -302,7 +311,7 @@ describe("repairTranscriptStateIfNeeded", () => {
   });
 
   it("does not rewrite silent-reply turns (stopReason=stop, content=[])", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header } = buildSessionHeaderAndMessage();
     const silentReplyEntry = {
       type: "message",
@@ -327,19 +336,22 @@ describe("repairTranscriptStateIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "follow up" },
     };
-    writeTranscriptEvents(file, [header, silentReplyEntry, followUp]);
+    writeTranscriptEvents(scope, [header, silentReplyEntry, followUp]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(false);
     expect(result.rewrittenAssistantMessages ?? 0).toBe(0);
     const original = `${JSON.stringify(header)}\n${JSON.stringify(silentReplyEntry)}\n${JSON.stringify(followUp)}\n`;
-    const after = await readTranscriptJsonl(file);
+    const after = await readTranscriptJsonl(scope);
     expect(after).toBe(original);
   });
 
   it("preserves delivered trailing assistant messages", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
     const assistantEntry = {
       type: "message",
@@ -352,19 +364,22 @@ describe("repairTranscriptStateIfNeeded", () => {
         stopReason: "stop",
       },
     };
-    writeTranscriptEvents(file, [header, message, assistantEntry]);
+    writeTranscriptEvents(scope, [header, message, assistantEntry]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(false);
 
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantEntry)}\n`;
-    const after = await readTranscriptJsonl(file);
+    const after = await readTranscriptJsonl(scope);
     expect(after).toBe(original);
   });
 
   it("preserves multiple consecutive delivered trailing assistant messages", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
     const assistantEntry1 = {
       type: "message",
@@ -388,19 +403,22 @@ describe("repairTranscriptStateIfNeeded", () => {
         stopReason: "stop",
       },
     };
-    writeTranscriptEvents(file, [header, message, assistantEntry1, assistantEntry2]);
+    writeTranscriptEvents(scope, [header, message, assistantEntry1, assistantEntry2]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(false);
 
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantEntry1)}\n${JSON.stringify(assistantEntry2)}\n`;
-    const after = await readTranscriptJsonl(file);
+    const after = await readTranscriptJsonl(scope);
     expect(after).toBe(original);
   });
 
   it("does not trim non-trailing assistant messages", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
     const assistantEntry = {
       type: "message",
@@ -420,15 +438,18 @@ describe("repairTranscriptStateIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "follow up" },
     };
-    writeTranscriptEvents(file, [header, message, assistantEntry, userFollowUp]);
+    writeTranscriptEvents(scope, [header, message, assistantEntry, userFollowUp]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(false);
   });
 
   it("preserves trailing assistant messages that contain tool calls", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
     const toolCallAssistant = {
       type: "message",
@@ -444,18 +465,21 @@ describe("repairTranscriptStateIfNeeded", () => {
         stopReason: "toolUse",
       },
     };
-    writeTranscriptEvents(file, [header, message, toolCallAssistant]);
+    writeTranscriptEvents(scope, [header, message, toolCallAssistant]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(false);
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n`;
-    const after = await readTranscriptJsonl(file);
+    const after = await readTranscriptJsonl(scope);
     expect(after).toBe(original);
   });
 
   it("preserves adjacent trailing tool-call and text assistant messages", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
     const toolCallAssistant = {
       type: "message",
@@ -479,14 +503,17 @@ describe("repairTranscriptStateIfNeeded", () => {
         stopReason: "stop",
       },
     };
-    writeTranscriptEvents(file, [header, message, toolCallAssistant, plainAssistant]);
+    writeTranscriptEvents(scope, [header, message, toolCallAssistant, plainAssistant]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(false);
 
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(plainAssistant)}\n`;
-    const after = await readTranscriptJsonl(file);
+    const after = await readTranscriptJsonl(scope);
     expect(after).toBe(original);
   });
 
@@ -496,7 +523,7 @@ describe("repairTranscriptStateIfNeeded", () => {
     // pass. This is the exact sequence produced by any agent run that calls at least
     // one tool before returning a final text response, and it must survive intact so
     // subsequent user messages are parented to the correct leaf node.
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
     const toolCallAssistant = {
       type: "message",
@@ -533,19 +560,22 @@ describe("repairTranscriptStateIfNeeded", () => {
         stopReason: "stop",
       },
     };
-    writeTranscriptEvents(file, [header, message, toolCallAssistant, toolResult, finalAssistant]);
+    writeTranscriptEvents(scope, [header, message, toolCallAssistant, toolResult, finalAssistant]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(false);
 
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(toolResult)}\n${JSON.stringify(finalAssistant)}\n`;
-    const after = await readTranscriptJsonl(file);
+    const after = await readTranscriptJsonl(scope);
     expect(after).toBe(original);
   });
 
   it("preserves assistant-only session history after the header", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header } = buildSessionHeaderAndMessage();
     const assistantEntry = {
       type: "message",
@@ -558,19 +588,22 @@ describe("repairTranscriptStateIfNeeded", () => {
         stopReason: "stop",
       },
     };
-    writeTranscriptEvents(file, [header, assistantEntry]);
+    writeTranscriptEvents(scope, [header, assistantEntry]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(false);
 
     const original = `${JSON.stringify(header)}\n${JSON.stringify(assistantEntry)}\n`;
-    const after = await readTranscriptJsonl(file);
+    const after = await readTranscriptJsonl(scope);
     expect(after).toBe(original);
   });
 
   it("is a no-op on a session that was already repaired", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header } = buildSessionHeaderAndMessage();
     const healedEntry = {
       type: "message",
@@ -595,19 +628,22 @@ describe("repairTranscriptStateIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "follow up" },
     };
-    writeTranscriptEvents(file, [header, healedEntry, followUp]);
+    writeTranscriptEvents(scope, [header, healedEntry, followUp]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(false);
     expect(result.rewrittenAssistantMessages ?? 0).toBe(0);
     const original = `${JSON.stringify(header)}\n${JSON.stringify(healedEntry)}\n${JSON.stringify(followUp)}\n`;
-    const after = await readTranscriptJsonl(file);
+    const after = await readTranscriptJsonl(scope);
     expect(after).toBe(original);
   });
 
   it("drops type:message entries with null role instead of preserving them through repair (#77228)", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
 
     const nullRoleEntry = {
@@ -632,14 +668,23 @@ describe("repairTranscriptStateIfNeeded", () => {
       message: { role: "   ", content: "blank role" },
     };
 
-    writeTranscriptEvents(file, [header, message, nullRoleEntry, missingRoleEntry, emptyRoleEntry]);
+    writeTranscriptEvents(scope, [
+      header,
+      message,
+      nullRoleEntry,
+      missingRoleEntry,
+      emptyRoleEntry,
+    ]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(3);
 
-    const after = await readTranscriptJsonl(file);
+    const after = await readTranscriptJsonl(scope);
     const lines = after.trimEnd().split("\n");
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0])).toEqual(header);
@@ -648,7 +693,7 @@ describe("repairTranscriptStateIfNeeded", () => {
   });
 
   it("drops a type:message entry whose message field is missing or non-object", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
 
     const missingMessage = {
@@ -665,20 +710,23 @@ describe("repairTranscriptStateIfNeeded", () => {
       message: "not an object",
     };
 
-    writeTranscriptEvents(file, [header, message, missingMessage, stringMessage]);
+    writeTranscriptEvents(scope, [header, message, missingMessage, stringMessage]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(2);
 
-    const after = await readTranscriptJsonl(file);
+    const after = await readTranscriptJsonl(scope);
     const lines = after.trimEnd().split("\n");
     expect(lines).toHaveLength(2);
   });
 
   it("preserves non-`message` envelope types (e.g. compactionSummary, custom) without role inspection", async () => {
-    const { file } = await createTempSessionPath();
+    const { scope } = await createTempTranscriptScope();
     const { header, message } = buildSessionHeaderAndMessage();
 
     const summary = {
@@ -695,9 +743,12 @@ describe("repairTranscriptStateIfNeeded", () => {
       data: { provider: "openai", modelApi: "openai-responses", modelId: "gpt-5" },
     };
 
-    writeTranscriptEvents(file, [header, message, summary, custom]);
+    writeTranscriptEvents(scope, [header, message, summary, custom]);
 
-    const result = await repairTranscriptStateIfNeeded({ transcriptLocator: file });
+    const result = await repairTranscriptSessionStateIfNeeded({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    });
 
     expect(result.repaired).toBe(false);
     expect(result.droppedLines).toBe(0);
@@ -707,7 +758,7 @@ describe("repairTranscriptStateIfNeeded", () => {
       JSON.stringify(summary),
       JSON.stringify(custom),
     ].join("\n");
-    const after = await readTranscriptJsonl(file);
+    const after = await readTranscriptJsonl(scope);
     expect(after).toBe(`${content}\n`);
   });
 });

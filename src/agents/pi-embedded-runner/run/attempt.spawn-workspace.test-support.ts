@@ -421,7 +421,7 @@ vi.mock("../tool-schema-runtime.js", () => ({
 }));
 
 vi.mock("../../transcript-state-repair.js", () => ({
-  repairTranscriptStateIfNeeded: async () => {},
+  repairTranscriptSessionStateIfNeeded: async () => {},
 }));
 
 vi.mock("../tool-result-context-guard.js", async () => {
