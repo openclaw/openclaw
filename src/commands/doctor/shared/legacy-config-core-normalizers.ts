@@ -1,4 +1,7 @@
-import { migrateLegacyRuntimeModelRef } from "../../../agents/model-runtime-aliases.js";
+import {
+  isCliRuntimeAlias,
+  migrateLegacyRuntimeModelRef,
+} from "../../../agents/model-runtime-aliases.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
@@ -245,17 +248,14 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
 } {
   if (typeof raw === "string") {
     const migrated = migrateLegacyRuntimeModelRef(raw);
-    // CLI runtime aliases (claude-cli, codex-cli, google-gemini-cli) use
-    // legacyProvider/model as their canonical format — do not rewrite them.
-    if (!migrated || migrated.cli) {
-      return { value: raw, changed: false, selectedRefs: [] };
-    }
-    return {
-      value: migrated.ref,
-      changed: true,
-      selectedRuntime: migrated.runtime,
-      selectedRefs: [migrated.ref],
-    };
+    return migrated
+      ? {
+          value: migrated.ref,
+          changed: true,
+          selectedRuntime: migrated.runtime,
+          selectedRefs: [migrated.ref],
+        }
+      : { value: raw, changed: false, selectedRefs: [] };
   }
   if (!isRecord(raw)) {
     return { value: raw, changed: false, selectedRefs: [] };
@@ -263,8 +263,7 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
 
   const migratedPrimary =
     typeof raw.primary === "string" ? migrateLegacyRuntimeModelRef(raw.primary) : null;
-  // CLI runtime aliases use legacyProvider/model as their canonical format — skip rewrite.
-  if (!migratedPrimary || migratedPrimary.cli) {
+  if (!migratedPrimary) {
     return { value: raw, changed: false, selectedRefs: [] };
   }
 
@@ -371,6 +370,22 @@ function ensureSelectedModelRuntimePolicies(
   return { value: next, changed };
 }
 
+function isModelPrimaryOwnedByExplicitCliRuntime(
+  rawModel: unknown,
+  rawAgentRuntime: unknown,
+): boolean {
+  if (!isRecord(rawAgentRuntime)) return false;
+  const runtimeId = normalizeOptionalLowercaseString(rawAgentRuntime.id);
+  if (!runtimeId || !isCliRuntimeAlias(runtimeId)) return false;
+  const primary = isRecord(rawModel)
+    ? rawModel.primary
+    : typeof rawModel === "string"
+      ? rawModel
+      : undefined;
+  if (typeof primary !== "string") return false;
+  return primary.startsWith(`${runtimeId}/`);
+}
+
 function normalizeLegacyRuntimeAgentContainer(
   raw: Record<string, unknown>,
   path: string,
@@ -379,7 +394,13 @@ function normalizeLegacyRuntimeAgentContainer(
   let changed = false;
   const next: Record<string, unknown> = { ...raw };
 
-  const model = normalizeLegacyRuntimeAgentModelConfig(raw.model);
+  // Skip model ref migration when the agentRuntime is already explicitly set to a CLI
+  // alias that owns the model prefix — e.g. agentRuntime.id=claude-cli + primary=claude-cli/*
+  // should not be rewritten to anthropic/* (#79842).
+  const skipModelMigration = isModelPrimaryOwnedByExplicitCliRuntime(raw.model, raw.agentRuntime);
+  const model = skipModelMigration
+    ? { value: raw.model, changed: false, selectedRuntime: undefined, selectedRefs: [] as string[] }
+    : normalizeLegacyRuntimeAgentModelConfig(raw.model);
   if (model.changed) {
     next.model = model.value;
     changed = true;
