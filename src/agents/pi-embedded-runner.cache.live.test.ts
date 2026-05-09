@@ -4,6 +4,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
   buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
   buildStableCachePrefix,
@@ -106,7 +107,7 @@ function buildRunnerSessionPaths(sessionId: string) {
   }
   return {
     agentDir: liveRunnerRootDir,
-    sessionFile: path.join(liveRunnerRootDir, `${sessionId}.jsonl`),
+    sessionFile: createSqliteSessionTranscriptLocator({ agentId: "main", sessionId }),
     workspaceDir: path.join(liveRunnerRootDir, `${sessionId}-workspace`),
   };
 }

@@ -270,10 +270,18 @@ describe("session cost usage", () => {
     const root = await makeRoot("missing");
     await withStateDir(root, async () => {
       expect(
-        await loadSessionCostSummary({ sessionFile: path.join(os.tmpdir(), "missing.jsonl") }),
+        await loadSessionCostSummary({
+          sessionFile: createSqliteSessionTranscriptLocator({
+            agentId: "main",
+            sessionId: "missing",
+          }),
+        }),
       ).toBeNull();
       const cached = await loadSessionCostSummaryFromCache({
-        sessionFile: path.join(os.tmpdir(), "missing.jsonl"),
+        sessionFile: createSqliteSessionTranscriptLocator({
+          agentId: "main",
+          sessionId: "missing",
+        }),
       });
       expect(cached.summary).toBeNull();
       expect(cached.cacheStatus.status).toBe("stale");

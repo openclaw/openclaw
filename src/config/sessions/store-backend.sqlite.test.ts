@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createSqliteSessionTranscriptLocator } from "./paths.js";
 import { loadSqliteSessionEntries } from "./store-backend.sqlite.js";
 import {
   deleteSessionEntry,
@@ -27,6 +28,10 @@ function resolveRetiredSessionJsonFixturePath(params: {
   return path.join(params.env.OPENCLAW_STATE_DIR ?? "", "agents", params.agentId, "sessions.json");
 }
 
+function sqliteTranscript(agentId: string, sessionId: string): string {
+  return createSqliteSessionTranscriptLocator({ agentId, sessionId });
+}
+
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -43,12 +48,12 @@ describe("SQLite session store backend", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const mainEntry: SessionEntry = {
       sessionId: "main-session",
-      sessionFile: "/tmp/main.jsonl",
+      sessionFile: sqliteTranscript("main", "main-session"),
       updatedAt: 123,
     };
     const opsEntry: SessionEntry = {
       sessionId: "ops-session",
-      sessionFile: "/tmp/ops.jsonl",
+      sessionFile: sqliteTranscript("ops", "ops-session"),
       updatedAt: 456,
     };
 
@@ -72,7 +77,7 @@ describe("SQLite session store backend", () => {
     });
     const entry: SessionEntry = {
       sessionId: "sqlite-primary",
-      sessionFile: "sqlite-primary.jsonl",
+      sessionFile: sqliteTranscript("ops", "sqlite-primary"),
       updatedAt: 100,
     };
 
@@ -107,7 +112,7 @@ describe("SQLite session store backend", () => {
       sessionKey: "discord:ops",
       entry: {
         sessionId: "ops-session",
-        sessionFile: "ops.jsonl",
+        sessionFile: sqliteTranscript("ops", "ops-session"),
         updatedAt: 100,
       },
     });
@@ -117,7 +122,7 @@ describe("SQLite session store backend", () => {
       sessionKey: "discord:other",
       entry: {
         sessionId: "other-session",
-        sessionFile: "other.jsonl",
+        sessionFile: sqliteTranscript("ops", "other-session"),
         updatedAt: 50,
       },
     });
@@ -133,12 +138,12 @@ describe("SQLite session store backend", () => {
     expect(loadSqliteSessionEntries({ agentId: "ops", env })).toEqual({
       "discord:ops": expect.objectContaining({
         sessionId: "ops-session",
-        sessionFile: "ops.jsonl",
+        sessionFile: sqliteTranscript("ops", "ops-session"),
         modelOverride: "gpt-5.5",
       }),
       "discord:other": {
         sessionId: "other-session",
-        sessionFile: "other.jsonl",
+        sessionFile: sqliteTranscript("ops", "other-session"),
         updatedAt: 50,
       },
     });
@@ -154,7 +159,7 @@ describe("SQLite session store backend", () => {
       sessionKey: "discord:ops",
       entry: {
         sessionId: "ops-session",
-        sessionFile: "ops.jsonl",
+        sessionFile: sqliteTranscript("ops", "ops-session"),
         updatedAt: 100,
       },
     });
@@ -164,7 +169,7 @@ describe("SQLite session store backend", () => {
       sessionKey: "discord:other",
       entry: {
         sessionId: "other-session",
-        sessionFile: "other.jsonl",
+        sessionFile: sqliteTranscript("ops", "other-session"),
         updatedAt: 50,
       },
     });
@@ -190,7 +195,7 @@ describe("SQLite session store backend", () => {
     });
     const entry: SessionEntry = {
       sessionId: "sqlite-default",
-      sessionFile: "sqlite-default.jsonl",
+      sessionFile: sqliteTranscript("ops", "sqlite-default"),
       updatedAt: 100,
     };
 
