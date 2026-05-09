@@ -205,6 +205,8 @@ const ModelCompatSchema = z
         z.literal("openai"),
         z.literal("openrouter"),
         z.literal("deepseek"),
+        z.literal("qwen"),
+        z.literal("qwen-chat-template"),
         z.literal("zai"),
       ])
       .optional(),

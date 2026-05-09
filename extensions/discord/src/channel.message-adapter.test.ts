@@ -151,7 +151,7 @@ describe("discord channel message adapter", () => {
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "discordMessageAdapter",
-      adapter: adapter,
+      adapter,
       proofs: {
         text: proveText,
         media: proveMedia,

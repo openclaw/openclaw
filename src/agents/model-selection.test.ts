@@ -5,6 +5,7 @@ import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.j
 import { migrateLegacyRuntimeModelRef } from "./model-runtime-aliases.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredModelCatalog,
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
   buildModelAliasIndex,
@@ -689,6 +690,44 @@ describe("model-selection", () => {
       ).toBe("qwen-dashscope");
     });
 
+    it("infers Google provider from canonicalized configured provider catalogs", () => {
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              models: [{ id: "gemini-3-pro-preview" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "gemini-3.1-pro-preview",
+        }),
+      ).toBe("google");
+    });
+
+    it("infers proxy providers from canonicalized nested Google catalog ids", () => {
+      const cfg = {
+        models: {
+          providers: {
+            kilocode: {
+              models: [{ id: "google/gemini-3-pro-preview" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "google/gemini-3.1-pro-preview",
+        }),
+      ).toBe("kilocode");
+    });
+
     it("returns undefined when provider catalog matches are ambiguous", () => {
       const cfg = {
         models: {
@@ -709,6 +748,58 @@ describe("model-selection", () => {
           model: "qwen-max",
         }),
       ).toBeUndefined();
+    });
+  });
+
+  describe("buildConfiguredModelCatalog", () => {
+    it("emits canonical Google Gemini 3.1 provider model ids", () => {
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              models: [
+                {
+                  id: "gemini-3-pro-preview",
+                  name: "Gemini 3 Pro",
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(buildConfiguredModelCatalog({ cfg })).toContainEqual(
+        expect.objectContaining({
+          provider: "google",
+          id: "gemini-3.1-pro-preview",
+          name: "Gemini 3 Pro",
+        }),
+      );
+    });
+
+    it("emits canonical nested Google Gemini 3.1 ids from proxy provider catalog rows", () => {
+      const cfg = {
+        models: {
+          providers: {
+            kilocode: {
+              models: [
+                {
+                  id: "google/gemini-3-pro-preview",
+                  name: "Gemini 3 Pro",
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(buildConfiguredModelCatalog({ cfg })).toContainEqual(
+        expect.objectContaining({
+          provider: "kilocode",
+          id: "google/gemini-3.1-pro-preview",
+          name: "Gemini 3 Pro",
+        }),
+      );
     });
   });
 

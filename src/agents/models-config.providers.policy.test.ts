@@ -81,9 +81,10 @@ describe("models-config.providers.policy", () => {
         baseUrl: "https://generativelanguage.googleapis.com",
         models: [],
       }),
-    ).toMatchObject({
+    ).toEqual({
       api: "google-generative-ai",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      models: [],
     });
   });
 

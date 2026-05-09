@@ -113,11 +113,16 @@ describe("cli program (nodes media)", () => {
     expect(facings).toEqual(["back", "front"]);
 
     const out = getFirstRuntimeLogLine();
-    const mediaPaths = out
-      .split("\n")
-      .filter((l) => l.startsWith("MEDIA:"))
-      .map((l) => l.replace(/^MEDIA:/, ""))
-      .filter(Boolean);
+    const mediaPaths: string[] = [];
+    for (const line of out.split("\n")) {
+      if (!line.startsWith("MEDIA:")) {
+        continue;
+      }
+      const mediaPath = line.replace(/^MEDIA:/, "");
+      if (mediaPath.length > 0) {
+        mediaPaths.push(mediaPath);
+      }
+    }
     expect(mediaPaths).toHaveLength(2);
     expect(mediaPaths[0]).toContain("openclaw-camera-snap-");
     expect(mediaPaths[1]).toContain("openclaw-camera-snap-");

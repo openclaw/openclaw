@@ -175,7 +175,7 @@ describe("sanitizeToolUseResultPairing", () => {
     ]);
 
     const out = sanitizeToolUseResultPairing(input);
-    expect(out.filter((m) => m.role === "toolResult")).toHaveLength(1);
+    expect(out.reduce((count, m) => count + (m.role === "toolResult" ? 1 : 0), 0)).toBe(1);
   });
 
   it("drops duplicate tool results for the same id across the transcript", () => {
@@ -209,7 +209,7 @@ describe("sanitizeToolUseResultPairing", () => {
     ]);
 
     const out = sanitizeToolUseResultPairing(input);
-    expect(out.filter((m) => m.role === "toolResult")).toEqual([]);
+    expect(out.some((m) => m.role === "toolResult")).toBe(false);
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
@@ -489,7 +489,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
   });
 
   it("drops signed-thinking assistant turns when sibling tool calls reuse an id", () => {
@@ -513,7 +513,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
   });
 
   it("drops later signed-thinking assistant turns that reuse an earlier signed tool id", () => {
@@ -579,7 +579,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
     expect(JSON.stringify(out)).not.toContain(secret);
   });
 

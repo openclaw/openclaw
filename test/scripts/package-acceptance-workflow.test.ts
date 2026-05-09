@@ -230,7 +230,10 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("node .release-harness/scripts/docker-e2e.mjs github-outputs");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
     const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
-    expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toMatchObject({
+    expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toEqual({
+      INCLUDE_OPENWEBUI: "${{ inputs.include_openwebui }}",
+      INCLUDE_RELEASE_PATH_SUITES: "${{ inputs.include_release_path_suites }}",
+      LANES: "${{ inputs.docker_lanes }}",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "${{ inputs.published_upgrade_survivor_baseline }}",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS:
         "${{ inputs.published_upgrade_survivor_baselines }}",
@@ -672,9 +675,14 @@ describe("package artifact reuse", () => {
     expect(npmTelegramJob.if).toContain(
       "inputs.rerun_group == 'all' && inputs.release_profile == 'full'",
     );
-    expect(dispatchStep.env).toMatchObject({
+    expect(dispatchStep.env).toEqual({
+      CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
+      GH_TOKEN: "${{ github.token }}",
       PACKAGE_ARTIFACT_NAME: "${{ needs.prepare_release_package.outputs.artifact_name }}",
+      PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
       PREPARE_PACKAGE_RESULT: "${{ needs.prepare_release_package.result }}",
+      PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
+      SCENARIO: "${{ inputs.npm_telegram_scenario }}",
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
     });
     expectTextToIncludeAll(dispatchStep.run, [
@@ -734,16 +742,18 @@ describe("package artifact reuse", () => {
     const validateStep = workflowStep(job, "Validate inputs and secrets");
     const runStep = workflowStep(job, "Run package Telegram E2E");
 
-    expect(currentRunDownload).toMatchObject({
+    expect(currentRunDownload).toEqual({
       if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''",
+      name: "Download package-under-test artifact",
       uses: "actions/download-artifact@v8",
       with: {
         name: "${{ inputs.package_artifact_name }}",
         path: ".artifacts/telegram-package-under-test",
       },
     });
-    expect(releaseRunDownload).toMatchObject({
+    expect(releaseRunDownload).toEqual({
       if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id != ''",
+      name: "Download package-under-test artifact from release run",
       uses: "actions/download-artifact@v8",
       with: {
         "github-token": "${{ github.token }}",

@@ -32,7 +32,7 @@ function expectPrunedImageMessage(
 
 function expectPrunedMessages(messages: AgentMessage[]): AgentMessage[] {
   const pruned = pruneProcessedHistoryImages(messages);
-  expect(pruned).toEqual(expect.any(Array));
+  expect(Array.isArray(pruned)).toBe(true);
   if (!pruned) {
     throw new Error("expected pruned history messages");
   }

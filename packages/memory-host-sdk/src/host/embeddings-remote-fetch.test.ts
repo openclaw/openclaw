@@ -34,14 +34,11 @@ describe("fetchRemoteEmbeddingVectors", () => {
     });
 
     expect(vectors).toEqual([[0.1, 0.2], [], [0.3]]);
-    expect(postJsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://memory.example/v1/embeddings",
-        headers: { Authorization: "Bearer test" },
-        body: { input: ["one", "two", "three"] },
-        errorPrefix: "embedding fetch failed",
-      }),
-    );
+    const postJsonParams = postJsonMock.mock.calls[0]?.[0];
+    expect(postJsonParams?.url).toBe("https://memory.example/v1/embeddings");
+    expect(postJsonParams?.headers).toEqual({ Authorization: "Bearer test" });
+    expect(postJsonParams?.body).toEqual({ input: ["one", "two", "three"] });
+    expect(postJsonParams?.errorPrefix).toBe("embedding fetch failed");
   });
 
   it("throws a status-rich error on non-ok responses", async () => {

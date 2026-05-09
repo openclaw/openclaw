@@ -210,10 +210,10 @@ describe("sessions_spawn tool", () => {
       },
     });
     const schema = tool.parameters as {
-      properties?: {
-        thread?: { description?: string; enum?: string[]; type?: string };
-        mode?: { description?: string; enum?: string[]; type?: string };
-      };
+      properties?: Record<
+        string,
+        { description?: string; enum?: string[]; type?: string } | undefined
+      >;
     };
 
     expect(schema.properties?.thread).toBeUndefined();
@@ -236,10 +236,10 @@ describe("sessions_spawn tool", () => {
       },
     });
     const schema = tool.parameters as {
-      properties?: {
-        thread?: { description?: string; enum?: string[]; type?: string };
-        mode?: { description?: string; enum?: string[]; type?: string };
-      };
+      properties?: Record<
+        string,
+        { description?: string; enum?: string[]; type?: string } | undefined
+      >;
     };
 
     const thread = requireSchemaProperty(schema.properties, "thread");
@@ -699,6 +699,25 @@ describe("sessions_spawn tool", () => {
       "resumeSessionId",
     );
     expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty("streamTo");
+  });
+
+  it('treats model="default" as no explicit model override', async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-model-default", {
+      task: "analyze file",
+      model: "default",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "analyze file",
+        model: undefined,
+      }),
+      expect.any(Object),
+    );
   });
 
   it("keeps attachment content schema unconstrained for llama.cpp grammar safety", () => {

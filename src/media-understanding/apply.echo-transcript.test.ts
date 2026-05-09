@@ -113,7 +113,11 @@ function disableImageUnderstanding(cfg: OpenClawConfig): void {
 
 function expectSingleEchoDeliveryCall() {
   expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
-  const callArgs = mockDeliverOutboundPayloads.mock.calls[0]?.[0];
+  const firstCall = mockDeliverOutboundPayloads.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("Expected echo transcript delivery call");
+  }
+  const callArgs = firstCall[0];
   if (!callArgs) {
     throw new Error("Expected one echo transcript delivery call");
   }
@@ -180,8 +184,8 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       runExec: runExecMock,
       runCommandWithTimeout: runCommandWithTimeoutMock,
     }));
-    vi.doMock("../infra/outbound/deliver-runtime.js", () => ({
-      deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+    vi.doMock("../channels/message/runtime.js", () => ({
+      sendDurableMessageBatch: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
     }));
     vi.doMock("../utils/message-channel.js", () => ({
       isDeliverableMessageChannel: (channel: string) => channel === "voicechat",
@@ -232,7 +236,11 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     runExecMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
     mockDeliverOutboundPayloads.mockClear();
-    mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "voicechat", messageId: "echo-1" }]);
+    mockDeliverOutboundPayloads.mockResolvedValue({
+      status: "sent",
+      results: [{ channel: "voicechat", messageId: "echo-1" }],
+      receipt: { platformMessageIds: ["echo-1"], parts: [], sentAt: 1 },
+    });
   });
 
   afterAll(async () => {

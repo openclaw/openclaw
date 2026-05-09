@@ -220,7 +220,7 @@ describe("exportTrajectoryBundle", () => {
         sessionId: "session-1",
         workspaceDir: tmpDir,
       }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: "EEXIST" });
   });
 
   it("does not synthesize prompt files from export-time fallbacks", async () => {
@@ -772,7 +772,7 @@ describe("exportTrajectoryBundle", () => {
       "tools.json",
     ]);
     const emptyContents = (manifest.contents ?? []).filter((entry) => entry.bytes <= 0);
-    expect(emptyContents).toEqual([]);
+    expect(emptyContents).toStrictEqual([]);
 
     const metadata = JSON.parse(fs.readFileSync(path.join(outputDir, "metadata.json"), "utf8")) as {
       skills?: { entries?: Array<{ id?: string; invoked?: boolean }> };

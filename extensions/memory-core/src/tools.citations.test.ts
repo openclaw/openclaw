@@ -4,7 +4,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
 } from "openclaw/plugin-sdk/memory-host-core";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemorySearchManagerMockCalls,
   getReadAgentMemoryFileMockCalls,
@@ -27,23 +27,25 @@ import {
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 
-async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
-  const startedAt = Date.now();
-  let lastError: unknown;
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      return await task();
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 20);
-      });
+function collectWikiResultPaths(results: readonly { corpus: string; path: string }[]): string[] {
+  const paths: string[] = [];
+  for (const result of results) {
+    if (result.corpus === "wiki") {
+      paths.push(result.path);
     }
   }
-  if (lastError instanceof Error) {
-    throw lastError;
-  }
-  throw new Error("Timed out waiting for async test condition");
+  return paths;
+}
+
+async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
+  let value: T | undefined;
+  await vi.waitFor(
+    async () => {
+      value = await task();
+    },
+    { interval: 1, timeout: timeoutMs },
+  );
+  return value as T;
 }
 
 beforeEach(() => {
@@ -369,9 +371,7 @@ describe("memory tools", () => {
     expect(corpora).toContain("memory");
     expect(corpora).toContain("wiki");
     expect(details.results).toHaveLength(5);
-    expect(
-      details.results.filter((entry) => entry.corpus === "wiki").map((entry) => entry.path),
-    ).toEqual(["w1.md", "w2.md", "w3.md", "w4.md"]);
+    expect(collectWikiResultPaths(details.results)).toEqual(["w1.md", "w2.md", "w3.md", "w4.md"]);
   });
 
   it("merges memory and wiki corpus search results for corpus=all", async () => {

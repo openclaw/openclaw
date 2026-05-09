@@ -550,15 +550,34 @@ const DiscordVoiceRealtimeSchema = z
     instructions: z.string().min(1).optional(),
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
     consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
+    bargeIn: z.boolean().optional(),
+    minBargeInAudioEndMs: z.number().int().min(0).max(10_000).optional(),
     debounceMs: z.number().int().positive().max(10_000).optional(),
     providers: z.record(z.string(), z.record(z.string(), z.unknown()).optional()).optional(),
   })
   .strict();
 
+const DiscordVoiceAgentSessionSchema = z
+  .object({
+    mode: z.enum(["voice", "target"]).optional(),
+    target: z.string().min(1).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.mode === "target" && !value.target) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["target"],
+        message: 'voice.agentSession.target is required when mode is "target"',
+      });
+    }
+  });
+
 const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
-    mode: z.enum(["stt-tts", "talk-buffer", "bidi"]).optional(),
+    mode: z.enum(["stt-tts", "agent-proxy", "bidi"]).optional(),
+    agentSession: DiscordVoiceAgentSessionSchema.optional(),
     model: z.string().min(1).optional(),
     realtime: DiscordVoiceRealtimeSchema.optional(),
     autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
@@ -1432,10 +1451,21 @@ export const IMessageAccountSchemaBase = z
             requireMention: z.boolean().optional(),
             tools: ToolPolicySchema,
             toolsBySender: ToolPolicyBySenderSchema,
+            systemPrompt: z.string().optional(),
           })
           .strict()
           .optional(),
       )
+      .optional(),
+    catchup: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxAgeMinutes: z.number().int().min(1).max(720).optional(),
+        perRunLimit: z.number().int().min(1).max(500).optional(),
+        firstRunLookbackMinutes: z.number().int().min(1).max(720).optional(),
+        maxFailureRetries: z.number().int().min(1).max(1000).optional(),
+      })
+      .strict()
       .optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,

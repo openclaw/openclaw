@@ -76,6 +76,22 @@ import { feishuPlugin } from "./channel.js";
 import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 
+async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), 0);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 type FeishuSendText = NonNullable<typeof feishuOutbound.sendText>;
 type FeishuMessageAdapter = NonNullable<typeof feishuPlugin.message>;
 type FeishuMessageSender = NonNullable<FeishuMessageAdapter["send"]>;
@@ -867,10 +883,7 @@ describe("feishuOutbound comment-thread routing", () => {
       accountId: "main",
     });
 
-    const status = await Promise.race([
-      sendPromise.then(() => "done"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const status = await raceWithNextMacrotask(sendPromise.then(() => "done"));
 
     expect(status).toBe("done");
     expect(deliverCommentThreadTextMock).toHaveBeenCalled();

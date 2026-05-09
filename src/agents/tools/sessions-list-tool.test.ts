@@ -190,13 +190,12 @@ describe("sessions-list-tool", () => {
     const result = await tool.execute("call-3", {});
     const details = getSessionsListDetails(result);
 
-    expect(details.sessions?.[0]).toMatchObject({
-      thinkingLevel: "high",
-      fastMode: true,
-      verboseLevel: "on",
-      reasoningLevel: "deep",
-      elevatedLevel: "on",
-      responseUsage: "full",
-    });
+    const session = details.sessions?.[0];
+    expect(session?.thinkingLevel).toBe("high");
+    expect(session?.fastMode).toBe(true);
+    expect(session?.verboseLevel).toBe("on");
+    expect(session?.reasoningLevel).toBe("deep");
+    expect(session?.elevatedLevel).toBe("on");
+    expect(session?.responseUsage).toBe("full");
   });
 });

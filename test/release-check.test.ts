@@ -49,7 +49,7 @@ describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
     const xml = `<rss><channel>${makeItem("2026.2.26", "202602260")}</channel></rss>`;
 
-    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+    expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
 
   it("requires lane-floor builds on and after lane-floor cutover", () => {
@@ -63,7 +63,7 @@ describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts canonical stable lane builds on and after lane-floor cutover", () => {
     const xml = `<rss><channel>${makeItem("2026.3.1", "2026030190")}</channel></rss>`;
 
-    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+    expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
 });
 
@@ -145,7 +145,7 @@ describe("packed CLI smoke", () => {
           OPENCLAW_STATE_DIR: "/tmp/smoke-state",
         },
       ),
-    ).toMatchObject({
+    ).toEqual({
       PATH: "/usr/bin",
       HOME: "/tmp/smoke-home",
       OPENCLAW_STATE_DIR: "/tmp/smoke-state",
@@ -237,7 +237,7 @@ describe("collectBundledExtensionManifestErrors", () => {
           },
         },
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags non-object install metadata instead of throwing", () => {
@@ -301,7 +301,7 @@ describe("bundled plugin package dependency checks", () => {
         "utf8",
       );
 
-      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toStrictEqual([]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -380,9 +380,9 @@ describe("collectForbiddenPackPaths", () => {
 
   it("keeps local build metadata excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
-    expect(pkg.files).toEqual(
-      expect.arrayContaining(LOCAL_BUILD_METADATA_DIST_PATHS.map((entry) => `!${entry}`)),
-    );
+    for (const entry of LOCAL_BUILD_METADATA_DIST_PATHS) {
+      expect(pkg.files).toContain(`!${entry}`);
+    }
   });
 
   it("blocks legacy runtime dependency stamps from npm pack output", () => {
@@ -483,27 +483,27 @@ describe("collectMissingPackPaths", () => {
       "dist/build-info.json",
     ]);
 
-    expect(missing).toEqual(
-      expect.arrayContaining([
-        "dist/channel-catalog.json",
-        PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-        "dist/control-ui/index.html",
-        "scripts/npm-runner.mjs",
-        "scripts/preinstall-package-manager-warning.mjs",
-        "scripts/lib/official-external-channel-catalog.json",
-        "scripts/lib/official-external-plugin-catalog.json",
-        "scripts/lib/official-external-provider-catalog.json",
-        "scripts/lib/package-dist-imports.mjs",
-        "scripts/postinstall-bundled-plugins.mjs",
-        "dist/task-registry-control.runtime.js",
-        bundledDistPluginFile("slack", "runtime-api.js"),
-        bundledDistPluginFile("slack", "openclaw.plugin.json"),
-        bundledDistPluginFile("slack", "package.json"),
-        bundledDistPluginFile("telegram", "runtime-api.js"),
-        bundledDistPluginFile("telegram", "openclaw.plugin.json"),
-        bundledDistPluginFile("telegram", "package.json"),
-      ]),
-    );
+    for (const path of [
+      "dist/channel-catalog.json",
+      PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+      "dist/control-ui/index.html",
+      "scripts/npm-runner.mjs",
+      "scripts/preinstall-package-manager-warning.mjs",
+      "scripts/lib/official-external-channel-catalog.json",
+      "scripts/lib/official-external-plugin-catalog.json",
+      "scripts/lib/official-external-provider-catalog.json",
+      "scripts/lib/package-dist-imports.mjs",
+      "scripts/postinstall-bundled-plugins.mjs",
+      "dist/task-registry-control.runtime.js",
+      bundledDistPluginFile("slack", "runtime-api.js"),
+      bundledDistPluginFile("slack", "openclaw.plugin.json"),
+      bundledDistPluginFile("slack", "package.json"),
+      bundledDistPluginFile("telegram", "runtime-api.js"),
+      bundledDistPluginFile("telegram", "openclaw.plugin.json"),
+      bundledDistPluginFile("telegram", "package.json"),
+    ]) {
+      expect(missing).toContain(path);
+    }
   });
 
   it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
@@ -531,15 +531,15 @@ describe("collectMissingPackPaths", () => {
         "dist/channel-catalog.json",
         PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
-    expect(requiredBundledPluginPackPaths).toEqual(
-      expect.arrayContaining([
-        bundledDistPluginFile("slack", "runtime-api.js"),
-        bundledDistPluginFile("telegram", "runtime-api.js"),
-      ]),
+    expect(requiredBundledPluginPackPaths).toContain(
+      bundledDistPluginFile("slack", "runtime-api.js"),
+    );
+    expect(requiredBundledPluginPackPaths).toContain(
+      bundledDistPluginFile("telegram", "runtime-api.js"),
     );
   });
 });
@@ -574,7 +574,7 @@ describe("collectPackUnpackedSizeErrors", () => {
   it("accepts pack results within the unpacked size budget", () => {
     expect(
       collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.14.tgz", 120_354_302)]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags oversized pack results that risk low-memory startup failures", () => {

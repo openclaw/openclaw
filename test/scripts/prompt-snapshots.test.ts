@@ -177,8 +177,12 @@ describe("happy path prompt snapshots", () => {
       fs.mkdirSync(path.dirname(cachePath), { recursive: true });
       fs.writeFileSync(cachePath, JSON.stringify({ models: [] }));
 
-      await expect(findDefaultCatalogPath({ env: {}, homeDir: root })).resolves.toMatchObject({
+      await expect(findDefaultCatalogPath({ env: {}, homeDir: root })).resolves.toEqual({
         catalogPath: cachePath,
+        candidates: [
+          cachePath,
+          path.join(root, "code", "codex", "codex-rs", "models-manager", "models.json"),
+        ],
       });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

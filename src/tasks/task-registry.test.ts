@@ -72,6 +72,16 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: hoisted.cancelSessionMock,
@@ -798,7 +808,7 @@ describe("task-registry", () => {
           }),
         ),
       );
-      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
   });
 
@@ -1088,7 +1098,7 @@ describe("task-registry", () => {
           }),
         ),
       );
-      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       expect(hasPendingHeartbeatWake()).toBe(false);
     });
   });
@@ -1120,7 +1130,7 @@ describe("task-registry", () => {
         deliveryStatus: "pending",
       });
 
-      expect(listTaskRecords().filter((task) => task.runId === "run-shared")).toHaveLength(2);
+      expect(countMatching(listTaskRecords(), (task) => task.runId === "run-shared")).toBe(2);
       expect(findTaskByRunId("run-shared")).toMatchObject({
         runtime: "acp",
         task: "Spawn ACP child",
@@ -1223,7 +1233,7 @@ describe("task-registry", () => {
       await maybeDeliverTaskTerminalUpdate(spawnedTask.taskId);
 
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
-      expect(listTaskRecords().filter((task) => task.runId === "run-shared-delivery")).toHaveLength(
+      expect(countMatching(listTaskRecords(), (task) => task.runId === "run-shared-delivery")).toBe(
         1,
       );
       expect(findTaskByRunId("run-shared-delivery")).toMatchObject({
@@ -1367,7 +1377,7 @@ describe("task-registry", () => {
       });
 
       expect(directTask.taskId).toBe(spawnedTask.taskId);
-      expect(listTaskRecords().filter((task) => task.runId === "run-collapse")).toHaveLength(1);
+      expect(countMatching(listTaskRecords(), (task) => task.runId === "run-collapse")).toBe(1);
       expect(findTaskByRunId("run-collapse")).toMatchObject({
         task: "Spawn ACP child",
       });
@@ -1536,7 +1546,7 @@ describe("task-registry", () => {
       expect(getTaskById(task.taskId)).toMatchObject({
         status: "running",
       });
-      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
   });
 
@@ -1968,7 +1978,7 @@ describe("task-registry", () => {
         cleanupStamped: 0,
         pruned: 1,
       });
-      expect(listTaskRecords()).toEqual([]);
+      expect(listTaskRecords()).toStrictEqual([]);
     });
   });
 
@@ -2107,7 +2117,7 @@ describe("task-registry", () => {
         startTaskRegistryMaintenance();
         await vi.advanceTimersByTimeAsync(5_000);
         await flushAsyncWork();
-        expect(unhandled).toEqual([]);
+        expect(unhandled).toStrictEqual([]);
       } finally {
         process.off("unhandledRejection", onUnhandledRejection);
       }
@@ -2518,7 +2528,7 @@ describe("task-registry", () => {
       });
       vi.advanceTimersByTime(10);
 
-      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
 
       emitAgentEvent({
@@ -2538,7 +2548,7 @@ describe("task-registry", () => {
           content: "Background task done: ACP background task (run run-quie).",
         }),
       );
-      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       relay.dispose();
       vi.useRealTimers();
     });
@@ -2591,7 +2601,7 @@ describe("task-registry", () => {
             "Background task failed: ACP background task (run run-fail). Permission denied by ACP runtime",
         }),
       );
-      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
   });
 
@@ -2652,7 +2662,7 @@ describe("task-registry", () => {
         }),
       );
 
-      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       relay.dispose();
       vi.useRealTimers();
     });

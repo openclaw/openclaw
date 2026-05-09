@@ -16,6 +16,7 @@ Most skills loader/install configuration lives under `skills` in
     allowBundled: ["gemini", "peekaboo"],
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills", "~/Projects/oss/some-skill-pack/skills"],
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
       watch: true,
       watchDebounceMs: 250,
     },
@@ -87,6 +88,10 @@ Rules:
 - `allowBundled`: optional allowlist for **bundled** skills only. When set, only
   bundled skills in the list are eligible (managed, agent, and workspace skills unaffected).
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
+- `load.allowSymlinkTargets`: trusted real target directories that symlinked
+  skill folders may resolve into even when the symlink lives outside that
+  target root. Use this for intentional sibling-repo layouts such as
+  `~/.agents/skills/manager -> ~/Projects/manager/skills`.
 - `load.watch`: watch skill folders and refresh the skills snapshot (default: true).
 - `load.watchDebounceMs`: debounce for skill watcher events in milliseconds (default: 250).
 - `install.preferBrew`: prefer brew installers when available (default: true).

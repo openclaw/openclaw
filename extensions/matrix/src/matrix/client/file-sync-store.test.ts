@@ -52,10 +52,13 @@ function createSyncResponse(nextBatch: string): ISyncResponse {
 }
 
 function createDeferred() {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((resolvePromise) => {
     resolve = resolvePromise;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 

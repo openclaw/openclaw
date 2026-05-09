@@ -27,6 +27,8 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
 const DREAMING_TEST_DAY = "2026-04-05";
+const EMPTY_SESSION_CONTENT_HASH =
+  "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070";
 const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   plugins: {
     entries: {
@@ -981,7 +983,7 @@ describe("memory-core dreaming phases", () => {
       expect.objectContaining({
         lineCount: 0,
         lastContentLine: 0,
-        contentHash: expect.any(String),
+        contentHash: EMPTY_SESSION_CONTENT_HASH,
       }),
     ]);
   });
@@ -1094,7 +1096,7 @@ describe("memory-core dreaming phases", () => {
       expect.objectContaining({
         lineCount: 0,
         lastContentLine: 0,
-        contentHash: expect.any(String),
+        contentHash: EMPTY_SESSION_CONTENT_HASH,
       }),
     ]);
   });
@@ -1203,7 +1205,7 @@ describe("memory-core dreaming phases", () => {
       expect.objectContaining({
         lineCount: 0,
         lastContentLine: 0,
-        contentHash: expect.any(String),
+        contentHash: EMPTY_SESSION_CONTENT_HASH,
       }),
     ]);
   });
@@ -2764,7 +2766,7 @@ describe("previewRemHarness", () => {
       },
     });
 
-    expect(preview.groundedInputPaths).toEqual([]);
+    expect(preview.groundedInputPaths).toStrictEqual([]);
     expect(preview.grounded).toBeNull();
   });
 
@@ -2801,8 +2803,8 @@ describe("previewRemHarness", () => {
     });
 
     expect(preview.remSkipped).toBe(true);
-    expect(preview.rem.candidateTruths).toEqual([]);
-    expect(preview.rem.bodyLines).toEqual([]);
+    expect(preview.rem.candidateTruths).toStrictEqual([]);
+    expect(preview.rem.bodyLines).toStrictEqual([]);
     expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
   });
 });

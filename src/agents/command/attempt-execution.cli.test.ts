@@ -62,11 +62,7 @@ function makeCliResult(text: string): EmbeddedPiRunResult {
 }
 
 async function readSessionMessages(sessionFile: string) {
-  const raw = await fs.readFile(sessionFile, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as { type?: string; message?: unknown })
+  return (await readSessionFileJsonLines<{ type?: string; message?: unknown }>(sessionFile))
     .filter((entry) => entry.type === "message")
     .map(
       (entry) =>
@@ -75,20 +71,25 @@ async function readSessionMessages(sessionFile: string) {
 }
 
 async function readSessionFileEntries(sessionFile: string) {
+  return await readSessionFileJsonLines<{
+    type?: string;
+    id?: string;
+    parentId?: string | null;
+    cwd?: string;
+    message?: { role?: string };
+  }>(sessionFile);
+}
+
+async function readSessionFileJsonLines<T>(sessionFile: string): Promise<T[]> {
   const raw = await fs.readFile(sessionFile, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map(
-      (line) =>
-        JSON.parse(line) as {
-          type?: string;
-          id?: string;
-          parentId?: string | null;
-          cwd?: string;
-          message?: { role?: string };
-        },
-    );
+  const entries: T[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.length === 0) {
+      continue;
+    }
+    entries.push(JSON.parse(line) as T);
+  }
+  return entries;
 }
 
 describe("CLI attempt execution", () => {
@@ -509,8 +510,10 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
     const sessionFile = updatedFirst?.sessionFile;
-    if (!sessionFile) {
-      throw new Error("expected embedded gap-fill persistence to create a session file");
+    expect(typeof sessionFile).toBe("string");
+    expect(sessionFile?.length ?? 0).toBeGreaterThan(0);
+    if (typeof sessionFile !== "string" || sessionFile.length === 0) {
+      throw new Error("Expected CLI transcript session file.");
     }
 
     await appendSessionTranscriptMessage({

@@ -81,6 +81,16 @@ const mockState = vi.hoisted(() => ({
   deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
 }));
 
+function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
+  const entries: Array<Record<string, unknown>> = [];
+  for (const line of fs.readFileSync(transcriptPath, "utf-8").split("\n")) {
+    if (line.length > 0) {
+      entries.push(JSON.parse(line) as Record<string, unknown>);
+    }
+  }
+  return entries;
+}
+
 const bindingMocks = vi.hoisted(() => ({
   resolveByConversation: vi.fn((_ref: unknown) => null as { targetSessionKey?: string } | null),
 }));
@@ -781,18 +791,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     // Agent-run delivery is a live projection; Pi message_end owns persisted
     // assistant transcript entries, including stale media/text final payloads.
-    expect(assistantUpdates).toEqual([]);
-    const transcriptLines = fs
-      .readFileSync(mockState.transcriptPath, "utf-8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(assistantUpdates).toStrictEqual([]);
+    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
     const assistantEntries = transcriptLines.filter(
       (entry) =>
         (entry as { message?: { role?: string } }).message?.role === "assistant" ||
         (entry as { role?: string }).role === "assistant",
     );
-    expect(assistantEntries).toEqual([]);
+    expect(assistantEntries).toStrictEqual([]);
   });
 
   it("does not mirror normal agent-run final text from live delivery", async () => {
@@ -832,18 +838,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     // Normal agent-run final text must not be mirrored into JSONL by WebChat;
     // Pi persists the model-visible assistant turn from message_end.
-    expect(assistantUpdates).toEqual([]);
-    const transcriptLines = fs
-      .readFileSync(mockState.transcriptPath, "utf-8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(assistantUpdates).toStrictEqual([]);
+    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
     const assistantEntries = transcriptLines.filter(
       (entry) =>
         (entry as { message?: { role?: string } }).message?.role === "assistant" ||
         (entry as { role?: string }).role === "assistant",
     );
-    expect(assistantEntries).toEqual([]);
+    expect(assistantEntries).toStrictEqual([]);
   });
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
@@ -2000,7 +2002,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.GatewayClientScopes).toEqual([]);
+    expect(mockState.lastDispatchCtx?.GatewayClientScopes).toStrictEqual([]);
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("/scopecheck");
   });
 
@@ -2423,7 +2425,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           update.message !== null &&
           (update.message as { role?: unknown }).role === "user",
       );
-      expect(mockState.savedMediaCalls).toEqual([]);
+      expect(mockState.savedMediaCalls).toStrictEqual([]);
       expect(userUpdate).toMatchObject({
         message: {
           role: "user",
@@ -3359,7 +3361,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
-    expect(mockState.savedMediaCalls).toEqual([]);
+    expect(mockState.savedMediaCalls).toStrictEqual([]);
     expect(mockState.lastDispatchImages).toBeUndefined();
     expect(respond).toHaveBeenCalledWith(true, {
       ok: true,

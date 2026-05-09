@@ -158,7 +158,7 @@ describe("session-compaction-checkpoints", () => {
       expect(snapshot).toBeNull();
       expect(copyFileSyncSpy).not.toHaveBeenCalled();
       expect(MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES).toBeGreaterThan(64);
-      expect(fsSync.readdirSync(dir).filter((file) => file.includes(".checkpoint."))).toEqual([]);
+      expect(fsSync.readdirSync(dir).some((file) => file.includes(".checkpoint."))).toBe(false);
     } finally {
       copyFileSyncSpy.mockRestore();
     }

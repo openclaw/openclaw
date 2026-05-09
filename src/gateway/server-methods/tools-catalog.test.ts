@@ -95,7 +95,7 @@ describe("tools.catalog handler", () => {
       | undefined;
     expect(payload?.agentId).toBe("main");
     const groups = payload?.groups ?? [];
-    expect(groups.filter((group) => group.source === "plugin")).toEqual([]);
+    expect(groups.some((group) => group.source === "plugin")).toBe(false);
     const media = groups.find((group) => group.id === "media");
     expect(media?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:tts");
   });

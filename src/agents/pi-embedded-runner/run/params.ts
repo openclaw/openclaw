@@ -26,29 +26,7 @@ export type { ClientToolDefinition } from "../../command/shared-types.js";
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
 export type CurrentTurnPromptContext = {
-  reply?: {
-    body: string;
-    senderLabel?: string;
-    isQuote?: boolean;
-  };
-  replyChain?: Array<{
-    messageId?: string;
-    threadId?: string;
-    sender?: string;
-    senderId?: string;
-    senderUsername?: string;
-    timestamp?: number;
-    body?: string;
-    isQuote?: boolean;
-    mediaType?: string;
-    mediaPath?: string;
-    mediaRef?: string;
-    replyToId?: string;
-    forwardedFrom?: string;
-    forwardedFromId?: string;
-    forwardedFromUsername?: string;
-    forwardedDate?: number;
-  }>;
+  text: string;
 };
 
 export type RunEmbeddedPiAgentParams = {

@@ -15,17 +15,12 @@ describe("opencode-go provider plugin", () => {
       name: "OpenCode Go Provider",
     });
 
-    expect(mediaProviders).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "opencode-go",
-          capabilities: ["image"],
-          defaultModels: { image: "kimi-k2.6" },
-          describeImage: expect.any(Function),
-          describeImages: expect.any(Function),
-        }),
-      ]),
-    );
+    const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode-go");
+    expect(mediaProvider).toBeDefined();
+    expect(mediaProvider?.capabilities).toEqual(["image"]);
+    expect(mediaProvider?.defaultModels).toEqual({ image: "kimi-k2.6" });
+    expect(typeof mediaProvider?.describeImage).toBe("function");
+    expect(typeof mediaProvider?.describeImages).toBe("function");
   });
 
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
@@ -57,8 +52,6 @@ describe("opencode-go provider plugin", () => {
       "glm-5.1",
       "kimi-k2.5",
       "kimi-k2.6",
-      "mimo-v2-omni",
-      "mimo-v2-pro",
       "mimo-v2.5",
       "mimo-v2.5-pro",
       "minimax-m2.5",
@@ -103,7 +96,7 @@ describe("opencode-go provider plugin", () => {
       contextWindow: 204_800,
       maxTokens: 131_072,
     });
-    expect(models.get("mimo-v2-pro")).toMatchObject({
+    expect(models.get("mimo-v2.5-pro")).toMatchObject({
       api: "openai-completions",
       baseUrl: "https://opencode.ai/zen/go/v1",
       input: ["text"],
@@ -111,10 +104,10 @@ describe("opencode-go provider plugin", () => {
       contextWindow: 1_048_576,
       maxTokens: 128_000,
     });
-    expect(models.get("mimo-v2-omni")).toMatchObject({
+    expect(models.get("mimo-v2.5")).toMatchObject({
       input: ["text", "image"],
       reasoning: true,
-      contextWindow: 262_144,
+      contextWindow: 1_000_000,
       maxTokens: 128_000,
     });
     expect(

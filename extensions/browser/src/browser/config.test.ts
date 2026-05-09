@@ -601,7 +601,7 @@ describe("browser config", () => {
 
   it("defaults extraArgs to empty array when not provided", () => {
     const resolved = resolveBrowserConfig(undefined);
-    expect(resolved.extraArgs).toEqual([]);
+    expect(resolved.extraArgs).toStrictEqual([]);
   });
 
   it("passes through valid extraArgs strings", () => {
@@ -629,7 +629,7 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       extraArgs: "not-an-array" as unknown as string[],
     });
-    expect(resolved.extraArgs).toEqual([]);
+    expect(resolved.extraArgs).toStrictEqual([]);
   });
 
   it("resolves browser SSRF policy when configured", () => {
@@ -649,7 +649,7 @@ describe("browser config", () => {
 
   it("defaults browser SSRF policy to strict mode when unset", () => {
     const resolved = resolveBrowserConfig({});
-    expect(resolved.ssrfPolicy).toEqual({});
+    expect(resolved.ssrfPolicy).toStrictEqual({});
   });
 
   it("supports explicit strict mode by disabling private network access", () => {
@@ -692,7 +692,7 @@ describe("browser config", () => {
         },
       },
     });
-    expect(resolved.ssrfPolicy).toEqual({});
+    expect(resolved.ssrfPolicy).toStrictEqual({});
   });
 
   it("resolves existing-session profiles without cdpPort or cdpUrl", () => {

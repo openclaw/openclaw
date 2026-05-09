@@ -21,6 +21,14 @@ import type { TaskRecord } from "./task-registry.types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
+function requireFirstUpsertParams(upsertTaskWithDeliveryState: ReturnType<typeof vi.fn>): unknown {
+  const params = upsertTaskWithDeliveryState.mock.calls[0]?.[0];
+  if (!params) {
+    throw new Error("expected task upsert params");
+  }
+  return params;
+}
+
 function createStoredTask(): TaskRecord {
   return {
     taskId: "task-restored",
@@ -174,7 +182,7 @@ describe("task-registry store runtime", () => {
     expect(deleteTaskRecordById(created.taskId)).toBe(true);
 
     expect(upsertTaskWithDeliveryState).toHaveBeenCalled();
-    expect(upsertTaskWithDeliveryState.mock.calls[0]?.[0]).toMatchObject({
+    expect(requireFirstUpsertParams(upsertTaskWithDeliveryState)).toMatchObject({
       task: expect.objectContaining({
         taskId: created.taskId,
       }),

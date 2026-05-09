@@ -11,10 +11,10 @@ type HookRunner = NonNullable<ReturnType<HookRunnerGlobalModule["getGlobalHookRu
 function expectGlobalHookRunner(
   runner: ReturnType<HookRunnerGlobalModule["getGlobalHookRunner"]>,
 ): HookRunner {
-  expect(runner).toEqual(expect.objectContaining({ hasHooks: expect.any(Function) }));
   if (runner === null) {
     throw new Error("Expected global hook runner");
   }
+  expect(typeof runner.hasHooks).toBe("function");
   return runner;
 }
 

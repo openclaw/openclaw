@@ -12,7 +12,10 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
+import {
+  normalizeConfiguredProviderCatalogModelId,
+  normalizeStaticProviderModelId,
+} from "./model-ref-shared.js";
 import {
   type ModelRef,
   findNormalizedProviderValue,
@@ -123,7 +126,11 @@ export function inferUniqueProviderFromConfiguredModels(params: {
         if (!modelId) {
           continue;
         }
-        if (modelId === model || normalizeLowercaseStringOrEmpty(modelId) === normalized) {
+        const normalizedModelId = normalizeConfiguredProviderCatalogModelId(providerId, modelId);
+        if (
+          normalizedModelId === model ||
+          normalizeLowercaseStringOrEmpty(normalizedModelId) === normalized
+        ) {
           addProvider(providerId);
         }
       }
@@ -834,7 +841,8 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
       continue;
     }
     for (const model of provider.models) {
-      const id = normalizeOptionalString(model?.id) ?? "";
+      const rawId = normalizeOptionalString(model?.id) ?? "";
+      const id = rawId ? normalizeConfiguredProviderCatalogModelId(providerId, rawId) : "";
       if (!id) {
         continue;
       }

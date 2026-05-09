@@ -65,7 +65,9 @@ describe("agent harness registry", () => {
     const harness = makeHarness("custom");
     registerAgentHarness(harness, { ownerPluginId: "plugin-a" });
 
-    expect(getAgentHarness("custom")).toMatchObject({ id: "custom", pluginId: "plugin-a" });
+    const registeredHarness = getAgentHarness("custom");
+    expect(registeredHarness?.id).toBe("custom");
+    expect(registeredHarness?.pluginId).toBe("plugin-a");
     expect(getRegisteredAgentHarness("custom")?.ownerPluginId).toBe("plugin-a");
     expect(listAgentHarnessIds()).toEqual(["custom"]);
   });

@@ -18,6 +18,16 @@ type AuditFixture = {
 const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
 const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
 
+function countNonEmptyLines(value: string): number {
+  let count = 0;
+  for (const line of value.split("\n")) {
+    if (line.trim().length > 0) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
@@ -334,7 +344,7 @@ describe("secrets audit", () => {
     expect(report.summary.unresolvedRefCount).toBe(0);
 
     const callLog = await fs.readFile(execLogPath, "utf8");
-    const callCount = callLog.split("\n").filter((line) => line.trim().length > 0).length;
+    const callCount = countNonEmptyLines(callLog);
     expect(callCount).toBe(1);
   });
 
@@ -398,7 +408,7 @@ describe("secrets audit", () => {
     expect(report.summary.unresolvedRefCount).toBeGreaterThanOrEqual(2);
 
     const callLog = await fs.readFile(execLogPath, "utf8");
-    const callCount = callLog.split("\n").filter((line) => line.trim().length > 0).length;
+    const callCount = countNonEmptyLines(callLog);
     expect(callCount).toBe(1);
   });
 

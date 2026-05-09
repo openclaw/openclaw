@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -62,10 +61,14 @@ describe("json file helpers", () => {
 
       await expect(readDurableJsonFile(validPath)).resolves.toEqual({ ok: true });
       await expect(readDurableJsonFile(missingPath)).resolves.toBeNull();
-      await expect(readDurableJsonFile(invalidPath)).rejects.toMatchObject({
-        filePath: invalidPath,
-        reason: "parse",
-      } satisfies Partial<JsonFileReadError>);
+      let readError: unknown;
+      try {
+        await readDurableJsonFile(invalidPath);
+      } catch (error) {
+        readError = error;
+      }
+      expect((readError as JsonFileReadError | undefined)?.filePath).toBe(invalidPath);
+      expect((readError as JsonFileReadError | undefined)?.reason).toBe("parse");
     });
   });
 
@@ -149,7 +152,7 @@ describe("json file helpers", () => {
       name: "serializes async lock callers even across rejections",
       firstTask: async (events: string[]) => {
         events.push("first:start");
-        await sleep(20);
+        await Promise.resolve();
         events.push("first:end");
         throw new Error("boom");
       },
