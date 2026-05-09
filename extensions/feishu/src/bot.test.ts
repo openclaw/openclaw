@@ -1087,6 +1087,7 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         ChatType: "group",
         CommandAuthorized: false,
+        GroupId: "oc-group",
         SenderId: "ou-attacker",
       }),
     );
@@ -1171,6 +1172,7 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         ChatType: "group",
         CommandAuthorized: true,
+        CommandSource: "text",
         SenderId: "ou-admin",
       }),
     );
