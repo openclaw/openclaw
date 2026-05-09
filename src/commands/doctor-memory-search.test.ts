@@ -17,9 +17,7 @@ type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
 const checkQmdBinaryAvailability = vi.hoisted(() =>
   vi.fn<CheckQmdBinaryAvailability>(async () => ({ available: true })),
 );
-const auditDreamingArtifacts = vi.hoisted(() => vi.fn());
 const auditShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
-const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
 const repairShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
 const noteWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
 const maybeRepairWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
@@ -58,9 +56,7 @@ vi.mock("../memory-host-sdk/engine-qmd.js", () => ({
 }));
 
 vi.mock("../plugin-sdk/memory-core-engine-runtime.js", () => ({
-  auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
-  repairDreamingArtifacts,
   repairShortTermPromotionArtifacts,
   getBuiltinMemoryEmbeddingProviderDoctorMetadata: vi.fn((provider: string) => {
     if (provider === "gemini") {
@@ -109,22 +105,6 @@ function resetMemoryRecallMocks() {
     conceptTaggedEntryCount: 1,
     invalidEntryCount: 0,
     issues: [],
-  });
-  auditDreamingArtifacts.mockReset();
-  auditDreamingArtifacts.mockResolvedValue({
-    sessionCorpusDir: "/tmp/agent-default/workspace/memory/.dreams/session-corpus",
-    sessionCorpusFileCount: 0,
-    suspiciousSessionCorpusFileCount: 0,
-    suspiciousSessionCorpusLineCount: 0,
-    issues: [],
-  });
-  repairDreamingArtifacts.mockReset();
-  repairDreamingArtifacts.mockResolvedValue({
-    changed: false,
-    archivedDreamsDiary: false,
-    archivedSessionCorpus: false,
-    archivedPaths: [],
-    warnings: [],
   });
   repairShortTermPromotionArtifacts.mockReset();
   repairShortTermPromotionArtifacts.mockResolvedValue({
@@ -799,44 +779,6 @@ describe("memory recall doctor integration", () => {
     const message = firstNoteMessage();
     expect(message).toContain("Memory recall artifacts repaired:");
     expect(message).toContain("rewrote recall store");
-  });
-
-  it("runs dreaming artifact repair during doctor --fix", async () => {
-    auditDreamingArtifacts.mockResolvedValueOnce({
-      sessionCorpusDir: "/tmp/agent-default/workspace/memory/.dreams/session-corpus",
-      sessionCorpusFileCount: 2,
-      suspiciousSessionCorpusFileCount: 1,
-      suspiciousSessionCorpusLineCount: 3,
-      issues: [
-        {
-          severity: "warn",
-          code: "dreaming-session-corpus-self-ingested",
-          message:
-            "Dreaming session corpus appears to contain self-ingested narrative content (3 suspicious lines).",
-          fixable: true,
-        },
-      ],
-    });
-    repairDreamingArtifacts.mockResolvedValueOnce({
-      changed: true,
-      archiveDir: "/tmp/agent-default/workspace/.openclaw-repair/dreaming/2026-04-11T21-35-00-000Z",
-      archivedDreamsDiary: false,
-      archivedSessionCorpus: true,
-      archivedPaths: [],
-      warnings: [],
-    });
-    const prompter = createPrompter();
-
-    await maybeRepairMemoryRecallHealth({ cfg, prompter });
-
-    expect(maybeRepairWorkspaceMemoryHealth).toHaveBeenCalledWith({ cfg, prompter });
-    expect(prompter.confirmRuntimeRepair).toHaveBeenCalled();
-    expect(repairDreamingArtifacts).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/agent-default/workspace",
-    });
-    const message = String(note.mock.calls.at(-1)?.[0] ?? "");
-    expect(message).toContain("Dreaming artifacts repaired:");
-    expect(message).toContain("archived session corpus");
   });
 });
 
