@@ -58,11 +58,7 @@ import { resolveConversationBindingContextFromMessage } from "./conversation-bin
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
-import {
-  maybeRetireLegacyMainDeliveryRoute,
-  resolveLastChannelRaw,
-  resolveLastToRaw,
-} from "./session-delivery.js";
+import { resolveLastChannelRaw, resolveLastToRaw } from "./session-delivery.js";
 import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
@@ -379,18 +375,6 @@ export async function initSessionState(params: {
     agentId,
     sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey),
   });
-  const retiredLegacyMainDelivery = maybeRetireLegacyMainDeliveryRoute({
-    sessionCfg,
-    sessionKey,
-    sessionStore,
-    agentId,
-    mainKey,
-    isGroup,
-    ctx,
-  });
-  if (retiredLegacyMainDelivery) {
-    sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
-  }
   const entry = sessionStore[sessionKey];
   const now = Date.now();
   const isThread = resolveThreadFlag({
@@ -775,13 +759,6 @@ export async function initSessionState(params: {
       ...sessionEntry,
     },
   });
-  if (retiredLegacyMainDelivery) {
-    upsertSessionEntry({
-      agentId,
-      sessionKey: retiredLegacyMainDelivery.key,
-      entry: retiredLegacyMainDelivery.entry,
-    });
-  }
 
   // Resolve the previous transcript before rotating session metadata.
   let previousSessionTranscript: {
