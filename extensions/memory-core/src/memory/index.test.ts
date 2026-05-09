@@ -337,21 +337,13 @@ describe("memory index", () => {
     sessionId: string;
     events: unknown[];
     now?: number;
-  }): string {
-    const transcriptPath = path.join(
-      workspaceDir,
-      ".state",
-      "transcript-fixtures",
-      "main",
-      `${params.sessionId}.jsonl`,
-    );
+  }): void {
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: params.sessionId,
       events: params.events,
       now: () => params.now ?? Date.now(),
     });
-    return transcriptPath;
   }
 
   it("indexes memory files and searches", async () => {
