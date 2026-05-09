@@ -273,19 +273,13 @@ export function isValidOcPath(input: unknown): input is string {
 }
 
 /**
- * Positional tokens resolve to one concrete index/key based on
- * container size at lookup time. Unlike `*`/`**`, they pick exactly
- * one element so they don't trigger the wildcard guard.
- *
- *   `$first` — index 0 / first-declared key
- *   `$last`  — last index / last-declared key
- *   `-N`     — Nth from end (indexable only); `-1` = last
+ * Positional token: `$last` resolves to the last index / last-declared
+ * key. Picks exactly one element, so it doesn't trigger wildcard guards.
  */
-export const POS_FIRST = "$first";
 export const POS_LAST = "$last";
 
 export function isPositionalSeg(seg: string): boolean {
-  return seg === POS_FIRST || seg === POS_LAST || /^-\d+$/.test(seg);
+  return seg === POS_LAST;
 }
 
 /**
@@ -309,28 +303,11 @@ export interface PositionalContainer {
   readonly keys?: readonly string[];
 }
 
-/** Resolve `$first`/`$last`/`-N` against a container; null when out of range. */
+// Resolve `$last` against a container; null when empty.
 export function resolvePositionalSeg(seg: string, container: PositionalContainer): string | null {
-  if (seg === POS_FIRST) {
-    if (container.size === 0) return null;
-    if (!container.indexable) return container.keys?.[0] ?? null;
-    return "0";
-  }
-  if (seg === POS_LAST) {
-    if (container.size === 0) return null;
-    if (!container.indexable) return container.keys?.[container.keys.length - 1] ?? null;
-    return String(container.size - 1);
-  }
-  if (/^-\d+$/.test(seg)) {
-    if (!container.indexable) return null;
-    // Guard against absurd magnitudes — `-9999999999` would coerce
-    // through Number into a big negative that wraps to a positive index.
-    const raw = Number(seg);
-    if (!Number.isInteger(raw) || Math.abs(raw) > 1e9) return null;
-    const n = container.size + raw;
-    return n >= 0 && n < container.size ? String(n) : null;
-  }
-  return null;
+  if (seg !== POS_LAST || container.size === 0) return null;
+  if (!container.indexable) return container.keys?.[container.keys.length - 1] ?? null;
+  return String(container.size - 1);
 }
 
 /**
@@ -378,13 +355,12 @@ export function parseUnionSeg(seg: string): readonly string[] | null {
 }
 
 /**
- * Value predicate `[key<op>value]` filters by sibling-field comparison.
- * Operators: `=` `!=` `*=` `^=` `$=` (string), `<` `<=` `>` `>=` (numeric).
- * Multi-char operators are tried before single-char so `<=` beats `<`.
+ * Value predicate `[key<op>value]`. Operators: `=` `!=` (string),
+ * `<` `<=` `>` `>=` (numeric). Multi-char tried before single-char.
  */
-export type PredicateOp = "=" | "!=" | "*=" | "^=" | "$=" | "<" | "<=" | ">" | ">=";
+export type PredicateOp = "=" | "!=" | "<" | "<=" | ">" | ">=";
 
-const PREDICATE_OPS: readonly PredicateOp[] = ["!=", "*=", "^=", "$=", "<=", ">=", "<", ">", "="];
+const PREDICATE_OPS: readonly PredicateOp[] = ["!=", "<=", ">=", "<", ">", "="];
 
 export function isPredicateSeg(seg: string): boolean {
   if (seg.length < 4 || !seg.startsWith("[") || !seg.endsWith("]")) return false;
@@ -413,11 +389,7 @@ export function parsePredicateSeg(seg: string): PredicateSpec | null {
   return null;
 }
 
-/**
- * Evaluate a predicate against a string-coerced leaf value. Numeric
- * operators require both sides to coerce to finite numbers via
- * `Number()`. Returns false for null (non-leaf children).
- */
+// Numeric ops require both sides to coerce to finite numbers.
 export function evaluatePredicate(actual: string | null, pred: PredicateSpec): boolean {
   if (actual === null) return false;
   switch (pred.op) {
@@ -425,35 +397,19 @@ export function evaluatePredicate(actual: string | null, pred: PredicateSpec): b
       return actual === pred.value;
     case "!=":
       return actual !== pred.value;
-    case "*=":
-      return actual.includes(pred.value);
-    case "^=":
-      return actual.startsWith(pred.value);
-    case "$=":
-      return actual.endsWith(pred.value);
     case "<":
     case "<=":
     case ">":
     case ">=": {
       const a = Number(actual);
       const b = Number(pred.value);
-      if (!Number.isFinite(a) || !Number.isFinite(b)) {
-        return false;
-      }
-      switch (pred.op) {
-        case "<":
-          return a < b;
-        case "<=":
-          return a <= b;
-        case ">":
-          return a > b;
-        case ">=":
-          return a >= b;
-      }
-      return false;
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+      if (pred.op === "<") return a < b;
+      if (pred.op === "<=") return a <= b;
+      if (pred.op === ">") return a > b;
+      return a >= b;
     }
   }
-  return false;
 }
 
 /**
@@ -519,12 +475,9 @@ function extractSession(queryPart: string): string | undefined {
   return undefined;
 }
 
-/**
- * Walk `s` respecting `[...]`/`{...}`/`"..."` regions. Calls `onChar`
- * for every character with `atTop` indicating depth-0 status.
- * `onChar` returns `"stop"` to short-circuit. On unbalanced
- * brackets/braces/quotes, calls `onUnbalanced` (which must throw).
- */
+// Walk `s` respecting `[...]`/`{...}`/`"..."` regions. Quoted regions
+// are byte-literal. `onChar` returns "stop" to short-circuit;
+// `onUnbalanced` (must throw) fires on bracket/brace/quote imbalance.
 type ScanCallback = (c: string, i: number, atTop: boolean) => "stop" | void;
 function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => never): void {
   let depthBracket = 0;
@@ -533,13 +486,6 @@ function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => n
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (inQuote) {
-      // `\\` / `\"` consume the next char.
-      if (c === "\\" && i + 1 < s.length) {
-        if (onChar(c, i, false) === "stop") return;
-        if (onChar(s[i + 1], i + 1, false) === "stop") return;
-        i++;
-        continue;
-      }
       if (c === '"') inQuote = false;
       if (onChar(c, i, false) === "stop") return;
       continue;
@@ -610,33 +556,22 @@ export function isQuotedSeg(seg: string): boolean {
   return seg.length >= 2 && seg.startsWith('"') && seg.endsWith('"');
 }
 
-/** Strip surrounding quotes and unescape `\\`/`\"`. No-op on bare segments. */
+/** Strip surrounding quotes. Content is byte-literal. */
 export function unquoteSeg(seg: string): string {
-  if (!isQuotedSeg(seg)) return seg;
-  const inner = seg.slice(1, -1);
-  let out = "";
-  for (let i = 0; i < inner.length; i++) {
-    const c = inner[i];
-    if (c === "\\" && i + 1 < inner.length) {
-      const next = inner[i + 1];
-      if (next === "\\" || next === '"') {
-        out += next;
-        i++;
-        continue;
-      }
-    }
-    out += c;
-  }
-  return out;
+  return isQuotedSeg(seg) ? seg.slice(1, -1) : seg;
 }
 
-/** Quote a literal for path inclusion if it contains any grammar character. */
+// Refuses values with `"` or `\` — no escape mechanism.
 export function quoteSeg(value: string): string {
   if (value.length === 0) return '""';
-  const needsQuote = /[/.[\]{}?&%"\s]/.test(value);
-  if (!needsQuote) return value;
-  const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return `"${escaped}"`;
+  if (value.includes('"') || value.includes("\\")) {
+    fail(
+      `Cannot quote value containing '"' or '\\\\': ${printable(value)}`,
+      value,
+      "OC_PATH_UNQUOTABLE",
+    );
+  }
+  return /[/.[\]{}?&%\s]/.test(value) ? `"${value}"` : value;
 }
 
 // Defense-in-depth — the splitter validates segments it splits; this
@@ -670,8 +605,18 @@ function validateSubSegment(sub: string, input: string): void {
       "OC_PATH_CONTROL_CHAR",
     );
   }
-  // Quoting opts out of identifier-shape rules — content is verbatim.
-  if (isQuotedSeg(sub)) return;
+  // Quoted content is byte-literal but can't contain `"` or `\`.
+  if (isQuotedSeg(sub)) {
+    const inner = sub.slice(1, -1);
+    if (inner.includes('"') || inner.includes("\\")) {
+      fail(
+        `Quoted segment cannot contain '"' or '\\\\': ${printable(sub)}`,
+        input,
+        "OC_PATH_UNQUOTABLE",
+      );
+    }
+    return;
+  }
 
   // Reserved characters used by the path grammar itself (`?`/`&`/`%`).
   // Allowed inside predicate / union segments — those are content.
@@ -711,7 +656,7 @@ function validateSubSegment(sub: string, input: string): void {
         "OC_PATH_MALFORMED_PREDICATE",
       );
     }
-    const hasOp = ["!=", "*=", "^=", "$=", "<=", ">=", "<", ">", "="].some((op) =>
+    const hasOp = ["!=", "<=", ">=", "<", ">", "="].some((op) =>
       inner.includes(op),
     );
     if (hasOp) {

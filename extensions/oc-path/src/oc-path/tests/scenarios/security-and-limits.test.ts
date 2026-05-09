@@ -48,15 +48,12 @@ describe("file-slot containment", () => {
     expect(() => parseOcPath('oc://"C:/Windows/System32/foo"/section')).toThrow(
       /Absolute file slot/,
     );
-    expect(() => parseOcPath('oc://"C:\\\\Windows\\\\System32"/section')).toThrow(
-      /Absolute file slot/,
-    );
+    // `\` inside quoted segments is rejected outright (no escape support).
+    expect(() => parseOcPath('oc://"C:\\\\Windows\\\\System32"/section')).toThrow(OcPathError);
   });
 
   it("rejects leading-backslash UNC path", () => {
-    expect(() => parseOcPath('oc://"\\\\srv\\\\share\\\\foo"/section')).toThrow(
-      /Absolute file slot/,
-    );
+    expect(() => parseOcPath('oc://"\\\\srv\\\\share\\\\foo"/section')).toThrow(OcPathError);
   });
 
   it("rejects parent-directory escapes", () => {
@@ -149,21 +146,10 @@ describe("numeric segments dispatch by node kind", () => {
     expect(m?.kind).toBe("leaf");
   });
 
-  it("`-1` still works as positional on arrays", () => {
-    const ast = parseJsonc('{"items":[10,20,30]}').ast;
-    const m = resolveOcPath(ast, parseOcPath("oc://X/items/-1"));
-    expect(m?.kind === "leaf" && m.valueText).toBe("30");
-  });
-
   it("`$last` literal key on an object is shadowed by the positional sentinel", () => {
     const ast = parseJsonc('{"$last":"literal-value","foo":"bar"}').ast;
     const m = resolveOcPath(ast, parseOcPath("oc://X/$last"));
     expect(m?.kind === "leaf" && m.valueText).toBe("bar");
-  });
-
-  it("out-of-range negative index returns null, not crash", () => {
-    const ast = parseJsonc('{"x":[1,2,3]}').ast;
-    expect(resolveOcPath(ast, parseOcPath("oc://X/x/-9999999999"))).toBeNull();
   });
 });
 

@@ -18,7 +18,6 @@
 import type { JsoncEntry, JsoncValue } from "../jsonc/ast.js";
 import type { OcPath } from "../oc-path.js";
 import {
-  POS_FIRST,
   POS_LAST,
   isPositionalSeg,
   isQuotedSeg,
@@ -138,22 +137,6 @@ function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
       }
     }
     return null;
-  }
-  if (addr === POS_FIRST) {
-    for (const l of ast.lines) {
-      if (l.kind === "value") {
-        return l;
-      }
-    }
-    return null;
-  }
-  // Negative line address: `-N` selects the Nth-from-last value line.
-  if (/^-\d+$/.test(addr)) {
-    const valueLines = ast.lines.filter(
-      (l): l is Extract<JsonlLine, { kind: "value" }> => l.kind === "value",
-    );
-    const n = valueLines.length + Number(addr);
-    return n >= 0 && n < valueLines.length ? valueLines[n] : null;
   }
   const m = /^L(\d+)$/.exec(addr);
   if (m === null || m[1] === undefined) {

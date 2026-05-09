@@ -85,23 +85,7 @@ describe("setJsoncOcPath — value replacement", () => {
   });
 });
 
-describe("setJsoncOcPath — positional tokens (round-11 resolve↔edit symmetry)", () => {
-  // ClawSweeper round-11 P2 — `$first` / `$last` / `-N` resolved on
-  // the read path but not on the edit path. Pin the new behavior:
-  // editing through a positional address must reach the same child
-  // that `resolveJsoncOcPath` would have returned.
-  it("edits the first array element via $first", () => {
-    const { ast } = parseJsonc('{ "items": [10, 20, 30] }');
-    const r = setJsoncOcPath(ast, parseOcPath("oc://config.jsonc/items/$first"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({ items: [99, 20, 30] });
-    }
-  });
-
+describe("setJsoncOcPath — $last positional", () => {
   it("edits the last array element via $last", () => {
     const { ast } = parseJsonc('{ "items": [10, 20, 30] }');
     const r = setJsoncOcPath(ast, parseOcPath("oc://config.jsonc/items/$last"), {
@@ -114,33 +98,9 @@ describe("setJsoncOcPath — positional tokens (round-11 resolve↔edit symmetry
     }
   });
 
-  it("edits the second-to-last array element via -2", () => {
-    const { ast } = parseJsonc('{ "items": [10, 20, 30] }');
-    const r = setJsoncOcPath(ast, parseOcPath("oc://config.jsonc/items/-2"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({ items: [10, 99, 30] });
-    }
-  });
-
-  it("edits the first object entry value via $first", () => {
-    const { ast } = parseJsonc('{ "a": 1, "b": 2, "c": 3 }');
-    const r = setJsoncOcPath(ast, parseOcPath("oc://config.jsonc/$first"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({ a: 99, b: 2, c: 3 });
-    }
-  });
-
-  it("reports unresolved for $first against an empty array", () => {
+  it("reports unresolved for $last against an empty array", () => {
     const { ast } = parseJsonc('{ "items": [] }');
-    const r = setJsoncOcPath(ast, parseOcPath("oc://config.jsonc/items/$first"), {
+    const r = setJsoncOcPath(ast, parseOcPath("oc://config.jsonc/items/$last"), {
       kind: "number",
       value: 99,
     });

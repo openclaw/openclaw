@@ -451,4 +451,11 @@ export function registerPathCli(program: Command): void {
   ).action(async (fileArg: string, opts: PathCommandOptions) => {
     await pathEmitCommand(fileArg, opts, defaultRuntime);
   });
+
+  // Bare `openclaw path` prints help and exits 0 (matches the core
+  // applyParentDefaultHelpAction contract — see openclaw#73077).
+  path.action(() => {
+    path.outputHelp();
+    process.exitCode = 0;
+  });
 }

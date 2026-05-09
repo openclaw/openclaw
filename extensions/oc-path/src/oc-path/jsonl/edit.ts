@@ -144,28 +144,12 @@ function replaceAt(
   return null;
 }
 
-// Mirrors the line-address grammar in resolveJsonlOcPath / find.ts.
-// `-N` walks value lines only so blank/malformed lines don't shift.
 function pickLineIndex(ast: JsonlAst, addr: string): number {
-  const valueIndices = (): number[] => {
-    const out: number[] = [];
-    for (let i = 0; i < ast.lines.length; i++) {
-      if (ast.lines[i]?.kind === "value") out.push(i);
-    }
-    return out;
-  };
   if (addr === "$last") {
-    const v = valueIndices();
-    return v[v.length - 1] ?? -1;
-  }
-  if (addr === "$first") {
-    const v = valueIndices();
-    return v[0] ?? -1;
-  }
-  if (/^-\d+$/.test(addr)) {
-    const v = valueIndices();
-    const n = v.length + Number(addr);
-    return n >= 0 && n < v.length ? (v[n] ?? -1) : -1;
+    for (let i = ast.lines.length - 1; i >= 0; i--) {
+      if (ast.lines[i]?.kind === "value") return i;
+    }
+    return -1;
   }
   const m = /^L(\d+)$/.exec(addr);
   if (m === null || m[1] === undefined) return -1;
