@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-policy.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
@@ -456,18 +455,12 @@ async function prepareContextEngineSubagentSpawn(params: {
       childSessionKey: params.childSessionKey,
       contextMode: params.context.mode,
       parentSessionId,
-      parentTranscriptLocator: parentSessionId
-        ? createSqliteSessionTranscriptLocator({
-            agentId: parentAgentId,
-            sessionId: parentSessionId,
-          })
+      parentTranscriptScope: parentSessionId
+        ? { agentId: parentAgentId, sessionId: parentSessionId }
         : undefined,
       childSessionId,
-      childTranscriptLocator: childSessionId
-        ? createSqliteSessionTranscriptLocator({
-            agentId: childAgentId,
-            sessionId: childSessionId,
-          })
+      childTranscriptScope: childSessionId
+        ? { agentId: childAgentId, sessionId: childSessionId }
         : undefined,
       ttlMs: params.runTimeoutSeconds > 0 ? params.runTimeoutSeconds * 1000 : undefined,
     });
