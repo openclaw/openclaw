@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -16,8 +15,8 @@ import { assertLocalMediaAllowed } from "../media/local-media-access.js";
 import { isPassThroughRemoteMediaSource } from "../media/media-source-url.js";
 import {
   deleteMediaBuffer,
-  getMediaMaterializationDir,
   MEDIA_MAX_BYTES,
+  readMediaBuffer,
   saveMediaBuffer,
   saveMediaSource,
 } from "../media/store.js";
@@ -69,7 +68,8 @@ type ManagedImageAttachmentLimitsConfig = Partial<
 >;
 
 export type ManagedImageRecordVariant = {
-  path: string;
+  mediaId: string;
+  mediaSubdir: string;
   contentType: string;
   width: number | null;
   height: number | null;
@@ -281,20 +281,8 @@ function managedImageRecordDbOptions(stateDir: string): OpenClawStateDatabaseOpt
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
-function managedOutgoingOriginalIdFromPath(filePath: string): string | undefined {
-  const root = path.resolve(
-    getMediaMaterializationDir(),
-    ...MANAGED_OUTGOING_ORIGINALS_SUBDIR.split("/"),
-  );
-  const resolved = path.resolve(filePath);
-  const relative = path.relative(root, resolved);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
-  }
-  if (relative.includes(path.sep)) {
-    return undefined;
-  }
-  return relative;
+function normalizeManagedOutgoingOriginalSubdir(value: string | undefined): string {
+  return value === MANAGED_OUTGOING_ORIGINALS_SUBDIR ? value : MANAGED_OUTGOING_ORIGINALS_SUBDIR;
 }
 
 function buildOutgoingVariantUrl(sessionKey: string, attachmentId: string, variant: "full") {
@@ -379,24 +367,17 @@ async function getVariantStats(filePath: string) {
   };
 }
 
-async function deleteManagedImageOriginal(filePath: string): Promise<number> {
-  let deleted = 0;
-  const id = managedOutgoingOriginalIdFromPath(filePath);
-  if (id) {
-    try {
-      await deleteMediaBuffer(id, MANAGED_OUTGOING_ORIGINALS_SUBDIR);
-      deleted = 1;
-    } catch {
-      // Older records may point at a non-media-store file; fall back below.
-    }
-  }
-  try {
-    await fs.rm(filePath, { force: true });
-    deleted = 1;
-  } catch {
-    // Ignore cleanup races or already-missing files.
-  }
-  return deleted;
+async function readManagedImageOriginalBuffer(record: ManagedImageRecord): Promise<Buffer> {
+  const subdir = normalizeManagedOutgoingOriginalSubdir(record.original.mediaSubdir);
+  return (await readMediaBuffer(record.original.mediaId, subdir)).buffer;
+}
+
+async function deleteManagedImageOriginal(original: ManagedImageRecordVariant): Promise<number> {
+  await deleteMediaBuffer(
+    original.mediaId,
+    normalizeManagedOutgoingOriginalSubdir(original.mediaSubdir),
+  );
+  return 1;
 }
 
 export async function writeManagedImageRecord(
@@ -415,14 +396,7 @@ async function deleteManagedImageRecordArtifacts(
   record: ManagedImageRecord,
   stateDir = resolveStateDir(),
 ) {
-  const files = new Set<string>();
-  if (record.original?.path) {
-    files.add(record.original.path);
-  }
-  let deletedFileCount = 0;
-  for (const filePath of files) {
-    deletedFileCount += await deleteManagedImageOriginal(filePath);
-  }
+  const deletedFileCount = await deleteManagedImageOriginal(record.original);
   deleteOpenClawStateKvJson(
     MANAGED_OUTGOING_IMAGE_RECORD_SCOPE,
     record.attachmentId,
@@ -788,7 +762,7 @@ export async function createManagedOutgoingImageBlocks(params: {
       continue;
     }
 
-    let savedOriginalPath: string | null = null;
+    let savedOriginalForCleanup: ManagedImageRecordVariant | null = null;
     try {
       let resizeWarning: ManagedImageBlock | null = null;
       if (parsedDataUrl.kind === "image-data-url") {
@@ -815,11 +789,19 @@ export async function createManagedOutgoingImageBlocks(params: {
                 Math.max(limits.maxBytes, MEDIA_MAX_BYTES),
               );
             })();
-      savedOriginalPath = savedOriginal.path;
       let savedOriginalContentType = savedOriginal.contentType;
+      savedOriginalForCleanup = {
+        mediaId: savedOriginal.id,
+        mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+        contentType: savedOriginalContentType ?? "application/octet-stream",
+        width: null,
+        height: null,
+        sizeBytes: savedOriginal.size,
+        filename: toRecordFilename(savedOriginal.path),
+      };
       if (!savedOriginalContentType?.startsWith("image/")) {
-        await deleteManagedImageOriginal(savedOriginal.path);
-        savedOriginalPath = null;
+        await deleteManagedImageOriginal(savedOriginalForCleanup);
+        savedOriginalForCleanup = null;
         continue;
       }
       if (savedOriginal.size > limits.maxBytes) {
@@ -868,10 +850,26 @@ export async function createManagedOutgoingImageBlocks(params: {
           limits.maxBytes,
           toRecordFilename(savedOriginal.path) ?? `generated-image-${index + 1}`,
         );
-        await deleteManagedImageOriginal(savedOriginal.path);
+        await deleteManagedImageOriginal({
+          mediaId: savedOriginal.id,
+          mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+          contentType: savedOriginalContentType,
+          width: originalStats.width,
+          height: originalStats.height,
+          sizeBytes: originalStats.sizeBytes,
+          filename: toRecordFilename(savedOriginal.path),
+        });
         savedOriginal = replacement;
         savedOriginalContentType = replacement.contentType ?? resized.contentType;
-        savedOriginalPath = savedOriginal.path;
+        savedOriginalForCleanup = {
+          mediaId: savedOriginal.id,
+          mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+          contentType: savedOriginalContentType,
+          width: null,
+          height: null,
+          sizeBytes: savedOriginal.size,
+          filename: toRecordFilename(savedOriginal.path),
+        };
         originalBuffer = resized.buffer;
         originalStats = await getVariantStats(savedOriginal.path);
         effectiveMetadata =
@@ -898,7 +896,8 @@ export async function createManagedOutgoingImageBlocks(params: {
         retentionClass: params.messageId ? "history" : "transient",
         alt,
         original: {
-          path: savedOriginal.path,
+          mediaId: savedOriginal.id,
+          mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
           contentType: savedOriginalContentType,
           width: originalStats.width,
           height: originalStats.height,
@@ -907,13 +906,14 @@ export async function createManagedOutgoingImageBlocks(params: {
         },
       };
       await writeManagedImageRecord(record, stateDir);
+      savedOriginalForCleanup = null;
       blocks.push(buildManagedImageBlock(record));
       if (resizeWarning) {
         blocks.push(resizeWarning);
       }
     } catch (error) {
-      if (savedOriginalPath) {
-        await deleteManagedImageOriginal(savedOriginalPath);
+      if (savedOriginalForCleanup) {
+        await deleteManagedImageOriginal(savedOriginalForCleanup);
       }
       const sanitizedError = getSanitizedManagedImageAttachmentError(error, alt);
       if (params.continueOnPrepareError) {
@@ -1022,7 +1022,7 @@ export async function handleManagedOutgoingImageHttpRequest(
 
   let body: Buffer;
   try {
-    body = (await readLocalFileSafely({ filePath: record.original.path })).buffer;
+    body = await readManagedImageOriginalBuffer(record);
   } catch {
     sendStatus(res, 404, "not found");
     return true;

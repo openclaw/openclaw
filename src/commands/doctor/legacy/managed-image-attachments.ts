@@ -6,9 +6,66 @@ import {
   writeManagedImageRecord,
 } from "../../../gateway/managed-image-attachments.js";
 import { tryReadJson } from "../../../infra/json-files.js";
+import { saveMediaBufferWithId } from "../../../media/store.js";
 
 function resolveLegacyOutgoingRecordsDir(stateDir = resolveStateDir()): string {
   return path.join(stateDir, "media", "outgoing", "records");
+}
+
+type LegacyManagedImageRecord = Omit<ManagedImageRecord, "original"> & {
+  original?: Partial<ManagedImageRecord["original"]> & {
+    path?: string;
+  };
+};
+
+function legacyManagedOriginalMediaId(record: LegacyManagedImageRecord): string {
+  const filename = record.original?.filename ?? record.original?.path ?? "";
+  const ext = path.extname(filename).toLowerCase();
+  return /^[.][a-z0-9]{1,16}$/u.test(ext) ? `${record.attachmentId}${ext}` : record.attachmentId;
+}
+
+async function importLegacyManagedImageRecord(
+  record: LegacyManagedImageRecord,
+  stateDir: string,
+): Promise<boolean> {
+  if (!record.attachmentId || !record.original) {
+    return false;
+  }
+  if (record.original.mediaId && record.original.mediaSubdir) {
+    await writeManagedImageRecord(record as ManagedImageRecord, stateDir);
+    return true;
+  }
+  if (!record.original.path) {
+    return false;
+  }
+  const buffer = await fs.readFile(record.original.path).catch(() => null);
+  if (!buffer) {
+    return false;
+  }
+  const mediaId = legacyManagedOriginalMediaId(record);
+  await saveMediaBufferWithId({
+    subdir: "outgoing/originals",
+    id: mediaId,
+    buffer,
+    contentType: record.original.contentType ?? "application/octet-stream",
+  });
+  await writeManagedImageRecord(
+    {
+      ...record,
+      original: {
+        mediaId,
+        mediaSubdir: "outgoing/originals",
+        contentType: record.original.contentType ?? "application/octet-stream",
+        width: record.original.width ?? null,
+        height: record.original.height ?? null,
+        sizeBytes: record.original.sizeBytes ?? buffer.byteLength,
+        filename: record.original.filename ?? path.basename(record.original.path),
+      },
+    },
+    stateDir,
+  );
+  await fs.rm(record.original.path, { force: true }).catch(() => {});
+  return true;
 }
 
 async function listLegacyManagedImageRecordPaths(stateDir: string): Promise<string[]> {
@@ -41,9 +98,8 @@ export async function importLegacyManagedOutgoingImageRecordFilesToSqlite(
   const recordPaths = await listLegacyManagedImageRecordPaths(stateDir);
   let records = 0;
   for (const recordPath of recordPaths) {
-    const record = await tryReadJson<ManagedImageRecord>(recordPath);
-    if (record?.attachmentId) {
-      await writeManagedImageRecord(record, stateDir);
+    const record = await tryReadJson<LegacyManagedImageRecord>(recordPath);
+    if (record && (await importLegacyManagedImageRecord(record, stateDir))) {
       records += 1;
     }
     await fs.rm(recordPath, { force: true }).catch(() => {});

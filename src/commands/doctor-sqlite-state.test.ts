@@ -255,7 +255,16 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           "utf8",
         );
         const mediaRecordsDir = path.join(stateDir, "media", "outgoing", "records");
+        const legacyManagedOriginalPath = path.join(
+          stateDir,
+          "media",
+          "outgoing",
+          "originals",
+          "legacy-image.png",
+        );
         await fs.mkdir(mediaRecordsDir, { recursive: true });
+        await fs.mkdir(path.dirname(legacyManagedOriginalPath), { recursive: true });
+        await fs.writeFile(legacyManagedOriginalPath, "legacy image bytes", "utf8");
         await fs.writeFile(
           path.join(mediaRecordsDir, "11111111-1111-4111-8111-111111111111.json"),
           `${JSON.stringify({
@@ -265,7 +274,7 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
             createdAt: "2026-01-17T10:00:00.000Z",
             alt: "legacy image",
             original: {
-              path: "/tmp/legacy-image.png",
+              path: legacyManagedOriginalPath,
               contentType: "image/png",
               width: 1,
               height: 1,
@@ -495,7 +504,18 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         ).toMatchObject({
           sessionKey: "agent:main:main",
           alt: "legacy image",
+          original: {
+            mediaId: "11111111-1111-4111-8111-111111111111.png",
+            mediaSubdir: "outgoing/originals",
+          },
         });
+        await expect(
+          readMediaBuffer("11111111-1111-4111-8111-111111111111.png", "outgoing/originals"),
+        ).resolves.toMatchObject({
+          id: "11111111-1111-4111-8111-111111111111.png",
+          size: "legacy image bytes".length,
+        });
+        await expect(fs.stat(legacyManagedOriginalPath)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(
           fs.stat(path.join(mediaRecordsDir, "11111111-1111-4111-8111-111111111111.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
