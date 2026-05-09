@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Daemon/launchd: rotate the gateway stdout and stderr sinks at install, plist rewrite, and `gateway restart` once they exceed the configured cap, so a stuck dep-staging error loop can no longer grow `gateway.err.log` to tens of gigabytes between restarts. Default cap is 64 MB per stream with one archive, configurable via `OPENCLAW_GATEWAY_LOG_MAX_BYTES` and `OPENCLAW_GATEWAY_LOG_ARCHIVES`. Refs #79422 (log-retention half only; the CPU/dep-staging loop in that issue stays open for separate live-profiling). Thanks @quintusadvisorygroup-openclaw.
 - Feishu: auto-thread `message(action="send")` replies inside the topic when the active session is group_topic or group_topic_sender, and propagate `replyInThread` through text, card, and media outbound adapters so topic-scoped sessions no longer post at the group root. Fixes #74903. (#77151) Thanks @ai-hpc.
 - WhatsApp: pass routing context into voice-note transcript echo preflight so echoed transcripts can deliver to the originating chat. Fixes #79778. (#79788) Thanks @hclsys.
 - Cron/failover: classify structured OpenAI-compatible `server_error` payloads as `server_error`, expose that reason in cron state, and let one-shot cron retry policy honor `retryOn: ["server_error"]` without requiring raw `5xx` text. (#45594) Thanks @clovericbot.
