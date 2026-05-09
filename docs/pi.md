@@ -147,9 +147,9 @@ The main entry point is `runEmbeddedPiAgent()` in `pi-embedded-runner/run.ts`:
 import { runEmbeddedPiAgent } from "./agents/pi-embedded-runner.js";
 
 const result = await runEmbeddedPiAgent({
+  agentId: "main",
   sessionId: "user-123",
   sessionKey: "main:whatsapp:+1234567890",
-  sessionFile: "sqlite-transcript://main/user-123.jsonl",
   workspaceDir: "/path/to/workspace",
   config: openclawConfig,
   prompt: "Hello, how are you?",
@@ -305,7 +305,10 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 Sessions are SQLite-backed event streams with tree structure (id/parentId linking). JSONL is legacy doctor-import/export/debug shape. OpenClaw owns the PI-compatible `SessionManager` shape behind `src/agents/transcript/session-transcript-contract.ts`:
 
 ```typescript
-const sessionManager = openTranscriptSessionManager({ sessionFile: params.sessionFile });
+const sessionManager = openTranscriptSessionManager({
+  agentId: params.agentId,
+  sessionId: params.sessionId,
+});
 ```
 
 OpenClaw wraps this with `guardSessionManager()` for tool result safety.
@@ -325,7 +328,7 @@ compaction:
 
 ```typescript
 const compactResult = await compactEmbeddedPiSessionDirect({
-  sessionId, sessionFile, provider, model, ...
+  agentId, sessionId, provider, model, ...
 });
 ```
 

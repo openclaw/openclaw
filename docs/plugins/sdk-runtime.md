@@ -94,9 +94,9 @@ Provider and channel execution paths must use the active runtime config snapshot
     const agentDir = api.runtime.agent.resolveAgentDir(cfg);
     const sessionId = "my-plugin-task-1";
     const result = await api.runtime.agent.runEmbeddedAgent({
+      agentId,
       sessionId,
       runId: crypto.randomUUID(),
-      sessionFile: createSqliteSessionTranscriptLocator({ agentId, sessionId }),
       workspaceDir: api.runtime.agent.resolveAgentWorkspaceDir(cfg),
       prompt: "Summarize the latest changes",
       timeoutMs: api.runtime.agent.resolveAgentTimeoutMs(cfg),
@@ -114,8 +114,6 @@ Provider and channel execution paths must use the active runtime config snapshot
     **SQLite session row helpers** are under `api.runtime.agent.session`:
 
     ```typescript
-    import { createSqliteSessionTranscriptLocator } from "openclaw/plugin-sdk/session-store-runtime";
-
     const entry = api.runtime.agent.session.getSessionEntry({ agentId, sessionKey });
     await api.runtime.agent.session.patchSessionEntry({
       agentId,
@@ -125,7 +123,6 @@ Provider and channel execution paths must use the active runtime config snapshot
         thinkingLevel: "high",
       }),
     });
-    const sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
     ```
 
     Prefer row helpers such as `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, and `upsertSessionEntry(...)` for runtime writes. They route through the SQLite session row store and preserve concurrent updates. Legacy `sessions.json` parsing belongs in doctor import code, not plugin runtime paths.

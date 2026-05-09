@@ -617,12 +617,12 @@ during the blocking memory sub-agent call.
 
 By default, that transcript is internal:
 
-- it uses a `sqlite-transcript://<agent>/<session>.jsonl` locator
+- it is addressed by `{ agentId, sessionId }`
 - it is used only for the blocking memory sub-agent run
-- it does not create a JSONL sidecar
+- it does not create a JSONL sidecar or transcript locator
 
-If you want the blocking memory sub-agent transcript locator logged for debugging
-or inspection, turn persistence on explicitly:
+If you want the blocking memory sub-agent transcript retained for debugging or
+inspection, turn persistence on explicitly:
 
 ```json5
 {

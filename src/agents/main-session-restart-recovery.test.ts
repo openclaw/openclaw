@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { callGateway } from "../gateway/call.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";

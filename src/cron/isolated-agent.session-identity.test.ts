@@ -99,26 +99,30 @@ describe("runCronIsolatedAgentTurn session identity", () => {
 
       expect(res.status).toBe("ok");
       const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+        agentId?: string;
+        sessionId?: string;
         sessionKey?: string;
         workspaceDir?: string;
-        sessionFile?: string;
       };
+      expect(call?.agentId).toBe("ops");
+      expect(call?.sessionId).toBe(res.sessionId);
       expect(call?.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
       expect(call?.workspaceDir).toBe(opsWorkspace);
-      expect(call?.sessionFile).toMatch(/^sqlite-transcript:\/\/ops\/.+\.jsonl$/u);
     });
   });
 
-  it("passes sessionFile to isolated cron runs", async () => {
+  it("passes session identity to isolated cron runs", async () => {
     await withTempHome(async (home) => {
-      await runCronTurn(home, {
+      const { res } = await runCronTurn(home, {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
       });
       const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
-        sessionFile?: string;
+        agentId?: string;
+        sessionId?: string;
       };
 
-      expect(call?.sessionFile).toMatch(/^sqlite-transcript:\/\/main\/.+\.jsonl$/u);
+      expect(call?.agentId).toBe("main");
+      expect(call?.sessionId).toBe(res.sessionId);
     });
   });
 
