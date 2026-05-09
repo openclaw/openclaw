@@ -2,6 +2,7 @@ import {
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { createReplyToFanout } from "openclaw/plugin-sdk/outbound-runtime";
 import { resolvePayloadMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
@@ -90,6 +91,8 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     mediaAccess,
     deps,
     replyToId,
+    replyToIdSource,
+    replyToMode,
     threadId,
     accountId,
     audioAsVoice,
@@ -99,6 +102,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
     const resolvedReplyToId = replyToId ?? undefined;
+    const resolveReplyToId = createReplyToFanout({
+      replyToId: resolvedReplyToId,
+      replyToIdSource,
+      replyToMode,
+    });
     const urls = resolvePayloadMediaUrls(payload);
     if (urls.length > 0) {
       let lastResult: Awaited<ReturnType<typeof send>> | undefined;
@@ -110,7 +118,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
           mediaAccess,
           mediaLocalRoots,
           mediaReadFile,
-          replyToId: resolvedReplyToId,
+          replyToId: resolveReplyToId(),
           threadId: resolvedThreadId,
           accountId: accountId ?? undefined,
           audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
@@ -129,7 +137,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
-      replyToId: resolvedReplyToId,
+      replyToId: resolveReplyToId(),
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
       audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
