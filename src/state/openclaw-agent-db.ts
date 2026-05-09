@@ -123,7 +123,7 @@ export function listOpenClawRegisteredAgentDatabases(
 ): OpenClawRegisteredAgentDatabase[] {
   const database = openOpenClawStateDatabase(options);
   const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
-  const rows = executeSqliteQuerySync<OpenClawStateKyselyDatabase["agent_databases"]>(
+  const rows = executeSqliteQuerySync(
     database.db,
     db.selectFrom("agent_databases").selectAll().orderBy("agent_id", "asc"),
   ).rows;

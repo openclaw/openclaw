@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
@@ -13,6 +13,7 @@ import {
   getDebugProxyCaptureStore,
   persistEventPayload,
 } from "./store.sqlite.js";
+import type { CaptureQueryRowsByPreset } from "./types.js";
 
 const cleanupDirs: string[] = [];
 
@@ -39,6 +40,21 @@ function readPragmaNumber(db: import("node:sqlite").DatabaseSync, pragma: string
 }
 
 describe("DebugProxyCaptureStore", () => {
+  it("types query preset rows by preset", () => {
+    const store = null as unknown as DebugProxyCaptureStore;
+
+    if (false) {
+      expectTypeOf(store.queryPreset("double-sends")).toEqualTypeOf<
+        CaptureQueryRowsByPreset["double-sends"][]
+      >();
+      expectTypeOf(store.queryPreset("missing-ack")).toEqualTypeOf<
+        CaptureQueryRowsByPreset["missing-ack"][]
+      >();
+    }
+
+    expect(true).toBe(true);
+  });
+
   it("keeps the cached store open until the last lease releases", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-lease-"));
     cleanupDirs.push(root);

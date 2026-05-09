@@ -7,6 +7,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import {
+  isDeliveryQueueEntryWithId,
+  parseDeliveryQueueEntryJson,
+  type DeliveryQueueEntryJsonRow,
+} from "./delivery-queue-entry-json.js";
+import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -63,10 +68,6 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
 
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 
-type DeliveryQueueEntryRow = {
-  entry_json: string;
-};
-
 function buildEntryId(idempotencyKey?: string): string {
   if (!idempotencyKey) {
     return generateSecureUuid();
@@ -78,16 +79,27 @@ function databaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
   return stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {};
 }
 
-function parseQueueEntry(row: DeliveryQueueEntryRow | undefined): QueuedSessionDelivery | null {
-  if (!row) {
-    return null;
+function isQueuedSessionDelivery(value: unknown): value is QueuedSessionDelivery {
+  if (
+    !isDeliveryQueueEntryWithId(value) ||
+    typeof value.sessionKey !== "string" ||
+    typeof value.enqueuedAt !== "number" ||
+    !Number.isFinite(value.enqueuedAt) ||
+    typeof value.retryCount !== "number" ||
+    !Number.isFinite(value.retryCount)
+  ) {
+    return false;
   }
-  const parsed = JSON.parse(row.entry_json) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
+  if (value.kind === "systemEvent") {
+    return typeof value.text === "string";
   }
-  const entry = parsed as QueuedSessionDelivery;
-  return typeof entry.id === "string" ? entry : null;
+  return value.kind === "agentTurn"
+    ? typeof value.message === "string" && typeof value.messageId === "string"
+    : false;
+}
+
+function parseQueueEntry(row: DeliveryQueueEntryJsonRow | undefined): QueuedSessionDelivery | null {
+  return parseDeliveryQueueEntryJson(row, isQueuedSessionDelivery);
 }
 
 function ensureSessionDeliveryQueueStorage(stateDir?: string): void {
@@ -194,7 +206,7 @@ export async function loadPendingSessionDelivery(
 ): Promise<QueuedSessionDelivery | null> {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(stateDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
-  const row = executeSqliteQueryTakeFirstSync<DeliveryQueueEntryRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
@@ -211,7 +223,7 @@ export async function loadPendingSessionDeliveries(
 ): Promise<QueuedSessionDelivery[]> {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(stateDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
-  const rows = executeSqliteQuerySync<DeliveryQueueEntryRow>(
+  const rows = executeSqliteQuerySync(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")

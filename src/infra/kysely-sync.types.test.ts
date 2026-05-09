@@ -1,0 +1,51 @@
+import type { DatabaseSync } from "node:sqlite";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
+
+type TypeTestDatabase = {
+  type_test_items: {
+    id: number;
+    name: string | null;
+    data: Uint8Array;
+  };
+};
+
+describe("kysely sync helper types", () => {
+  it("preserves Kysely builder result rows through sync helpers", () => {
+    const nativeDb = {} as DatabaseSync;
+    const db = getNodeSqliteKysely<TypeTestDatabase>(nativeDb);
+    const query = db
+      .selectFrom("type_test_items")
+      .select((eb) => ["id as itemId", "name", "data", eb.fn.countAll<number>().as("total")])
+      .groupBy(["id", "name", "data"]);
+
+    if (false) {
+      const result = executeSqliteQuerySync(nativeDb, query);
+      expectTypeOf(result.rows).toEqualTypeOf<
+        Array<{
+          itemId: number;
+          name: string | null;
+          data: Uint8Array;
+          total: number;
+        }>
+      >();
+
+      const row = executeSqliteQueryTakeFirstSync(nativeDb, query);
+      expectTypeOf(row).toEqualTypeOf<
+        | {
+            itemId: number;
+            name: string | null;
+            data: Uint8Array;
+            total: number;
+          }
+        | undefined
+      >();
+    }
+
+    expect(query.compile().sql).toContain("select");
+  });
+});

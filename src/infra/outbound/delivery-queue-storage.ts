@@ -8,6 +8,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import {
+  isDeliveryQueueEntryWithId,
+  parseDeliveryQueueEntryJson,
+  type DeliveryQueueEntryJsonRow,
+} from "../delivery-queue-entry-json.js";
+import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -72,10 +77,6 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
 
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 
-type DeliveryQueueEntryRow = {
-  entry_json: string;
-};
-
 function databaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
   return stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {};
 }
@@ -113,16 +114,21 @@ function createMissingQueueEntryError(id: string): NodeJS.ErrnoException {
   return error;
 }
 
-function parseQueueEntry(row: DeliveryQueueEntryRow | undefined): QueuedDelivery | null {
-  if (!row) {
-    return null;
-  }
-  const parsed = JSON.parse(row.entry_json) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const entry = parsed as QueuedDelivery;
-  return typeof entry.id === "string" ? entry : null;
+function isQueuedDelivery(value: unknown): value is QueuedDelivery {
+  return (
+    isDeliveryQueueEntryWithId(value) &&
+    typeof value.channel === "string" &&
+    typeof value.to === "string" &&
+    Array.isArray(value.payloads) &&
+    typeof value.enqueuedAt === "number" &&
+    Number.isFinite(value.enqueuedAt) &&
+    typeof value.retryCount === "number" &&
+    Number.isFinite(value.retryCount)
+  );
+}
+
+function parseQueueEntry(row: DeliveryQueueEntryJsonRow | undefined): QueuedDelivery | null {
+  return parseDeliveryQueueEntryJson(row, isQueuedDelivery);
 }
 
 function loadQueueEntryByStatus(
@@ -132,7 +138,7 @@ function loadQueueEntryByStatus(
 ): QueuedDelivery | null {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(stateDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
-  const row = executeSqliteQueryTakeFirstSync<DeliveryQueueEntryRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
@@ -284,7 +290,7 @@ export async function loadPendingDelivery(
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(stateDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
-  const rows = executeSqliteQuerySync<DeliveryQueueEntryRow>(
+  const rows = executeSqliteQuerySync(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")

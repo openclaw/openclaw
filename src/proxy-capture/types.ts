@@ -65,7 +65,42 @@ export type CaptureQueryPreset =
   | "missing-ack"
   | "error-bursts";
 
-export type CaptureQueryRow = Record<string, string | number | null>;
+export type CaptureQueryRowsByPreset = {
+  "double-sends": {
+    host: string | null;
+    path: string | null;
+    method: string | null;
+    duplicateCount: number;
+  };
+  "retry-storms": {
+    host: string | null;
+    path: string | null;
+    errorCount: number;
+  };
+  "cache-busting": {
+    host: string | null;
+    path: string | null;
+    variantCount: number;
+  };
+  "ws-duplicate-frames": {
+    host: string | null;
+    path: string | null;
+    duplicateFrames: number;
+  };
+  "missing-ack": {
+    flowId: string;
+    host: string | null;
+    path: string | null;
+    outboundFrames: number;
+  };
+  "error-bursts": {
+    host: string | null;
+    path: string | null;
+    errorCount: number;
+  };
+};
+
+export type CaptureQueryRow = CaptureQueryRowsByPreset[CaptureQueryPreset];
 
 export type CaptureSessionSummary = {
   id: string;

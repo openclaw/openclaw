@@ -269,7 +269,7 @@ function readGatewayLockPayload(
   return runOpenClawStateWriteTransaction((database) => {
     const db = getNodeSqliteKysely<GatewayLockKvDatabase>(database.db);
     const row =
-      executeSqliteQueryTakeFirstSync<GatewayLockKvRow>(
+      executeSqliteQueryTakeFirstSync(
         database.db,
         db
           .selectFrom("kv")
@@ -317,7 +317,7 @@ function tryAcquireGatewayLockRow(params: {
     (database) => {
       const db = getNodeSqliteKysely<GatewayLockKvDatabase>(database.db);
       const existingRow =
-        executeSqliteQueryTakeFirstSync<GatewayLockKvRow>(
+        executeSqliteQueryTakeFirstSync(
           database.db,
           db
             .selectFrom("kv")
@@ -362,7 +362,7 @@ function clearGatewayLockRowIfTokenMatches(params: {
     (database) => {
       const db = getNodeSqliteKysely<GatewayLockKvDatabase>(database.db);
       const existingRow =
-        executeSqliteQueryTakeFirstSync<GatewayLockKvRow>(
+        executeSqliteQueryTakeFirstSync(
           database.db,
           db
             .selectFrom("kv")

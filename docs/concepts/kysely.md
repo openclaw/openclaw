@@ -133,6 +133,11 @@ Keep helpers composable:
 - Accept a transaction-capable database object when work may run inside a
   transaction.
 - Alias computed selections explicitly.
+- Let Kysely carry selected row shapes through builder queries. Avoid passing a
+  broad row generic to a sync execution helper when the builder already knows
+  the result type; use exact boundary types or a mapper instead.
+- For finite public query presets, prefer a preset-to-row type map and exported
+  union over a generic `Record<string, ...>` row shape.
 
 ## Raw SQL
 
@@ -209,6 +214,8 @@ Adapter rules:
   pragmas, CTEs, and raw SQL make verb heuristics brittle.
 - Execute row-returning statements with `all()` or `iterate()`, and mutations
   with `run()`.
+- Preserve the row type from `CompiledQuery<Row>` in sync execution helpers so
+  native stores keep Kysely's inferred result shape after compilation.
 - Do not blindly map `lastInsertRowid` to Kysely `insertId`. In `node:sqlite`,
   that value is connection-scoped and can be stale for updates or ignored
   inserts. Only return `insertId` for insert statements that changed rows.
@@ -236,6 +243,7 @@ a real in-memory SQLite database when feasible.
 Minimum coverage for the native adapter:
 
 - builder `select`
+- sync helper type inference for aliases, aggregates, and driver-specific values
 - raw row-returning SQL
 - non-returning insert metadata
 - `INSERT ... RETURNING`
