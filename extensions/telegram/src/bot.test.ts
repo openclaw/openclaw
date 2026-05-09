@@ -1616,6 +1616,20 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expect(payload.UntrustedStructuredContext).toEqual([
       expect.objectContaining({
+        label: "Nearby reply target window",
+        payload: expect.objectContaining({
+          relation: "around_reply_target",
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              message_id: "100",
+              sender: "Assistant",
+              body: "Earlier deployment answer",
+              is_reply_target: true,
+            }),
+          ]),
+        }),
+      }),
+      expect.objectContaining({
         label: "Current local chat window",
         payload: expect.objectContaining({
           relation: "before_current_message",
@@ -1629,20 +1643,6 @@ describe("createTelegramBot", () => {
               message_id: "201",
               sender: "Riley",
               body: "After the incident review.",
-            }),
-          ]),
-        }),
-      }),
-      expect.objectContaining({
-        label: "Nearby reply target window",
-        payload: expect.objectContaining({
-          relation: "around_reply_target",
-          messages: expect.arrayContaining([
-            expect.objectContaining({
-              message_id: "100",
-              sender: "Assistant",
-              body: "Earlier deployment answer",
-              is_reply_target: true,
             }),
           ]),
         }),

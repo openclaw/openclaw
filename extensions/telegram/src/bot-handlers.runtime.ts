@@ -595,18 +595,6 @@ export const registerTelegramHandlers = ({
       after: 2,
     });
     const entries: TelegramPromptContextEntry[] = [];
-    if (currentWindow.length > 0) {
-      entries.push({
-        label: "Current local chat window",
-        source: "telegram",
-        type: "chat_window",
-        payload: {
-          order: "chronological",
-          relation: "before_current_message",
-          messages: currentWindow.map((node) => toPromptContextMessage(node)),
-        },
-      });
-    }
     if (replyTargetWindow.length > 0) {
       entries.push({
         label: "Nearby reply target window",
@@ -618,6 +606,18 @@ export const registerTelegramHandlers = ({
           messages: replyTargetWindow.map((node) =>
             toPromptContextMessage(node, { replyTarget: node.messageId === replyTargetId }),
           ),
+        },
+      });
+    }
+    if (currentWindow.length > 0) {
+      entries.push({
+        label: "Current local chat window",
+        source: "telegram",
+        type: "chat_window",
+        payload: {
+          order: "chronological",
+          relation: "before_current_message",
+          messages: currentWindow.map((node) => toPromptContextMessage(node)),
         },
       });
     }
