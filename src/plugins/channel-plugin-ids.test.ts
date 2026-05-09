@@ -1425,9 +1425,24 @@ describe("resolveGatewayStartupPluginIds", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         modelId: "openai/gpt-5.5",
-        enabledPluginIds: ["codex"],
       }),
       expected: ["demo-channel", "browser", "codex", "memory-core"],
+    });
+  });
+
+  it("does not include Codex when an OpenAI model is manually pinned to PI", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser", "memory-core"],
     });
   });
 
