@@ -1322,7 +1322,7 @@ describe("installPluginFromNpmSpec", () => {
     }
     expect(stableCorrection.npmResolution?.version).toBe("2026.5.3-1");
     expect(stableCorrection.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@2026.5.3-1");
-    expect(correctionWarnings).toEqual([]);
+    expect(correctionWarnings).toStrictEqual([]);
 
     runCommandWithTimeoutMock.mockReset();
     const prereleaseOnlyNpmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
