@@ -9,6 +9,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 const hoisted = vi.hoisted(() => {
   const sessionStore: Record<string, Record<string, unknown>> = {
     "agent:main:main": {
@@ -2316,7 +2320,7 @@ describe("active-memory plugin", () => {
       prependContext: expect.stringContaining("temporary partial recall summary"),
     });
     await vi.waitFor(async () => {
-      await expect(fs.access(tempSessionFile)).rejects.toThrow();
+      await expectPathMissing(tempSessionFile);
     });
     expect(getActiveMemoryLines(sessionKey)).toEqual(
       expect.arrayContaining([

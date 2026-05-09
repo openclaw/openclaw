@@ -8,6 +8,10 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("compileMemoryWikiVault", () => {
   let suiteRoot = "";
   let caseId = 0;
@@ -368,7 +372,7 @@ describe("compileMemoryWikiVault", () => {
 
     await compileMemoryWikiVault(config);
 
-    await expect(fs.access(path.join(rootDir, "reports", "open-questions.md"))).rejects.toThrow();
+    await expectPathMissing(path.join(rootDir, "reports", "open-questions.md"));
   });
 
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {
