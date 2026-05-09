@@ -1,27 +1,17 @@
 #!/bin/sh
 # Openclaw container entrypoint.
 #
-# Railway-managed persistent volumes are mounted with root ownership.
-# Openclaw runs as the unprivileged `node` user (uid 1000) and needs
-# write access to the state dir (config, sessions/memory, agent
-# auth-profiles, logs). Without this script the gateway crashloops on
-# EACCES at startup.
-#
-# Flow:
-#   1. Run briefly as root.
-#   2. Ensure the state dir exists and is owned by node:node.
-#   3. Drop privileges via gosu and exec the original CMD as node.
+# Runs as root and stays as root for the workload. The upstream
+# Dockerfile drops to the `node` user for defense-in-depth, but on
+# Railway the persistent volume is mounted root-owned and chown
+# inside the container is silently denied — leaving the gateway
+# unable to read or write its state dir as `node`. Single-tenant
+# Railway services already isolate the container from the host, so
+# root-in-container is an acceptable trade. tini stays PID 1 for
+# signal forwarding + zombie reaping.
 set -e
 
-STATE_DIR="${OPENCLAW_STATE_DIR:-/home/node/.openclaw}"
-
-# Idempotent: mkdir is a no-op if the dir exists; chown is cheap on
-# already-owned trees and harmless on volumes that started root-owned.
+STATE_DIR="${OPENCLAW_STATE_DIR:-/root/.openclaw}"
 mkdir -p "$STATE_DIR"
-chown -R node:node "$STATE_DIR" 2>/dev/null || true
 
-# Drop to node and exec the actual CMD (defaults to
-# `node openclaw.mjs gateway --allow-unconfigured`).
-# tini is preserved as PID 1 so signal forwarding + zombie reaping
-# still work.
-exec /usr/bin/tini -s -- gosu node "$@"
+exec /usr/bin/tini -s -- "$@"
