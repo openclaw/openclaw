@@ -2,19 +2,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi, type Mock } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../../config/sessions/test-helpers/transcript-locator.js";
 import type {
   AssembleResult,
   BootstrapResult,
   CompactResult,
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
+  ContextEngineTranscriptScope,
   IngestBatchResult,
   IngestResult,
 } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
-import { DEFAULT_AGENT_ID, resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -1037,14 +1036,14 @@ export async function createContextEngineAttemptRunner(params: {
     bootstrap?: (params: {
       sessionId: string;
       sessionKey?: string;
-      transcriptLocator: string;
+      transcriptScope?: ContextEngineTranscriptScope;
     }) => Promise<BootstrapResult>;
     maintain?:
       | boolean
       | ((params: {
           sessionId: string;
           sessionKey?: string;
-          transcriptLocator: string;
+          transcriptScope?: ContextEngineTranscriptScope;
           runtimeContext?: Record<string, unknown>;
         }) => Promise<{
           changed: boolean;
@@ -1062,7 +1061,7 @@ export async function createContextEngineAttemptRunner(params: {
     afterTurn?: (params: {
       sessionId: string;
       sessionKey?: string;
-      transcriptLocator: string;
+      transcriptScope?: ContextEngineTranscriptScope;
       messages: AgentMessage[];
       prePromptMessageCount: number;
       tokenBudget?: number;
@@ -1081,7 +1080,7 @@ export async function createContextEngineAttemptRunner(params: {
     compact?: (params: {
       sessionId: string;
       sessionKey?: string;
-      transcriptLocator: string;
+      transcriptScope?: ContextEngineTranscriptScope;
       tokenBudget?: number;
     }) => Promise<CompactResult>;
     info?: Partial<ContextEngineInfo>;
@@ -1098,10 +1097,6 @@ export async function createContextEngineAttemptRunner(params: {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-agent-"));
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-state-"));
   const sessionId = "embedded-session";
-  const transcriptLocator = createSqliteSessionTranscriptLocator({
-    agentId: resolveAgentIdFromSessionKey(params.sessionKey) ?? DEFAULT_AGENT_ID,
-    sessionId,
-  });
   params.tempPaths.push(workspaceDir, agentDir, stateDir);
   const seedMessages: AgentMessage[] =
     params.sessionMessages ?? ([{ role: "user", content: "seed", timestamp: 1 }] as AgentMessage[]);

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
@@ -22,6 +23,32 @@ function stateDir() {
 
 function configPath() {
   return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
+}
+
+function agentDatabasePath(agentId = "main") {
+  return path.join(stateDir(), "agents", agentId, "agent", "openclaw-agent.sqlite");
+}
+
+function withSqliteDatabase(dbPath, callback) {
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`missing SQLite database: ${dbPath}`);
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    return callback(db);
+  } finally {
+    db.close();
+  }
+}
+
+function readMainAgentTranscriptText() {
+  return withSqliteDatabase(agentDatabasePath("main"), (db) =>
+    db
+      .prepare("SELECT event_json FROM transcript_events ORDER BY session_id, seq")
+      .all()
+      .map((row) => String(row.event_json ?? ""))
+      .join("\n"),
+  );
 }
 
 function realPathMaybe(filePath) {
@@ -246,16 +273,9 @@ function assertAgentTurn() {
       `live agent reply did not contain tool slug ${expected}:\nstdout=${stdout}\nstderr=${stderr}`,
     );
   }
-  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
-  const sessionFiles = fs
-    .readdirSync(sessionsDir, { recursive: true })
-    .map((entry) => path.join(sessionsDir, String(entry)))
-    .filter((entry) => entry.endsWith(".jsonl") && fs.existsSync(entry));
-  const transcript = sessionFiles.map((file) => fs.readFileSync(file, "utf8")).join("\n");
+  const transcript = readMainAgentTranscriptText();
   if (!transcript.includes(toolName) || !transcript.includes(expected)) {
-    throw new Error(
-      `session transcript did not show ${toolName} returning ${expected}; checked ${sessionFiles.join(", ")}`,
-    );
+    throw new Error(`SQLite session transcript did not show ${toolName} returning ${expected}`);
   }
 }
 
