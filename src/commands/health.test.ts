@@ -132,6 +132,54 @@ describe("healthCommand", () => {
     );
   });
 
+  it("formats stopped runtime errors as failed channel health", () => {
+    const summary: HealthSummary = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 5,
+      channels: {
+        imessage: {
+          accountId: "default",
+          configured: true,
+          running: false,
+          lastError: "imsg rpc exited: Cannot access Messages database",
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              running: false,
+              lastError: "imsg rpc exited: Cannot access Messages database",
+            },
+          },
+        },
+      },
+      channelOrder: ["imessage"],
+      channelLabels: { imessage: "iMessage" },
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [
+        {
+          agentId: "main",
+          isDefault: true,
+          heartbeat: {
+            enabled: true,
+            every: "1m",
+            everyMs: 60_000,
+            prompt: "hi",
+            target: "last",
+            ackMaxChars: 160,
+          },
+          sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+        },
+      ],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+
+    expect(formatHealthChannelLines(summary, { accountMode: "all" })).toContain(
+      "iMessage: failed (runtime) - imsg rpc exited: Cannot access Messages database",
+    );
+  });
+
   it("formats per-account probe timings", () => {
     const summary = createHealthSummary({
       channels: {

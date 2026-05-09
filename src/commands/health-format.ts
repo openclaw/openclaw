@@ -201,6 +201,16 @@ export const formatHealthChannelLines = (
       continue;
     }
 
+    const runtimeError =
+      typeof baseSummary.lastError === "string" && baseSummary.lastError.trim()
+        ? baseSummary.lastError.trim()
+        : null;
+    const running = typeof baseSummary.running === "boolean" ? baseSummary.running : null;
+    if (runtimeError && running === false) {
+      lines.push(`${label}: failed (runtime) - ${runtimeError}`);
+      continue;
+    }
+
     const accountTimings =
       accountMode === "all"
         ? listSummaries
