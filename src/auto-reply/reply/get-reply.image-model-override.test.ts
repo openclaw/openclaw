@@ -23,10 +23,20 @@ vi.mock("./message-preprocess-hooks.js", () => ({
 }));
 
 const channelOverrideMocks = vi.hoisted(() => ({
-  resolveChannelModelOverride: vi.fn(() => undefined),
+  resolveChannelModelOverride: vi.fn(
+    (): import("../../channels/model-overrides.js").ChannelModelOverride | null =>
+      undefined as unknown as null,
+  ),
 }));
 vi.mock("../../channels/model-overrides.js", () => ({
   resolveChannelModelOverride: channelOverrideMocks.resolveChannelModelOverride,
+}));
+
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime: {
+    log: vi.fn(),
+    error: vi.fn(),
+  },
 }));
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
@@ -108,7 +118,7 @@ describe("getReplyFromConfig image model override", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    defaultRuntime.log.mockClear();
+    vi.mocked(defaultRuntime.log).mockClear();
   });
 
   it("applies modelOverride when no allowlist is configured", async () => {
@@ -406,7 +416,7 @@ describe("getReplyFromConfig image model override", () => {
     );
 
     // Reset mock for other tests
-    channelOverrideMocks.resolveChannelModelOverride.mockReturnValue(undefined);
+    channelOverrideMocks.resolveChannelModelOverride.mockReturnValue(null);
   });
 
   it("ignores empty modelOverride and uses default model", async () => {
