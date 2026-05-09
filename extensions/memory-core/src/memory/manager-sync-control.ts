@@ -171,6 +171,7 @@ export function _createMemorySyncControlConfigForTests(
   workspaceDir: string,
   indexPath: string,
 ): OpenClawConfig {
+  void indexPath;
   return {
     agents: {
       defaults: {
@@ -178,7 +179,7 @@ export function _createMemorySyncControlConfigForTests(
         memorySearch: {
           provider: "openai",
           model: "mock-embed",
-          store: { path: indexPath, vector: { enabled: false } },
+          store: { vector: { enabled: false } },
           cache: { enabled: false },
           query: { minScore: 0, hybrid: { enabled: false } },
           sync: { watch: false, onSessionStart: false, onSearch: false },

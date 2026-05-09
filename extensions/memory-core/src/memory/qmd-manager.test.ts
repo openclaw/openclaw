@@ -283,7 +283,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
         },
@@ -370,7 +370,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: true, onSearch: false },
           },
         },
@@ -414,7 +414,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: true, onSearch: false },
           },
         },
@@ -469,7 +469,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            store: { vector: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },

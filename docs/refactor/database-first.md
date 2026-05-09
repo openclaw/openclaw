@@ -635,8 +635,9 @@ Move these into the global database:
 - Plugin state runtime writes now use the shared database; the unshipped
   `plugin-state/state.sqlite` sidecar importer is deleted.
 - Builtin memory search no longer defaults to `memory/<agentId>.sqlite`; its
-  index tables live in the owning agent database unless `memorySearch.store.path`
-  explicitly asks for a sidecar.
+  index tables live in the owning agent database, and the explicit
+  `memorySearch.store.path` sidecar opt-in has been retired to doctor config
+  migration.
 - Sandbox container/browser registries from monolithic and sharded JSON. Runtime
   writes now use the shared database; legacy JSON import remains.
 - Cron job definitions, schedule state, and run history now use shared SQLite;
@@ -927,9 +928,8 @@ keeps only the version-1 schema plus doctor file-to-database import.
      writes; the unshipped legacy sidecar importer is deleted.
    - Move Task Flow tables into the global database. Done for runtime writes;
      the unshipped legacy sidecar importer is deleted.
-   - Move builtin memory-search tables into each agent database by default.
-     Done for the default path; explicit custom `memorySearch.store.path`
-     remains a sidecar opt-in.
+   - Move builtin memory-search tables into each agent database. Done; explicit
+     custom `memorySearch.store.path` is now removed by doctor config migration.
    - Delete duplicate database openers, WAL setup, permission helpers, and
      close paths from those subsystems.
 

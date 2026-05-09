@@ -102,6 +102,16 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-memory-search-store-path",
+    owner: "config",
+    introduced: "2026-05-09",
+    source: "agents.*.memorySearch.store.path",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
+    replacement: "per-agent openclaw-agent.sqlite",
+    docsPath: "/reference/memory-config",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-top-level-heartbeat",
     owner: "config",
     introduced: "2026-04-26",
