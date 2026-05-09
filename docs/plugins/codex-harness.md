@@ -21,6 +21,11 @@ Do not configure `openai-codex/gpt-*` model refs. `openai-codex` is the auth
 profile provider for Codex OAuth or Codex API-key profiles, not the model
 provider prefix for new agent config.
 
+OpenClaw starts Codex app-server threads with Codex native code mode enabled.
+That keeps deferred/searchable OpenClaw dynamic tools inside Codex's own tool
+execution surface instead of adding a PI-style tool-search wrapper on top of
+Codex.
+
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes). The short version is:
 `openai/gpt-5.5` is the model ref, `codex` is the runtime, and Telegram,
