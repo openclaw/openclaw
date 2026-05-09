@@ -1461,6 +1461,12 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      const hadToolCalls =
+        typeof runResult.meta?.toolSummary?.calls === "number" &&
+        runResult.meta.toolSummary.calls > 0;
+      if (hadToolCalls) {
+        return returnWithQueuedFollowupDrain({ text: "Done." });
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
