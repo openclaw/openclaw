@@ -110,7 +110,7 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
-  resolveTelegramMessageCachePath,
+  resolveTelegramMessageCacheScopeKey,
   type TelegramCachedMessageNode,
   type TelegramReplyChainEntry,
 } from "./message-cache.js";
@@ -171,7 +171,7 @@ export const registerTelegramHandlers = ({
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
   const messageCache = createTelegramMessageCache({
-    persistedPath: resolveTelegramMessageCachePath(accountId),
+    persistedScopeKey: resolveTelegramMessageCacheScopeKey(accountId),
   });
 
   type TextFragmentEntry = {

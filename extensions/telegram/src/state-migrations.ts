@@ -5,7 +5,7 @@ import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channe
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   importTelegramMessageCacheEntries,
-  resolveTelegramMessageCachePath,
+  resolveTelegramMessageCacheScopeKey,
 } from "./message-cache.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { cacheSticker, type CachedSticker } from "./sticker-cache-store.js";
@@ -198,7 +198,7 @@ function messageCachePlans(
         const parsed = readJson(sourcePath);
         const legacyStorePath = sourcePath.replace(/\.telegram-messages\.json$/u, "");
         const imported = importTelegramMessageCacheEntries(
-          resolveTelegramMessageCachePath(legacyStorePath),
+          resolveTelegramMessageCacheScopeKey(legacyStorePath),
           parsed,
         );
         removeFile(sourcePath);
