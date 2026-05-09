@@ -399,7 +399,7 @@ async function persistRegistrationsState(
 export function normalizeApnsRegistrationStateSnapshot(
   parsed: unknown,
 ): ApnsRegistrationState | null {
-  if (!parsed || typeof parsed !== "object") {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }
   const registrations =

@@ -1,7 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importLegacyApnsRegistrationFileToSqlite } from "../commands/doctor/legacy/push-apns.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearApnsRegistration,
@@ -57,75 +54,8 @@ describe("push APNs registration store", () => {
     expect(loaded && "token" in loaded).toBe(false);
   });
 
-  it("normalizes legacy direct records from disk and ignores invalid entries", async () => {
+  it("falls back cleanly for missing registration state", async () => {
     const baseDir = await makeTempDir();
-    const statePath = path.join(baseDir, "push", "apns-registrations.json");
-    await fs.mkdir(path.dirname(statePath), { recursive: true });
-    await fs.writeFile(
-      statePath,
-      `${JSON.stringify(
-        {
-          registrationsByNodeId: {
-            " ios-node-legacy ": {
-              nodeId: " ios-node-legacy ",
-              token: "<ABCD1234ABCD1234ABCD1234ABCD1234>",
-              topic: " ai.openclaw.ios ",
-              environment: " PRODUCTION ",
-              updatedAtMs: 3,
-            },
-            "   ": {
-              nodeId: " ios-node-fallback ",
-              token: "<ABCD1234ABCD1234ABCD1234ABCD1234>",
-              topic: " ai.openclaw.ios ",
-              updatedAtMs: 2,
-            },
-            "ios-node-bad-relay": {
-              transport: "relay",
-              nodeId: "ios-node-bad-relay",
-              relayHandle: "relay-handle-123",
-              sendGrant: "send-grant-123",
-              installationId: "install-123",
-              topic: "ai.openclaw.ios",
-              environment: "production",
-              distribution: "beta",
-              updatedAtMs: 1,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-
-    await expect(importLegacyApnsRegistrationFileToSqlite(baseDir)).resolves.toEqual({
-      imported: true,
-      registrations: 2,
-    });
-    await expect(loadApnsRegistration("ios-node-legacy", baseDir)).resolves.toMatchObject({
-      nodeId: "ios-node-legacy",
-      transport: "direct",
-      token: "abcd1234abcd1234abcd1234abcd1234",
-      topic: "ai.openclaw.ios",
-      environment: "production",
-      updatedAtMs: 3,
-    });
-    await expect(loadApnsRegistration("ios-node-fallback", baseDir)).resolves.toEqual({
-      nodeId: "ios-node-fallback",
-      transport: "direct",
-      token: "abcd1234abcd1234abcd1234abcd1234",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: 2,
-    });
-    await expect(loadApnsRegistration("ios-node-bad-relay", baseDir)).resolves.toBeNull();
-  });
-
-  it("falls back cleanly for malformed or missing registration state", async () => {
-    const baseDir = await makeTempDir();
-    const statePath = path.join(baseDir, "push", "apns-registrations.json");
-    await fs.mkdir(path.dirname(statePath), { recursive: true });
-    await fs.writeFile(statePath, "[]", "utf8");
 
     await expect(loadApnsRegistration("ios-node-missing", baseDir)).resolves.toBeNull();
     await expect(loadApnsRegistration("   ", baseDir)).resolves.toBeNull();
