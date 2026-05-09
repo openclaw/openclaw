@@ -610,6 +610,21 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/plain");
   });
 
+  it("rejects host-read LOG files even though they map to text/plain", async () => {
+    const logFile = path.join(fixtureRoot, "debug.log");
+    await fs.writeFile(logFile, "plain text\n", "utf8");
+    await expect(
+      loadWebMedia(logFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
   it("rejects renamed host-read text files even when the extension looks allowed", async () => {
     const disguisedPdf = path.join(fixtureRoot, "secret.pdf");
     await fs.writeFile(disguisedPdf, "secret", "utf8");
