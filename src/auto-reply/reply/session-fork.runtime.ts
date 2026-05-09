@@ -1,10 +1,8 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
-  parseSessionEntries,
   type FileEntry,
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
@@ -15,18 +13,18 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import {
+  loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScope,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import {
   resolveFreshSessionTotalTokens,
   type SessionEntry as StoreSessionEntry,
 } from "../../config/sessions/types.js";
 import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/session-utils.fs.js";
-import { readRegularFile } from "../../infra/fs-safe.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 
 type ForkSourceTranscript = {
+  agentId: string;
   cwd: string;
   sessionDir: string;
   leafId: string | null;
@@ -53,7 +51,7 @@ function maxPositiveTokenCount(...values: Array<number | undefined>): number | u
   return max;
 }
 
-async function estimateParentTranscriptTokensFromBytes(params: {
+async function estimateParentTranscriptTokensFromSqlite(params: {
   parentEntry: StoreSessionEntry;
   storePath: string;
 }): Promise<number | undefined> {
@@ -63,8 +61,18 @@ async function estimateParentTranscriptTokensFromBytes(params: {
       params.parentEntry,
       resolveSessionFilePathOptions({ storePath: params.storePath }),
     );
-    const stat = await fs.stat(filePath);
-    return resolvePositiveTokenCount(Math.ceil(stat.size / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN));
+    const scope = resolveSqliteSessionTranscriptScope({
+      sessionId: params.parentEntry.sessionId,
+      transcriptPath: filePath,
+    });
+    if (!scope) {
+      return undefined;
+    }
+    const size = loadSqliteSessionTranscriptEvents(scope).reduce(
+      (total, entry) => total + JSON.stringify(entry.event).length + 1,
+      0,
+    );
+    return resolvePositiveTokenCount(Math.ceil(size / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN));
   } catch {
     return undefined;
   }
@@ -80,7 +88,7 @@ export async function resolveParentForkTokenCountRuntime(params: {
   }
 
   const cachedTokens = resolvePositiveTokenCount(params.parentEntry.totalTokens);
-  const byteEstimateTokens = await estimateParentTranscriptTokensFromBytes(params);
+  const byteEstimateTokens = await estimateParentTranscriptTokensFromSqlite(params);
   try {
     const usage = await readLatestRecentSessionUsageFromTranscriptAsync(
       params.parentEntry.sessionId,
@@ -172,11 +180,18 @@ function collectBranchLabels(params: {
   return labelsToWrite;
 }
 
-async function readForkSourceTranscript(
-  parentSessionFile: string,
-): Promise<ForkSourceTranscript | null> {
-  const raw = (await readRegularFile({ filePath: parentSessionFile })).buffer.toString("utf-8");
-  const fileEntries = parseSessionEntries(raw);
+async function readForkSourceTranscript(params: {
+  parentSessionFile: string;
+  agentId: string;
+  sessionId: string;
+}): Promise<ForkSourceTranscript | null> {
+  const fileEntries = loadSqliteSessionTranscriptEvents({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+  }).map((entry) => entry.event as FileEntry);
+  if (fileEntries.length === 0) {
+    return null;
+  }
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
@@ -188,8 +203,9 @@ async function readForkSourceTranscript(
     branchEntries.filter((entry) => entry.type !== "label").map((entry) => entry.id),
   );
   return {
+    agentId: params.agentId,
     cwd: header?.cwd ?? process.cwd(),
-    sessionDir: path.dirname(parentSessionFile),
+    sessionDir: path.dirname(params.parentSessionFile),
     leafId,
     branchEntries,
     labelsToWrite: collectBranchLabels({ allEntries: entries, pathEntryIds }),
@@ -221,6 +237,7 @@ function buildBranchLabelEntries(params: {
 
 async function writeForkHeaderOnly(params: {
   parentSessionFile: string;
+  agentId: string;
   sessionDir: string;
   cwd: string;
 }): Promise<{ sessionId: string; sessionFile: string }> {
@@ -236,11 +253,8 @@ async function writeForkHeaderOnly(params: {
     cwd: params.cwd,
     parentSession: params.parentSessionFile,
   } satisfies SessionHeader;
-  const parentScope = resolveSqliteSessionTranscriptScopeForPath({
-    transcriptPath: params.parentSessionFile,
-  });
   replaceSqliteSessionTranscriptEvents({
-    agentId: parentScope?.agentId ?? DEFAULT_AGENT_ID,
+    agentId: params.agentId,
     sessionId,
     transcriptPath: sessionFile,
     events: [header],
@@ -276,11 +290,8 @@ async function writeBranchedSession(params: {
     (entry) => entry.type === "message" && entry.message.role === "assistant",
   );
   if (hasAssistant) {
-    const parentScope = resolveSqliteSessionTranscriptScopeForPath({
-      transcriptPath: params.parentSessionFile,
-    });
     replaceSqliteSessionTranscriptEvents({
-      agentId: parentScope?.agentId ?? DEFAULT_AGENT_ID,
+      agentId: params.source.agentId,
       sessionId,
       transcriptPath: sessionFile,
       events: entries,
@@ -303,7 +314,11 @@ export async function forkSessionFromParentRuntime(params: {
     return null;
   }
   try {
-    const source = await readForkSourceTranscript(parentSessionFile);
+    const source = await readForkSourceTranscript({
+      parentSessionFile,
+      agentId: params.agentId,
+      sessionId: params.parentEntry.sessionId,
+    });
     if (!source) {
       return null;
     }
@@ -311,6 +326,7 @@ export async function forkSessionFromParentRuntime(params: {
       ? await writeBranchedSession({ parentSessionFile, source })
       : await writeForkHeaderOnly({
           parentSessionFile,
+          agentId: source.agentId,
           sessionDir: source.sessionDir,
           cwd: source.cwd,
         });

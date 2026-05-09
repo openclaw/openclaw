@@ -1,8 +1,11 @@
-import fs from "node:fs";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
+import {
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScope,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
@@ -63,6 +66,26 @@ type CostUsageCacheEntry = {
   updatedAt?: number;
   inFlight?: Promise<CostUsageSummary>;
 };
+
+function readSessionTranscriptUpdatedAt(params: {
+  agentId?: string;
+  sessionId: string;
+  sessionFile?: string;
+}): number | undefined {
+  const scope = resolveSqliteSessionTranscriptScope({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    transcriptPath: params.sessionFile,
+  });
+  if (!scope) {
+    return undefined;
+  }
+  const events = loadSqliteSessionTranscriptEvents(scope);
+  if (events.length === 0) {
+    return undefined;
+  }
+  return events.at(-1)?.createdAt;
+}
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
 
@@ -877,24 +900,24 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
 
       if (sessionFile) {
-        try {
-          const stats = fs.statSync(sessionFile);
-          if (stats.isFile()) {
-            maybeMergeFamilyEntry({
-              mergedEntries,
-              groupingMode,
-              base: {
-                key: resolvedStoreKey,
-                sessionId,
-                sessionFile,
-                label: storeEntry?.label,
-                updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
-                storeEntry,
-              },
-            });
-          }
-        } catch {
-          // File doesn't exist - no results for this key
+        const transcriptUpdatedAt = readSessionTranscriptUpdatedAt({
+          agentId: agentIdFromKey,
+          sessionId,
+          sessionFile,
+        });
+        if (transcriptUpdatedAt !== undefined) {
+          maybeMergeFamilyEntry({
+            mergedEntries,
+            groupingMode,
+            base: {
+              key: resolvedStoreKey,
+              sessionId,
+              sessionFile,
+              label: storeEntry?.label,
+              updatedAt: storeEntry?.updatedAt ?? transcriptUpdatedAt,
+              storeEntry,
+            },
+          });
         }
       }
     } else {

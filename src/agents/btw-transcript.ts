@@ -1,14 +1,17 @@
-import { readFile } from "node:fs/promises";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
+import {
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScope,
+} from "../config/sessions/transcript-store.sqlite.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import {
   buildSessionContext,
   migrateSessionEntries,
-  parseSessionEntries,
+  type FileEntry,
   type SessionEntry as PiSessionEntry,
 } from "./transcript/session-transcript-contract.js";
 
@@ -105,7 +108,16 @@ export async function readBtwTranscriptMessages(params: {
   snapshotLeafId?: string | null;
 }): Promise<unknown[]> {
   try {
-    const entries = parseSessionEntries(await readFile(params.sessionFile, "utf-8"));
+    const scope = resolveSqliteSessionTranscriptScope({
+      sessionId: params.sessionId,
+      transcriptPath: params.sessionFile,
+    });
+    if (!scope) {
+      return [];
+    }
+    const entries = loadSqliteSessionTranscriptEvents(scope)
+      .map((entry) => entry.event)
+      .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
       (entry): entry is PiSessionEntry => entry.type !== "session",

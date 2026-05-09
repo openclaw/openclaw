@@ -1,4 +1,3 @@
-import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -20,7 +19,6 @@ const log = createSubsystemLogger("sessions/store");
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
-const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
 const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
 const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
 const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
@@ -39,8 +37,6 @@ export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
-  maxDiskBytes: number | null;
-  highWaterBytes: number | null;
 };
 
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
@@ -56,54 +52,6 @@ function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
   }
 }
 
-function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | null {
-  const raw = maintenance?.maxDiskBytes;
-  const normalized = normalizeStringifiedOptionalString(raw);
-  if (!normalized) {
-    return null;
-  }
-  try {
-    return parseByteSize(normalized, { defaultUnit: "b" });
-  } catch {
-    return null;
-  }
-}
-
-function resolveHighWaterBytes(
-  maintenance: SessionMaintenanceConfig | undefined,
-  maxDiskBytes: number | null,
-): number | null {
-  const computeDefault = () => {
-    if (maxDiskBytes == null) {
-      return null;
-    }
-    if (maxDiskBytes <= 0) {
-      return 0;
-    }
-    return Math.max(
-      1,
-      Math.min(
-        maxDiskBytes,
-        Math.floor(maxDiskBytes * DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO),
-      ),
-    );
-  };
-  if (maxDiskBytes == null) {
-    return null;
-  }
-  const raw = maintenance?.highWaterBytes;
-  const normalized = normalizeStringifiedOptionalString(raw);
-  if (!normalized) {
-    return computeDefault();
-  }
-  try {
-    const parsed = parseByteSize(normalized, { defaultUnit: "b" });
-    return Math.min(parsed, maxDiskBytes);
-  } catch {
-    return computeDefault();
-  }
-}
-
 /**
  * Resolve maintenance settings from openclaw.json (`session.maintenance`).
  * Falls back to built-in defaults when config is missing or unset.
@@ -112,13 +60,10 @@ export function resolveMaintenanceConfigFromInput(
   maintenance?: SessionMaintenanceConfig,
 ): ResolvedSessionMaintenanceConfig {
   const pruneAfterMs = resolvePruneAfterMs(maintenance);
-  const maxDiskBytes = resolveMaxDiskBytes(maintenance);
   return {
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
     pruneAfterMs,
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
-    maxDiskBytes,
-    highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };
 }
 

@@ -1,11 +1,13 @@
-import fsp from "node:fs/promises";
 import path from "node:path";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
+import {
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScope,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   limitAgentHookHistoryMessages,
@@ -13,7 +15,7 @@ import {
 } from "../harness/hook-history.js";
 import {
   migrateSessionEntries,
-  parseSessionEntries,
+  type FileEntry,
 } from "../transcript/session-transcript-contract.js";
 
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
@@ -119,14 +121,6 @@ export function buildCliSessionHistoryPrompt(params: {
   ].join("\n");
 }
 
-async function safeRealpath(filePath: string): Promise<string | undefined> {
-  try {
-    return await fsp.realpath(filePath);
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveSafeCliSessionFile(params: {
   sessionId: string;
   sessionFile: string;
@@ -162,25 +156,21 @@ async function loadCliSessionEntries(params: {
   config?: OpenClawConfig;
 }): Promise<unknown[]> {
   try {
-    const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
-    const entryStat = await fsp.lstat(sessionFile);
-    if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
+    const { sessionFile } = resolveSafeCliSessionFile(params);
+    const scope = resolveSqliteSessionTranscriptScope({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      transcriptPath: sessionFile,
+    });
+    if (!scope) {
       return [];
     }
-    const realSessionsDir = (await safeRealpath(sessionsDir)) ?? path.resolve(sessionsDir);
-    const realSessionFile = await safeRealpath(sessionFile);
-    if (
-      !realSessionFile ||
-      realSessionFile === realSessionsDir ||
-      !isPathInside(realSessionsDir, realSessionFile)
-    ) {
+    const entries = loadSqliteSessionTranscriptEvents(scope)
+      .map((entry) => entry.event)
+      .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
+    if (JSON.stringify(entries).length > MAX_CLI_SESSION_HISTORY_FILE_BYTES) {
       return [];
     }
-    const stat = await fsp.stat(realSessionFile);
-    if (!stat.isFile() || stat.size > MAX_CLI_SESSION_HISTORY_FILE_BYTES) {
-      return [];
-    }
-    const entries = parseSessionEntries(await fsp.readFile(realSessionFile, "utf-8"));
     migrateSessionEntries(entries);
     return entries.filter((entry) => entry.type !== "session");
   } catch {

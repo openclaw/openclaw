@@ -5,8 +5,6 @@ import path from "node:path";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
-  loadSessionTranscriptClassificationForAgent,
-  normalizeSessionTranscriptPathForComparison,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -751,30 +749,17 @@ async function collectSessionIngestionBatches(params: {
   const sessionFiles: Array<{
     agentId: string;
     absolutePath: string;
-    generatedByDreamingNarrative: boolean;
-    generatedByCronRun: boolean;
     sessionPath: string;
   }> = [];
   for (const agentId of agentIds) {
     const files = await listSessionFilesForAgent(agentId);
-    const transcriptClassification =
-      files.length > 0
-        ? loadSessionTranscriptClassificationForAgent(agentId)
-        : {
-            dreamingNarrativeTranscriptPaths: new Set<string>(),
-            cronRunTranscriptPaths: new Set<string>(),
-          };
     for (const absolutePath of files) {
       if (isCheckpointSessionTranscriptPath(absolutePath)) {
         continue;
       }
-      const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
       sessionFiles.push({
         agentId,
         absolutePath,
-        generatedByDreamingNarrative:
-          transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
-        generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
         sessionPath: sessionPathForFile(absolutePath),
       });
     }
@@ -803,21 +788,16 @@ async function collectSessionIngestionBatches(params: {
     }
     const stateKey = buildSessionStateKey(file.agentId, file.absolutePath);
     const previous = params.state.files[stateKey];
-    const stat = await fs.stat(file.absolutePath).catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-        return null;
-      }
-      throw err;
-    });
-    if (!stat) {
+    const entry = await buildSessionEntry(file.absolutePath);
+    if (!entry) {
       if (previous) {
         changed = true;
       }
       continue;
     }
     const fingerprint = {
-      mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
-      size: Math.floor(Math.max(0, stat.size)),
+      mtimeMs: Math.floor(Math.max(0, entry.mtimeMs)),
+      size: Math.floor(Math.max(0, entry.size)),
     };
     const cursorAtEnd = previous !== undefined && previous.lastContentLine >= previous.lineCount;
     const unchanged =
@@ -831,13 +811,6 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
 
-    const entry = await buildSessionEntry(file.absolutePath, {
-      generatedByDreamingNarrative: file.generatedByDreamingNarrative,
-      generatedByCronRun: file.generatedByCronRun,
-    });
-    if (!entry) {
-      continue;
-    }
     if (entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
       nextFiles[stateKey] = {
         mtimeMs: fingerprint.mtimeMs,

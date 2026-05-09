@@ -1,17 +1,18 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
 import {
-  exportSqliteSessionTranscriptJsonl,
   hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
 } from "../../config/sessions/transcript-store.sqlite.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 
 /** Tail kept so DM continuity survives silent session rotations. */
 export const DEFAULT_REPLAY_MAX_MESSAGES = 6;
 
 type SessionRecord = { message?: { role?: unknown } };
-type KeptRecord = { role: "user" | "assistant"; line: string };
+type KeptRecord = { role: "user" | "assistant"; event: unknown };
 
 /**
  * Copy the tail of user/assistant JSONL records from a prior transcript into a
@@ -25,6 +26,7 @@ export async function replayRecentUserAssistantMessages(params: {
   sourceAgentId?: string;
   sourceSessionId?: string;
   sourceTranscript?: string;
+  targetAgentId?: string;
   targetTranscript: string;
   newSessionId: string;
   maxMessages?: number;
@@ -34,22 +36,15 @@ export async function replayRecentUserAssistantMessages(params: {
     return 0;
   }
   try {
-    const sourceLines = await loadReplaySourceLines(params);
-    if (!sourceLines) {
+    const sourceEvents = loadReplaySourceEvents(params);
+    if (!sourceEvents) {
       return 0;
     }
     const kept: KeptRecord[] = [];
-    for (const line of sourceLines) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const role = (JSON.parse(line) as SessionRecord | null)?.message?.role;
-        if (role === "user" || role === "assistant") {
-          kept.push({ role, line });
-        }
-      } catch {
-        // Skip malformed lines.
+    for (const event of sourceEvents) {
+      const role = (event as SessionRecord | null)?.message?.role;
+      if (role === "user" || role === "assistant") {
+        kept.push({ role, event });
       }
     }
     if (kept.length === 0) {
@@ -64,48 +59,75 @@ export async function replayRecentUserAssistantMessages(params: {
       // role-ordering hazard this reset path is recovering from.
       return 0;
     }
-    const tail = coalesceAlternatingReplayTail(kept.slice(startIdx)).map((entry) => entry.line);
-    if (!fs.existsSync(params.targetTranscript)) {
-      await fsp.mkdir(path.dirname(params.targetTranscript), { recursive: true });
-      const header = JSON.stringify({
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: params.newSessionId,
-        timestamp: new Date().toISOString(),
-        cwd: process.cwd(),
-      });
-      await fsp.writeFile(params.targetTranscript, `${header}\n`, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-    }
-    await fsp.appendFile(params.targetTranscript, `${tail.join("\n")}\n`, "utf-8");
+    const tail = coalesceAlternatingReplayTail(kept.slice(startIdx)).map((entry) => entry.event);
+    const targetAgentId =
+      params.targetAgentId ??
+      params.sourceAgentId ??
+      resolveAgentIdFromSessionPath(params.targetTranscript);
+    const existingTargetEvents = loadSqliteSessionTranscriptEvents({
+      agentId: targetAgentId,
+      sessionId: params.newSessionId,
+    }).map((entry) => entry.event);
+    const targetEvents =
+      existingTargetEvents.length > 0
+        ? [...existingTargetEvents, ...tail]
+        : [
+            {
+              type: "session",
+              version: CURRENT_SESSION_VERSION,
+              id: params.newSessionId,
+              timestamp: new Date().toISOString(),
+              cwd: process.cwd(),
+            },
+            ...tail,
+          ];
+    replaceSqliteSessionTranscriptEvents({
+      agentId: targetAgentId,
+      sessionId: params.newSessionId,
+      transcriptPath: path.resolve(params.targetTranscript),
+      events: targetEvents,
+    });
     return tail.length;
   } catch {
     return 0;
   }
 }
 
-async function loadReplaySourceLines(params: {
+function resolveAgentIdFromSessionPath(sessionFile: string): string {
+  const resolved = path.resolve(sessionFile);
+  const sessionsDir = path.dirname(resolved);
+  const agentDir = path.dirname(sessionsDir);
+  const agentsDir = path.dirname(agentDir);
+  if (path.basename(sessionsDir) === "sessions" && path.basename(agentsDir) === "agents") {
+    return path.basename(agentDir);
+  }
+  return DEFAULT_AGENT_ID;
+}
+
+function loadReplaySourceEvents(params: {
   sourceAgentId?: string;
   sourceSessionId?: string;
   sourceTranscript?: string;
-}): Promise<string[] | undefined> {
-  const scopedJsonl = loadScopedReplaySourceJsonl(params);
-  if (scopedJsonl !== undefined) {
-    return scopedJsonl.split(/\r?\n/);
+}): unknown[] | undefined {
+  const scopedEvents = loadScopedReplaySourceEvents(params);
+  if (scopedEvents !== undefined) {
+    return scopedEvents;
   }
   const src = params.sourceTranscript;
-  if (!src || !fs.existsSync(src)) {
+  if (!src) {
     return undefined;
   }
-  return (await fsp.readFile(src, "utf-8")).split(/\r?\n/);
+  const sourceScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: src });
+  if (!sourceScope) {
+    return undefined;
+  }
+  return loadSqliteSessionTranscriptEvents(sourceScope).map((entry) => entry.event);
 }
 
-function loadScopedReplaySourceJsonl(params: {
+function loadScopedReplaySourceEvents(params: {
   sourceAgentId?: string;
   sourceSessionId?: string;
-}): string | undefined {
+}): unknown[] | undefined {
   if (!params.sourceAgentId?.trim() || !params.sourceSessionId?.trim()) {
     return undefined;
   }
@@ -115,15 +137,14 @@ function loadScopedReplaySourceJsonl(params: {
       sessionId: params.sourceSessionId,
     };
     return hasSqliteSessionTranscriptEvents(scope)
-      ? exportSqliteSessionTranscriptJsonl(scope)
+      ? loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event)
       : undefined;
   } catch {
     return undefined;
   }
 }
 
-// Keep the newest record from each same-role run, preserving original JSONL bytes
-// for replay while ensuring strict provider alternation.
+// Keep the newest record from each same-role run while ensuring strict provider alternation.
 function coalesceAlternatingReplayTail(entries: KeptRecord[]): KeptRecord[] {
   const tail: KeptRecord[] = [];
   for (const entry of entries) {

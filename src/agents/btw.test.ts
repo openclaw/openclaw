@@ -38,6 +38,16 @@ vi.mock("node:fs/promises", () => ({
   readFile: (...args: unknown[]) => readFileMock(...args),
 }));
 
+vi.mock("../config/sessions/transcript-store.sqlite.js", () => ({
+  resolveSqliteSessionTranscriptScope: () => ({ agentId: "main", sessionId: "session-1" }),
+  loadSqliteSessionTranscriptEvents: () =>
+    (parseSessionEntriesMock() as unknown[]).map((event, seq) => ({
+      seq,
+      event,
+      createdAt: seq + 1,
+    })),
+}));
+
 vi.mock("./transcript/session-transcript-contract.js", () => ({
   buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
   CURRENT_SESSION_VERSION: 3,

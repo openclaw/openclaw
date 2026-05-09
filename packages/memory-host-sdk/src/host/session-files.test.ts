@@ -2,6 +2,8 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { replaceSqliteSessionTranscriptEvents } from "../../../../src/config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
@@ -30,6 +32,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
   if (originalStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
@@ -44,25 +47,42 @@ function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
   return entry;
 }
 
+function seedTranscript(params: {
+  agentId?: string;
+  sessionId: string;
+  transcriptPath?: string;
+  events: unknown[];
+  now?: number;
+}): string {
+  const agentId = params.agentId ?? "main";
+  const transcriptPath =
+    params.transcriptPath ??
+    path.join(tmpDir, "agents", agentId, "sessions", `${params.sessionId}.jsonl`);
+  replaceSqliteSessionTranscriptEvents({
+    agentId,
+    sessionId: params.sessionId,
+    transcriptPath,
+    events: params.events,
+    now: () => params.now ?? 1_770_000_000_000,
+  });
+  return transcriptPath;
+}
+
 describe("listSessionFilesForAgent", () => {
-  it("includes primary transcripts in session file listing", async () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(path.join(sessionsDir, "archive"), { recursive: true });
-
-    const included = ["active.jsonl"];
-    const excluded = ["active.jsonl.bak.2026-02-16T22-28-33.000Z", "sessions.json", "notes.md"];
-    excluded.push("active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl");
-
-    for (const fileName of [...included, ...excluded]) {
-      fsSync.writeFileSync(path.join(sessionsDir, fileName), "");
-    }
-    fsSync.writeFileSync(path.join(sessionsDir, "archive", "nested.jsonl"), "");
+  it("lists SQLite transcript handles for an agent", async () => {
+    const includedPath = seedTranscript({
+      sessionId: "active",
+      events: [{ type: "session", id: "active" }],
+    });
+    seedTranscript({
+      agentId: "other",
+      sessionId: "other-active",
+      events: [{ type: "session", id: "other-active" }],
+    });
 
     const files = await listSessionFilesForAgent("main");
 
-    expect(files.map((filePath) => path.basename(filePath)).toSorted()).toEqual(
-      included.toSorted(),
-    );
+    expect(files).toEqual([includedPath]);
   });
 });
 
@@ -82,26 +102,25 @@ describe("sessionPathForFile", () => {
 
 describe("buildSessionEntry", () => {
   it("returns lineMap tracking original JSONL line numbers", async () => {
-    // Simulate a real session JSONL file with metadata records interspersed
+    // Simulate a real transcript event stream with metadata records interspersed
     // Lines 1-3: non-message metadata records
     // Line 4: user message
     // Line 5: metadata
     // Line 6: assistant message
     // Line 7: user message
-    const jsonlLines = [
-      JSON.stringify({ type: "custom", customType: "model-snapshot", data: {} }),
-      JSON.stringify({ type: "custom", customType: "openclaw.cache-ttl", data: {} }),
-      JSON.stringify({ type: "session-meta", agentId: "test" }),
-      JSON.stringify({ type: "message", message: { role: "user", content: "Hello world" } }),
-      JSON.stringify({ type: "custom", customType: "tool-result", data: {} }),
-      JSON.stringify({
+    const events = [
+      { type: "custom", customType: "model-snapshot", data: {} },
+      { type: "custom", customType: "openclaw.cache-ttl", data: {} },
+      { type: "session-meta", agentId: "test" },
+      { type: "message", message: { role: "user", content: "Hello world" } },
+      { type: "custom", customType: "tool-result", data: {} },
+      {
         type: "message",
         message: { role: "assistant", content: "Hi there, how can I help?" },
-      }),
-      JSON.stringify({ type: "message", message: { role: "user", content: "Tell me a joke" } }),
+      },
+      { type: "message", message: { role: "user", content: "Tell me a joke" } },
     ];
-    const filePath = path.join(tmpDir, "session.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+    const filePath = seedTranscript({ sessionId: "session", events });
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     // The content should have 3 lines (3 message records)
@@ -119,12 +138,13 @@ describe("buildSessionEntry", () => {
   });
 
   it("returns empty lineMap when no messages are found", async () => {
-    const jsonlLines = [
-      JSON.stringify({ type: "custom", customType: "model-snapshot", data: {} }),
-      JSON.stringify({ type: "session-meta", agentId: "test" }),
-    ];
-    const filePath = path.join(tmpDir, "empty-session.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+    const filePath = seedTranscript({
+      sessionId: "empty-session",
+      events: [
+        { type: "custom", customType: "model-snapshot", data: {} },
+        { type: "session-meta", agentId: "test" },
+      ],
+    });
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.content).toBe("");
@@ -134,13 +154,21 @@ describe("buildSessionEntry", () => {
   it("skips checkpoint artifacts so snapshots do not double-index session content", async () => {
     const checkpointPath = path.join(
       tmpDir,
+      "agents",
+      "main",
+      "sessions",
       "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
     );
-    const content = JSON.stringify({
-      type: "message",
-      message: { role: "user", content: "Archived hello" },
+    seedTranscript({
+      sessionId: "ordinary.checkpoint.11111111-1111-4111-8111-111111111111",
+      transcriptPath: checkpointPath,
+      events: [
+        {
+          type: "message",
+          message: { role: "user", content: "Archived hello" },
+        },
+      ],
     });
-    fsSync.writeFileSync(checkpointPath, content);
 
     const checkpointEntry = requireSessionEntry(await buildSessionEntry(checkpointPath));
 
@@ -193,71 +221,73 @@ describe("buildSessionEntry", () => {
     expect(entry.generatedByCronRun).toBe(true);
   });
 
-  it("skips blank lines and invalid JSON without breaking lineMap", async () => {
-    const jsonlLines = [
-      "",
-      "not valid json",
-      JSON.stringify({ type: "message", message: { role: "user", content: "First" } }),
-      "",
-      JSON.stringify({ type: "message", message: { role: "assistant", content: "Second" } }),
-    ];
-    const filePath = path.join(tmpDir, "gaps.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+  it("skips non-message events without breaking lineMap", async () => {
+    const filePath = seedTranscript({
+      sessionId: "gaps",
+      events: [
+        { type: "custom", customType: "ignored" },
+        { type: "message", message: { role: "user", content: "First" } },
+        { type: "custom", customType: "ignored-again" },
+        { type: "message", message: { role: "assistant", content: "Second" } },
+      ],
+    });
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    expect(entry.lineMap).toEqual([3, 5]);
+    expect(entry.lineMap).toEqual([2, 4]);
   });
 
   it("strips inbound metadata when a user envelope is split across text blocks", async () => {
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: [
-            { type: "text", text: "Conversation info (untrusted metadata):" },
-            { type: "text", text: "```json" },
-            { type: "text", text: '{"message_id":"msg-100","chat_id":"-100123"}' },
-            { type: "text", text: "```" },
-            { type: "text", text: "" },
-            { type: "text", text: "Sender (untrusted metadata):" },
-            { type: "text", text: "```json" },
-            { type: "text", text: '{"label":"Chris","id":"42"}' },
-            { type: "text", text: "```" },
-            { type: "text", text: "" },
-            { type: "text", text: "Actual user text" },
-          ],
+    const filePath = seedTranscript({
+      sessionId: "enveloped-session-array",
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: "Conversation info (untrusted metadata):" },
+              { type: "text", text: "```json" },
+              { type: "text", text: '{"message_id":"msg-100","chat_id":"-100123"}' },
+              { type: "text", text: "```" },
+              { type: "text", text: "" },
+              { type: "text", text: "Sender (untrusted metadata):" },
+              { type: "text", text: "```json" },
+              { type: "text", text: '{"label":"Chris","id":"42"}' },
+              { type: "text", text: "```" },
+              { type: "text", text: "" },
+              { type: "text", text: "Actual user text" },
+            ],
+          },
         },
-      }),
-    ];
-    const filePath = path.join(tmpDir, "enveloped-session-array.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+      ],
+    });
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.content).toBe("User: Actual user text");
   });
 
   it("skips inter-session user messages", async () => {
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "A background task completed. Internal relay text.",
-          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+    const filePath = seedTranscript({
+      sessionId: "inter-session-session",
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "user",
+            content: "A background task completed. Internal relay text.",
+            provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+          },
         },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "User-facing summary." },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "Actual user follow-up." },
-      }),
-    ];
-    const filePath = path.join(tmpDir, "inter-session-session.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+        {
+          type: "message",
+          message: { role: "assistant", content: "User-facing summary." },
+        },
+        {
+          type: "message",
+          message: { role: "user", content: "Actual user follow-up." },
+        },
+      ],
+    });
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");

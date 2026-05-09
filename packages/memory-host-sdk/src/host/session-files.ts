@@ -1,7 +1,4 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
 import {
@@ -13,7 +10,9 @@ import {
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isSilentReplyPayloadText,
-  isUsageCountedSessionTranscriptFileName,
+  listSqliteSessionTranscripts,
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
   parseUsageCountedSessionIdFromFileName,
   resolveSessionTranscriptsDirForAgent,
   stripInboundMetadata,
@@ -55,11 +54,6 @@ export type BuildSessionEntryOptions = {
 export type SessionTranscriptClassification = {
   dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
   cronRunTranscriptPaths: ReadonlySet<string>;
-};
-
-type SessionTranscriptStoreEntry = {
-  sessionFile?: unknown;
-  sessionId?: unknown;
 };
 
 function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
@@ -126,20 +120,6 @@ function isDreamingNarrativeGeneratedRecord(record: unknown): boolean {
   return hasDreamingNarrativeRunId(nested.runId) || hasDreamingNarrativeRunId(nested.sessionKey);
 }
 
-function isDreamingNarrativeSessionStoreKey(sessionKey: string): boolean {
-  const trimmed = sessionKey.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const firstSeparator = trimmed.indexOf(":");
-  if (firstSeparator < 0) {
-    return trimmed.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
-  }
-  const secondSeparator = trimmed.indexOf(":", firstSeparator + 1);
-  const sessionSegment = secondSeparator < 0 ? trimmed : trimmed.slice(secondSeparator + 1);
-  return sessionSegment.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
-}
-
 function hasCronRunSessionKey(value: unknown): boolean {
   return typeof value === "string" && isCronRunSessionKey(value);
 }
@@ -173,67 +153,21 @@ export function normalizeSessionTranscriptPathForComparison(pathname: string): s
   return normalizeComparablePath(pathname);
 }
 
-function resolveSessionStoreTranscriptPath(
-  sessionsDir: string,
-  entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
-): string | null {
-  if (typeof entry?.sessionFile === "string" && entry.sessionFile.trim().length > 0) {
-    const sessionFile = entry.sessionFile.trim();
-    const resolved = path.isAbsolute(sessionFile)
-      ? sessionFile
-      : path.resolve(sessionsDir, sessionFile);
-    return normalizeComparablePath(resolved);
-  }
-  if (typeof entry?.sessionId === "string" && entry.sessionId.trim().length > 0) {
-    return normalizeComparablePath(path.join(sessionsDir, `${entry.sessionId.trim()}.jsonl`));
-  }
-  return null;
-}
-
 export function loadDreamingNarrativeTranscriptPathSetForSessionsDir(
   sessionsDir: string,
 ): ReadonlySet<string> {
-  return loadSessionTranscriptClassificationForSessionsDir(sessionsDir)
-    .dreamingNarrativeTranscriptPaths;
+  void sessionsDir;
+  return new Set<string>();
 }
 
 export function loadSessionTranscriptClassificationForSessionsDir(
   sessionsDir: string,
 ): SessionTranscriptClassification {
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const store = readSessionTranscriptClassificationStore(storePath);
-  const dreamingTranscriptPaths = new Set<string>();
-  const cronRunTranscriptPaths = new Set<string>();
-  for (const [sessionKey, entry] of Object.entries(store)) {
-    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
-    if (!transcriptPath) {
-      continue;
-    }
-    if (isDreamingNarrativeSessionStoreKey(sessionKey)) {
-      dreamingTranscriptPaths.add(transcriptPath);
-    }
-    if (isCronRunSessionKey(sessionKey)) {
-      cronRunTranscriptPaths.add(transcriptPath);
-    }
-  }
+  void sessionsDir;
   return {
-    dreamingNarrativeTranscriptPaths: dreamingTranscriptPaths,
-    cronRunTranscriptPaths,
+    dreamingNarrativeTranscriptPaths: new Set<string>(),
+    cronRunTranscriptPaths: new Set<string>(),
   };
-}
-
-function readSessionTranscriptClassificationStore(
-  storePath: string,
-): Record<string, SessionTranscriptStoreEntry> {
-  try {
-    const parsed = JSON.parse(fsSync.readFileSync(storePath, "utf-8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {};
-    }
-    return parsed as Record<string, SessionTranscriptStoreEntry>;
-  } catch {
-    return {};
-  }
 }
 
 export function loadDreamingNarrativeTranscriptPathSetForAgent(
@@ -245,39 +179,18 @@ export function loadDreamingNarrativeTranscriptPathSetForAgent(
 export function loadSessionTranscriptClassificationForAgent(
   agentId: string,
 ): SessionTranscriptClassification {
-  return loadSessionTranscriptClassificationForSessionsDir(
-    resolveSessionTranscriptsDirForAgent(agentId),
-  );
-}
-
-function classifySessionTranscriptFromSessionStore(absPath: string): {
-  generatedByDreamingNarrative: boolean;
-  generatedByCronRun: boolean;
-} {
-  const sessionsDir = path.dirname(absPath);
-  const normalizedAbsPath = normalizeComparablePath(absPath);
-  const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
-  const hasClassifiedPath = (paths: ReadonlySet<string>) => paths.has(normalizedAbsPath);
+  void agentId;
   return {
-    generatedByDreamingNarrative: hasClassifiedPath(
-      classification.dreamingNarrativeTranscriptPaths,
-    ),
-    generatedByCronRun: hasClassifiedPath(classification.cronRunTranscriptPaths),
+    dreamingNarrativeTranscriptPaths: new Set<string>(),
+    cronRunTranscriptPaths: new Set<string>(),
   };
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
   const dir = resolveSessionTranscriptsDirForAgent(agentId);
-  try {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isFile())
-      .map((entry) => entry.name)
-      .filter((name) => isUsageCountedSessionTranscriptFileName(name))
-      .map((name) => path.join(dir, name));
-  } catch {
-    return [];
-  }
+  return listSqliteSessionTranscripts({ agentId }).map(
+    (transcript) => transcript.path ?? path.join(dir, `${transcript.sessionId}.jsonl`),
+  );
 }
 
 function extractAgentIdFromSessionPath(absPath: string): string | null {
@@ -287,6 +200,10 @@ function extractAgentIdFromSessionPath(absPath: string): string | null {
     return null;
   }
   return parts[sessionsIndex - 1] || null;
+}
+
+function resolveSessionIdFromTranscriptPath(absPath: string): string | null {
+  return parseUsageCountedSessionIdFromFileName(path.basename(absPath));
 }
 
 export function sessionPathForFile(absPath: string): string {
@@ -497,51 +414,47 @@ export async function buildSessionEntry(
   opts: BuildSessionEntryOptions = {},
 ): Promise<SessionFileEntry | null> {
   try {
-    const regularFile = await statRegularFile(absPath);
-    if (regularFile.missing) {
+    const transcriptPath = path.resolve(absPath);
+    const rememberedScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
+    const agentId = rememberedScope?.agentId ?? extractAgentIdFromSessionPath(transcriptPath);
+    const sessionId =
+      rememberedScope?.sessionId ?? resolveSessionIdFromTranscriptPath(transcriptPath);
+    if (!agentId || !sessionId) {
       return null;
     }
-    const stat = regularFile.stat;
+    const transcriptEvents = loadSqliteSessionTranscriptEvents({ agentId, sessionId });
+    if (transcriptEvents.length === 0) {
+      return null;
+    }
+    const mtimeMs = Math.max(0, ...transcriptEvents.map((entry) => entry.createdAt));
+    const size = transcriptEvents.reduce(
+      (total, entry) => total + JSON.stringify(entry.event).length + 1,
+      0,
+    );
     if (shouldSkipTranscriptFileForDreaming(absPath)) {
       return {
         path: sessionPathForFile(absPath),
         absPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
+        mtimeMs,
+        size,
         hash: hashText("\n\n"),
         content: "",
         lineMap: [],
         messageTimestampsMs: [],
       };
     }
-    const raw = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
-    const lines = raw.split("\n");
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];
-    const sessionStoreClassification =
-      opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined
-        ? classifySessionTranscriptFromSessionStore(absPath)
-        : null;
-    let generatedByDreamingNarrative =
-      opts.generatedByDreamingNarrative ??
-      sessionStoreClassification?.generatedByDreamingNarrative ??
-      false;
-    let generatedByCronRun =
-      opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
-    for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
-      const line = lines[jsonlIdx];
-      if (!line.trim()) {
-        continue;
-      }
-      let record: unknown;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        continue;
-      }
+    let generatedByDreamingNarrative = opts.generatedByDreamingNarrative ?? false;
+    let generatedByCronRun = opts.generatedByCronRun ?? false;
+    for (const transcriptEvent of transcriptEvents) {
+      const record = transcriptEvent.event;
       if (!generatedByDreamingNarrative && isDreamingNarrativeGeneratedRecord(record)) {
         generatedByDreamingNarrative = true;
+      }
+      if (!generatedByCronRun && isCronRunGeneratedRecord(record)) {
+        generatedByCronRun = true;
       }
       if (
         !record ||
@@ -588,15 +501,15 @@ export async function buildSessionEntry(
         message as { timestamp?: unknown },
       );
       collected.push(...renderedLines);
-      lineMap.push(...renderedLines.map(() => jsonlIdx + 1));
+      lineMap.push(...renderedLines.map(() => transcriptEvent.seq + 1));
       messageTimestampsMs.push(...renderedLines.map(() => timestampMs));
     }
     const content = collected.join("\n");
     return {
       path: sessionPathForFile(absPath),
       absPath,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
+      mtimeMs,
+      size,
       hash: hashText(content + "\n" + lineMap.join(",") + "\n" + messageTimestampsMs.join(",")),
       content,
       lineMap,

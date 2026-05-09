@@ -1,5 +1,11 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  listSqliteSessionTranscriptFiles,
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScope,
+  resolveSqliteSessionTranscriptScopeForPath,
+  type SqliteSessionTranscriptScope,
+} from "../../../config/sessions/transcript-store.sqlite.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 
 function extractTextMessageContent(content: unknown): string | undefined {
@@ -26,15 +32,17 @@ export async function getRecentSessionContent(
   messageCount: number = 15,
 ): Promise<string | null> {
   try {
-    const content = await fs.readFile(sessionFilePath, "utf-8");
-    const lines = content.trim().split("\n");
+    const scope = resolveScopeForTranscriptPath(sessionFilePath);
+    if (!scope) {
+      return null;
+    }
+    const events = loadSqliteSessionTranscriptEvents(scope);
 
     const allMessages: string[] = [];
-    for (const line of lines) {
+    for (const { event } of events) {
       try {
-        const entry = JSON.parse(line);
-        if (entry.type === "message" && entry.message) {
-          const msg = entry.message as {
+        if (isRecord(event) && event.type === "message" && event.message) {
+          const msg = event.message as {
             role?: unknown;
             content?: unknown;
             provenance?: unknown;
@@ -61,27 +69,80 @@ export async function getRecentSessionContent(
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function extractSessionIdFromTranscriptPath(sessionFilePath: string): string | undefined {
+  const base = path.basename(sessionFilePath);
+  if (!base.endsWith(".jsonl")) {
+    return undefined;
+  }
+  const stem = base.slice(0, -".jsonl".length);
+  const topicIndex = stem.indexOf("-topic-");
+  return topicIndex > 0 ? stem.slice(0, topicIndex) : stem || undefined;
+}
+
+function resolveScopeForTranscriptPath(
+  sessionFilePath: string,
+): SqliteSessionTranscriptScope | undefined {
+  const byPath = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFilePath });
+  if (byPath) {
+    return byPath;
+  }
+  const sessionId = extractSessionIdFromTranscriptPath(sessionFilePath);
+  if (!sessionId) {
+    return undefined;
+  }
+  return resolveSqliteSessionTranscriptScope({
+    sessionId,
+    transcriptPath: sessionFilePath,
+  });
+}
+
+function resolveRememberedPathInSessionsDir(params: {
+  sessionsDir: string;
+  sessionId: string;
+}): string | undefined {
+  const sessionsDir = path.resolve(params.sessionsDir);
+  const candidates = listSqliteSessionTranscriptFiles()
+    .filter((file) => path.dirname(path.resolve(file.path)) === sessionsDir)
+    .filter((file) => file.sessionId === params.sessionId)
+    .toSorted((a, b) => {
+      const updatedDelta = b.updatedAt - a.updatedAt;
+      return updatedDelta || b.path.localeCompare(a.path);
+    });
+
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const canonicalPath = path.join(sessionsDir, `${params.sessionId}.jsonl`);
+  const canonical = candidates.find((file) => path.resolve(file.path) === canonicalPath);
+  return canonical?.path ?? candidates[0]?.path;
+}
+
 export async function findPreviousSessionFile(params: {
   sessionsDir: string;
   sessionId?: string;
 }): Promise<string | undefined> {
   try {
-    const files = await fs.readdir(params.sessionsDir);
-    const fileSet = new Set(files);
-
     const trimmedSessionId = params.sessionId?.trim();
     if (trimmedSessionId) {
-      const canonicalFile = `${trimmedSessionId}.jsonl`;
-      if (fileSet.has(canonicalFile)) {
-        return path.join(params.sessionsDir, canonicalFile);
+      const rememberedPath = resolveRememberedPathInSessionsDir({
+        sessionsDir: params.sessionsDir,
+        sessionId: trimmedSessionId,
+      });
+      if (rememberedPath) {
+        return rememberedPath;
       }
 
-      const topicVariants = files
-        .filter((name) => name.startsWith(`${trimmedSessionId}-topic-`) && name.endsWith(".jsonl"))
-        .toSorted()
-        .toReversed();
-      if (topicVariants.length > 0) {
-        return path.join(params.sessionsDir, topicVariants[0]);
+      const scope = resolveSqliteSessionTranscriptScope({
+        sessionId: trimmedSessionId,
+        transcriptPath: path.join(params.sessionsDir, `${trimmedSessionId}.jsonl`),
+      });
+      if (scope) {
+        return path.join(params.sessionsDir, `${trimmedSessionId}.jsonl`);
       }
     }
   } catch {

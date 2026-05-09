@@ -12,7 +12,6 @@ import {
   readLatestSessionUsageFromTranscript,
   readLatestSessionUsageFromTranscriptAsync,
   readRecentSessionMessages,
-  readRecentSessionMessagesAsync,
   readRecentSessionMessagesWithStats,
   readRecentSessionMessagesWithStatsAsync,
   readRecentSessionTranscriptLines,

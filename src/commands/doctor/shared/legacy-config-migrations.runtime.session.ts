@@ -10,6 +10,15 @@ function hasLegacyRotateBytes(value: unknown): boolean {
   return Boolean(maintenance && Object.prototype.hasOwnProperty.call(maintenance, "rotateBytes"));
 }
 
+function hasLegacyDiskBudget(value: unknown): boolean {
+  const maintenance = getRecord(value);
+  return Boolean(
+    maintenance &&
+    (Object.prototype.hasOwnProperty.call(maintenance, "maxDiskBytes") ||
+      Object.prototype.hasOwnProperty.call(maintenance, "highWaterBytes")),
+  );
+}
+
 function hasLegacyResetArchiveRetention(value: unknown): boolean {
   const maintenance = getRecord(value);
   return Boolean(
@@ -27,6 +36,13 @@ const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
   message:
     'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
   match: hasLegacyRotateBytes,
+};
+
+const LEGACY_SESSION_MAINTENANCE_DISK_BUDGET_RULE: LegacyConfigRule = {
+  path: ["session", "maintenance"],
+  message:
+    'session.maintenance.maxDiskBytes/highWaterBytes are deprecated and ignored; run "openclaw doctor --fix" to remove them.',
+  match: hasLegacyDiskBudget,
 };
 
 const LEGACY_SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_RULE: LegacyConfigRule = {
@@ -55,6 +71,31 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
       }
       delete maintenance.rotateBytes;
       changes.push("Removed deprecated session.maintenance.rotateBytes.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "session.maintenance.diskBudget",
+    describe: "Remove deprecated session.maintenance disk budget settings",
+    legacyRules: [LEGACY_SESSION_MAINTENANCE_DISK_BUDGET_RULE],
+    apply: (raw, changes) => {
+      const maintenance = getRecord(getRecord(raw.session)?.maintenance);
+      if (!maintenance) {
+        return;
+      }
+      let removed = false;
+      if (Object.prototype.hasOwnProperty.call(maintenance, "maxDiskBytes")) {
+        delete maintenance.maxDiskBytes;
+        removed = true;
+      }
+      if (Object.prototype.hasOwnProperty.call(maintenance, "highWaterBytes")) {
+        delete maintenance.highWaterBytes;
+        removed = true;
+      }
+      if (removed) {
+        changes.push(
+          "Removed deprecated session.maintenance.maxDiskBytes/highWaterBytes; session transcripts are stored in SQLite.",
+        );
+      }
     },
   }),
   defineLegacyConfigMigration({

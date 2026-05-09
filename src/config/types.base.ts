@@ -210,7 +210,7 @@ export type SessionConfig = {
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
-  /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
+  /** Explicit SQLite session-row maintenance (age and entry-count retention). */
   maintenance?: SessionMaintenanceConfig;
 };
 
@@ -232,15 +232,9 @@ export type SessionMaintenanceConfig = {
   maxEntries?: number;
   /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
   rotateBytes?: number | string;
-  /**
-   * Optional per-agent sessions-directory disk budget (e.g. "500mb").
-   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup (mode=enforce).
-   */
+  /** @deprecated Ignored. Session transcripts are stored in SQLite. */
   maxDiskBytes?: number | string;
-  /**
-   * Target size after disk-budget cleanup (high-water mark), e.g. "400mb".
-   * Default: 80% of maxDiskBytes.
-   */
+  /** @deprecated Ignored with maxDiskBytes. */
   highWaterBytes?: number | string;
 };
 

@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
+import { replaceSqliteSessionTranscriptEvents } from "../../../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
@@ -18,6 +19,7 @@ let handler: typeof import("./handler.js").default;
 let flushSessionMemoryWritesForTest: typeof import("./handler.js").flushSessionMemoryWritesForTest;
 let suiteWorkspaceRoot = "";
 let workspaceCaseCounter = 0;
+let originalStateDir: string | undefined;
 
 async function createCaseWorkspace(prefix = "case"): Promise<string> {
   const dir = path.join(suiteWorkspaceRoot, `${prefix}-${workspaceCaseCounter}`);
@@ -27,11 +29,23 @@ async function createCaseWorkspace(prefix = "case"): Promise<string> {
 }
 
 beforeAll(async () => {
-  ({ default: handler, flushSessionMemoryWritesForTest } = await import("./handler.js"));
   suiteWorkspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-memory-"));
+  originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(suiteWorkspaceRoot, "state");
+  ({ default: handler, flushSessionMemoryWritesForTest } = await import("./handler.js"));
+});
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
 });
 
 afterAll(async () => {
+  closeOpenClawStateDatabaseForTest();
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
   if (!suiteWorkspaceRoot) {
     return;
   }
@@ -61,6 +75,29 @@ function createMockSessionContent(
       return JSON.stringify(entry);
     })
     .join("\n");
+}
+
+function parseMockSessionContent(content: string): unknown[] {
+  return content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function seedSessionTranscript(params: {
+  sessionId: string;
+  sessionFile: string;
+  content: string;
+  agentId?: string;
+}): void {
+  replaceSqliteSessionTranscriptEvents({
+    agentId: params.agentId ?? "main",
+    sessionId: params.sessionId,
+    transcriptPath: params.sessionFile,
+    events: parseMockSessionContent(params.content),
+    now: () => 1_770_000_000_000,
+  });
 }
 
 async function runNewWithPreviousSessionEntry(params: {
@@ -109,9 +146,10 @@ async function runNewWithPreviousSession(params: {
   const sessionsDir = path.join(tempDir, "sessions");
   await fs.mkdir(sessionsDir, { recursive: true });
 
-  const sessionFile = await writeWorkspaceFile({
-    dir: sessionsDir,
-    name: "test-session.jsonl",
+  const sessionFile = path.join(sessionsDir, "test-session.jsonl");
+  seedSessionTranscript({
+    sessionId: "test-123",
+    sessionFile,
     content: params.sessionContent,
   });
 
@@ -144,22 +182,25 @@ async function createSessionMemoryWorkspace(params?: {
     return { tempDir, sessionsDir };
   }
 
-  const activeSessionFile = await writeWorkspaceFile({
-    dir: sessionsDir,
-    name: params.activeSession.name,
+  const activeSessionFile = path.join(sessionsDir, params.activeSession.name);
+  seedSessionTranscript({
+    sessionId: path.basename(params.activeSession.name, ".jsonl"),
+    sessionFile: activeSessionFile,
     content: params.activeSession.content,
   });
   return { tempDir, sessionsDir, activeSessionFile };
 }
 
 async function writeSessionTranscript(params: {
+  sessionId?: string;
   name: string;
   content: string;
 }): Promise<{ tempDir: string; sessionsDir: string; sessionFile: string }> {
   const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
-  const sessionFile = await writeWorkspaceFile({
-    dir: sessionsDir,
-    name: params.name,
+  const sessionFile = path.join(sessionsDir, params.name);
+  seedSessionTranscript({
+    sessionId: params.sessionId ?? path.basename(params.name, ".jsonl"),
+    sessionFile,
     content: params.content,
   });
   return { tempDir, sessionsDir, sessionFile };
@@ -191,6 +232,16 @@ function expectMemoryConversation(params: {
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
+async function waitUntil(condition: () => boolean, timeoutMs = 500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error("condition was not met before timeout");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 describe("session-memory hook", () => {
@@ -310,9 +361,10 @@ describe("session-memory hook", () => {
     const sessionsDir = path.join(tempDir, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
-    const sessionFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl",
+    const sessionFile = path.join(sessionsDir, "test-session.jsonl");
+    seedSessionTranscript({
+      sessionId: "test-123",
+      sessionFile,
       content: createMockSessionContent([
         { role: "user", content: "Investigate slow WhatsApp reset" },
         { role: "assistant", content: "Checking reset hooks" },
@@ -444,9 +496,10 @@ describe("session-memory hook", () => {
     const naviSessionsDir = path.join(naviWorkspace, "sessions");
     await fs.mkdir(naviSessionsDir, { recursive: true });
 
-    const sessionFile = await writeWorkspaceFile({
-      dir: naviSessionsDir,
-      name: "navi-session.jsonl",
+    const sessionFile = path.join(naviSessionsDir, "navi-session.jsonl");
+    seedSessionTranscript({
+      sessionId: "navi-session",
+      sessionFile,
       content: createMockSessionContent([
         { role: "user", content: "Remember this under Navi" },
         { role: "assistant", content: "Stored in the bound workspace" },
@@ -582,9 +635,9 @@ describe("session-memory hook", () => {
     const { sessionsDir } = await createSessionMemoryWorkspace();
 
     const sessionId = "missing-session-file";
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: `${sessionId}.jsonl`,
+    seedSessionTranscript({
+      sessionId,
+      sessionFile: path.join(sessionsDir, `${sessionId}.jsonl`),
       content: createMockSessionContent([
         { role: "user", content: "Recovered with missing sessionFile pointer" },
         { role: "assistant", content: "Recovered by sessionId fallback" },
@@ -614,9 +667,10 @@ describe("session-memory hook", () => {
     const sessionsDir = path.join(customAgentWorkspace, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
-    const sessionFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "custom-agent-session.jsonl",
+    const sessionFile = path.join(sessionsDir, "custom-agent-session.jsonl");
+    seedSessionTranscript({
+      sessionId: "custom-agent-session",
+      sessionFile,
       content: createMockSessionContent([
         { role: "user", content: "Custom agent conversation" },
         { role: "assistant", content: "Stored in agent workspace" },

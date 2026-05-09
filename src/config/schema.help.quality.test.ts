@@ -705,7 +705,7 @@ describe("config help copy quality", () => {
     expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
   });
 
-  it("documents session maintenance duration/size examples and deprecations", () => {
+  it("documents session maintenance duration examples and deprecations", () => {
     const pruneAfter = FIELD_HELP["session.maintenance.pruneAfter"];
     expect(pruneAfter.includes("30d")).toBe(true);
     expect(pruneAfter.includes("12h")).toBe(true);
@@ -719,10 +719,11 @@ describe("config help copy quality", () => {
     expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
 
     const maxDisk = FIELD_HELP["session.maintenance.maxDiskBytes"];
-    expect(maxDisk.includes("500mb")).toBe(true);
+    expect(/deprecated|ignored/i.test(maxDisk)).toBe(true);
+    expect(maxDisk.includes("doctor --fix")).toBe(true);
 
     const highWater = FIELD_HELP["session.maintenance.highWaterBytes"];
-    expect(highWater.includes("80%")).toBe(true);
+    expect(/deprecated|ignored/i.test(highWater)).toBe(true);
   });
 
   it("documents cron run-log retention controls", () => {

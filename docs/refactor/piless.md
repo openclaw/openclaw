@@ -50,21 +50,21 @@ This plan has started landing in slices:
   fix mode imports legacy `sessions.json` indexes into SQLite and removes the
   JSON index after import, instead of keeping a startup migration or parallel
   compatibility/export store. Runtime session reads and writes normalize and
-  persist only: no JSON import, pruning, capping, archive cleanup, or
+  persist only: no JSON import, row pruning, capping, archive cleanup, or
   disk-budget cleanup runs on the hot path. The old maintenance write options
   have been removed from the session-store API; doctor owns legacy import and
-  `openclaw sessions cleanup` owns explicit cleanup. Status and discovery now
-  use the primary session-store loader instead of a duplicated read-only JSON
-  parser, and SQLite-backed agent session directories remain discoverable after
-  doctor deletes the legacy `sessions.json` file. The legacy JSON session-store
-  object/serialized cache is gone; JSON fallback reads now parse directly while
-  canonical SQLite stores avoid that path. The cron timer no longer runs a
-  dedicated session reaper; cron run sessions are maintained through the same
-  explicit session cleanup path as other rows.
+  `openclaw sessions cleanup` owns explicit SQLite row cleanup only. Status and
+  discovery now use the primary session-store loader instead of a duplicated
+  read-only JSON parser, and SQLite-backed agent session directories remain
+  discoverable after doctor deletes the legacy `sessions.json` file. The legacy
+  JSON session-store object/serialized cache is gone; JSON fallback reads now
+  parse directly while canonical SQLite stores avoid that path. The cron timer
+  no longer runs a dedicated session reaper; cron run sessions are maintained
+  through the same explicit row cleanup path as other rows.
 - Transcript events are SQLite-primary. OpenClaw-owned append paths require
   agent/session scope and write `transcript_events` directly; `*.jsonl` is no
   longer a runtime mirror for those paths. JSONL is now an explicit
-  import/export/debug shape only. The OpenClaw transcript session manager,
+  import/export/debug boundary shape only. The OpenClaw transcript session manager,
   Gateway-injected assistant messages, CLI transcript persistence, Codex
   app-server mirroring, compaction successor transcripts, manual compaction
   boundary rewrites, and reset/header creation all persist through SQLite.

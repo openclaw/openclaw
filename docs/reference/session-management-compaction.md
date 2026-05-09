@@ -85,36 +85,30 @@ OpenClaw resolves these via `src/config/sessions/*`.
 
 ---
 
-## Store maintenance and disk controls
+## Store Maintenance
 
-Session persistence has explicit maintenance controls (`session.maintenance`) for session entries and trajectory sidecars:
+Session persistence has explicit maintenance controls (`session.maintenance`) for SQLite session rows:
 
 - `mode`: `warn` (default) or `enforce`
 - `pruneAfter`: stale-entry age cutoff (default `30d`)
 - `maxEntries`: cap entries in the session store (default `500`)
-- `maxDiskBytes`: optional sessions-directory budget
-- `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
+- `maxDiskBytes`: deprecated and ignored
+- `highWaterBytes`: deprecated and ignored
 
-Normal Gateway writes flow through a per-store session writer that serializes in-process mutations. SQLite is the canonical per-agent backend; `sessions.json` is a legacy doctor-import input, not a parallel export/debug store. Runtime code should prefer `updateSessionStore(...)` or `updateSessionStoreEntry(...)`. Runtime writes normalize and persist only; they do not prune, cap, import, archive, or run disk-budget cleanup. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue. Session store reads do not import, prune, or cap entries during Gateway startup; use `openclaw doctor --fix` for legacy JSON import and `openclaw sessions cleanup --enforce` for cleanup. `openclaw sessions cleanup --enforce` applies the configured cap immediately and prunes old unreferenced trajectory artifacts even when no disk budget is configured. Compaction checkpoint cleanup removes SQLite snapshot rows, not file artifacts.
+Normal Gateway writes flow through a per-store session writer that serializes in-process mutations. SQLite is the canonical per-agent backend; `sessions.json` is a legacy doctor-import input, not a parallel export/debug store. Runtime code should prefer `updateSessionStore(...)` or `updateSessionStoreEntry(...)`. Runtime writes normalize and persist only; they do not prune, cap, import, archive, or run disk-budget cleanup. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue. Session store reads do not import, prune, or cap entries during Gateway startup; use `openclaw doctor --fix` for legacy JSON import and `openclaw sessions cleanup --enforce` for row cleanup. `openclaw sessions cleanup --enforce` applies the configured age/count policy immediately. Compaction checkpoint cleanup removes SQLite snapshot rows, not file artifacts.
 
 Maintenance keeps durable external conversation pointers such as group sessions
 and thread-scoped chat sessions, but synthetic runtime entries for cron, hooks,
 heartbeat, ACP, and sub-agents can still be removed when they exceed the
-configured age, count, or disk budget.
+configured age or count.
 
-OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes` key is ignored and `openclaw doctor --fix` removes it from older configs.
+OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes`, `maxDiskBytes`, and `highWaterBytes` keys are ignored and `openclaw doctor --fix` removes them from older configs.
 
 Transcript mutations are serialized through SQLite transactions plus the
 per-session append queue. The legacy `session.writeLock.acquireTimeoutMs`
 setting remains for older import/debug paths that still touch JSONL files.
 
-Enforcement order for disk budget cleanup (`mode: "enforce"`):
-
-1. Remove oldest orphan trajectory artifacts first.
-2. If still above the target, evict oldest session entries and their trajectory sidecars.
-3. Keep going until usage is at or below `highWaterBytes`.
-
-In `mode: "warn"`, OpenClaw reports potential evictions but does not mutate the store/files.
+In `mode: "warn"`, OpenClaw reports potential row pruning/capping but does not mutate the store.
 
 Run maintenance on demand:
 

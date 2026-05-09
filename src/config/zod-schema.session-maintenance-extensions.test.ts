@@ -22,24 +22,14 @@ describe("SessionSchema maintenance extensions", () => {
     ).toThrow(/acquireTimeoutMs|number/i);
   });
 
-  it("accepts valid maintenance extensions", () => {
-    expect(
-      SessionSchema.safeParse({
-        maintenance: {
-          maxDiskBytes: "500mb",
-          highWaterBytes: "350mb",
-        },
-      }),
-    ).toMatchObject({ success: true });
-  });
-
-  it("rejects invalid maintenance extension values", () => {
+  it("accepts ignored legacy disk budget settings", () => {
     expect(() =>
       SessionSchema.parse({
         maintenance: {
           maxDiskBytes: "big",
+          highWaterBytes: "legacy",
         },
       }),
-    ).toThrow(/maxDiskBytes|size/i);
+    ).not.toThrow();
   });
 });

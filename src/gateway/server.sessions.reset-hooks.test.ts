@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
 import { loadSessionStore } from "../config/sessions.js";
@@ -246,7 +245,7 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
 });
 
 test("sessions.reset returns unavailable when active run does not stop", async () => {
-  const { dir, storePath } = await seedActiveMainSession();
+  const { storePath } = await seedActiveMainSession();
   const waitCallCountAtSnapshotClear: number[] = [];
   bootstrapCacheMocks.clearBootstrapSnapshot.mockImplementation(() => {
     waitCallCountAtSnapshotClear.push(embeddedRunMock.waitCalls.length);

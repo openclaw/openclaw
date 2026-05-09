@@ -47,6 +47,29 @@ describe("legacy session maintenance migrate", () => {
     expect(res.changes).toContain("Removed deprecated session.maintenance.rotateBytes.");
   });
 
+  it("removes deprecated session.maintenance disk budget settings", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 500,
+          maxDiskBytes: "500mb",
+          highWaterBytes: "400mb",
+        },
+      },
+    });
+
+    expect(res.config?.session?.maintenance).toEqual({
+      mode: "enforce",
+      pruneAfter: "30d",
+      maxEntries: 500,
+    });
+    expect(res.changes).toContain(
+      "Removed deprecated session.maintenance.maxDiskBytes/highWaterBytes; session transcripts are stored in SQLite.",
+    );
+  });
+
   it("removes legacy session.maintenance.resetArchiveRetention", () => {
     const res = migrateLegacyConfigForTest({
       session: {
