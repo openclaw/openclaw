@@ -10,6 +10,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createSqliteSessionTranscriptLocator } from "./paths.js";
 import {
   appendSqliteSessionTranscriptEvent,
   appendSqliteSessionTranscriptMessage,
@@ -171,7 +172,7 @@ describe("SQLite session transcript store", () => {
     ).toEqual([{ type: "message", id: "main" }]);
   });
 
-  it("lists SQLite transcripts with the newest remembered transcript path", () => {
+  it("lists SQLite transcripts with canonical transcript locators", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const olderPath = path.join(stateDir, "session-old.jsonl");
@@ -198,14 +199,14 @@ describe("SQLite session transcript store", () => {
       {
         agentId: "main",
         sessionId: "session-1",
-        path: newerPath,
+        path: createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "session-1" }),
         updatedAt: 200,
         eventCount: 2,
       },
     ]);
   });
 
-  it("cascades transcript file mappings when an agent database registration is removed", () => {
+  it("does not write runtime transcript file mappings", () => {
     const stateDir = createTempDir();
     appendSqliteSessionTranscriptEvent({
       env: { OPENCLAW_STATE_DIR: stateDir },
@@ -220,14 +221,10 @@ describe("SQLite session transcript store", () => {
     });
     expect(
       stateDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_files").get(),
-    ).toEqual({ count: 1 });
-    stateDatabase.db.prepare("DELETE FROM agent_databases WHERE agent_id = ?").run("main");
-    expect(
-      stateDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_files").get(),
     ).toEqual({ count: 0 });
   });
 
-  it("deletes transcript snapshots and file mappings with the transcript", () => {
+  it("deletes transcript snapshots with the transcript", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const transcriptPath = path.join(stateDir, "session.jsonl");
@@ -255,10 +252,6 @@ describe("SQLite session transcript store", () => {
     const agentDatabase = openOpenClawAgentDatabase({ env, agentId: "main" });
     expect(
       agentDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_snapshots").get(),
-    ).toEqual({ count: 0 });
-    const stateDatabase = openOpenClawStateDatabase({ env });
-    expect(
-      stateDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_files").get(),
     ).toEqual({ count: 0 });
   });
 
