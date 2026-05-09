@@ -3,7 +3,6 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
-import { formatCliFailureLines } from "./cli/failure-output.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { assertNotRoot } from "./cli/root-guard.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
@@ -215,6 +214,7 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
     );
     await runCli(argv);
   } catch (error) {
+    const { formatCliFailureLines } = await import("./cli/failure-output.js");
     for (const line of formatCliFailureLines({
       title: "Could not start the CLI.",
       error,
