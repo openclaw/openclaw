@@ -459,9 +459,11 @@ export async function runEmbeddedPiAgent(
     agentId: sessionAgentId,
     sessionId: params.sessionId,
   });
-  if (params.transcriptLocator !== sqliteTranscriptLocator) {
-    params = { ...params, transcriptLocator: sqliteTranscriptLocator };
-  }
+  const normalizedParams: RunEmbeddedPiAgentParams & { transcriptLocator: string } = {
+    ...params,
+    transcriptLocator: sqliteTranscriptLocator,
+  };
+  params = normalizedParams;
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
@@ -1000,7 +1002,7 @@ export async function runEmbeddedPiAgent(
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       let activeSessionId = params.sessionId;
-      let activeSessionFile = params.sessionFile;
+      let activeTranscriptLocator = sqliteTranscriptLocator;
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
       // Pi owns transcript persistence; this marker only lets the outer retry avoid
       // replaying the same inbound channel message after overflow compaction.
@@ -1106,12 +1108,12 @@ export async function runEmbeddedPiAgent(
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
         ) => {
           const nextSessionId = compactResult.result?.sessionId;
-          const nextSessionFile = compactResult.result?.sessionFile;
+          const nextTranscriptLocator = compactResult.result?.transcriptLocator;
           if (nextSessionId && nextSessionId !== activeSessionId) {
             activeSessionId = nextSessionId;
           }
-          if (nextSessionFile && nextSessionFile !== activeSessionFile) {
-            activeSessionFile = nextSessionFile;
+          if (nextTranscriptLocator && nextTranscriptLocator !== activeTranscriptLocator) {
+            activeTranscriptLocator = nextTranscriptLocator;
           }
         };
         const onCompactionHookMessages = async (payload: {
@@ -1144,7 +1146,7 @@ export async function runEmbeddedPiAgent(
           }
           try {
             await hookRunner.runBeforeCompaction(
-              { messageCount: -1, sessionFile: activeSessionFile },
+              { messageCount: -1, transcriptLocator: activeTranscriptLocator },
               resolveActiveHookContext(),
             );
           } catch (hookErr) {
@@ -1169,7 +1171,8 @@ export async function runEmbeddedPiAgent(
                 messageCount: -1,
                 compactedCount: -1,
                 tokenCount: compactResult.result?.tokensAfter,
-                sessionFile: compactResult.result?.sessionFile ?? activeSessionFile,
+                transcriptLocator:
+                  compactResult.result?.transcriptLocator ?? activeTranscriptLocator,
               },
               resolveActiveHookContext(),
             );
@@ -1307,7 +1310,7 @@ export async function runEmbeddedPiAgent(
             currentMessageId: params.currentMessageId,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
-            sessionFile: activeSessionFile,
+            transcriptLocator: activeTranscriptLocator,
             workspaceDir: resolvedWorkspace,
             agentDir,
             config: params.config,
@@ -1423,7 +1426,7 @@ export async function runEmbeddedPiAgent(
             idleTimedOut,
             timedOutDuringCompaction,
             sessionIdUsed,
-            sessionFileUsed,
+            transcriptLocatorUsed,
             lastAssistant: sessionLastAssistant,
             currentAttemptAssistant,
           } = attempt;
@@ -1431,8 +1434,8 @@ export async function runEmbeddedPiAgent(
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
           }
-          if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
-            activeSessionFile = sessionFileUsed;
+          if (transcriptLocatorUsed && transcriptLocatorUsed !== activeTranscriptLocator) {
+            activeTranscriptLocator = transcriptLocatorUsed;
           }
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
@@ -1649,7 +1652,7 @@ export async function runEmbeddedPiAgent(
                 timeoutCompactResult = await contextEngine.compact({
                   sessionId: activeSessionId,
                   sessionKey: params.sessionKey,
-                  sessionFile: activeSessionFile,
+                  transcriptLocator: activeTranscriptLocator,
                   tokenBudget: ctxInfo.tokens,
                   force: true,
                   compactionTarget: "budget",
@@ -1684,7 +1687,7 @@ export async function runEmbeddedPiAgent(
                     agentId: sessionAgentId,
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
-                    sessionFile: activeSessionFile,
+                    transcriptLocator: activeTranscriptLocator,
                   });
                 }
                 log.info(
@@ -1729,7 +1732,7 @@ export async function runEmbeddedPiAgent(
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
-                `messages=${msgCount} sessionFile=${activeSessionFile} ` +
+                `messages=${msgCount} transcriptLocator=${activeTranscriptLocator} ` +
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
                 `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
                 `error=${errorText.slice(0, 200)}`,
@@ -1819,7 +1822,7 @@ export async function runEmbeddedPiAgent(
                 compactResult = await contextEngine.compact({
                   sessionId: activeSessionId,
                   sessionKey: params.sessionKey,
-                  sessionFile: activeSessionFile,
+                  transcriptLocator: activeTranscriptLocator,
                   tokenBudget: ctxInfo.tokens,
                   ...(observedOverflowTokens !== undefined
                     ? { currentTokenCount: observedOverflowTokens }
@@ -1835,7 +1838,7 @@ export async function runEmbeddedPiAgent(
                     sessionAgentId,
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
-                    sessionFile: activeSessionFile,
+                    transcriptLocator: activeTranscriptLocator,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
                     config: params.config,
@@ -1864,7 +1867,7 @@ export async function runEmbeddedPiAgent(
                 }
                 if (preflightRecovery?.route === "compact_then_truncate") {
                   const truncResult = await truncateOversizedToolResultsInSession({
-                    sessionFile: activeSessionFile,
+                    transcriptLocator: activeTranscriptLocator,
                     contextWindowTokens: ctxInfo.tokens,
                     maxCharsOverride: resolveLiveToolResultMaxChars({
                       contextWindowTokens: ctxInfo.tokens,
@@ -1931,7 +1934,7 @@ export async function runEmbeddedPiAgent(
                     `(contextWindow=${contextWindowTokens} tokens)`,
                 );
                 const truncResult = await truncateOversizedToolResultsInSession({
-                  sessionFile: activeSessionFile,
+                  transcriptLocator: activeTranscriptLocator,
                   contextWindowTokens,
                   maxCharsOverride: toolResultMaxChars,
                   agentId: sessionAgentId,
@@ -2182,15 +2185,13 @@ export async function runEmbeddedPiAgent(
               (await advanceAuthProfile())
             ) {
               if (failedPromptProfileId && promptProfileFailureReason) {
-                try {
-                  await maybeMarkAuthProfileFailure({
-                    profileId: failedPromptProfileId,
-                    reason: promptProfileFailureReason,
-                    modelId,
-                  });
-                } catch (err) {
-                  log.warn(`prompt profile failure mark failed: ${String(err)}`);
-                }
+                maybeMarkAuthProfileFailure({
+                  profileId: failedPromptProfileId,
+                  reason: promptProfileFailureReason,
+                  modelId,
+                }).catch((err) =>
+                  log.warn(`deferred prompt profile failure mark failed: ${String(err)}`),
+                );
               }
               traceAttempts.push({
                 provider,
@@ -2219,15 +2220,13 @@ export async function runEmbeddedPiAgent(
               });
             }
             if (failedPromptProfileId && promptProfileFailureReason) {
-              try {
-                await maybeMarkAuthProfileFailure({
-                  profileId: failedPromptProfileId,
-                  reason: promptProfileFailureReason,
-                  modelId,
-                });
-              } catch (err) {
-                log.warn(`prompt profile failure mark failed: ${String(err)}`);
-              }
+              maybeMarkAuthProfileFailure({
+                profileId: failedPromptProfileId,
+                reason: promptProfileFailureReason,
+                modelId,
+              }).catch((err) =>
+                log.warn(`deferred prompt profile failure mark failed: ${String(err)}`),
+              );
             }
             const fallbackThinking = pickFallbackThinkingLevel({
               message: errorText,
@@ -2360,7 +2359,6 @@ export async function runEmbeddedPiAgent(
 
           const assistantFailoverDecision = resolveRunFailoverDecision({
             stage: "assistant",
-            allowFormatRetry: cloudCodeAssistFormatError,
             aborted,
             externalAbort,
             fallbackConfigured,
@@ -2473,7 +2471,7 @@ export async function runEmbeddedPiAgent(
           });
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
-            sessionFile: sessionFileUsed,
+            transcriptLocator: transcriptLocatorUsed,
             provider: reportedModelRef.provider,
             model: reportedModelRef.model,
             contextTokens: ctxInfo.tokens,
@@ -2536,7 +2534,6 @@ export async function runEmbeddedPiAgent(
           // partial assistant fragment. Emit an explicit timeout error instead.
           if (
             timedOutDuringPrompt &&
-            !hasMessagingToolDeliveryEvidence(attempt) &&
             (!payloadsWithToolMedia?.length || hasPartialAssistantTextAfterPromptTimeout)
           ) {
             const timeoutText = idleTimedOut

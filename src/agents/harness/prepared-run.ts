@@ -1,3 +1,4 @@
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RunEmbeddedPiAgentParams } from "../pi-embedded-runner/run/params.js";
 import type { EmbeddedRunAttemptParams } from "../pi-embedded-runner/run/types.js";
@@ -23,7 +24,7 @@ type PreparedRunAttemptShape = Pick<
   | "provider"
   | "replyOperation"
   | "runId"
-  | "sessionFile"
+  | "transcriptLocator"
   | "sessionId"
   | "sessionKey"
   | "shouldEmitToolOutput"
@@ -44,7 +45,7 @@ type PreparedRunParamsShape = Pick<
   | "initialVfsEntries"
   | "replyOperation"
   | "runId"
-  | "sessionFile"
+  | "transcriptLocator"
   | "sessionId"
   | "sessionKey"
   | "shouldEmitToolOutput"
@@ -92,13 +93,17 @@ function createPreparedAgentRun(
   source: PreparedRunSourceShape,
   options: CreatePreparedAgentRunOptions & { runParams?: Record<string, unknown> },
 ): PreparedAgentRun {
+  const agentId = source.agentId ?? resolveAgentIdFromSessionKey(source.sessionKey);
   const preparedRun: PreparedAgentRun = {
     runtimeId: options.runtimeId ?? "pi",
     runId: source.runId,
-    agentId: source.agentId ?? resolveAgentIdFromSessionKey(source.sessionKey),
+    agentId,
     sessionId: source.sessionId,
     ...(source.sessionKey ? { sessionKey: source.sessionKey } : {}),
-    sessionFile: source.sessionFile,
+    transcriptLocator: createSqliteSessionTranscriptLocator({
+      agentId,
+      sessionId: source.sessionId,
+    }),
     workspaceDir: source.workspaceDir,
     ...(source.agentDir ? { agentDir: source.agentDir } : {}),
     prompt: source.prompt,

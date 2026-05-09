@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  createSqliteSessionTranscriptLocator,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -41,11 +42,11 @@ afterEach(async () => {
   }
 });
 
-async function createTempSessionFile() {
+async function createTempTranscriptLocator(sessionId = "session") {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-transcript-"));
   tempDirs.push(dir);
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
-  return path.join(dir, "session.jsonl");
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
 }
 
 async function makeRoot(prefix: string): Promise<string> {
@@ -55,19 +56,27 @@ async function makeRoot(prefix: string): Promise<string> {
   return root;
 }
 
-function sessionIdFromFile(sessionFile: string): string {
-  return path.basename(sessionFile).replace(/\.jsonl$/i, "");
+function sessionIdFromLocator(transcriptLocator: string): string {
+  return transcriptLocator.replace(/^sqlite-transcript:\/\/[^/]+\//, "").replace(/\?.*$/, "");
 }
 
-function readTranscriptEvents(sessionFile: string, sessionId = sessionIdFromFile(sessionFile)) {
+function readTranscriptEvents(
+  transcriptLocator: string,
+  sessionId = sessionIdFromLocator(transcriptLocator),
+) {
   return loadSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
   }).map((entry) => entry.event);
 }
 
-function readTranscriptRaw(sessionFile: string, sessionId = sessionIdFromFile(sessionFile)) {
-  const lines = readTranscriptEvents(sessionFile, sessionId).map((event) => JSON.stringify(event));
+function readTranscriptRaw(
+  transcriptLocator: string,
+  sessionId = sessionIdFromLocator(transcriptLocator),
+) {
+  const lines = readTranscriptEvents(transcriptLocator, sessionId).map((event) =>
+    JSON.stringify(event),
+  );
   return lines.length ? `${lines.join("\n")}\n` : "";
 }
 
@@ -81,7 +90,7 @@ function parseJsonLines<T>(raw: string): T[] {
 
 describe("mirrorCodexAppServerTranscript", () => {
   it("mirrors user and assistant messages into the Pi transcript", async () => {
-    const sessionFile = await createTempSessionFile();
+    const transcriptLocator = await createTempTranscriptLocator();
     const userMessage = makeAgentUserMessage({
       content: [{ type: "text", text: "hello" }],
       timestamp: Date.now(),
@@ -92,13 +101,13 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
 
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [userMessage, assistantMessage],
       idempotencyScope: "scope-1",
     });
 
-    const raw = readTranscriptRaw(sessionFile);
+    const raw = readTranscriptRaw(transcriptLocator);
     expect(raw).toContain('"role":"user"');
     expect(raw).toContain('"content":[{"type":"text","text":"hello"}]');
     expect(raw).toContain('"role":"assistant"');
@@ -109,12 +118,15 @@ describe("mirrorCodexAppServerTranscript", () => {
     );
   });
 
-  it("creates the transcript directory on first mirror", async () => {
-    const root = await makeRoot("openclaw-codex-transcript-missing-dir-");
-    const sessionFile = path.join(root, "nested", "sessions", "session.jsonl");
+  it("creates the SQLite transcript on first mirror", async () => {
+    await makeRoot("openclaw-codex-transcript-missing-dir-");
+    const transcriptLocator = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "session",
+    });
 
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [
         makeAgentAssistantMessage({
@@ -125,13 +137,13 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    const raw = readTranscriptRaw(sessionFile);
+    const raw = readTranscriptRaw(transcriptLocator);
     expect(raw).toContain('"role":"assistant"');
     expect(raw).toContain('"content":[{"type":"text","text":"first mirror"}]');
   });
 
   it("deduplicates app-server turn mirrors by idempotency scope", async () => {
-    const sessionFile = await createTempSessionFile();
+    const transcriptLocator = await createTempTranscriptLocator();
     const messages = [
       makeAgentUserMessage({
         content: [{ type: "text", text: "hello" }],
@@ -144,19 +156,19 @@ describe("mirrorCodexAppServerTranscript", () => {
     ] as const;
 
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [...messages],
       idempotencyScope: "scope-1",
     });
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [...messages],
       idempotencyScope: "scope-1",
     });
 
-    const records = readTranscriptRaw(sessionFile)
+    const records = readTranscriptRaw(transcriptLocator)
       .trim()
       .split("\n")
       .filter(Boolean)
@@ -178,20 +190,20 @@ describe("mirrorCodexAppServerTranscript", () => {
         },
       ]),
     );
-    const sessionFile = await createTempSessionFile();
+    const transcriptLocator = await createTempTranscriptLocator();
     const sourceMessage = makeAgentAssistantMessage({
       content: [{ type: "text", text: "hello" }],
       timestamp: Date.now(),
     });
 
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [sourceMessage],
       idempotencyScope: "scope-1",
     });
 
-    const raw = readTranscriptRaw(sessionFile);
+    const raw = readTranscriptRaw(transcriptLocator);
     expect(raw).toContain('"content":[{"type":"text","text":"hello [hooked]"}]');
     // The idempotency fingerprint is derived from the pre-hook message so a
     // hook rewrite cannot bypass dedupe by reshaping content on every retry.
@@ -214,20 +226,20 @@ describe("mirrorCodexAppServerTranscript", () => {
         },
       ]),
     );
-    const sessionFile = await createTempSessionFile();
+    const transcriptLocator = await createTempTranscriptLocator();
     const sourceMessage = makeAgentAssistantMessage({
       content: [{ type: "text", text: "hello" }],
       timestamp: Date.now(),
     });
 
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [sourceMessage],
       idempotencyScope: "scope-1",
     });
 
-    const raw = readTranscriptRaw(sessionFile);
+    const raw = readTranscriptRaw(transcriptLocator);
     expect(raw).toContain(
       `"idempotencyKey":"scope-1:assistant:${expectedFingerprint(sourceMessage)}"`,
     );
@@ -243,10 +255,10 @@ describe("mirrorCodexAppServerTranscript", () => {
         },
       ]),
     );
-    const sessionFile = await createTempSessionFile();
+    const transcriptLocator = await createTempTranscriptLocator();
 
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [
         makeAgentAssistantMessage({
@@ -257,15 +269,14 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    expect(readTranscriptRaw(sessionFile)).toBe("");
+    expect(readTranscriptRaw(transcriptLocator)).toBe("");
   });
 
   it("migrates small linear transcripts before mirroring", async () => {
-    const sessionFile = await createTempSessionFile();
+    const transcriptLocator = await createTempTranscriptLocator("linear-codex-session");
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "linear-codex-session",
-      transcriptPath: sessionFile,
       events: [
         {
           type: "session",
@@ -285,7 +296,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
 
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionId: "linear-codex-session",
       sessionKey: "session-1",
       messages: [
@@ -297,7 +308,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    const records = readTranscriptRaw(sessionFile, "linear-codex-session")
+    const records = readTranscriptRaw(transcriptLocator, "linear-codex-session")
       .trim()
       .split("\n")
       .map(
@@ -346,7 +357,7 @@ describe("mirrorCodexAppServerTranscript", () => {
   // tags `${turnId}:reasoning` and `${turnId}:assistant`) makes each kind
   // its own dedupe slot.
   it("dedupes mirrored messages despite snapshot positional shifts", async () => {
-    const sessionFile = await createTempSessionFile();
+    const transcriptLocator = await createTempTranscriptLocator();
     const userMessage = attachCodexMirrorIdentity(
       makeAgentUserMessage({
         content: [{ type: "text", text: "hello" }],
@@ -363,7 +374,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     );
 
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [userMessage, assistantMessage],
       idempotencyScope: "codex-app-server:thread-X",
@@ -376,13 +387,13 @@ describe("mirrorCodexAppServerTranscript", () => {
       "turn-1:reasoning",
     );
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [userMessage, reasoningMessage, assistantMessage],
       idempotencyScope: "codex-app-server:thread-X",
     });
 
-    const messageTexts = readFileMessages(readTranscriptRaw(sessionFile)).map((m) => m.text);
+    const messageTexts = readFileMessages(readTranscriptRaw(transcriptLocator)).map((m) => m.text);
     expect(messageTexts).toEqual(["hello", "hi there", "[Codex reasoning] thinking"]);
   });
 
@@ -391,7 +402,7 @@ describe("mirrorCodexAppServerTranscript", () => {
   // key differs even when role+content match. (Prior content-fingerprint-only
   // designs would have collapsed the second user turn here.)
   it("keeps repeated same-content turns distinct", async () => {
-    const sessionFile = await createTempSessionFile();
+    const transcriptLocator = await createTempTranscriptLocator();
     const userTurn1 = attachCodexMirrorIdentity(
       makeAgentUserMessage({
         content: [{ type: "text", text: "yes" }],
@@ -422,19 +433,19 @@ describe("mirrorCodexAppServerTranscript", () => {
     );
 
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [userTurn1, assistantTurn1],
       idempotencyScope: "codex-app-server:thread-X",
     });
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [userTurn2, assistantTurn2],
       idempotencyScope: "codex-app-server:thread-X",
     });
 
-    expect(readFileMessages(readTranscriptRaw(sessionFile))).toEqual([
+    expect(readFileMessages(readTranscriptRaw(transcriptLocator))).toEqual([
       { role: "user", text: "yes" },
       { role: "assistant", text: "ok 1" },
       { role: "user", text: "yes" },
@@ -449,7 +460,7 @@ describe("mirrorCodexAppServerTranscript", () => {
   // existing on-disk keys and become true no-ops — instead of being
   // appended again on a sibling branch (the on-disk symptom in #77012).
   it("dedupes prior-turn entries re-emitted into a later turn's snapshot", async () => {
-    const sessionFile = await createTempSessionFile();
+    const transcriptLocator = await createTempTranscriptLocator();
     const userTurn1 = attachCodexMirrorIdentity(
       makeAgentUserMessage({
         content: [{ type: "text", text: "msg1" }],
@@ -465,7 +476,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       "turn-1:assistant",
     );
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [userTurn1, assistantTurn1],
       idempotencyScope: "codex-app-server:thread-X",
@@ -488,13 +499,13 @@ describe("mirrorCodexAppServerTranscript", () => {
     // Buggy upstream: snapshot for turn 2 also includes the just-completed
     // turn 1's entries (with their original identities preserved).
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [userTurn1, assistantTurn1, userTurn2, assistantTurn2],
       idempotencyScope: "codex-app-server:thread-X",
     });
 
-    expect(readFileMessages(readTranscriptRaw(sessionFile))).toEqual([
+    expect(readFileMessages(readTranscriptRaw(transcriptLocator))).toEqual([
       { role: "user", text: "msg1" },
       { role: "assistant", text: "reply1" },
       { role: "user", text: "msg2" },
@@ -507,7 +518,7 @@ describe("mirrorCodexAppServerTranscript", () => {
   // still get the role/content fingerprint key. Distinct turns are then
   // distinguished by the caller's idempotency scope.
   it("falls back to the role+content fingerprint when no identity is attached", async () => {
-    const sessionFile = await createTempSessionFile();
+    const transcriptLocator = await createTempTranscriptLocator();
     const userMessage = makeAgentUserMessage({
       content: [{ type: "text", text: "hello" }],
       timestamp: Date.now(),
@@ -518,13 +529,13 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
 
     await mirrorCodexAppServerTranscript({
-      sessionFile,
+      transcriptLocator,
       sessionKey: "session-1",
       messages: [userMessage, assistantMessage],
       idempotencyScope: "scope-1",
     });
 
-    const raw = readTranscriptRaw(sessionFile);
+    const raw = readTranscriptRaw(transcriptLocator);
     expect(raw).toContain(`"idempotencyKey":"scope-1:user:${expectedFingerprint(userMessage)}"`);
     expect(raw).toContain(
       `"idempotencyKey":"scope-1:assistant:${expectedFingerprint(assistantMessage)}"`,

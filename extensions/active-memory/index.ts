@@ -3,7 +3,7 @@ import path from "node:path";
 import {
   createSqliteSessionTranscriptLocator,
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   DEFAULT_PROVIDER,
@@ -252,7 +252,7 @@ type TranscriptReadLimits = {
 
 type RecallSubagentResult = {
   rawReply: string;
-  transcriptPath?: string;
+  transcriptLocator?: string;
   searchDebug?: ActiveMemorySearchDebug;
 };
 
@@ -1502,13 +1502,13 @@ function resolveTranscriptReadLimits(
 }
 
 async function streamBoundedTranscriptJsonl(params: {
-  sessionFile: string;
+  transcriptLocator: string;
   limits?: TranscriptReadLimits;
   onRecord: (record: unknown) => boolean | void;
 }): Promise<void> {
   const limits = resolveTranscriptReadLimits(params.limits);
-  const scope = resolveSqliteSessionTranscriptScopeForPath({
-    transcriptPath: params.sessionFile,
+  const scope = resolveSqliteSessionTranscriptScopeForLocator({
+    transcriptLocator: params.transcriptLocator,
   });
   if (!scope) {
     return;
@@ -1608,12 +1608,12 @@ function extractTerminalMemorySearchResultFromSessionRecord(
 }
 
 async function readActiveMemorySearchDebug(
-  sessionFile: string,
+  transcriptLocator: string,
   limits?: TranscriptReadLimits,
 ): Promise<ActiveMemorySearchDebug | undefined> {
   let found: ActiveMemorySearchDebug | undefined;
   await streamBoundedTranscriptJsonl({
-    sessionFile,
+    transcriptLocator,
     limits,
     onRecord: (record) => {
       const debug = extractActiveMemorySearchDebugFromSessionRecord(record);
@@ -1626,12 +1626,12 @@ async function readActiveMemorySearchDebug(
 }
 
 async function readTerminalMemorySearchResult(
-  sessionFile: string,
+  transcriptLocator: string,
   limits?: TranscriptReadLimits,
 ): Promise<TerminalMemorySearchResult | undefined> {
   let found: TerminalMemorySearchResult | undefined;
   await streamBoundedTranscriptJsonl({
-    sessionFile,
+    transcriptLocator,
     limits,
     onRecord: (record) => {
       const result = extractTerminalMemorySearchResultFromSessionRecord(record);
@@ -1646,7 +1646,7 @@ async function readTerminalMemorySearchResult(
 }
 
 function watchTerminalMemorySearchResult(params: {
-  getSessionFile: () => string | undefined;
+  getTranscriptLocator: () => string | undefined;
   abortSignal: AbortSignal;
 }): TerminalMemorySearchWatch {
   let stopped = false;
@@ -1685,8 +1685,10 @@ function watchTerminalMemorySearchResult(params: {
     }
     inFlight = true;
     try {
-      const sessionFile = params.getSessionFile();
-      const result = sessionFile ? await readTerminalMemorySearchResult(sessionFile) : undefined;
+      const transcriptLocator = params.getTranscriptLocator();
+      const result = transcriptLocator
+        ? await readTerminalMemorySearchResult(transcriptLocator)
+        : undefined;
       if (result) {
         finish(result);
         return;
@@ -1772,17 +1774,17 @@ function extractAssistantTextFromSessionRecord(value: unknown): string {
 }
 
 async function readPartialAssistantText(
-  sessionFile: string | undefined,
+  transcriptLocator: string | undefined,
   limits?: TranscriptReadLimits,
 ): Promise<string | null> {
-  if (!sessionFile) {
+  if (!transcriptLocator) {
     return null;
   }
   const texts: string[] = [];
   const resolvedLimits = resolveTranscriptReadLimits(limits);
   let collectedChars = 0;
   await streamBoundedTranscriptJsonl({
-    sessionFile,
+    transcriptLocator,
     limits: resolvedLimits,
     onRecord: (record) => {
       const text = extractAssistantTextFromSessionRecord(record);
@@ -1874,7 +1876,7 @@ async function waitForSubagentPartialTimeoutData(
 async function buildTimeoutRecallResult(params: {
   elapsedMs: number;
   maxSummaryChars: number;
-  sessionFile?: string;
+  transcriptLocator?: string;
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
   subagentPromise?: Promise<RecallSubagentResult>;
@@ -1886,7 +1888,7 @@ async function buildTimeoutRecallResult(params: {
   const rawReply =
     params.rawReply ??
     subagentPartialData.rawReply ??
-    (await readPartialAssistantText(params.sessionFile));
+    (await readPartialAssistantText(params.transcriptLocator));
   const summary = truncateSummary(
     normalizeActiveSummary(rawReply ?? "") ?? "",
     params.maxSummaryChars,
@@ -1905,7 +1907,9 @@ async function buildTimeoutRecallResult(params: {
     searchDebug:
       params.searchDebug ??
       subagentPartialData.searchDebug ??
-      (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined),
+      (params.transcriptLocator
+        ? await readActiveMemorySearchDebug(params.transcriptLocator)
+        : undefined),
   };
 }
 
@@ -2292,7 +2296,7 @@ async function runRecallSubagent(params: {
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
   abortSignal?: AbortSignal;
-  onSessionFile?: (sessionFile: string) => void;
+  onTranscriptLocator?: (transcriptLocator: string) => void;
 }): Promise<RecallSubagentResult> {
   const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
   const agentDir = resolveAgentDir(params.api.config, params.agentId);
@@ -2322,11 +2326,11 @@ async function runRecallSubagent(params: {
   const subagentSessionKey = parentSessionKey
     ? `${parentSessionKey}:${subagentSuffix}`
     : `agent:${params.agentId}:${subagentSuffix}`;
-  const sessionFile = createSqliteSessionTranscriptLocator({
+  const transcriptLocator = createSqliteSessionTranscriptLocator({
     agentId: params.agentId,
     sessionId: subagentSessionId,
   });
-  params.onSessionFile?.(sessionFile);
+  params.onTranscriptLocator?.(transcriptLocator);
   const prompt = buildRecallPrompt({
     config: params.config,
     query: params.query,
@@ -2350,7 +2354,7 @@ async function runRecallSubagent(params: {
       agentId: params.agentId,
       messageChannel,
       messageProvider,
-      sessionFile,
+      transcriptLocator,
       workspaceDir,
       agentDir,
       config: embeddedConfig,
@@ -2390,17 +2394,19 @@ async function runRecallSubagent(params: {
       .join("\n")
       .trim();
     const searchDebug =
-      (await readActiveMemorySearchDebug(sessionFile)) ??
+      (await readActiveMemorySearchDebug(transcriptLocator)) ??
       readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
-      transcriptPath: params.config.persistTranscripts ? sessionFile : undefined,
+      transcriptLocator: params.config.persistTranscripts ? transcriptLocator : undefined,
       searchDebug,
     };
   } catch (error) {
     if (params.abortSignal?.aborted) {
-      const partialReply = await readPartialAssistantText(sessionFile);
-      const searchDebug = partialReply ? await readActiveMemorySearchDebug(sessionFile) : undefined;
+      const partialReply = await readPartialAssistantText(transcriptLocator);
+      const searchDebug = partialReply
+        ? await readActiveMemorySearchDebug(transcriptLocator)
+        : undefined;
       attachPartialTimeoutData(error, partialReply, searchDebug);
     }
     if (
@@ -2518,7 +2524,7 @@ async function maybeResolveActiveRecall(params: {
 
   const controller = new AbortController();
   const TIMEOUT_SENTINEL = Symbol("timeout");
-  let sessionFile: string | undefined;
+  let transcriptLocator: string | undefined;
   const watchdogTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
   const timeoutId = setTimeout(() => {
     controller.abort(new Error(`active-memory timeout after ${watchdogTimeoutMs}ms`));
@@ -2541,12 +2547,12 @@ async function maybeResolveActiveRecall(params: {
       ...params,
       modelRef: resolvedModelRef,
       abortSignal: controller.signal,
-      onSessionFile: (value) => {
-        sessionFile = value;
+      onTranscriptLocator: (value) => {
+        transcriptLocator = value;
       },
     });
     terminalMemorySearchWatch = watchTerminalMemorySearchResult({
-      getSessionFile: () => sessionFile,
+      getTranscriptLocator: () => transcriptLocator,
       abortSignal: controller.signal,
     });
     // Silently catch late rejections after timeout so they don't become
@@ -2564,7 +2570,7 @@ async function maybeResolveActiveRecall(params: {
       const result = await buildTimeoutRecallResult({
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
-        sessionFile,
+        transcriptLocator,
         subagentPromise,
       });
       if (params.config.logging) {
@@ -2611,13 +2617,13 @@ async function maybeResolveActiveRecall(params: {
       return result;
     }
 
-    const { rawReply, transcriptPath, searchDebug } = raceResult;
+    const { rawReply, transcriptLocator: persistedTranscriptLocator, searchDebug } = raceResult;
     const summary = truncateSummary(
       normalizeActiveSummary(rawReply) ?? "",
       params.config.maxSummaryChars,
     );
-    if (params.config.logging && transcriptPath) {
-      params.api.logger.info?.(`${logPrefix} transcript=${transcriptPath}`);
+    if (params.config.logging && persistedTranscriptLocator) {
+      params.api.logger.info?.(`${logPrefix} transcript=${persistedTranscriptLocator}`);
     }
     const result: ActiveRecallResult =
       summary.length > 0
@@ -2658,7 +2664,7 @@ async function maybeResolveActiveRecall(params: {
       const result = await buildTimeoutRecallResult({
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
-        sessionFile,
+        transcriptLocator,
         rawReply: partialTimeoutData.rawReply,
         searchDebug: partialTimeoutData.searchDebug,
       });

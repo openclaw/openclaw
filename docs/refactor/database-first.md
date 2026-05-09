@@ -247,6 +247,10 @@ The remaining cleanup is mostly consolidation and deletion:
   `sqlite-transcript://<agent>/<session>` handle for external boundaries, but it
   must not store that derived value in active session rows. Legacy absolute
   JSONL paths are doctor migration inputs only.
+- `runEmbeddedPiAgent(...)` now treats caller-provided transcript locators as
+  ignored legacy hints. It derives the active SQLite transcript locator from the
+  resolved agent id and session id before worker dispatch, attempt creation, or
+  prepared-run serialization.
 - Gateway transcript-key lookup compares derived SQLite transcript handles at
   protocol boundaries and no longer realpaths or stats transcript filenames.
 - Automatic compaction transcript rotation writes successor transcript rows
