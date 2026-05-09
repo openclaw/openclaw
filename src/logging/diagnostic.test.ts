@@ -2,6 +2,10 @@ import fs from "node:fs";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  __testing as replyRunRegistryTesting,
+  createReplyOperation,
+} from "../auto-reply/reply/reply-run-registry.js";
+import {
   emitDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -199,11 +203,13 @@ describe("logger import side effects", () => {
 describe("stuck session diagnostics threshold", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    replyRunRegistryTesting.resetReplyRunRegistry();
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
   });
 
   afterEach(() => {
+    replyRunRegistryTesting.resetReplyRunRegistry();
     resetDiagnosticEventsForTest();
     resetDiagnosticStateForTest();
     vi.restoreAllMocks();
@@ -286,6 +292,47 @@ describe("stuck session diagnostics threshold", () => {
       queueDepth: 1,
       stateGeneration: expect.any(Number),
     });
+  });
+
+  it("does not classify queued diagnostic state as stuck while reply work is active", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logMessageQueued({ sessionKey: "main", source: "test" });
+      logSessionStateChange({ sessionKey: "main", state: "processing" });
+      createReplyOperation({
+        sessionKey: "main",
+        sessionId: "active-reply-session",
+        resetTriggered: false,
+      }).setPhase("running");
+
+      vi.advanceTimersByTime(61_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
+    const stalledEvents = events.filter((event) => event.type === "session.stalled");
+    expect(stalledEvents).toHaveLength(1);
+    expect(stalledEvents[0]).toMatchObject({
+      classification: "stalled_agent_run",
+      reason: "active_work_without_progress",
+      activeWorkKind: "embedded_run",
+      queueDepth: 1,
+    });
+    expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
   it("does not warn while a processing session continues reporting progress", () => {
