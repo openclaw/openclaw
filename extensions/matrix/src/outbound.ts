@@ -63,10 +63,11 @@ function renderMatrixPresentationPayload(params: {
   const fallbackText = renderMessagePresentationFallbackText({
     text: params.payload.text,
     presentation: params.presentation,
+    emptyFallback: MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT,
   });
   return {
     ...params.payload,
-    text: fallbackText.trim() ? fallbackText : MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT,
+    text: fallbackText,
     channelData: {
       ...params.payload.channelData,
       matrix: {
