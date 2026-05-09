@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,

@@ -4,7 +4,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { listOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {

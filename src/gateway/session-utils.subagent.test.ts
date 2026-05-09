@@ -7,12 +7,8 @@ import {
   resetSubagentRegistryForTests,
 } from "../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  createSqliteSessionTranscriptLocator,
-  getSessionEntry,
-  upsertSessionEntry,
-  type SessionEntry,
-} from "../config/sessions.js";
+import { getSessionEntry, upsertSessionEntry, type SessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";

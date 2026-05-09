@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { rpcReq, testState, seedGatewaySessionEntries } from "./test-helpers.js";
 import {

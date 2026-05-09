@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { getSessionEntry } from "../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,

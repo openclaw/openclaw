@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { listSessionEntries, upsertSessionEntry } from "../../config/sessions/store.js";
 import {
   createSqliteSessionTranscriptLocator,
   parseSqliteSessionTranscriptLocator,
-} from "../../config/sessions/paths.js";
-import { listSessionEntries, upsertSessionEntry } from "../../config/sessions/store.js";
+} from "../../config/sessions/test-helpers/transcript-locator.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { loadSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

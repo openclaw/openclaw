@@ -12,16 +12,16 @@ import {
   updateLastRoute,
 } from "./sessions.js";
 import {
-  createSqliteSessionTranscriptLocator,
-  parseSqliteSessionTranscriptLocator,
-  resolveSessionTranscriptLocator,
-} from "./sessions/paths.js";
-import {
   deleteSessionEntry,
   listSessionEntries,
   patchSessionEntry,
   upsertSessionEntry,
 } from "./sessions/store.js";
+import {
+  createSqliteSessionTranscriptLocator,
+  parseSqliteSessionTranscriptLocator,
+  resolveSessionTranscriptLocator,
+} from "./sessions/test-helpers/transcript-locator.js";
 import type { SessionEntry } from "./sessions/types.js";
 
 describe("sessions", () => {

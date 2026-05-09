@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { listSessionEntries, type SessionEntry } from "../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";

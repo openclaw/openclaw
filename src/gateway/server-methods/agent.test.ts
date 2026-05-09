@@ -5,7 +5,7 @@ import {
   resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,

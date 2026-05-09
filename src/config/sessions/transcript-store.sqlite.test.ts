@@ -7,7 +7,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createSqliteSessionTranscriptLocator } from "./paths.js";
+import { createSqliteSessionTranscriptLocator } from "./test-helpers/transcript-locator.js";
 import {
   appendSqliteSessionTranscriptEvent,
   appendSqliteSessionTranscriptMessage,

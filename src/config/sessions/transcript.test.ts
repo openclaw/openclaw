@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createSqliteSessionTranscriptLocator } from "./paths.js";
 import { upsertSessionEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { createSqliteSessionTranscriptLocator } from "./test-helpers/transcript-locator.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import {
   appendSqliteSessionTranscriptEvent,
