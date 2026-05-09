@@ -12,7 +12,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
+import { prepareProviderRuntimeAuth, wrapProviderStreamFn } from "../plugins/provider-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
@@ -397,13 +397,35 @@ export async function runBtwSideQuestion(
   // `/api/chat` or `/v1/chat/completions` paths based on api mode) construct
   // URLs correctly. Without this, streamSimple hits the provider's baseUrl
   // directly and 404s on endpoints like Ollama Cloud (#68336).
-  const providerStreamFn = registerProviderStreamForModel({
+  const providerStreamBase = registerProviderStreamForModel({
     model: runtimeModel,
     cfg: params.cfg,
     agentDir: params.agentDir,
     workspaceDir,
     env: process.env,
   });
+  // Apply the provider plugin's wrapStreamFn (e.g. github-copilot's IDE
+  // header injection). Without this, /btw against Copilot models fails with
+  // "400 bad request: missing Editor-Version header for IDE auth" because the
+  // base stream fn is the raw transport-aware fn that doesn't add the
+  // Editor-Version / Editor-Plugin-Version / User-Agent headers Copilot
+  // requires for /chat/completions.
+  const providerStreamWrapped = wrapProviderStreamFn({
+    provider: model.provider,
+    config: params.cfg,
+    workspaceDir,
+    env: process.env,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      workspaceDir,
+      provider: model.provider,
+      modelId: model.id,
+      model: runtimeModel,
+      streamFn: providerStreamBase,
+    },
+  });
+  const providerStreamFn = providerStreamWrapped ?? providerStreamBase;
 
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking
