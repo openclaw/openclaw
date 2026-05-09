@@ -62,7 +62,7 @@ describe("Ollama provider", () => {
       NODE_ENV: "test",
       ...params.env,
     };
-    const result = await ollamaProviderDiscovery.discovery.run({
+    const result = await ollamaProviderDiscovery.catalog.run({
       config: params.config ?? {},
       agentDir: createAgentDir(),
       env,
