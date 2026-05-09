@@ -134,8 +134,8 @@ The branch already has a real shared SQLite base:
   input only; runtime no longer reads or writes TTS prefs JSON files, and the
   legacy path resolver lives in the doctor migration module.
 - Subagent run recovery and OpenRouter model capability cache runtime modules
-  now keep SQLite readers/writers separate from doctor-only legacy JSON import
-  helpers.
+  now keep SQLite snapshot readers/writers separate from doctor-only legacy JSON
+  import helpers.
 - `src/agents/filesystem/virtual-agent-fs.sqlite.ts` implements a SQLite VFS
   over the agent database `vfs_entries` table.
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
@@ -147,13 +147,14 @@ The branch already has a real shared SQLite base:
   Doctor imports legacy `~/.openclaw/exec-approvals.json`; runtime writes no
   longer create or rewrite that file.
 - Device identity, device auth, and bootstrap runtime modules now keep their
-  SQLite readers/writers separate from doctor-only legacy JSON import helpers.
-- Web push, APNs, Voice Wake, and Voice Wake routing runtime modules now keep
-  their SQLite readers/writers separate from doctor-only legacy JSON import
+  SQLite snapshot readers/writers separate from doctor-only legacy JSON import
   helpers.
+- Web push, APNs, Voice Wake, and Voice Wake routing runtime modules now keep
+  their SQLite snapshot readers/writers separate from doctor-only legacy JSON
+  import helpers.
 - Pairing state, plugin binding approvals, and cron job state now follow the
-  same split: runtime modules expose SQLite-backed operations and narrow
-  migration writers, while doctor imports/removes the old JSON files through
+  same split: runtime modules expose SQLite-backed operations and neutral
+  snapshot helpers, while doctor imports/removes the old JSON files through
   `src/commands/doctor/legacy/*` modules.
 - Core pairing and cron runtime modules no longer export legacy JSON path
   builders. Doctor-owned legacy modules construct `pending.json`, `paired.json`,

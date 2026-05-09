@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
 import {
-  parseStoredDeviceIdentityForMigration,
-  writeStoredDeviceIdentityForMigration,
+  parseStoredDeviceIdentitySnapshot,
+  writeStoredDeviceIdentitySnapshot,
 } from "../../../infra/device-identity.js";
 
 function resolveIdentityPathForEnv(env: NodeJS.ProcessEnv = process.env): string {
@@ -31,11 +31,11 @@ export function importLegacyDeviceIdentityFileToSqlite(env: NodeJS.ProcessEnv = 
     }
     throw error;
   }
-  const stored = parseStoredDeviceIdentityForMigration(parsed);
+  const stored = parseStoredDeviceIdentitySnapshot(parsed);
   if (!stored) {
     return { imported: false };
   }
-  writeStoredDeviceIdentityForMigration(filePath, stored);
+  writeStoredDeviceIdentitySnapshot(filePath, stored);
   try {
     fs.rmSync(filePath, { force: true });
   } catch {

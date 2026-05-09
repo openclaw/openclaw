@@ -396,7 +396,7 @@ async function persistRegistrationsState(
   );
 }
 
-export function normalizeApnsRegistrationStateForMigration(
+export function normalizeApnsRegistrationStateSnapshot(
   parsed: unknown,
 ): ApnsRegistrationState | null {
   if (!parsed || typeof parsed !== "object") {
@@ -419,7 +419,7 @@ export function normalizeApnsRegistrationStateForMigration(
   return { registrationsByNodeId: normalized };
 }
 
-export async function writeApnsRegistrationStateForMigration(
+export async function writeApnsRegistrationStateSnapshot(
   state: ApnsRegistrationState,
   baseDir?: string,
 ): Promise<void> {

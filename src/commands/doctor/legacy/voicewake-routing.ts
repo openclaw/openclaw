@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
 import {
   normalizeVoiceWakeRoutingConfig,
-  writeVoiceWakeRoutingConfigForMigration,
+  writeVoiceWakeRoutingConfigSnapshot,
 } from "../../../infra/voicewake-routing.js";
 
 function resolveLegacyPath(baseDir?: string) {
@@ -38,7 +38,7 @@ export async function importLegacyVoiceWakeRoutingConfigFileToSqlite(baseDir?: s
     throw error;
   }
   const normalized = normalizeVoiceWakeRoutingConfig(raw);
-  writeVoiceWakeRoutingConfigForMigration(normalized, baseDir);
+  writeVoiceWakeRoutingConfigSnapshot(normalized, baseDir);
   await fs.rm(filePath, { force: true }).catch(() => undefined);
   return { imported: true, routes: normalized.routes.length };
 }

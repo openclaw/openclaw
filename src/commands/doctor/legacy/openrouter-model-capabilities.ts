@@ -2,7 +2,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
   parseOpenRouterModelCapabilitiesCachePayload,
-  writeOpenRouterModelCapabilitiesCacheForMigration,
+  writeOpenRouterModelCapabilitiesCacheSnapshot,
   type OpenRouterModelCapabilities,
 } from "../../../agents/pi-embedded-runner/openrouter-model-capabilities.js";
 import { resolveStateDir } from "../../../config/paths.js";
@@ -47,7 +47,7 @@ export function importLegacyOpenRouterModelCapabilitiesCacheToSqlite(
   }
   const legacyJsonCache = readLegacyJsonCache(env);
   if (legacyJsonCache) {
-    writeOpenRouterModelCapabilitiesCacheForMigration(legacyJsonCache, env);
+    writeOpenRouterModelCapabilitiesCacheSnapshot(legacyJsonCache, env);
   }
   try {
     unlinkSync(resolveLegacyJsonCachePath(env));

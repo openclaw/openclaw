@@ -66,7 +66,7 @@ export async function setVoiceWakeTriggers(
   return next;
 }
 
-export function normalizeVoiceWakeConfigForMigration(raw: unknown): VoiceWakeConfig {
+export function normalizeVoiceWakeConfigSnapshot(raw: unknown): VoiceWakeConfig {
   const updatedAtMs = (raw as Partial<VoiceWakeConfig> | undefined)?.updatedAtMs;
   return {
     triggers: sanitizeTriggers((raw as Partial<VoiceWakeConfig> | undefined)?.triggers),
@@ -74,7 +74,7 @@ export function normalizeVoiceWakeConfigForMigration(raw: unknown): VoiceWakeCon
   };
 }
 
-export function writeVoiceWakeConfigForMigration(config: VoiceWakeConfig, baseDir?: string): void {
+export function writeVoiceWakeConfigSnapshot(config: VoiceWakeConfig, baseDir?: string): void {
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     VOICEWAKE_SCOPE,
     VOICEWAKE_CONFIG_KEY,
