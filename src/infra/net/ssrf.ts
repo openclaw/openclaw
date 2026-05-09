@@ -153,10 +153,16 @@ export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
 }
 
 function shouldSkipPrivateNetworkChecks(hostname: string, policy?: SsrFPolicy): boolean {
-  return (
-    isPrivateNetworkAllowedByPolicy(policy) ||
-    normalizeHostnameSet(policy?.allowedHostnames).has(hostname)
-  );
+  if (isPrivateNetworkAllowedByPolicy(policy)) {
+    return true;
+  }
+  if (normalizeHostnameSet(policy?.allowedHostnames).has(hostname)) {
+    return true;
+  }
+  // A hostname explicitly in the provider allowlist (e.g. host.docker.internal from baseUrl)
+  // is an intentional target — don't block it on private-network grounds.
+  const allowlist = normalizeHostnameAllowlist(policy?.hostnameAllowlist);
+  return allowlist.length > 0 && matchesHostnameAllowlist(hostname, allowlist);
 }
 
 function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseBlockOptions {

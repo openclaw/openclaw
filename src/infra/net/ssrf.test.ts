@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "../../shared/net/ip-test-fixtures.js";
 import {
+  assertHostnameAllowedWithPolicy,
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
   isSameSsrFPolicy,
@@ -257,5 +258,31 @@ describe("isSameSsrFPolicy", () => {
     expect(
       isSameSsrFPolicy({ allowIpv6UniqueLocalRange: true }, { allowIpv6UniqueLocalRange: true }),
     ).toBe(true);
+  });
+});
+
+describe("assertHostnameAllowedWithPolicy — hostnameAllowlist bypasses .internal block", () => {
+  it("allows host.docker.internal when it is in the provider hostnameAllowlist", () => {
+    expect(() =>
+      assertHostnameAllowedWithPolicy("host.docker.internal", {
+        hostnameAllowlist: ["host.docker.internal"],
+      }),
+    ).not.toThrow();
+  });
+
+  it("still blocks host.docker.internal when not in hostnameAllowlist", () => {
+    expect(() =>
+      assertHostnameAllowedWithPolicy("host.docker.internal", {
+        hostnameAllowlist: ["api.example.com"],
+      }),
+    ).toThrow();
+  });
+
+  it("allows *.internal pattern via hostnameAllowlist wildcard", () => {
+    expect(() =>
+      assertHostnameAllowedWithPolicy("svc.internal", {
+        hostnameAllowlist: ["*.internal"],
+      }),
+    ).not.toThrow();
   });
 });
