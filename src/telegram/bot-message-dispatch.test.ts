@@ -232,6 +232,28 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("sends immediate previews without debounce when streamMode is progress", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hi" });
+        await dispatcherOptions.deliver({ text: "Hi" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    // @ts-expect-error -- progress is not in TelegramStreamMode type but is handled at runtime
+    await dispatchWithContext({ context: createContext(), streamMode: "progress" });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        minInitialChars: 0,
+      }),
+    );
+  });
+
   it("keeps block streaming enabled when account config enables it", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
