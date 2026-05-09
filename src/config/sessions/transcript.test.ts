@@ -347,7 +347,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("ignores malformed transcript lines when checking mirror idempotency", async () => {
+  it("uses SQLite transcript rows when checking mirror idempotency", async () => {
     await writeTranscriptStore();
 
     const result = await appendAssistantMessageToSessionTranscript({
