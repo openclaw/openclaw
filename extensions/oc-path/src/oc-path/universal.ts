@@ -147,6 +147,7 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
     case "jsonl":
       return resolveJsonlToUniversal(ast, path);
   }
+  return null;
 }
 
 function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
@@ -164,6 +165,7 @@ function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
     case "item-field":
       return { kind: "leaf", valueText: m.value, leafType: "string", line: m.node.line };
   }
+  return null;
 }
 
 function resolveJsoncToUniversal(ast: JsoncAst, path: OcPath): OcMatch | null {
@@ -189,6 +191,7 @@ function jsoncValueToMatch(value: JsoncValue, line: number): OcMatch {
     case "null":
       return { kind: "leaf", valueText: "null", leafType: "null", line };
   }
+  return { kind: "leaf", valueText: "null", leafType: "null", line };
 }
 
 function resolveJsonlToUniversal(ast: JsonlAst, path: OcPath): OcMatch | null {
@@ -211,6 +214,7 @@ function resolveInsertion(ast: OcAst, info: InsertionInfo): OcMatch | null {
     case "jsonl":
       return resolveJsonlInsertion(ast, info);
   }
+  return null;
 }
 
 function resolveMdInsertion(ast: MdAst, info: InsertionInfo): OcMatch | null {
@@ -304,15 +308,16 @@ export function setOcPath(ast: OcAst, path: OcPath, value: string): SetResult {
         return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
       });
   }
+  return { ok: false, reason: "not-writable" };
 }
 
 // Resolve → reject root/line → coerce by existing leaf type → set →
 // wrap. The optional `onLine` handles jsonl's whole-line replacement.
-function setStructuredLeaf<A extends OcAst, M extends StructuredLeafMatch>(
+function setStructuredLeaf<A extends OcAst>(
   ast: A,
   path: OcPath,
   value: string,
-  resolve: (a: A, p: OcPath) => M | null,
+  resolve: (a: A, p: OcPath) => StructuredLeafMatch | null,
   set: (a: A, p: OcPath, c: JsoncValue) => SetOpResult<A>,
   onLine?: () => SetResult,
 ): SetResult {

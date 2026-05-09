@@ -410,6 +410,7 @@ export function evaluatePredicate(actual: string | null, pred: PredicateSpec): b
       return a >= b;
     }
   }
+  return false;
 }
 
 /**
@@ -518,6 +519,7 @@ export function indexOfTopLevel(s: string, ch: string): number {
         result = i;
         return "stop";
       }
+      return undefined;
     },
     fail,
   );

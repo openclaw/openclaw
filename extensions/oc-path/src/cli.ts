@@ -173,6 +173,7 @@ function emitForKind(ast: OcAst, fileName?: string): string {
     case "md":
       return emitMd(ast, opts);
   }
+  return "";
 }
 
 function resolveFsPath(path: OcPath, options: PathCommandOptions): string {
@@ -220,7 +221,7 @@ export async function pathResolveCommand(
     runtime.exit(1);
     return;
   }
-  emit(runtime, mode, { resolved: true, ocPath: pathStr, match }, () => formatMatchHuman(match!));
+  emit(runtime, mode, { resolved: true, ocPath: pathStr, match }, () => formatMatchHuman(match));
 }
 
 export async function pathSetCommand(

@@ -140,4 +140,5 @@ function jsoncValueToJson(value: JsoncValue): unknown {
     case "null":
       return null;
   }
+  return null;
 }
