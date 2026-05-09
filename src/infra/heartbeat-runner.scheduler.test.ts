@@ -593,6 +593,47 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("keeps cooldown bookkeeping for repeated zero-interval exec-event wakes", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "0m" } },
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      requestHeartbeat({
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+    }
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    runner.stop();
+  });
+
   it("preserves immediate delivery for repeated bare wake reasons", async () => {
     // 'wake' is the immediate-path reason from `openclaw system event --mode now`
     // and must NOT be deferred. Verify the runner allows multiple back-to-back

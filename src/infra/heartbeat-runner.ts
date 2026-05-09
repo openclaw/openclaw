@@ -91,7 +91,12 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/t
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours, resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
-import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
+import {
+  DEFAULT_MIN_WAKE_SPACING_MS,
+  recordRunStart,
+  shouldDeferWake,
+  type DeferDecision,
+} from "./heartbeat-cooldown.js";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
@@ -1296,9 +1301,19 @@ export async function runHeartbeatOnce(opts: {
         threadId: firstDueCommitment.threadId,
       }
     : undefined;
+  const shouldRelayTargetedExecEventDelivery =
+    isExecEventWake(opts) &&
+    Boolean(opts.sessionKey || opts.agentId) &&
+    !resolveHeartbeatIntervalMs(cfg, undefined, heartbeat) &&
+    (normalizeOptionalString(heartbeat?.target) ?? "none") === "none" &&
+    Boolean(
+      preflight.turnSourceDeliveryContext?.channel || preflight.turnSourceDeliveryContext?.to,
+    );
   const heartbeatForDelivery = commitmentDeliveryContext
     ? { ...heartbeat, target: "last", to: undefined, accountId: undefined }
-    : heartbeat;
+    : shouldRelayTargetedExecEventDelivery
+      ? { ...heartbeat, target: "last", to: undefined, accountId: undefined }
+      : heartbeat;
   const delivery = resolveHeartbeatDeliveryTarget({
     cfg,
     entry,
@@ -1954,6 +1969,7 @@ export function startHeartbeatRunner(opts: {
     runtime,
     schedulerSeed: resolveHeartbeatSchedulerSeed(opts.stableSchedulerSeed),
     agents: new Map<string, HeartbeatAgentState>(),
+    execEventAgents: new Map<string, HeartbeatAgentState>(),
     timer: null as NodeJS.Timeout | null,
     stopped: false,
   };
@@ -2038,6 +2054,26 @@ export function startHeartbeatRunner(opts: {
     agent.lastRunStartedAtMs = now;
     recordRunStart(agent.recentRunStarts, now);
     agent.floodLoggedSinceLastRun = false;
+  };
+
+  const resolveExecEventAgentState = (
+    agentId: string,
+    heartbeat?: HeartbeatConfig,
+  ): HeartbeatAgentState => {
+    const prevState = state.execEventAgents.get(agentId);
+    const nextState: HeartbeatAgentState = {
+      agentId,
+      heartbeat,
+      activeHoursSchedule: resolveActiveHoursSchedule(state.cfg, heartbeat),
+      intervalMs: prevState?.intervalMs ?? DEFAULT_MIN_WAKE_SPACING_MS,
+      phaseMs: prevState?.phaseMs ?? 0,
+      nextDueMs: prevState?.nextDueMs ?? 0,
+      lastRunStartedAtMs: prevState?.lastRunStartedAtMs,
+      recentRunStarts: prevState?.recentRunStarts ?? [],
+      floodLoggedSinceLastRun: prevState?.floodLoggedSinceLastRun ?? false,
+    };
+    state.execEventAgents.set(agentId, nextState);
+    return nextState;
   };
 
   const scheduleNext = () => {
@@ -2197,19 +2233,51 @@ export function startHeartbeatRunner(opts: {
         const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
         const targetAgent = state.agents.get(targetAgentId);
         if (!targetAgent) {
-          if (!isTargetedExecEventWake) {
+          if (!isTargetedExecEventWake || !targetAgentId) {
             return { status: "skipped", reason: "disabled" };
           }
-          return await runOnce({
-            cfg: state.cfg,
-            agentId: targetAgentId,
-            heartbeat: resolveRequestedHeartbeat(resolveHeartbeatConfig(state.cfg, targetAgentId)),
-            source: params.source,
-            intent,
-            reason,
-            sessionKey: requestedSessionKey,
-            deps: { runtime: state.runtime },
-          });
+          const fallbackHeartbeat = resolveRequestedHeartbeat(
+            resolveHeartbeatConfig(state.cfg, targetAgentId),
+          );
+          const fallbackAgent = resolveExecEventAgentState(targetAgentId, fallbackHeartbeat);
+          const deferral = evaluateWakeDeferral(fallbackAgent, now, reason, intent);
+          if (deferral.defer) {
+            return { status: "skipped", reason: deferral.reason };
+          }
+          try {
+            const res = await runOnce({
+              cfg: state.cfg,
+              agentId: targetAgentId,
+              heartbeat: fallbackHeartbeat,
+              source: params.source,
+              intent,
+              reason,
+              sessionKey: requestedSessionKey,
+              deps: { runtime: state.runtime },
+            });
+            if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
+              retryableBusySkip = true;
+              return res;
+            }
+            recordRunBookkeeping(fallbackAgent, now);
+            if (res.status !== "skipped" || res.reason !== "disabled") {
+              advanceAgentSchedule(fallbackAgent, now, reason);
+            }
+            return res.status === "ran"
+              ? { status: "ran", durationMs: Date.now() - startedAt }
+              : res;
+          } catch (err) {
+            const errMsg = formatErrorMessage(err);
+            log.error(
+              `heartbeat runner: targeted zero-interval runOnce threw unexpectedly: ${errMsg}`,
+              {
+                error: errMsg,
+              },
+            );
+            recordRunBookkeeping(fallbackAgent, now);
+            advanceAgentSchedule(fallbackAgent, now, reason);
+            return { status: "failed", reason: errMsg };
+          }
         }
         const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);
         if (deferral.defer) {

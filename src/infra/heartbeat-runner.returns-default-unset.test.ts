@@ -1861,6 +1861,10 @@ tasks:
     enqueueSystemEvent("exec finished: backup completed", {
       sessionKey,
       contextKey: "exec:backup",
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "120363401234567890@g.us",
+      },
     });
 
     const replySpy = vi.fn();
@@ -1881,8 +1885,10 @@ tasks:
         deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
       });
       expect(res.status).toBe("ran");
-      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string };
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
       expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.Body).toContain("Please relay the command output to the user");
     } finally {
       replySpy.mockReset();
     }
