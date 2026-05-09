@@ -99,15 +99,17 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "utf8",
     );
 
-    expect(lane).toEqual(
-      expect.objectContaining({
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-plugin",
-        e2eImageKind: "functional",
-        name: "kitchen-sink-plugin",
-        resources: expect.arrayContaining(["npm"]),
-        stateScenario: "empty",
-      }),
-    );
+    expect(lane).toEqual({
+      command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-plugin",
+      e2eImageKind: "functional",
+      live: false,
+      name: "kitchen-sink-plugin",
+      resources: ["npm"],
+      retryPatterns: [],
+      retries: 0,
+      stateScenario: "empty",
+      weight: 3,
+    });
     expect(script).toContain("npm:@openclaw/kitchen-sink@latest");
     expect(script).toContain("npm-latest-conformance");
     expect(script).toContain("npm-latest-adversarial");
@@ -168,14 +170,17 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const fixtureServer = readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8");
     const prereleasePlan = createPluginPrereleaseTestPlan();
 
-    expect(lane).toEqual(
-      expect.objectContaining({
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins",
-        name: "plugins",
-        resources: expect.arrayContaining(["npm"]),
-        stateScenario: "empty",
-      }),
-    );
+    expect(lane).toEqual({
+      command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins",
+      e2eImageKind: "functional",
+      live: false,
+      name: "plugins",
+      resources: ["npm", "service"],
+      retryPatterns: [],
+      retries: 0,
+      stateScenario: "empty",
+      weight: 6,
+    });
     expect(prereleasePlan.surfaces).toContain("external-install-boundary");
     expect(sweepScript).toContain("run_plugins_clawhub_scenario");
     expect(clawhubScript).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
