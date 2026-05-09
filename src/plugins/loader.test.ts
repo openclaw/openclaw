@@ -1505,6 +1505,7 @@ describe("loadOpenClawPlugins", () => {
 
         __testing.runPluginRegisterSync((guardedApi) => {
           capturedApi = guardedApi;
+          // Host-hook delivery remains callable after registration closes; only registration-only APIs lock.
           guardedApi.registerGatewayMethod("proofchat.ping", vi.fn() as never);
         }, api);
 
