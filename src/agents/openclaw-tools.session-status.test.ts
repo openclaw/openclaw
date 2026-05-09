@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
 
@@ -1181,6 +1182,39 @@ describe("session_status tool", () => {
       liveModelSwitchPending: true,
       modelOverride: "claude-sonnet-4-6",
     });
+  });
+
+  it("emits a session change event after mutating the model via session_status", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+    });
+    const events: Array<{ sessionKey: string; reason: string }> = [];
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      events.push({
+        sessionKey: event.sessionKey,
+        reason: event.reason,
+      });
+    });
+
+    try {
+      const tool = getSessionStatusTool("agent:main:main");
+      await tool.execute("call-current-model-change-event", {
+        sessionKey: "current",
+        model: "anthropic/claude-sonnet-4-6",
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toEqual([
+      {
+        sessionKey: "agent:main:main",
+        reason: "patch",
+      },
+    ]);
   });
 
   it("uses the runtime session model as the selected card model when no override is set", async () => {

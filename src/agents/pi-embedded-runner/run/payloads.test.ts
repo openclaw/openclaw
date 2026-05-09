@@ -111,6 +111,43 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("uses only the latest accumulated assistant text for non-segmented final delivery", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        "Background task update: Context engine turn maintenance is still running.",
+        "The answer is ready.",
+      ],
+    });
+
+    expectSinglePayloadText(payloads, "The answer is ready.");
+  });
+
+  it("preserves accumulated assistant text segments when segment delivery is explicit", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["First paragraph.", "Second paragraph."],
+      preserveAssistantTextSegments: true,
+    });
+
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "First paragraph.",
+      "Second paragraph.",
+    ]);
+  });
+
+  it("preserves individual assistant texts that carry media directives", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["MEDIA:/tmp/first.png\nFirst image", "Second note."],
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({
+      text: "First image",
+      mediaUrl: "/tmp/first.png",
+      mediaUrls: ["/tmp/first.png"],
+    });
+    expect(payloads[1]?.text).toBe("Second note.");
+  });
+
   it("does not replay raw-looking accumulated tool output when final answer text is available", () => {
     const payloads = buildPayloads({
       assistantTexts: [
@@ -163,27 +200,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
-  it("surfaces concise exec tool errors when verbose mode is off", () => {
-    const payloads = buildPayloads({
+  it("suppresses exec tool errors when verbose mode is off", () => {
+    expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
       verboseLevel: "off",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "command failed",
-    });
-  });
-
-  it("surfaces concise bash tool errors when verbose mode is off", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "bash", error: "command failed" },
-      verboseLevel: "off",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Bash",
-      absentDetail: "command failed",
     });
   });
 

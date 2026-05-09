@@ -22,6 +22,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
@@ -632,6 +633,10 @@ export function createSessionStatusTool(opts?: {
           });
           resolved.entry = persistedEntry;
           changedModel = true;
+          emitSessionLifecycleEvent({
+            sessionKey: resolved.key,
+            reason: "patch",
+          });
         }
       }
 

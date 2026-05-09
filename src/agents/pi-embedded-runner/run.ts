@@ -2417,6 +2417,7 @@ export async function runEmbeddedPiAgent(
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+            preserveAssistantTextSegments: Boolean(params.blockReplyChunking),
             heartbeatToolResponse: attempt.heartbeatToolResponse,
           });
           const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({

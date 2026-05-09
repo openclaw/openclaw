@@ -170,6 +170,32 @@ function resolveToolErrorWarningPolicy(params: {
   };
 }
 
+function assistantTextRequiresIndividualDelivery(text: string): boolean {
+  const parsed = parseReplyDirectives(text);
+  return (
+    (parsed.mediaUrls?.length ?? 0) > 0 ||
+    parsed.audioAsVoice === true ||
+    Boolean(parsed.replyToId || parsed.replyToTag || parsed.replyToCurrent)
+  );
+}
+
+function selectAssistantAnswerTexts(params: {
+  texts: string[];
+  preserveSegments?: boolean;
+}): string[] {
+  if (!params.texts.length) {
+    return [];
+  }
+  if (
+    params.preserveSegments === true ||
+    params.texts.some((text) => assistantTextRequiresIndividualDelivery(text))
+  ) {
+    return params.texts;
+  }
+  const latest = params.texts.at(-1);
+  return latest ? [latest] : [];
+}
+
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
@@ -188,6 +214,7 @@ export function buildEmbeddedRunPayloads(params: {
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
+  preserveAssistantTextSegments?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): Array<{
   text?: string;
@@ -378,7 +405,10 @@ export function buildEmbeddedRunPayloads(params: {
         : shouldPreferRawAnswerText && fallbackRawAnswerText
           ? [fallbackRawAnswerText]
           : hasAssistantTextPayload
-            ? nonEmptyAssistantTexts
+            ? selectAssistantAnswerTexts({
+                texts: nonEmptyAssistantTexts,
+                preserveSegments: params.preserveAssistantTextSegments,
+              })
             : fallbackAnswerText
               ? [fallbackAnswerText]
               : []
