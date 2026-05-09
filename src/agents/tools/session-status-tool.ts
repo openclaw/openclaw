@@ -22,6 +22,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
@@ -636,6 +637,20 @@ export function createSessionStatusTool(opts?: {
           });
           resolved.entry = persistedEntry;
           changedModel = true;
+          // Notify subscribers (e.g. Control UI sessions list / model picker) that
+          // the session's model changed. Without this, the dropdown shows stale
+          // values until the page is refreshed (issue #79613).
+          emitSessionLifecycleEvent({
+            sessionKey: resolved.key,
+            reason: "model",
+            ...(persistedEntry.parentSessionKey
+              ? { parentSessionKey: persistedEntry.parentSessionKey }
+              : {}),
+            ...(persistedEntry.label ? { label: persistedEntry.label } : {}),
+            ...(persistedEntry.displayName
+              ? { displayName: persistedEntry.displayName }
+              : {}),
+          });
         }
       }
 

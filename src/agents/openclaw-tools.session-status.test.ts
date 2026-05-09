@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
 
@@ -879,6 +880,34 @@ describe("session_status tool", () => {
         }),
       }),
     );
+  });
+
+  it("emits a sessions.changed lifecycle event when session_status mutates the session model (issue #79613)", async () => {
+    resetSessionStore({});
+    const events: Array<{ sessionKey: string; reason: string }> = [];
+    const unsubscribe = onSessionLifecycleEvent((evt) => {
+      events.push({ sessionKey: evt.sessionKey, reason: evt.reason });
+    });
+    try {
+      const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
+      const result = await tool.execute("call-79613-emit", {
+        sessionKey: "current",
+        model: "anthropic/claude-sonnet-4-6",
+      });
+      const details = result.details as { ok?: boolean; changedModel?: boolean };
+      expect(details.ok).toBe(true);
+      expect(details.changedModel).toBe(true);
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            sessionKey: "agent:main:scope:scopy:direct:scopy",
+            reason: "model",
+          }),
+        ]),
+      );
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("materializes a valid persisted session entry when implicit current fallback mutates model state", async () => {
