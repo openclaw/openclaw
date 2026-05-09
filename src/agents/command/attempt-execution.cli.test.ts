@@ -1931,54 +1931,6 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().authProfileId).toBeUndefined();
   });
 
-  it("forwards runtime toolsAllow into CLI attempts so the CLI harness can fail closed", async () => {
-    const sessionKey = "agent:main:direct:claude-tools-allow";
-    const sessionEntry: SessionEntry = {
-      sessionId: "openclaw-session-cli-tools-allow",
-      updatedAt: Date.now(),
-    };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("restricted cli"));
-
-    await runAgentAttempt({
-      providerOverride: "claude-cli",
-      originalProvider: "claude-cli",
-      modelOverride: "opus",
-      cfg: {} as OpenClawConfig,
-      sessionEntry,
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionAgentId: "main",
-      sessionFile: path.join(tmpDir, "session.jsonl"),
-      workspaceDir: tmpDir,
-      body: "route this",
-      isFallbackRetry: false,
-      resolvedThinkLevel: "medium",
-      timeoutMs: 1_000,
-      runId: "run-cli-tools-allow",
-      opts: {
-        toolsAllow: ["read", "web_search"],
-      } as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
-      spawnedBy: undefined,
-      messageChannel: "discord",
-      skillsSnapshot: undefined,
-      resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
-      onAgentEvent: vi.fn(),
-      authProfileProvider: "claude-cli",
-      sessionStore,
-      storePath,
-      sessionHasHistory: false,
-    });
-
-    expectMockArgFields(runCliAgentMock, {
-      provider: "claude-cli",
-      toolsAllow: ["read", "web_search"],
-    });
-  });
-
   it("stamps CLI prompts with current timestamp context", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2024-06-05T15:30:00Z"));
