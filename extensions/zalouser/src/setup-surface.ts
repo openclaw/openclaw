@@ -13,10 +13,10 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import {
+  checkZcaAuthenticated,
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
   resolveZalouserAccountSync,
-  checkZcaAuthenticated,
 } from "./accounts.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import {
