@@ -884,7 +884,7 @@ export async function noteStateIntegrity(
       if (!sessionId) {
         return false;
       }
-      const transcriptPath = resolveSessionTranscriptLocator(sessionId, entry, sessionPathOpts);
+      const transcriptPath = resolveSessionTranscriptLocator(sessionId, sessionPathOpts);
       return !hasSessionTranscript({ agentId, sessionId, transcriptPath });
     });
     if (missing.length > 0) {
@@ -972,11 +972,7 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionTranscriptLocator(
-        mainEntry.sessionId,
-        mainEntry,
-        sessionPathOpts,
-      );
+      const transcriptPath = resolveSessionTranscriptLocator(mainEntry.sessionId, sessionPathOpts);
       if (!hasSessionTranscript({ agentId, sessionId: mainEntry.sessionId, transcriptPath })) {
         warnings.push(
           `- Main session transcript missing (${shortenHomePath(transcriptPath)}). History will appear to reset.`,
@@ -1005,7 +1001,7 @@ export async function noteStateIntegrity(
       try {
         referencedTranscriptPaths.add(
           resolveComparableTranscriptPath(
-            resolveSessionTranscriptLocator(entry.sessionId, entry, sessionPathOpts),
+            resolveSessionTranscriptLocator(entry.sessionId, sessionPathOpts),
           ),
         );
       } catch {

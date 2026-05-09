@@ -752,7 +752,6 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_RAW_STREAM",
           "OPENCLAW_RAW_STREAM_PATH",
           "OPENCLAW_CACHE_TRACE",
-          "OPENCLAW_CACHE_TRACE_FILE",
           "OPENCLAW_CACHE_TRACE_MESSAGES",
           "OPENCLAW_CACHE_TRACE_PROMPT",
           "OPENCLAW_CACHE_TRACE_SYSTEM",

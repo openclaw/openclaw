@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { listOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
-import { resolveUserPath } from "../utils.js";
 import { createCacheTrace } from "./cache-trace.js";
 
 describe("createCacheTrace", () => {
@@ -39,14 +38,13 @@ describe("createCacheTrace", () => {
     expect(trace).toBeNull();
   });
 
-  it("honors diagnostics cache trace config and expands file paths", () => {
+  it("stores diagnostics cache trace output in SQLite state", () => {
     const lines: string[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
           cacheTrace: {
             enabled: true,
-            filePath: "~/.openclaw/logs/cache-trace.jsonl",
           },
         },
       },
@@ -59,7 +57,7 @@ describe("createCacheTrace", () => {
     });
 
     expect(typeof trace?.recordStage).toBe("function");
-    expect(trace?.filePath).toBe(resolveUserPath("~/.openclaw/logs/cache-trace.jsonl"));
+    expect(trace?.filePath).toBe("sqlite://state/diagnostics/cache-trace");
 
     trace?.recordStage("session:loaded", {
       messages: [],

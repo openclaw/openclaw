@@ -1,12 +1,10 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import type { AgentMessage, StreamFn } from "./agent-core-contract.js";
 import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
-import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
-import { getStateDiagnosticWriter } from "./state-diagnostic-writer.js";
+import { getStateDiagnosticWriter, type StateDiagnosticWriter } from "./state-diagnostic-writer.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
 type CacheTraceStage =
@@ -69,15 +67,13 @@ type CacheTraceInit = {
 type CacheTraceConfig = {
   enabled: boolean;
   filePath: string;
-  fileOverride: boolean;
   includeMessages: boolean;
   includePrompt: boolean;
   includeSystem: boolean;
 };
 
-type CacheTraceWriter = QueuedFileWriter;
+type CacheTraceWriter = StateDiagnosticWriter;
 
-const writers = new Map<string, CacheTraceWriter>();
 const stateWriters = new Map<string, CacheTraceWriter>();
 const CACHE_TRACE_SQLITE_LABEL = "sqlite://state/diagnostics/cache-trace";
 const CACHE_TRACE_SQLITE_SCOPE = "diagnostics.cache_trace";
@@ -87,8 +83,6 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const config = params.cfg?.diagnostics?.cacheTrace;
   const envEnabled = parseBooleanValue(env.OPENCLAW_CACHE_TRACE);
   const enabled = envEnabled ?? config?.enabled ?? false;
-  const fileOverride = config?.filePath?.trim() || env.OPENCLAW_CACHE_TRACE_FILE?.trim();
-  const filePath = fileOverride ? resolveUserPath(fileOverride) : CACHE_TRACE_SQLITE_LABEL;
 
   const includeMessages =
     parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
@@ -97,8 +91,7 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 
   return {
     enabled,
-    filePath,
-    fileOverride: Boolean(fileOverride),
+    filePath: CACHE_TRACE_SQLITE_LABEL,
     includeMessages: includeMessages ?? true,
     includePrompt: includePrompt ?? true,
     includeSystem: includeSystem ?? true,
@@ -106,9 +99,6 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 }
 
 function getWriter(cfg: CacheTraceConfig, env: NodeJS.ProcessEnv): CacheTraceWriter {
-  if (cfg.fileOverride) {
-    return getQueuedFileWriter(writers, cfg.filePath);
-  }
   return getStateDiagnosticWriter(stateWriters, {
     env,
     label: cfg.filePath,

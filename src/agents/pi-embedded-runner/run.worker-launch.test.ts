@@ -28,7 +28,7 @@ function makeParams(): RunEmbeddedPiAgentParams {
     model: "gpt-5.5",
     prompt: "hello",
     runId: "run-1",
-    sessionFile: "sqlite-transcript://agent-1/session-1.jsonl",
+    transcriptLocator: "/tmp/legacy-session.jsonl",
     sessionId: "session-1",
     sessionKey: "session-key-1",
     timeoutMs: 1_000,
@@ -86,6 +86,7 @@ describe("runEmbeddedPiAgent worker launch", () => {
       runParams: expect.objectContaining({
         sessionId: "session-1",
         sessionKey: "session-key-1",
+        transcriptLocator: "sqlite-transcript://agent-1/session-1",
       }),
       mode: "worker",
       workerChild: false,
@@ -94,6 +95,7 @@ describe("runEmbeddedPiAgent worker launch", () => {
       expect.objectContaining({
         runId: "run-1",
         sessionId: "session-1",
+        transcriptLocator: "sqlite-transcript://agent-1/session-1",
       }),
       {
         runtimeId: "pi",

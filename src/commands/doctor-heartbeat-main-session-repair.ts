@@ -195,11 +195,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   }
   let transcriptPath: string | undefined;
   try {
-    transcriptPath = resolveSessionTranscriptLocator(
-      mainEntry.sessionId,
-      undefined,
-      params.sessionPathOpts,
-    );
+    transcriptPath = resolveSessionTranscriptLocator(mainEntry.sessionId, params.sessionPathOpts);
   } catch {
     transcriptPath = undefined;
   }

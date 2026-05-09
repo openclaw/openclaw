@@ -38,18 +38,14 @@ describe("session path safety", () => {
   });
 
   it("ignores invalid transcript locators", () => {
-    const resolved = resolveSessionTranscriptLocator("sess-1", {
-      transcriptLocator: "not-a-transcript-locator",
-    });
+    const resolved = resolveSessionTranscriptLocator("sess-1");
     expect(resolved).toBe(createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }));
   });
 
   it("uses extensionless SQLite transcript locators by default", () => {
-    expect(
-      resolveSessionTranscriptLocator("sess-1", {
-        transcriptLocator: createSqliteSessionTranscriptLocator({ sessionId: "other-session" }),
-      }),
-    ).toBe(createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }));
+    expect(resolveSessionTranscriptLocator("sess-1")).toBe(
+      createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }),
+    );
   });
 });
 
