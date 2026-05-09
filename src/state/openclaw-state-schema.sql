@@ -183,22 +183,6 @@ CREATE INDEX IF NOT EXISTS idx_commitments_scope_due
 CREATE INDEX IF NOT EXISTS idx_commitments_status_due
   ON commitments(status, due_earliest_ms, due_latest_ms);
 
-CREATE TABLE IF NOT EXISTS transcript_files (
-  agent_id TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  path TEXT NOT NULL,
-  imported_at INTEGER,
-  exported_at INTEGER,
-  PRIMARY KEY (agent_id, session_id, path),
-  FOREIGN KEY (agent_id) REFERENCES agent_databases(agent_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_transcript_files_path_updated
-  ON transcript_files(path, imported_at DESC, exported_at DESC, agent_id, session_id);
-
-CREATE INDEX IF NOT EXISTS idx_transcript_files_session_updated
-  ON transcript_files(agent_id, session_id, imported_at DESC, exported_at DESC, path);
-
 CREATE TABLE IF NOT EXISTS cron_run_logs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,

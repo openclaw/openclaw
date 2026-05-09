@@ -6,10 +6,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createSqliteSessionTranscriptLocator } from "./paths.js";
 import {
   appendSqliteSessionTranscriptEvent,
@@ -204,24 +201,6 @@ describe("SQLite session transcript store", () => {
         eventCount: 2,
       },
     ]);
-  });
-
-  it("does not write runtime transcript file mappings", () => {
-    const stateDir = createTempDir();
-    appendSqliteSessionTranscriptEvent({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-      agentId: "main",
-      sessionId: "session-1",
-      transcriptPath: path.join(stateDir, "session.jsonl"),
-      event: { type: "session", id: "session-1" },
-    });
-
-    const stateDatabase = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    expect(
-      stateDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_files").get(),
-    ).toEqual({ count: 0 });
   });
 
   it("deletes transcript snapshots with the transcript", () => {

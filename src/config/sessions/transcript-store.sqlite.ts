@@ -57,7 +57,7 @@ export type SqliteSessionTranscriptScope = {
   sessionId: string;
 };
 
-export type SqliteSessionTranscriptFile = SqliteSessionTranscriptScope & {
+export type SqliteSessionTranscriptLocator = SqliteSessionTranscriptScope & {
   path: string;
   updatedAt: number;
 };
@@ -114,6 +114,12 @@ function parseCreatedAt(value: unknown): number {
 
 function getAgentTranscriptKysely(db: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<AgentTranscriptDatabase>(db);
+}
+
+function openTranscriptAgentDatabase(
+  options: SqliteSessionTranscriptStoreOptions,
+): OpenClawAgentDatabase {
+  return openOpenClawAgentDatabase({ env: options.env, agentId: options.agentId });
 }
 
 function bindTranscriptEvent(params: {
@@ -265,9 +271,9 @@ export function resolveSqliteSessionTranscriptScope(
   };
 }
 
-export function listSqliteSessionTranscriptFiles(
+export function listSqliteSessionTranscriptLocators(
   options: OpenClawStateDatabaseOptions = {},
-): SqliteSessionTranscriptFile[] {
+): SqliteSessionTranscriptLocator[] {
   return listSqliteSessionTranscripts(options).map((transcript) => ({
     agentId: transcript.agentId,
     sessionId: transcript.sessionId,
@@ -352,7 +358,7 @@ export function getSqliteSessionTranscriptStats(
   options: SqliteSessionTranscriptStoreOptions,
 ): Pick<SqliteSessionTranscript, "sessionId" | "updatedAt" | "eventCount"> | null {
   const { sessionId } = normalizeTranscriptScope(options);
-  const database = openOpenClawAgentDatabase(options);
+  const database = openTranscriptAgentDatabase(options);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getAgentTranscriptKysely(database.db)
@@ -519,7 +525,7 @@ export function loadSqliteSessionTranscriptEvents(
   options: SqliteSessionTranscriptStoreOptions,
 ): SqliteSessionTranscriptEvent[] {
   const { sessionId } = normalizeTranscriptScope(options);
-  const database = openOpenClawAgentDatabase(options);
+  const database = openTranscriptAgentDatabase(options);
   return executeSqliteQuerySync(
     database.db,
     getAgentTranscriptKysely(database.db)
@@ -542,7 +548,7 @@ export function hasSqliteSessionTranscriptEvents(
   options: SqliteSessionTranscriptStoreOptions,
 ): boolean {
   const { sessionId } = normalizeTranscriptScope(options);
-  const database = openOpenClawAgentDatabase(options);
+  const database = openTranscriptAgentDatabase(options);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getAgentTranscriptKysely(database.db)
@@ -598,7 +604,7 @@ export function hasSqliteSessionTranscriptSnapshot(
 ): boolean {
   const { sessionId } = normalizeTranscriptScope(options);
   const snapshotId = normalizeSessionId(options.snapshotId);
-  const database = openOpenClawAgentDatabase(options);
+  const database = openTranscriptAgentDatabase(options);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getAgentTranscriptKysely(database.db)

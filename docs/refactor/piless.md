@@ -364,7 +364,6 @@ kv(scope, key, value_json, updated_at)
 agents(agent_id, config_json, created_at, updated_at)
 session_entries(agent_id, session_key, entry_json, updated_at)
 transcript_events(agent_id, session_id, seq, event_json, created_at)
-transcript_files(agent_id, session_id, path, imported_at, exported_at)
 vfs_entries(agent_id, namespace, path, kind, content_blob, metadata_json, updated_at)
 tool_artifacts(agent_id, run_id, artifact_id, kind, metadata_json, blob, created_at)
 ```
