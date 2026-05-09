@@ -95,16 +95,7 @@ export function handleCompactionEnd(ctx: EmbeddedPiSubscribeContext, evt: Compac
         : undefined;
     ctx.noteCompactionTokensAfter(tokensAfter);
     const observedCompactionCount = ctx.getCompactionCount();
-    ctx.log.info(`embedded run ${kind} complete`, {
-      event: "embedded_run_compaction_end",
-      runId: ctx.params.runId,
-      reason,
-      completed: true,
-      willRetry,
-      compactionCount: observedCompactionCount,
-      consoleMessage: `embedded run ${kind} complete: runId=${ctx.params.runId} reason=${reason} compactionCount=${observedCompactionCount} willRetry=${willRetry}`,
-    });
-    void reconcileSessionStoreCompactionCountAfterSuccess({
+    void reconcileSessionRowCompactionCountAfterSuccess({
       sessionKey: ctx.params.sessionKey,
       agentId: ctx.params.agentId,
       observedCompactionCount,
@@ -163,13 +154,13 @@ export function handleCompactionEnd(ctx: EmbeddedPiSubscribeContext, evt: Compac
   }
 }
 
-export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
+export async function reconcileSessionRowCompactionCountAfterSuccess(params: {
   sessionKey?: string;
   agentId?: string;
   observedCompactionCount: number;
   now?: number;
 }): Promise<number | undefined> {
-  const { reconcileSessionStoreCompactionCountAfterSuccess: reconcile } =
+  const { reconcileSessionRowCompactionCountAfterSuccess: reconcile } =
     await import("./pi-embedded-subscribe.handlers.compaction.runtime.js");
   return reconcile(params);
 }

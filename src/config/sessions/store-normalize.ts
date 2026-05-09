@@ -37,7 +37,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
 // resolvedSkills carries the full parsed Skill[] (including each SKILL.md body)
 // and is only used as an in-turn cache by the runtime — see
 // src/agents/pi-embedded-runner/skills-runtime.ts. Persisting it bloats session
-// stores by orders of magnitude when many sessions are active.
+// rows by orders of magnitude when many sessions are active.
 function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
   const snapshot = entry.skillsSnapshot;
   if (!snapshot || snapshot.resolvedSkills === undefined) {
@@ -47,9 +47,9 @@ function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
   return { ...entry, skillsSnapshot: rest };
 }
 
-export function normalizeSessionStore(store: Record<string, SessionEntry>): boolean {
+export function normalizeSessionEntries(entries: Record<string, SessionEntry>): boolean {
   let changed = false;
-  for (const [key, entry] of Object.entries(store)) {
+  for (const [key, entry] of Object.entries(entries)) {
     if (!entry) {
       continue;
     }
@@ -57,7 +57,7 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): bool
       normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry)),
     );
     if (normalized !== entry) {
-      store[key] = normalized;
+      entries[key] = normalized;
       changed = true;
     }
   }

@@ -6,13 +6,12 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   readCompactionCount,
-  seedSessionStore,
+  seedSessionEntry,
   waitForCompactionCount,
 } from "./pi-embedded-subscribe.compaction-test-helpers.js";
 import {
   handleCompactionEnd,
-  handleCompactionStart,
-  reconcileSessionStoreCompactionCountAfterSuccess,
+  reconcileSessionRowCompactionCountAfterSuccess,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
@@ -89,18 +88,18 @@ afterEach(async () => {
   }
 });
 
-describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
+describe("reconcileSessionRowCompactionCountAfterSuccess", () => {
   it("raises the stored compaction count to the observed value", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-reconcile-"));
     useStateDir(tmp);
     const sessionKey = "main";
-    await seedSessionStore({
+    await seedSessionEntry({
       agentId: TEST_AGENT_ID,
       sessionKey,
       compactionCount: 1,
     });
 
-    const nextCount = await reconcileSessionStoreCompactionCountAfterSuccess({
+    const nextCount = await reconcileSessionRowCompactionCountAfterSuccess({
       sessionKey,
       agentId: TEST_AGENT_ID,
       observedCompactionCount: 2,
@@ -111,17 +110,17 @@ describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
     expect(await readCompactionCount(TEST_AGENT_ID, sessionKey)).toBe(2);
   });
 
-  it("does not double count when the store is already at or above the observed value", async () => {
+  it("does not double count when the row is already at or above the observed value", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-idempotent-"));
     useStateDir(tmp);
     const sessionKey = "main";
-    await seedSessionStore({
+    await seedSessionEntry({
       agentId: TEST_AGENT_ID,
       sessionKey,
       compactionCount: 3,
     });
 
-    const nextCount = await reconcileSessionStoreCompactionCountAfterSuccess({
+    const nextCount = await reconcileSessionRowCompactionCountAfterSuccess({
       sessionKey,
       agentId: TEST_AGENT_ID,
       observedCompactionCount: 2,
@@ -284,11 +283,11 @@ describe("compaction lifecycle logging", () => {
 });
 
 describe("handleCompactionEnd", () => {
-  it("reconciles the session store after a successful compaction end event", async () => {
+  it("reconciles the session row after a successful compaction end event", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
     useStateDir(tmp);
     const sessionKey = "main";
-    await seedSessionStore({
+    await seedSessionEntry({
       agentId: TEST_AGENT_ID,
       sessionKey,
       compactionCount: 1,

@@ -11,7 +11,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { type OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
-import { normalizeSessionStore } from "./store-normalize.js";
+import { normalizeSessionEntries } from "./store-normalize.js";
 import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionEntriesOptions = OpenClawStateDatabaseOptions & {
@@ -45,18 +45,18 @@ function parseSessionEntry(row: SessionEntryRow): SessionEntry | null {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
-    const store = { [row.session_key]: parsed as SessionEntry };
-    normalizeSessionStore(store);
-    return store[row.session_key] ?? null;
+    const entries = { [row.session_key]: parsed as SessionEntry };
+    normalizeSessionEntries(entries);
+    return entries[row.session_key] ?? null;
   } catch {
     return null;
   }
 }
 
 function serializeSessionEntry(sessionKey: string, entry: SessionEntry): string {
-  const store = { [sessionKey]: entry };
-  normalizeSessionStore(store);
-  return JSON.stringify(store[sessionKey] ?? entry);
+  const entries = { [sessionKey]: entry };
+  normalizeSessionEntries(entries);
+  return JSON.stringify(entries[sessionKey] ?? entry);
 }
 
 function bindSessionEntry(params: {
@@ -140,9 +140,9 @@ export function countSqliteSessionEntries(options: SqliteSessionEntriesOptions):
 }
 
 export function replaceSqliteSessionEntry(options: ReplaceSqliteSessionEntryOptions): void {
-  const store = { [options.sessionKey]: options.entry };
-  normalizeSessionStore(store);
-  const entry = store[options.sessionKey] ?? options.entry;
+  const entries = { [options.sessionKey]: options.entry };
+  normalizeSessionEntries(entries);
+  const entry = entries[options.sessionKey] ?? options.entry;
   const updatedAt = resolveNow(options);
   runOpenClawAgentWriteTransaction((database) => {
     upsertSessionEntries(database, [
@@ -159,7 +159,7 @@ export function applySqliteSessionEntriesPatch(
   options: ApplySqliteSessionEntriesPatchOptions,
 ): boolean {
   const upsertEntries = { ...options.upsertEntries };
-  normalizeSessionStore(upsertEntries);
+  normalizeSessionEntries(upsertEntries);
   const updatedAt = resolveNow(options);
   return runOpenClawAgentWriteTransaction((database) => {
     for (const [sessionKey, expected] of options.expectedEntries?.entries() ?? []) {
@@ -245,22 +245,22 @@ export function loadSqliteSessionEntries(
       .select(["session_key", "entry_json"])
       .orderBy("session_key", "asc"),
   ).rows;
-  const store: Record<string, SessionEntry> = {};
+  const entries: Record<string, SessionEntry> = {};
   for (const row of rows) {
     const entry = parseSessionEntry(row);
     if (entry) {
-      store[row.session_key] = entry;
+      entries[row.session_key] = entry;
     }
   }
-  normalizeSessionStore(store);
-  return store;
+  normalizeSessionEntries(entries);
+  return entries;
 }
 
 export function mergeSqliteSessionEntries(
   options: SqliteSessionEntriesOptions,
   incoming: Record<string, SessionEntry>,
 ): { imported: number; stored: number } {
-  normalizeSessionStore(incoming);
+  normalizeSessionEntries(incoming);
   const existing = loadSqliteSessionEntries(options);
   const upsertEntries: Record<string, SessionEntry> = {};
   for (const [key, entry] of Object.entries(incoming)) {

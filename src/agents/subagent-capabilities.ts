@@ -61,7 +61,7 @@ function shouldInspectStoredSubagentEnvelope(sessionKey: string): boolean {
   return isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey);
 }
 
-function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string): boolean {
+function isSameAgentSessionDatabase(leftSessionKey: string, rightSessionKey: string): boolean {
   const leftAgentId = normalizeOptionalLowercaseString(
     parseAgentSessionKey(leftSessionKey)?.agentId,
   );
@@ -224,7 +224,7 @@ function isStoredSubagentEnvelopeSession(
   if (!spawnedBy) {
     return false;
   }
-  const parentStore = isSameAgentSessionStore(normalizedSessionKey, spawnedBy)
+  const parentStore = isSameAgentSessionDatabase(normalizedSessionKey, spawnedBy)
     ? params.store
     : undefined;
   return isStoredSubagentEnvelopeSession(

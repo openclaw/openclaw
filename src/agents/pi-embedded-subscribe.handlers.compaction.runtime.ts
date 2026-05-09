@@ -1,6 +1,6 @@
 import { patchSessionEntry } from "../config/sessions.js";
 
-export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
+export async function reconcileSessionRowCompactionCountAfterSuccess(params: {
   sessionKey?: string;
   agentId?: string;
   observedCompactionCount: number;

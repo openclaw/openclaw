@@ -1,6 +1,6 @@
 import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
 
-export async function seedSessionStore(params: {
+export async function seedSessionEntry(params: {
   agentId: string;
   sessionKey: string;
   compactionCount: number;
