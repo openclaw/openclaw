@@ -373,6 +373,9 @@ The remaining cleanup is mostly consolidation and deletion:
   filesystem existence checks. Its transcript-ingestion tests seed SQLite rows
   through neutral test locators instead of creating `agents/<id>/sessions`
   fixtures.
+- Gateway doctor memory status reads short-term recall and phase-signal counts
+  from SQLite plugin-state rows instead of `memory/.dreams/*.json`; CLI and
+  doctor output now label that storage as a SQLite store, not a path.
 - Sandbox container/browser registries now use the shared
   `sandbox_registry_entries` SQLite table. Doctor imports legacy monolithic and
   sharded JSON registry files and removes successful sources.

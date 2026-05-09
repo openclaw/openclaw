@@ -153,7 +153,7 @@ type ShortTermAuditIssue = {
 };
 
 export type ShortTermAuditSummary = {
-  storePath: string;
+  storeLabel: string;
   updatedAt?: string;
   exists: boolean;
   entryCount: number;
@@ -1626,12 +1626,12 @@ export async function applyShortTermPromotions(
   });
 }
 
-export function resolveShortTermRecallStorePath(workspaceDir: string): string {
+export function resolveShortTermRecallStoreLabel(workspaceDir: string): string {
   void workspaceDir;
   return resolveSqliteStoreLabel(MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE);
 }
 
-export function resolveShortTermPhaseSignalStorePath(workspaceDir: string): string {
+export function resolveShortTermPhaseSignalStoreLabel(workspaceDir: string): string {
   void workspaceDir;
   return resolveSqliteStoreLabel(MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE);
 }
@@ -1644,7 +1644,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   };
 }): Promise<ShortTermAuditSummary> {
   const workspaceDir = params.workspaceDir.trim();
-  const storePath = resolveShortTermRecallStorePath(workspaceDir);
+  const storeLabel = resolveShortTermRecallStoreLabel(workspaceDir);
   const issues: ShortTermAuditIssue[] = [];
   const nowIso = new Date().toISOString();
   const store = await readStore(workspaceDir, nowIso);
@@ -1711,7 +1711,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   }
 
   return {
-    storePath,
+    storeLabel,
     updatedAt,
     exists,
     entryCount,
@@ -1778,9 +1778,9 @@ export async function repairShortTermPromotionArtifacts(params: {
 
 export async function removeGroundedShortTermCandidates(params: {
   workspaceDir: string;
-}): Promise<{ removed: number; storePath: string }> {
+}): Promise<{ removed: number; storeLabel: string }> {
   const workspaceDir = params.workspaceDir.trim();
-  const storePath = resolveShortTermRecallStorePath(workspaceDir);
+  const storeLabel = resolveShortTermRecallStoreLabel(workspaceDir);
   const nowIso = new Date().toISOString();
   let removed = 0;
 
@@ -1817,7 +1817,7 @@ export async function removeGroundedShortTermCandidates(params: {
     }
   });
 
-  return { removed, storePath };
+  return { removed, storeLabel };
 }
 
 export const __testing = {

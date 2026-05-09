@@ -1592,7 +1592,7 @@ describe("short-term promotion", () => {
       });
 
       const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
-      expect(audit.storePath).toBe(
+      expect(audit.storeLabel).toBe(
         "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
       );
       expect(audit.invalidEntryCount).toBe(0);

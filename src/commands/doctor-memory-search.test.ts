@@ -101,7 +101,7 @@ import { detectLegacyWorkspaceDirs, formatRootMemoryFilesWarning } from "./docto
 function resetMemoryRecallMocks() {
   auditShortTermPromotionArtifacts.mockReset();
   auditShortTermPromotionArtifacts.mockResolvedValue({
-    storePath: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
+    storeLabel: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
     exists: true,
     entryCount: 1,
     promotedCount: 0,
@@ -735,7 +735,7 @@ describe("memory recall doctor integration", () => {
 
   it("notes recall-store audit problems with doctor guidance", async () => {
     auditShortTermPromotionArtifacts.mockResolvedValueOnce({
-      storePath: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
+      storeLabel: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
       exists: true,
       entryCount: 12,
       promotedCount: 4,
@@ -767,7 +767,7 @@ describe("memory recall doctor integration", () => {
 
   it("runs memory recall repair during doctor --fix", async () => {
     auditShortTermPromotionArtifacts.mockResolvedValueOnce({
-      storePath: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
+      storeLabel: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
       exists: true,
       entryCount: 12,
       promotedCount: 4,

@@ -28,7 +28,7 @@ type RuntimeFacadeModule = {
   }) => void;
   removeGroundedShortTermCandidates: (params: {
     workspaceDir: string;
-  }) => Promise<{ removed: number; storePath: string }>;
+  }) => Promise<{ removed: number; storeLabel: string }>;
   repairDreamingArtifacts: (params: {
     workspaceDir: string;
     archiveDiary?: boolean;

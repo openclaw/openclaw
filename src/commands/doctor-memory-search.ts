@@ -173,7 +173,7 @@ function buildMemoryRecallIssueNote(audit: ShortTermAuditSummary): string | null
   return [
     "Memory recall artifacts need attention:",
     ...issueLines,
-    `Recall store: ${audit.storePath}`,
+    `Recall store: ${audit.storeLabel}`,
     guidance,
   ].join("\n");
 }

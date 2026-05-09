@@ -22,6 +22,7 @@ const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
 const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
+const readDreamingWorkspaceMap = vi.hoisted(() => vi.fn(async () => ({})));
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig,
@@ -50,7 +51,20 @@ vi.mock("./doctor.memory-core-runtime.js", () => ({
   repairDreamingArtifacts,
 }));
 
+vi.mock("../../memory-host-sdk/dreaming-state-store.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../memory-host-sdk/dreaming-state-store.js")
+  >("../../memory-host-sdk/dreaming-state-store.js");
+  return {
+    ...actual,
+    readDreamingWorkspaceMap,
+  };
+});
+
 import { doctorHandlers } from "./doctor.js";
+
+const SHORT_TERM_RECALL_NAMESPACE = "dreaming.short-term-recall";
+const SHORT_TERM_PHASE_SIGNAL_NAMESPACE = "dreaming.phase-signals";
 
 const makeRuntimeContext = () => ({ getRuntimeConfig: () => getRuntimeConfig() });
 
@@ -185,6 +199,7 @@ describe("doctor.memory.status", () => {
     removeBackfillDiaryEntries.mockReset();
     removeGroundedShortTermCandidates.mockReset();
     repairDreamingArtifacts.mockReset();
+    readDreamingWorkspaceMap.mockReset().mockResolvedValue({});
   });
 
   it("returns gateway embedding probe status for the default agent", async () => {
@@ -328,141 +343,77 @@ describe("doctor.memory.status", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-status-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
     const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
-    const mainStorePath = path.join(
-      mainWorkspaceDir,
-      "memory",
-      ".dreams",
-      "short-term-recall.json",
-    );
-    const alphaStorePath = path.join(
-      alphaWorkspaceDir,
-      "memory",
-      ".dreams",
-      "short-term-recall.json",
-    );
-    const mainPhaseSignalPath = path.join(
-      mainWorkspaceDir,
-      "memory",
-      ".dreams",
-      "phase-signals.json",
-    );
-    const alphaPhaseSignalPath = path.join(
-      alphaWorkspaceDir,
-      "memory",
-      ".dreams",
-      "phase-signals.json",
-    );
-    await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
-    await fs.mkdir(path.dirname(alphaStorePath), { recursive: true });
-    await fs.writeFile(
-      mainStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-03.md:1:2": {
-              path: "memory/2026-04-03.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Emma prefers shorter, lower-pressure check-ins.",
-              source: "memory",
-              recallCount: 2,
-              dailyCount: 1,
-              lastRecalledAt: recentIso,
-              promotedAt: undefined,
-            },
-            "memory:memory/2026-04-02.md:1:2": {
-              path: "memory/2026-04-02.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Use the Happy Together calendar for flights.",
-              source: "memory",
-              recallCount: 9,
-              dailyCount: 5,
-              promotedAt: recentIso,
-            },
+    readDreamingWorkspaceMap.mockImplementation(async (namespace: string, workspaceDir: string) => {
+      if (namespace === SHORT_TERM_RECALL_NAMESPACE && workspaceDir === mainWorkspaceDir) {
+        return {
+          "memory:memory/2026-04-03.md:1:2": {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 2,
+            snippet: "Emma prefers shorter, lower-pressure check-ins.",
+            source: "memory",
+            recallCount: 2,
+            dailyCount: 1,
+            lastRecalledAt: recentIso,
           },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.writeFile(
-      alphaStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-01.md:1:2": {
-              path: "memory/2026-04-01.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Bunji lives in London.",
-              source: "memory",
-              recallCount: 7,
-              dailyCount: 4,
-              promotedAt: olderIso,
-            },
-            "memory:memory/2026-04-04.md:1:2": {
-              path: "memory/2026-04-04.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Always book the covered valet option at Park & Greet BCN.",
-              source: "memory",
-              recallCount: 8,
-              dailyCount: 3,
-              promotedAt: recentIso,
-            },
+          "memory:memory/2026-04-02.md:1:2": {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 2,
+            snippet: "Use the Happy Together calendar for flights.",
+            source: "memory",
+            recallCount: 9,
+            dailyCount: 5,
+            promotedAt: recentIso,
           },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.writeFile(
-      mainPhaseSignalPath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-03.md:1:2": {
-              lightHits: 2,
-              remHits: 3,
-            },
-            "memory:memory/2026-04-02.md:1:2": {
-              lightHits: 9,
-              remHits: 9,
-            },
+        };
+      }
+      if (namespace === SHORT_TERM_RECALL_NAMESPACE && workspaceDir === alphaWorkspaceDir) {
+        return {
+          "memory:memory/2026-04-01.md:1:2": {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 2,
+            snippet: "Bunji lives in London.",
+            source: "memory",
+            recallCount: 7,
+            dailyCount: 4,
+            promotedAt: olderIso,
           },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.writeFile(
-      alphaPhaseSignalPath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-01.md:1:2": {
-              lightHits: 5,
-              remHits: 5,
-            },
+          "memory:memory/2026-04-04.md:1:2": {
+            path: "memory/2026-04-04.md",
+            startLine: 1,
+            endLine: 2,
+            snippet: "Always book the covered valet option at Park & Greet BCN.",
+            source: "memory",
+            recallCount: 8,
+            dailyCount: 3,
+            promotedAt: recentIso,
           },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+        };
+      }
+      if (namespace === SHORT_TERM_PHASE_SIGNAL_NAMESPACE && workspaceDir === mainWorkspaceDir) {
+        return {
+          "memory:memory/2026-04-03.md:1:2": {
+            lightHits: 2,
+            remHits: 3,
+          },
+          "memory:memory/2026-04-02.md:1:2": {
+            lightHits: 9,
+            remHits: 9,
+          },
+        };
+      }
+      if (namespace === SHORT_TERM_PHASE_SIGNAL_NAMESPACE && workspaceDir === alphaWorkspaceDir) {
+        return {
+          "memory:memory/2026-04-01.md:1:2": {
+            lightHits: 5,
+            remHits: 5,
+          },
+        };
+      }
+      return {};
+    });
 
     getRuntimeConfig.mockReturnValue({
       agents: {
@@ -595,27 +546,18 @@ describe("doctor.memory.status", () => {
 
   it("falls back to the manager workspace when no configured dreaming workspaces resolve", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-fallback-"));
-    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: "2026-04-04T00:00:00.000Z",
-          entries: {
-            "memory:memory/2026-04-03.md:1:2": {
-              path: "memory/2026-04-03.md",
-              source: "memory",
-              promotedAt: "2026-04-04T00:00:00.000Z",
-            },
-          },
+    readDreamingWorkspaceMap.mockImplementation(async (namespace: string, candidate: string) => {
+      if (namespace !== SHORT_TERM_RECALL_NAMESPACE || candidate !== workspaceDir) {
+        return {};
+      }
+      return {
+        "memory:memory/2026-04-03.md:1:2": {
+          path: "memory/2026-04-03.md",
+          source: "memory",
+          promotedAt: "2026-04-04T00:00:00.000Z",
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+      };
+    });
     resolveMemorySearchConfig.mockReturnValue(null);
     getRuntimeConfig.mockReturnValue({
       plugins: {
@@ -720,27 +662,12 @@ describe("doctor.memory.status", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-error-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
     const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
-    const alphaStorePath = path.join(
-      alphaWorkspaceDir,
-      "memory",
-      ".dreams",
-      "short-term-recall.json",
-    );
-    await fs.mkdir(path.dirname(alphaStorePath), { recursive: true });
-    await fs.writeFile(
-      alphaStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: "2026-04-04T00:00:00.000Z",
-          entries: {},
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.mkdir(path.join(mainWorkspaceDir, "memory", ".dreams"), { recursive: true });
+    readDreamingWorkspaceMap.mockImplementation(async (namespace: string) => {
+      if (namespace === SHORT_TERM_RECALL_NAMESPACE) {
+        throw Object.assign(new Error("denied"), { code: "EACCES" });
+      }
+      return {};
+    });
 
     getRuntimeConfig.mockReturnValue({
       agents: {
@@ -768,27 +695,6 @@ describe("doctor.memory.status", () => {
       agentId === "alpha" ? alphaWorkspaceDir : mainWorkspaceDir,
     );
 
-    const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
-      const targetPath =
-        typeof target === "string"
-          ? target
-          : Buffer.isBuffer(target)
-            ? target.toString("utf-8")
-            : target instanceof URL
-              ? target.pathname
-              : "";
-      if (
-        targetPath === path.join(mainWorkspaceDir, "memory", ".dreams", "short-term-recall.json") ||
-        targetPath === alphaStorePath
-      ) {
-        const error = Object.assign(new Error("denied"), { code: "EACCES" });
-        throw error;
-      }
-      return await vi
-        .importActual<typeof import("node:fs/promises")>("node:fs/promises")
-        .then((actual) => actual.readFile(target, options as never));
-    });
-
     const close = vi.fn().mockResolvedValue(undefined);
     getMemorySearchManager.mockResolvedValue({
       manager: {
@@ -813,7 +719,6 @@ describe("doctor.memory.status", () => {
         undefined,
       );
     } finally {
-      readFileSpy.mockRestore();
       await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
   });
@@ -824,7 +729,7 @@ describe("doctor.memory dream actions", () => {
     resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw");
     removeGroundedShortTermCandidates.mockResolvedValue({
       removed: 3,
-      storePath: "/tmp/openclaw/memory/.dreams/short-term-recall.json",
+      storeLabel: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
     });
     const respond = vi.fn();
 

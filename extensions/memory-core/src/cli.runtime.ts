@@ -54,7 +54,7 @@ import {
   recordGroundedShortTermCandidates,
   recordShortTermRecalls,
   rankShortTermPromotionCandidates,
-  resolveShortTermRecallStorePath,
+  resolveShortTermRecallStoreLabel,
   type RepairShortTermPromotionArtifactsResult,
   type ShortTermAuditSummary,
 } from "./short-term-promotion.js";
@@ -926,7 +926,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     }
     if (audit) {
       lines.push(`${label("Recall store")} ${info(formatAuditCounts(audit))}`);
-      lines.push(`${label("Recall path")} ${info(shortenHomePath(audit.storePath))}`);
+      lines.push(`${label("Recall storage")} ${info(audit.storeLabel)}`);
       if (audit.updatedAt) {
         lines.push(`${label("Recall updated")} ${info(audit.updatedAt)}`);
       }
@@ -1275,7 +1275,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
         }
       }
 
-      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const storeLabel = resolveShortTermRecallStoreLabel(workspaceDir);
       const customQmd = asRecord(asRecord(status.custom)?.qmd);
       const audit = await auditShortTermPromotionArtifacts({
         workspaceDir,
@@ -1292,7 +1292,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
       if (opts.json) {
         defaultRuntime.writeJson({
           workspaceDir,
-          storePath,
+          storeLabel,
           audit,
           candidates,
           apply: applyResult
@@ -1310,7 +1310,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
 
       if (candidates.length === 0) {
         defaultRuntime.log("No short-term recall candidates.");
-        defaultRuntime.log(`Recall store: ${shortenHomePath(storePath)}`);
+        defaultRuntime.log(`Recall store: ${storeLabel}`);
         if (audit.issues.length > 0) {
           for (const issue of audit.issues) {
             defaultRuntime.log(issue.message);
@@ -1328,7 +1328,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
           `(${agentId})`,
         )}`,
       );
-      lines.push(`${colorize(rich, theme.muted, "Recall store:")} ${shortenHomePath(storePath)}`);
+      lines.push(`${colorize(rich, theme.muted, "Recall store:")} ${storeLabel}`);
       lines.push(colorize(rich, theme.muted, `Store health: ${formatAuditCounts(audit)}`));
       for (const candidate of candidates) {
         lines.push(
@@ -1726,7 +1726,7 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
               : {}),
             ...(shortTermRollback
               ? {
-                  shortTermStorePath: shortTermRollback.storePath,
+                  shortTermStoreLabel: shortTermRollback.storeLabel,
                   removedShortTermEntries: shortTermRollback.removed,
                 }
               : {}),
@@ -1752,7 +1752,7 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
                   colorize(
                     isRich(),
                     theme.muted,
-                    `shortTermStorePath=${shortenHomePath(shortTermRollback.storePath)}`,
+                    `shortTermStoreLabel=${shortTermRollback.storeLabel}`,
                   ),
                   colorize(
                     isRich(),

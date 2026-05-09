@@ -60,7 +60,7 @@ export type ShortTermAuditIssue = {
 };
 
 export type ShortTermAuditSummary = {
-  storePath: string;
+  storeLabel: string;
   updatedAt?: string;
   exists: boolean;
   entryCount: number;
