@@ -106,7 +106,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
     record.requestedByConnId = "chat-agent-conn";
     record.requestedByDeviceId = null;
-    record.requestedByClientId = "chat-agent";
+    record.requestedByClientId = "gateway-client";
     record.requestedByDeviceTokenAuth = false;
     record.request = {
       ...record.request,
@@ -609,6 +609,33 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(forwarded).not.toHaveProperty("turnSourceTo");
     expect(forwarded).not.toHaveProperty("turnSourceAccountId");
     expect(forwarded).not.toHaveProperty("turnSourceThreadId");
+  });
+
+  test("accepts trusted backend chat replay from a non-bridgeable agent client when stable requester metadata matches", () => {
+    const record = makeChatRecord();
+    record.requestedByClientId = "chat-agent";
+
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:12345",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+
+    expectAllowOnceForwardingResult(result);
   });
 
   test("accepts trusted backend WeCom replay when the approved chat agent connection changes", () => {
