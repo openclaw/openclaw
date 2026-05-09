@@ -480,7 +480,9 @@ describe("OpenClaw SDK websocket e2e", () => {
       requestTimeoutMs: 500,
     });
 
-    await expect(transport.connect()).rejects.toThrow();
+    const initialConnectError = await transport.connect().catch((error: unknown) => error);
+    expect(initialConnectError).toBeInstanceOf(Error);
+    expect(String(initialConnectError)).toMatch(/ECONNREFUSED/);
 
     const gateway = await createFakeGateway(port);
     try {
