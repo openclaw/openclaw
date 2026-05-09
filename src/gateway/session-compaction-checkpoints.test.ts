@@ -79,6 +79,8 @@ describe("session-compaction-checkpoints", () => {
 
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
       expect(snapshot).not.toBeNull();
+      expect(snapshot?.agentId).toBe(DEFAULT_AGENT_ID);
+      expect(snapshot?.sourceSessionId).toBe(session.getSessionId());
       expect(snapshot?.leafId).toBe(leafId);
       expect(snapshot?.sessionFile).not.toBe(sessionFile);
       expect(snapshot?.sessionFile).toContain("sqlite-transcript://");
@@ -119,7 +121,14 @@ describe("session-compaction-checkpoints", () => {
           agentId: DEFAULT_AGENT_ID,
           sessionId: snapshot!.sessionId,
         }),
-      ).toBe(true);
+      ).toBe(false);
+      expect(
+        hasSqliteSessionTranscriptSnapshot({
+          agentId: DEFAULT_AGENT_ID,
+          sessionId: session.getSessionId(),
+          snapshotId: snapshot!.sessionId,
+        }),
+      ).toBe(false);
     } finally {
       sessionManagerOpenSpy.mockRestore();
     }
@@ -161,6 +170,8 @@ describe("session-compaction-checkpoints", () => {
 
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
       expect(snapshot).not.toBeNull();
+      expect(snapshot?.agentId).toBe(DEFAULT_AGENT_ID);
+      expect(snapshot?.sourceSessionId).toBe(sessionId);
       expect(snapshot?.sessionId).not.toBe(sessionId);
       expect(snapshot?.leafId).toBe(leafId);
       expect(snapshot?.sessionFile).not.toBe(sessionFile);
