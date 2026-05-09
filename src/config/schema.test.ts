@@ -500,6 +500,13 @@ describe("config schema", () => {
     expect(schema?.properties).toBeUndefined();
   });
 
+  it("lists Matrix in messages.queue.byChannel schema lookup", () => {
+    const lookup = lookupConfigSchema(baseSchema, "messages.queue.byChannel");
+    expect(lookup?.path).toBe("messages.queue.byChannel");
+    expect(lookup?.children.map((child) => child.key)).toEqual(expect.arrayContaining(["matrix"]));
+    expect(lookup?.schema).toMatchObject({ additionalProperties: false });
+  });
+
   it("returns a shallow lookup schema without nested composition keywords", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
     expect(lookup?.path).toBe("agents.list.0.runtime");
