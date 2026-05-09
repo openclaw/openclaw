@@ -1,10 +1,11 @@
 import type { Message } from "@grammyjs/types";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
-  resetTelegramMessageCacheForTests,
+  resetTelegramMessageCacheBucketsForTest,
   resolveTelegramMessageCacheScopeKey,
 } from "./message-cache.js";
 
@@ -32,7 +33,8 @@ function persistedCacheEntry(messageId: number, text: string): PersistedCacheEnt
 
 describe("telegram message cache", () => {
   afterEach(() => {
-    resetTelegramMessageCacheForTests();
+    resetTelegramMessageCacheBucketsForTest();
+    resetPluginStateStoreForTests();
   });
 
   it("hydrates reply chains from persisted cached messages", () => {
@@ -72,6 +74,7 @@ describe("telegram message cache", () => {
       } as Message,
     });
 
+    resetTelegramMessageCacheBucketsForTest();
     const secondCache = createTelegramMessageCache({ persistedScopeKey });
     const chain = buildTelegramReplyChain({
       cache: secondCache,
