@@ -127,9 +127,9 @@ describe("buildApiErrorObservationFields", () => {
   });
 
   it("returns empty observation fields for empty input", () => {
-    expect(buildApiErrorObservationFields(undefined)).toEqual({});
-    expect(buildApiErrorObservationFields("")).toEqual({});
-    expect(buildApiErrorObservationFields("   ")).toEqual({});
+    expect(buildApiErrorObservationFields(undefined)).toStrictEqual({});
+    expect(buildApiErrorObservationFields("")).toStrictEqual({});
+    expect(buildApiErrorObservationFields("   ")).toStrictEqual({});
   });
 
   it("re-reads configured redact patterns on each call", () => {
@@ -152,7 +152,7 @@ describe("buildApiErrorObservationFields", () => {
       throw new Error("boom");
     });
 
-    expect(buildApiErrorObservationFields("request_id=req_123")).toEqual({});
+    expect(buildApiErrorObservationFields("request_id=req_123")).toStrictEqual({});
     expect(buildTextObservationFields("request_id=req_123")).toEqual({
       textPreview: undefined,
       textHash: undefined,
