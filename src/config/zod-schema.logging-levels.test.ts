@@ -14,19 +14,32 @@ describe("OpenClawSchema logging levels", () => {
   });
 
   it("rejects invalid logging level values", () => {
-    expect(() =>
-      OpenClawSchema.parse({
-        logging: {
-          level: "loud",
-        },
-      }),
-    ).toThrow();
-    expect(() =>
-      OpenClawSchema.parse({
-        logging: {
-          consoleLevel: "verbose",
-        },
-      }),
-    ).toThrow();
+    const invalidLevel = OpenClawSchema.safeParse({
+      logging: {
+        level: "loud",
+      },
+    });
+    const invalidConsoleLevel = OpenClawSchema.safeParse({
+      logging: {
+        consoleLevel: "verbose",
+      },
+    });
+
+    expect(invalidLevel).toMatchObject({ success: false });
+    if (!invalidLevel.success) {
+      expect(invalidLevel.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["logging", "level"],
+        }),
+      );
+    }
+    expect(invalidConsoleLevel).toMatchObject({ success: false });
+    if (!invalidConsoleLevel.success) {
+      expect(invalidConsoleLevel.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["logging", "consoleLevel"],
+        }),
+      );
+    }
   });
 });
