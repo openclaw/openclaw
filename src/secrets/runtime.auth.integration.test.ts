@@ -1,8 +1,10 @@
-import { readFileSync } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import {
+  loadPersistedAuthProfileStore,
+  savePersistedAuthProfileSecretsStore,
+} from "../agents/auth-profiles/persisted.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   asConfig,
@@ -65,16 +67,11 @@ vi.mock("./runtime-prepare.runtime.js", () => ({
   }),
 }));
 
-function loadAuthStoreFromTestFile(agentDir?: string): AuthProfileStore {
+function loadAuthStoreFromTestState(agentDir?: string): AuthProfileStore {
   if (!agentDir) {
     return { version: 1, profiles: {} };
   }
-  try {
-    const raw = readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8");
-    return JSON.parse(raw) as AuthProfileStore;
-  } catch {
-    return { version: 1, profiles: {} };
-  }
+  return loadPersistedAuthProfileStore(agentDir) ?? { version: 1, profiles: {} };
 }
 
 describe("secrets runtime snapshot auth integration", () => {
@@ -92,43 +89,31 @@ describe("secrets runtime snapshot auth integration", () => {
     await withTempHome("openclaw-secrets-runtime-agent-dirs-", async (home) => {
       const mainAgentDir = path.join(home, ".openclaw", "agents", "main", "agent");
       const opsAgentDir = path.join(home, ".openclaw", "agents", "ops", "agent");
-      await fs.mkdir(mainAgentDir, { recursive: true });
-      await fs.mkdir(opsAgentDir, { recursive: true });
-      await fs.writeFile(
-        path.join(mainAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "openai:default": {
-                type: "api_key",
-                provider: "openai",
-                keyRef: OPENAI_ENV_KEY_REF,
-              },
+      savePersistedAuthProfileSecretsStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              keyRef: OPENAI_ENV_KEY_REF,
             },
           },
-          null,
-          2,
-        )}\n`,
-        { encoding: "utf8", mode: 0o600 },
+        },
+        mainAgentDir,
       );
-      await fs.writeFile(
-        path.join(opsAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "anthropic:ops": {
-                type: "api_key",
-                provider: "anthropic",
-                keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
-              },
+      savePersistedAuthProfileSecretsStore(
+        {
+          version: 1,
+          profiles: {
+            "anthropic:ops": {
+              type: "api_key",
+              provider: "anthropic",
+              keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
             },
           },
-          null,
-          2,
-        )}\n`,
-        { encoding: "utf8", mode: 0o600 },
+        },
+        opsAgentDir,
       );
 
       const prepared = await prepareSecretsRuntimeSnapshot({
@@ -137,7 +122,7 @@ describe("secrets runtime snapshot auth integration", () => {
           OPENAI_API_KEY: "sk-main-runtime",
           ANTHROPIC_API_KEY: "sk-ops-runtime",
         },
-        loadAuthStore: loadAuthStoreFromTestFile,
+        loadAuthStore: loadAuthStoreFromTestState,
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       });
 
@@ -158,7 +143,7 @@ describe("secrets runtime snapshot auth integration", () => {
           OPENAI_API_KEY: "sk-main-runtime",
           ANTHROPIC_API_KEY: "sk-ops-runtime",
         },
-        loadAuthStore: loadAuthStoreFromTestFile,
+        loadAuthStore: loadAuthStoreFromTestState,
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       });
       activateSecretsRuntimeSnapshot(refreshed);
