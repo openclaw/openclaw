@@ -364,6 +364,25 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("propagates request SSRF policy to JSON image requests", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "test",
+      cfg: {},
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    );
+  });
+
   it("forwards generation count and custom size overrides", async () => {
     mockGeneratedPngResponse();
 
@@ -1068,6 +1087,7 @@ describe("openai image generation provider", () => {
         },
       },
       authStore,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
     expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith({
@@ -1083,6 +1103,7 @@ describe("openai image generation provider", () => {
       expect.objectContaining({
         url: "http://127.0.0.1:44220/backend-api/codex/responses",
         allowPrivateNetwork: true,
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       }),
     );
     expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));

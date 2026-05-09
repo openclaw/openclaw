@@ -66,6 +66,41 @@ describe("vydra image-generation provider", () => {
     });
   });
 
+  it("passes request SSRF policy to the image creation request", async () => {
+    stubVydraApiKey();
+    const fetchMock = stubFetch(
+      jsonResponse({
+        jobId: "job-123",
+        status: "completed",
+        imageUrl: "https://cdn.vydra.ai/generated/test.png",
+      }),
+      binaryResponse("png-data", "image/png"),
+    );
+
+    const provider = buildVydraImageGenerationProvider();
+    await provider.generateImage({
+      provider: "vydra",
+      model: "grok-imagine",
+      prompt: "draw a cat",
+      cfg: {
+        models: {
+          providers: {
+            vydra: {
+              baseUrl: "https://198.18.0.10/api/v1",
+            },
+          },
+        },
+      } as never,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://198.18.0.10/api/v1/models/grok-imagine",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("polls jobs when the create response is not completed yet", async () => {
     stubVydraApiKey();
     const fetchMock = stubFetch(
