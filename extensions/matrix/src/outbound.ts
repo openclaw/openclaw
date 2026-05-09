@@ -101,11 +101,10 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       resolveOutboundSendDep<typeof sendMessageMatrix>(deps, "matrix") ?? sendMessageMatrix;
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
-    const resolvedReplyToId = replyToId ?? undefined;
     const resolveReplyToId = createReplyToFanout({
-      replyToId: resolvedReplyToId,
-      replyToIdSource,
-      replyToMode,
+      ...(replyToId != null ? { replyToId } : {}),
+      ...(replyToIdSource !== undefined ? { replyToIdSource } : {}),
+      ...(replyToMode !== undefined ? { replyToMode } : {}),
     });
     const urls = resolvePayloadMediaUrls(payload);
     if (urls.length > 0) {
