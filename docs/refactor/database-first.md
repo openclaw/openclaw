@@ -458,6 +458,21 @@ sessionId}` and session key context.
   session id as the retained transcript identity.
 - ACP session metadata APIs now read/list/upsert SQLite rows by `agentId` and
   no longer expose `storePath` as part of the ACP session entry contract.
+- Session usage accounting and gateway usage aggregation now resolve transcripts
+  by `{agentId, sessionId}` only. The cost/usage cache and discovered-session
+  summaries no longer synthesize or return transcript locator strings.
+- Gateway chat append, abort-partial persistence, `/sessions.send`, and
+  webchat media transcript writes append directly through SQLite transcript
+  scope. The gateway transcript-injection helper no longer accepts a
+  `transcriptLocator` parameter.
+- SQLite transcript discovery now lists transcript scopes and stats only:
+  `{agentId, sessionId, updatedAt, eventCount}`. The dead
+  `listSqliteSessionTranscriptLocators` compatibility helper and per-row
+  `locator` field are gone.
+- Transcript repair runtime now exposes only
+  `repairTranscriptSessionStateIfNeeded({agentId, sessionId})`. The old
+  locator-based repair helper is deleted; locator parsing remains only in
+  doctor/debug boundary code that explicitly receives an external handle.
 - ACP replay ledger runtime now stores per-session replay rows in the shared
   SQLite state database instead of `acp/event-ledger.json`; doctor imports and
   removes the legacy file.
