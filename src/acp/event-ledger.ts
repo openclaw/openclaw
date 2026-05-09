@@ -1,9 +1,5 @@
-import { statSync } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
-import { resolveStateDir } from "../config/paths.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -13,7 +9,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { isRecord } from "../utils.js";
 
-const LEDGER_VERSION = 1;
+export const ACP_EVENT_LEDGER_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
 const DEFAULT_MAX_EVENTS_PER_SESSION = 5_000;
 const DEFAULT_MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
@@ -76,6 +72,8 @@ type LedgerStore = {
   sessions: Record<string, LedgerSession>;
 };
 
+export type AcpEventLedgerMigrationStore = LedgerStore;
+
 type LedgerOptions = {
   maxSessions?: number;
   maxEventsPerSession?: number;
@@ -117,7 +115,7 @@ type MutableLedgerState = {
 
 function createEmptyStore(): LedgerStore {
   return {
-    version: LEDGER_VERSION,
+    version: ACP_EVENT_LEDGER_VERSION,
     sessions: {},
   };
 }
@@ -228,7 +226,7 @@ function normalizeSession(raw: unknown): LedgerSession | undefined {
 }
 
 function normalizeStore(raw: unknown): LedgerStore {
-  if (!isRecord(raw) || raw.version !== LEDGER_VERSION || !isRecord(raw.sessions)) {
+  if (!isRecord(raw) || raw.version !== ACP_EVENT_LEDGER_VERSION || !isRecord(raw.sessions)) {
     return createEmptyStore();
   }
   const sessions: Record<string, LedgerSession> = {};
@@ -239,7 +237,7 @@ function normalizeStore(raw: unknown): LedgerStore {
     }
     sessions[sessionId] = session;
   }
-  return { version: LEDGER_VERSION, sessions };
+  return { version: ACP_EVENT_LEDGER_VERSION, sessions };
 }
 
 function getOrCreateSession(
@@ -450,10 +448,6 @@ export function createInMemoryAcpEventLedger(options: LedgerOptions = {}): AcpEv
   });
 }
 
-export function resolveLegacyAcpEventLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "acp", "event-ledger.json");
-}
-
 function dbOptionsFromParams(
   params: OpenClawStateDatabaseOptions & LedgerOptions,
 ): OpenClawStateDatabaseOptions {
@@ -526,7 +520,7 @@ function loadStoreFromSqliteDb(database: DatabaseSync): LedgerStore {
     }
   }
 
-  return { version: LEDGER_VERSION, sessions };
+  return { version: ACP_EVENT_LEDGER_VERSION, sessions };
 }
 
 function writeStoreToSqliteDb(
@@ -628,44 +622,20 @@ function writeStoreToSqlite(
   }, options);
 }
 
-export function legacyAcpEventLedgerFileExists(env: NodeJS.ProcessEnv = process.env): boolean {
-  try {
-    return statSync(resolveLegacyAcpEventLedgerPath(env)).isFile();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
+export function normalizeAcpEventLedgerStoreForMigration(
+  raw: unknown,
+): AcpEventLedgerMigrationStore {
+  return normalizeStore(raw);
 }
 
-export async function importLegacyAcpEventLedgerFileToSqlite(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<{ imported: boolean; sessions: number; events: number }> {
-  const filePath = resolveLegacyAcpEventLedgerPath(env);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return { imported: false, sessions: 0, events: 0 };
-    }
-    throw error;
-  }
-  if (!isRecord(parsed) || parsed.version !== LEDGER_VERSION || !isRecord(parsed.sessions)) {
-    return { imported: false, sessions: 0, events: 0 };
-  }
-  const store = normalizeStore(parsed);
-  writeStoreToSqlite(store, dbOptionsFromParams({ env }));
-  await fs.rm(filePath, { force: true }).catch(() => undefined);
-  return {
-    imported: true,
-    sessions: Object.keys(store.sessions).length,
-    events: Object.values(store.sessions).reduce(
-      (count, session) => count + session.events.length,
-      0,
-    ),
-  };
+export function writeAcpEventLedgerStoreToSqliteForMigration(
+  store: AcpEventLedgerMigrationStore,
+  options: OpenClawStateDatabaseOptions & { now?: () => number } = {},
+): void {
+  writeStoreToSqlite(store, {
+    ...dbOptionsFromParams(options),
+    ...(options.now ? { now: options.now } : {}),
+  });
 }
 
 export function createSqliteAcpEventLedger(

@@ -3,7 +3,7 @@ import path from "node:path";
 import {
   importLegacyAcpEventLedgerFileToSqlite,
   legacyAcpEventLedgerFileExists,
-} from "../acp/event-ledger.js";
+} from "../acp/event-ledger-legacy.js";
 import {
   discoverLegacyAuthProfileStateAgentDirs,
   importLegacyAuthProfileStateFileToSqlite,
