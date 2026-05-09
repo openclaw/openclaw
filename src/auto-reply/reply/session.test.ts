@@ -119,24 +119,24 @@ afterAll(async () => {
 async function makeCaseDir(prefix: string): Promise<string> {
   const stateDir = path.join(suiteRoot, `${prefix}${++suiteCase}`);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  return path.join(stateDir, "transcript-fixtures", "main");
+  return stateDir;
 }
 
 type TestSessionRowsTarget = {
   agentId: string;
-  sessionsDir: string;
+  workspaceDir: string;
 };
 
-function createSessionRowsTargetFromSessionsDir(
-  sessionsDir: string,
+function createSessionRowsTargetFromStateDir(
+  stateDir: string,
   agentId = "main",
 ): TestSessionRowsTarget {
-  return { agentId, sessionsDir };
+  return { agentId, workspaceDir: path.join(stateDir, "workspace") };
 }
 
 async function makeSessionRowsTarget(prefix: string): Promise<TestSessionRowsTarget> {
-  const sessionsDir = await makeCaseDir(prefix);
-  const target = createSessionRowsTargetFromSessionsDir(sessionsDir);
+  const stateDir = await makeCaseDir(prefix);
+  const target = createSessionRowsTargetFromStateDir(stateDir);
   currentTestSessionRowsTarget = target;
   return target;
 }
@@ -383,7 +383,7 @@ describe("initSessionState thread forking", () => {
       events: [header, message, assistantMessage],
     });
 
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const parentSessionKey = "agent:main:slack:channel:c1";
     await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
       [parentSessionKey]: {
@@ -459,7 +459,7 @@ describe("initSessionState thread forking", () => {
       events: [header, message, assistantMessage],
     });
 
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const parentSessionKey = "agent:main:slack:channel:c1";
     const threadSessionKey = "agent:main:slack:channel:c1:thread:123";
     await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
@@ -536,7 +536,7 @@ describe("initSessionState thread forking", () => {
       events: [header, message, assistantMessage],
     });
 
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const parentSessionKey = "agent:main:slack:channel:c1";
     // Set totalTokens well above PARENT_FORK_MAX_TOKENS (100_000)
     await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
@@ -587,7 +587,7 @@ describe("initSessionState thread forking", () => {
       ],
     });
 
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const parentSessionKey = "agent:main:slack:channel:c1";
     await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
       [parentSessionKey]: {
@@ -731,7 +731,7 @@ describe("initSessionState RawBody", () => {
 
   it("drops cached skills snapshot when /new rotates an existing session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-reset-skills-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:signal:direct:uuid:reset-skills";
     const existingSessionId = "session-with-stale-skills";
 
@@ -775,7 +775,7 @@ describe("initSessionState RawBody", () => {
 
   it("drains stale system events when /new rotates an existing session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-reset-system-events-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:whatsapp:dm:system-events";
     const existingSessionId = "session-with-stale-events";
 
@@ -821,7 +821,7 @@ describe("initSessionState RawBody", () => {
 
   it("rotates local session state for /new on bound ACP sessions", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-reset-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
     const existingSessionId = "session-existing";
     const now = Date.now();
@@ -877,7 +877,7 @@ describe("initSessionState RawBody", () => {
 
   it("rotates local session state for ACP /new when no matching conversation binding exists", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-reset-no-conversation-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
     const existingSessionId = "session-existing";
     const now = Date.now();
@@ -922,7 +922,7 @@ describe("initSessionState RawBody", () => {
 
   it("keeps custom reset triggers working on bound ACP sessions", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-custom-reset-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
     const existingSessionId = "session-existing";
     const now = Date.now();
@@ -980,7 +980,7 @@ describe("initSessionState RawBody", () => {
 
   it("keeps normal /new behavior for unbound ACP-shaped session keys", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-unbound-reset-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
     const existingSessionId = "session-existing";
     const now = Date.now();
@@ -1024,7 +1024,7 @@ describe("initSessionState RawBody", () => {
 
   it("does not suppress /new when active conversation binding points to a non-ACP session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-nonacp-binding-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
     const existingSessionId = "session-existing";
     const now = Date.now();
@@ -1110,7 +1110,7 @@ describe("initSessionState RawBody", () => {
 
   it("does not suppress /new when active target session key is non-ACP even with configured ACP binding", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-configured-fallback-target-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const channelId = "1478836151241412759";
     const fallbackSessionKey = "agent:main:discord:channel:focus-target";
     const existingSessionId = "session-existing";
@@ -1218,7 +1218,7 @@ describe("initSessionState RawBody", () => {
     const agentId = "worker1";
     const sessionKey = `agent:${agentId}:telegram:12345`;
     const sessionId = "sess-worker-1";
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(stateDir, agentId);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(stateDir, agentId);
 
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
@@ -1351,7 +1351,7 @@ describe("initSessionState reset policy", () => {
   it("defaults to daily reset at 4am local time", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-daily-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:whatsapp:dm:s1";
     const existingSessionId = "daily-session-id";
 
@@ -1393,7 +1393,7 @@ describe("initSessionState reset policy", () => {
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 3, 0, 0));
     const root = await makeCaseDir("openclaw-reset-daily-edge-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:whatsapp:dm:s-edge";
     const existingSessionId = "daily-edge-session";
 
@@ -1418,7 +1418,7 @@ describe("initSessionState reset policy", () => {
   it("expires sessions when idle timeout wins over daily reset", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-idle-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:whatsapp:dm:s2";
     const existingSessionId = "idle-session-id";
 
@@ -1447,7 +1447,7 @@ describe("initSessionState reset policy", () => {
   it("drains stale system events when idle rollover creates a new session", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-idle-system-events-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:whatsapp:dm:idle-system-events";
     const existingSessionId = "idle-system-events-session";
 
@@ -1490,7 +1490,7 @@ describe("initSessionState reset policy", () => {
   it("keeps the existing stale session for /reset soft", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-soft-stale-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:whatsapp:dm:soft-stale";
     const existingSessionId = "soft-stale-session-id";
 
@@ -1529,7 +1529,7 @@ describe("initSessionState reset policy", () => {
   it("keeps the existing stale session for /reset: soft", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-soft-colon-stale-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:whatsapp:dm:soft-colon-stale";
     const existingSessionId = "soft-colon-stale-session-id";
 
@@ -1568,7 +1568,7 @@ describe("initSessionState reset policy", () => {
   it("keeps the existing stale session for multiline /reset soft tails", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-soft-multiline-stale-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:whatsapp:dm:soft-multiline-stale";
     const existingSessionId = "soft-multiline-stale-session-id";
 
@@ -1607,7 +1607,7 @@ describe("initSessionState reset policy", () => {
   it("does not preserve a stale session for unauthorized /reset soft", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-soft-stale-unauthorized-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:whatsapp:dm:soft-stale-unauthorized";
     const existingSessionId = "soft-stale-unauthorized-session-id";
 
@@ -1648,7 +1648,7 @@ describe("initSessionState reset policy", () => {
   it("uses per-type overrides for thread sessions", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-thread-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:slack:channel:c1:thread:123";
     const existingSessionId = "thread-session-id";
 
@@ -1678,7 +1678,7 @@ describe("initSessionState reset policy", () => {
   it("detects thread sessions without thread key suffix", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-thread-nosuffix-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:discord:channel:c1";
     const existingSessionId = "thread-nosuffix";
 
@@ -1707,7 +1707,7 @@ describe("initSessionState reset policy", () => {
   it("defaults to daily resets when only resetByType is configured", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-type-default-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:whatsapp:dm:s4";
     const existingSessionId = "type-default-session";
 
@@ -1736,7 +1736,7 @@ describe("initSessionState reset policy", () => {
   it("keeps legacy idleMinutes behavior without reset config", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-legacy-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:whatsapp:dm:s3";
     const existingSessionId = "legacy-session-id";
 
@@ -1858,7 +1858,7 @@ describe("initSessionState browser tab cleanup", () => {
 describe("initSessionState channel reset overrides", () => {
   it("uses channel-specific reset policy when configured", async () => {
     const root = await makeCaseDir("openclaw-channel-idle-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
     const sessionKey = "agent:main:discord:dm:123";
     const sessionId = "session-override";
     const updatedAt = Date.now() - (10080 - 1) * 60_000;
@@ -2740,7 +2740,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     await getOrCreateSessionMcpRuntime({
       sessionId: existingSessionId,
       sessionKey,
-      workspaceDir: sessionRowsTarget.sessionsDir,
+      workspaceDir: sessionRowsTarget.workspaceDir,
       cfg,
     });
 
