@@ -3,6 +3,11 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+  MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
+  readDreamingWorkspaceMap,
+} from "../../memory-host-sdk/dreaming-state-store.js";
+import {
   isSameMemoryDreamingDay,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryLightDreamingConfig,
@@ -25,8 +30,6 @@ import {
 import { asRecord, normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
-const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "phase-signals.json");
 const MANAGED_DEEP_SLEEP_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DEEP_SLEEP_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 const DEEP_SLEEP_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
@@ -96,8 +99,8 @@ type DoctorMemoryDreamingPayload = {
   remPhaseHitCount: number;
   promotedTotal: number;
   promotedToday: number;
-  storePath?: string;
-  phaseSignalPath?: string;
+  storeLabel?: string;
+  phaseSignalLabel?: string;
   lastPromotedAt?: string;
   storeError?: string;
   phaseSignalError?: string;
@@ -269,8 +272,8 @@ function resolveDreamingConfig(
   | "remPhaseHitCount"
   | "promotedTotal"
   | "promotedToday"
-  | "storePath"
-  | "phaseSignalPath"
+  | "storeLabel"
+  | "phaseSignalLabel"
   | "lastPromotedAt"
   | "storeError"
   | "phaseSignalError"
@@ -371,8 +374,8 @@ type DreamingStoreStats = Pick<
   | "remPhaseHitCount"
   | "promotedTotal"
   | "promotedToday"
-  | "storePath"
-  | "phaseSignalPath"
+  | "storeLabel"
+  | "phaseSignalLabel"
   | "lastPromotedAt"
   | "storeError"
   | "phaseSignalError"
@@ -480,18 +483,22 @@ function trimDreamingEntries(
   return selected;
 }
 
+function resolveDreamingStoreLabel(namespace: string): string {
+  return `sqlite:plugin_state_entries/memory-core/${namespace}`;
+}
+
 async function loadDreamingStoreStats(
   workspaceDir: string,
   nowMs: number,
   timezone?: string,
 ): Promise<DreamingStoreStats> {
-  const storePath = path.join(workspaceDir, SHORT_TERM_STORE_RELATIVE_PATH);
-  const phaseSignalPath = path.join(workspaceDir, SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH);
+  const storeLabel = resolveDreamingStoreLabel(MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE);
+  const phaseSignalLabel = resolveDreamingStoreLabel(MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE);
   try {
-    const raw = await fs.readFile(storePath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    const store = asRecord(parsed);
-    const entries = asRecord(store?.entries) ?? {};
+    const entries = await readDreamingWorkspaceMap<unknown>(
+      MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
+      workspaceDir,
+    );
     let shortTermCount = 0;
     let recallSignalCount = 0;
     let dailySignalCount = 0;
@@ -574,10 +581,10 @@ async function loadDreamingStoreStats(
 
     let phaseSignalError: string | undefined;
     try {
-      const phaseRaw = await fs.readFile(phaseSignalPath, "utf-8");
-      const parsedPhase = JSON.parse(phaseRaw) as unknown;
-      const phaseStore = asRecord(parsedPhase);
-      const phaseEntries = asRecord(phaseStore?.entries) ?? {};
+      const phaseEntries = await readDreamingWorkspaceMap<unknown>(
+        MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+        workspaceDir,
+      );
       for (const [key, value] of Object.entries(phaseEntries)) {
         if (!activeKeys.has(key)) {
           continue;
@@ -613,8 +620,8 @@ async function loadDreamingStoreStats(
       remPhaseHitCount,
       promotedTotal,
       promotedToday,
-      storePath,
-      phaseSignalPath,
+      storeLabel,
+      phaseSignalLabel,
       shortTermEntries: trimDreamingEntries(shortTermEntries, compareDreamingEntryByRecency),
       signalEntries: trimDreamingEntries(shortTermEntries, compareDreamingEntryBySignals),
       promotedEntries: trimDreamingEntries(promotedEntries, compareDreamingEntryByPromotion),
@@ -622,26 +629,6 @@ async function loadDreamingStoreStats(
       ...(phaseSignalError ? { phaseSignalError } : {}),
     };
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "ENOENT") {
-      return {
-        shortTermCount: 0,
-        recallSignalCount: 0,
-        dailySignalCount: 0,
-        groundedSignalCount: 0,
-        totalSignalCount: 0,
-        phaseSignalCount: 0,
-        lightPhaseHitCount: 0,
-        remPhaseHitCount: 0,
-        promotedTotal: 0,
-        promotedToday: 0,
-        storePath,
-        phaseSignalPath,
-        shortTermEntries: [],
-        signalEntries: [],
-        promotedEntries: [],
-      };
-    }
     return {
       shortTermCount: 0,
       recallSignalCount: 0,
@@ -653,8 +640,8 @@ async function loadDreamingStoreStats(
       remPhaseHitCount: 0,
       promotedTotal: 0,
       promotedToday: 0,
-      storePath,
-      phaseSignalPath,
+      storeLabel,
+      phaseSignalLabel,
       shortTermEntries: [],
       signalEntries: [],
       promotedEntries: [],
@@ -676,8 +663,8 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   let promotedToday = 0;
   let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
   let lastPromotedAt: string | undefined;
-  const storePaths = new Set<string>();
-  const phaseSignalPaths = new Set<string>();
+  const storeLabels = new Set<string>();
+  const phaseSignalLabels = new Set<string>();
   const storeErrors: string[] = [];
   const phaseSignalErrors: string[] = [];
   const shortTermEntries: DoctorMemoryDreamingEntryPayload[] = [];
@@ -695,11 +682,11 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
     remPhaseHitCount += stat.remPhaseHitCount;
     promotedTotal += stat.promotedTotal;
     promotedToday += stat.promotedToday;
-    if (stat.storePath) {
-      storePaths.add(stat.storePath);
+    if (stat.storeLabel) {
+      storeLabels.add(stat.storeLabel);
     }
-    if (stat.phaseSignalPath) {
-      phaseSignalPaths.add(stat.phaseSignalPath);
+    if (stat.phaseSignalLabel) {
+      phaseSignalLabels.add(stat.phaseSignalLabel);
     }
     if (stat.storeError) {
       storeErrors.push(stat.storeError);
@@ -731,8 +718,8 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
     shortTermEntries: trimDreamingEntries(shortTermEntries, compareDreamingEntryByRecency),
     signalEntries: trimDreamingEntries(signalEntries, compareDreamingEntryBySignals),
     promotedEntries: trimDreamingEntries(promotedEntries, compareDreamingEntryByPromotion),
-    ...(storePaths.size === 1 ? { storePath: [...storePaths][0] } : {}),
-    ...(phaseSignalPaths.size === 1 ? { phaseSignalPath: [...phaseSignalPaths][0] } : {}),
+    ...(storeLabels.size === 1 ? { storeLabel: [...storeLabels][0] } : {}),
+    ...(phaseSignalLabels.size === 1 ? { phaseSignalLabel: [...phaseSignalLabels][0] } : {}),
     ...(lastPromotedAt ? { lastPromotedAt } : {}),
     ...(storeErrors.length === 1
       ? { storeError: storeErrors[0] }
