@@ -240,7 +240,7 @@ The remaining cleanup is mostly consolidation and deletion:
   session row helpers. The old `resolveLegacySessionStorePath` helper is gone;
   legacy `sessions.json` path construction is now local to migration and test
   fixtures.
-- `src/config/sessions/store-backend.sqlite.ts` now stores canonical session
+- `src/config/sessions/session-entries.sqlite.ts` now stores canonical session
   entries in the per-agent database and has row-level read/upsert/delete patch
   support. Runtime upsert/patch/delete no longer scans for case variants or
   prunes legacy alias keys; doctor owns canonicalization. The

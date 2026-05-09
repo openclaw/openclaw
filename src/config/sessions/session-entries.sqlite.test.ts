@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { loadSqliteSessionEntries } from "./store-backend.sqlite.js";
+import { loadSqliteSessionEntries } from "./session-entries.sqlite.js";
 import {
   deleteSessionEntry,
   getSessionEntry,
@@ -17,7 +17,7 @@ import type { SessionEntry } from "./types.js";
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 function createTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-session-store-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-session-entries-"));
 }
 
 afterEach(() => {

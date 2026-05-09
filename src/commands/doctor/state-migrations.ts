@@ -22,7 +22,7 @@ import {
 } from "../../config/paths.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
-import { mergeSqliteSessionEntries } from "../../config/sessions/store-backend.sqlite.js";
+import { mergeSqliteSessionEntries } from "../../config/sessions/session-entries.sqlite.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

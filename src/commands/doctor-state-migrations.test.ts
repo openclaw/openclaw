@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSqliteSessionEntries } from "../config/sessions/store-backend.sqlite.js";
+import { loadSqliteSessionEntries } from "../config/sessions/session-entries.sqlite.js";
 import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import {
   createCorePluginStateKeyedStore,

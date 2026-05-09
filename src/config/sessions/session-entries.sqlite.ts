@@ -11,7 +11,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { type OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
-import { normalizeSessionEntries } from "./store-normalize.js";
+import { normalizeSessionEntries } from "./session-entry-normalize.js";
 import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionEntriesOptions = OpenClawStateDatabaseOptions & {

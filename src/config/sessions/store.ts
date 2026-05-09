@@ -14,7 +14,7 @@ import {
   listSqliteSessionEntries,
   readSqliteSessionEntry,
   replaceSqliteSessionEntry,
-} from "./store-backend.sqlite.js";
+} from "./session-entries.sqlite.js";
 import { normalizeSessionRowKey } from "./store-entry.js";
 import {
   mergeSessionEntry,
