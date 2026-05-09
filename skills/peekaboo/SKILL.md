@@ -186,5 +186,107 @@ peekaboo type "Line 1\nLine 2" --delay 10
 
 Notes
 
-- Requires Screen Recording + Accessibility permissions.
+- Requires Screen Recording + Accessibility permissions. If you are running
+  inside an OpenClaw subprocess (gateway-spawned Node, an agent runtime, etc.),
+  read **Subprocess agents** below before reporting a permission problem —
+  the grants are checked against the Bridge host, not your process.
 - Use `peekaboo see --annotate` to identify targets before clicking.
+
+## Subprocess agents (Bridge architecture)
+
+Peekaboo evaluates Screen Recording and Accessibility against TWO independent
+processes depending on the path you take. Both can be in valid states at the
+same time, and that is not a contradiction.
+
+```
+                     +--------------------+
+peekaboo CLI  --->   |  Bridge selection  |
+(default path)       +--------------------+
+                              |  auto, in priority order:
+                              v
+                  +-----------+-----------+
+                  | 1) Peekaboo.app       |
+                  | 2) Claude.app         |
+                  | 3) ClawdBot.app       |
+                  | 4) Local in-process   |  <- only if no host found
+                  +-----------+-----------+
+                              |
+                              v
+                  TCC checked against the host app's bundle ID.
+
+peekaboo CLI --no-remote --->  Local in-process capture.
+                               TCC checked against the calling process.
+```
+
+If you are an agent running under an OpenClaw host (gateway, agent runtime,
+cron-spawned subprocess), your calling process is whatever Node binary the
+gateway shells out to. Plain Node has no TCC grants of its own. Granting them
+to that binary path would also silently break on the next package-manager
+upgrade, since the path moves. **The Bridge is your TCC.** Use the default path.
+
+### Rules for subprocess agents
+
+- **Always use the Bridge path. Never pass `--no-remote`.** The default
+  `peekaboo` invocation IS the Bridge path when an OpenClaw host app is
+  running.
+- **Never** read `peekaboo permissions status --no-remote` and conclude
+  there is a permission problem. That command checks your subprocess's
+  TCC namespace, which is empty by design.
+- The user has granted Screen Recording + Accessibility to the host app
+  (OpenClaw/Claude/Peekaboo). Don't ask them to grant it again to your
+  runtime — they can't, and shouldn't.
+
+```bash
+# Correct.
+peekaboo image --mode screen --screen-index 0 --json
+
+# Wrong for a subprocess agent — bypasses the Bridge.
+peekaboo image --mode screen --no-remote --json
+```
+
+### Diagnosing failures, in order
+
+```bash
+# 1. Is a host app running?
+peekaboo bridge status --json
+
+# 2. What does the Bridge see for permissions?
+peekaboo permissions status --json
+# Expect: Source: Peekaboo Bridge, SR=Granted, AX=Granted
+
+# 3. One-off Bridge capture.
+peekaboo image --mode screen --screen-index 0 --json
+```
+
+If step 1 shows no remote host, the Bridge fell through to local
+in-process — meaning no host app is up. Ask the user to relaunch the
+host (don't try to launch it yourself; lifecycle is owned by the host's
+own daemon/launchd).
+
+If step 2 says `Source: Peekaboo Bridge` with both granted but step 3
+fails, it's a real permission problem (rare — usually only after the
+host app's bundle path changes). Re-granting via System Settings is the
+fix.
+
+### Sequoia "bypass private window picker" dialog
+
+On macOS 15+ you may capture a screenshot that shows a system modal:
+
+> "<Host>" is requesting to bypass the system private window picker
+> and directly access your screen and audio.
+
+This is a separate Sequoia escalation (skip the per-capture picker
+overlay) — granting it does not change base Screen Recording state.
+The dialog is owned by `loginwindow`, not by the host app, so a
+`peekaboo click` on the Allow button correctly reports
+`App: loginwindow`. That is not a bug.
+
+### Anti-patterns
+
+| Don't                                                                 | Do                                                                                        |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `peekaboo permissions status --no-remote` and report results          | `peekaboo permissions status` (default Bridge view)                                       |
+| Run raw `screencapture -x ...` from a subprocess                      | `peekaboo image --mode screen --json` (Bridge-routed)                                     |
+| Tell the user to grant Screen Recording to Terminal/Node/your runtime | Use the Bridge. Permissions belong on the host app.                                       |
+| Conclude "permission state is split between Bridge and CLI" and stop  | The split is by design. Bridge granted = you can capture.                                 |
+| Add `--no-remote` because it sounds safer or more direct              | The Bridge is the path. `--no-remote` is for callers who already have their own SR grant. |
