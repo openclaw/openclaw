@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   buildSessionTranscriptEntry,
   listSessionTranscriptsForAgent,
-  sessionPathForTranscript,
+  sessionSourceKeyForTranscript,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
@@ -628,17 +628,17 @@ function areStringArraysEqual(a: string[], b: string[]): boolean {
   return true;
 }
 
-function buildSessionStateKey(agentId: string, sessionPath: string): string {
-  return `${agentId}:${sessionPath}`;
+function buildSessionStateKey(agentId: string, sessionSourceKey: string): string {
+  return `${agentId}:${sessionSourceKey}`;
 }
 
 function buildSessionRenderedLine(params: {
   agentId: string;
-  sessionPath: string;
+  sessionSourceKey: string;
   lineNumber: number;
   snippet: string;
 }): string {
-  const source = `${params.agentId}/${params.sessionPath}#L${params.lineNumber}`;
+  const source = `${params.agentId}/${params.sessionSourceKey}#L${params.lineNumber}`;
   return `[${source}] ${params.snippet}`.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
 }
 
@@ -727,7 +727,7 @@ async function collectSessionIngestionBatches(params: {
   const sessionTranscripts: Array<{
     agentId: string;
     scope: { agentId: string; sessionId: string };
-    sessionPath: string;
+    sessionSourceKey: string;
   }> = [];
   for (const agentId of agentIds) {
     const scopes = await listSessionTranscriptsForAgent(agentId);
@@ -735,7 +735,7 @@ async function collectSessionIngestionBatches(params: {
       sessionTranscripts.push({
         agentId,
         scope,
-        sessionPath: sessionPathForTranscript(scope),
+        sessionSourceKey: sessionSourceKeyForTranscript(scope),
       });
     }
   }
@@ -744,7 +744,7 @@ async function collectSessionIngestionBatches(params: {
     if (a.agentId !== b.agentId) {
       return a.agentId.localeCompare(b.agentId);
     }
-    return a.sessionPath.localeCompare(b.sessionPath);
+    return a.sessionSourceKey.localeCompare(b.sessionSourceKey);
   });
 
   const totalCap = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
@@ -761,7 +761,7 @@ async function collectSessionIngestionBatches(params: {
     if (remaining <= 0) {
       break;
     }
-    const stateKey = buildSessionStateKey(file.agentId, file.sessionPath);
+    const stateKey = buildSessionStateKey(file.agentId, file.sessionSourceKey);
     const previous = params.state.files[stateKey];
     const entry = await buildSessionTranscriptEntry(file.scope);
     if (!entry) {
@@ -819,7 +819,7 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
 
-    const sessionScope = buildSessionScopeKey(file.agentId, file.sessionPath);
+    const sessionScope = buildSessionScopeKey(file.agentId, file.sessionSourceKey);
     const previousSeen = nextSeenMessages[sessionScope] ?? [];
     let seenSet = new Set(previousSeen);
     const newSeenHashes: string[] = [];
@@ -865,7 +865,7 @@ async function collectSessionIngestionBatches(params: {
       }
       const rendered = buildSessionRenderedLine({
         agentId: file.agentId,
-        sessionPath: file.sessionPath,
+        sessionSourceKey: file.sessionSourceKey,
         lineNumber,
         snippet,
       });

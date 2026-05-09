@@ -17,7 +17,7 @@ import {
   buildSessionTranscriptEntry,
   listSessionTranscriptsForAgent,
   readSessionTranscriptDeltaStats,
-  sessionPathForTranscript,
+  sessionSourceKeyForTranscript,
   type SessionTranscriptScope,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
@@ -817,7 +817,7 @@ export abstract class MemoryManagerSyncOps {
             db: this.db,
             source: "sessions",
           }).rows,
-      sessionPathForTranscript,
+      sessionSourceKeyForTranscript,
     });
     const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
     log.debug("memory sync: indexing session transcripts", {

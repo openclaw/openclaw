@@ -235,7 +235,7 @@ describe("QmdMemoryManager", () => {
     return { manager: requireValue(manager, "manager missing"), resolved };
   }
 
-  function seedSessionTranscript(params?: { sessionId?: string; content?: string }): string {
+  function seedSessionTranscript(params?: { sessionId?: string; content?: string }): void {
     const sessionId = params?.sessionId ?? "session-1";
     replaceSqliteSessionTranscriptEvents({
       agentId,
@@ -247,7 +247,6 @@ describe("QmdMemoryManager", () => {
         },
       ],
     });
-    return `sqlite-transcript://${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}.jsonl`;
   }
 
   beforeAll(async () => {

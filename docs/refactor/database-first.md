@@ -257,7 +257,7 @@ The remaining cleanup is mostly consolidation and deletion:
   old `resolve...ForPath` helper and unused `transcriptPath` write options are
   gone from runtime callers.
 - Runtime session resolution now uses `{agentId, sessionId}` and must not derive
-  `sqlite-transcript://<agent>/<session>` handles for external boundaries.
+  `sqlite-transcript://<agent>/<session>` strings for external boundaries.
   Legacy absolute JSONL paths are doctor migration inputs only.
 - `runEmbeddedPiAgent(...)` no longer has a transcript-locator parameter.
   Prepared worker descriptors also omit transcript locators. Runtime session
@@ -522,11 +522,10 @@ sessionId}` and session key context.
   SQLite reads. Its helper no longer accepts or derives transcript locators,
   legacy file reads, or file-rewrite options.
 - Codex app-server conversation bindings now key SQLite plugin state by
-  OpenClaw session key when available, with transcript-path lookups kept only as
-  a legacy fallback for existing bindings.
-- Codex app-server mirrored-history reads now prefer the SQLite transcript scope
-  registered for the transcript path, falling back to `{agentId, sessionId}`
-  only when the path has not been imported or mapped yet.
+  OpenClaw session key or explicit `{agentId, sessionId}` scope. They must not
+  preserve transcript-path fallback bindings.
+- Codex app-server mirrored-history reads use the SQLite transcript scope only;
+  they must not recover identity from transcript file paths.
 - Role-ordering and compaction reset paths no longer unlink old transcript
   files; reset only rotates the SQLite session row and transcript identity.
 - Gateway reset and checkpoint responses return clean session rows plus session
@@ -534,8 +533,8 @@ sessionId}` and session key context.
 - Memory-core dreaming no longer prunes session rows by probing for missing
   JSONL files. Subagent cleanup goes through the session runtime API instead of
   filesystem existence checks. Its transcript-ingestion tests seed SQLite rows
-  through neutral test locators instead of creating `agents/<id>/sessions`
-  fixtures.
+  directly instead of creating `agents/<id>/sessions` fixtures or locator
+  placeholders.
 - Gateway doctor memory status reads short-term recall and phase-signal counts
   from SQLite plugin-state rows instead of `memory/.dreams/*.json`; CLI and
   doctor output now label that storage as a SQLite store, not a path.

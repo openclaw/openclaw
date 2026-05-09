@@ -10,7 +10,7 @@ import {
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveAndPersistSessionTranscriptScope } from "./session-locator.js";
+import { resolveAndPersistSessionTranscriptScope } from "./session-scope.js";
 import { getSessionEntry, normalizeSessionRowKey } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";

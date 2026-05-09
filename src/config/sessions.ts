@@ -10,7 +10,7 @@ export * from "./sessions/session-key.js";
 export * from "./sessions/store.js";
 export * from "./sessions/types.js";
 export * from "./sessions/transcript.js";
-export * from "./sessions/session-locator.js";
+export * from "./sessions/session-scope.js";
 export * from "./sessions/delivery-info.js";
 export * from "./sessions/targets.js";
 export * from "./sessions/agent-purge.js";

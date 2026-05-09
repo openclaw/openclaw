@@ -1067,7 +1067,9 @@ async function agentCommandInternal(
                   agentId: sessionAgentId,
                   sessionId,
                 })),
-              suppressPromptPersistenceOnRetry: isFallbackRetry && currentTurnUserMessagePersisted,
+              suppressPromptPersistenceOnRetry:
+                opts.suppressPromptPersistence === true ||
+                (isFallbackRetry && currentTurnUserMessagePersisted),
               onUserMessagePersisted: () => {
                 currentTurnUserMessagePersisted = true;
               },
