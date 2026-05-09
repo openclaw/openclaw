@@ -186,9 +186,9 @@ describe("runCliRespawnPlan", () => {
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
       },
     );
-    expect(attachChildProcessBridge).toHaveBeenCalledWith(child, {
-      onSignal: expect.any(Function),
-    });
+    expect(attachChildProcessBridge.mock.calls[0]?.[0]).toBe(child);
+    const bridgeOptions = attachChildProcessBridge.mock.calls[0]?.[1];
+    expect(typeof bridgeOptions?.onSignal).toBe("function");
 
     child.emit("exit", 0, null);
 
