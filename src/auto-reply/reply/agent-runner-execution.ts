@@ -1442,6 +1442,22 @@ export async function runAgentTurnWithFallback(params: {
               let lifecycleTerminalEmitted = false;
               let lastBridgedAssistantText: string | undefined;
               let assistantBridgeUnsubscribed = false;
+              let assistantBridgeDelivery: Promise<void> = Promise.resolve();
+              const deliverBridgedAssistantText = async (text: string): Promise<void> => {
+                const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
+                if (textForTyping === undefined || !params.opts?.onPartialReply) {
+                  return;
+                }
+                await params.opts.onPartialReply({ text: textForTyping });
+              };
+              const queueBridgedAssistantText = (text: string) => {
+                assistantBridgeDelivery = assistantBridgeDelivery
+                  .then(() => deliverBridgedAssistantText(text))
+                  .catch(() => undefined);
+              };
+              const drainAssistantBridgeDelivery = async (): Promise<void> => {
+                await assistantBridgeDelivery;
+              };
               const rawUnsubscribeAssistantBridge = onAgentEvent((evt) => {
                 if (evt.runId !== runId || evt.stream !== "assistant") {
                   return;
@@ -1454,13 +1470,7 @@ export async function runAgentTurnWithFallback(params: {
                   return;
                 }
                 lastBridgedAssistantText = text;
-                void (async () => {
-                  const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
-                  if (textForTyping === undefined || !params.opts?.onPartialReply) {
-                    return;
-                  }
-                  await params.opts.onPartialReply({ text: textForTyping });
-                })().catch(() => undefined);
+                queueBridgedAssistantText(text);
               });
               const unsubscribeAssistantBridge = () => {
                 if (assistantBridgeUnsubscribed) {
@@ -1516,6 +1526,7 @@ export async function runAgentTurnWithFallback(params: {
                 );
 
                 unsubscribeAssistantBridge();
+                await drainAssistantBridgeDelivery();
 
                 // CLI backends don't emit streaming assistant events, so we need to
                 // emit one with the final text so server-chat can populate its buffer
@@ -1542,6 +1553,8 @@ export async function runAgentTurnWithFallback(params: {
 
                 return result;
               } catch (err) {
+                unsubscribeAssistantBridge();
+                await drainAssistantBridgeDelivery();
                 if (rollbackFallbackCandidateSelection) {
                   try {
                     await rollbackFallbackCandidateSelection();
