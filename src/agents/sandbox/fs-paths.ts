@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -174,7 +175,16 @@ function formatSandboxRootEscapeMessage(params: {
   defaultContainerRoot: string;
 }): string {
   const containerRoot = normalizeContainerPath(params.defaultContainerRoot);
-  return `Path escapes sandbox root (${params.defaultWorkspaceRoot}; container root ${containerRoot}): ${params.input}. Use a path under ${containerRoot}/ instead.`;
+  const workspaceRoot = shortenHomePath(path.resolve(params.defaultWorkspaceRoot));
+  return `Path escapes sandbox root (${workspaceRoot}; container root ${containerRoot}): ${params.input}. Use a path under ${containerRoot}/ instead.`;
+}
+
+function shortenHomePath(value: string): string {
+  const home = os.homedir();
+  if (value === home || value.startsWith(`${home}${path.sep}`)) {
+    return `~${value.slice(home.length)}`;
+  }
+  return value;
 }
 
 function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): number {
