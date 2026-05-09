@@ -53,9 +53,13 @@ async function makeHarness(): Promise<{
   return { handlers: skillsHandlers, stateDir, workspaceDir };
 }
 
-function makeContext() {
+function makeContext(
+  config: Record<string, unknown> = {
+    skills: { install: { allowUploadedArchives: true } },
+  },
+) {
   return {
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig: () => config,
     logGateway: {
       debug: vi.fn(),
       error: vi.fn(),
@@ -69,6 +73,7 @@ async function call(
   handlers: GatewayRequestHandlers,
   method: string,
   params: Record<string, unknown>,
+  options: { config?: Record<string, unknown> } = {},
 ): Promise<CallResult> {
   const handler = handlers[method];
   if (!handler) {
@@ -80,7 +85,7 @@ async function call(
     req: { method } as never,
     client: null,
     isWebchatConnect: () => false,
-    context: makeContext() as never,
+    context: makeContext(options.config) as never,
     respond: (ok, payload, error) => {
       result = { ok, payload, error };
     },
@@ -174,6 +179,43 @@ describe("skill upload gateway handlers", () => {
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
+  });
+
+  it("rejects upload archive RPCs and upload installs when disabled by config", async () => {
+    const { handlers, stateDir } = await makeHarness();
+    const config = { skills: { install: { allowUploadedArchives: false } } };
+    const archive = await makeSkillArchive({});
+    const begin = await call(
+      handlers,
+      "skills.upload.begin",
+      {
+        kind: "skill-archive",
+        slug: "disabled-skill",
+        sizeBytes: archive.length,
+      },
+      { config },
+    );
+
+    expect(begin.ok).toBe(false);
+    expect(begin.error?.code).toBe("UNAVAILABLE");
+    expect(begin.error?.message).toContain("skills.install.allowUploadedArchives");
+    await expect(fs.stat(path.join(stateDir, "tmp", "skill-uploads"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const install = await call(
+      handlers,
+      "skills.install",
+      {
+        source: "upload",
+        uploadId: randomUUID(),
+        slug: "disabled-skill",
+      },
+      { config },
+    );
+    expect(install.ok).toBe(false);
+    expect(install.error?.code).toBe("UNAVAILABLE");
+    expect(install.error?.message).toContain("skills.install.allowUploadedArchives");
   });
 
   it("uploads, installs, cleans up, and reports the skill from status", async () => {

@@ -4,6 +4,7 @@ import {
   type SkillArchiveInstallFailureKind,
   validateRequestedSkillSlug,
 } from "../../agents/skills-archive-install.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   ErrorCodes,
@@ -24,6 +25,13 @@ import type { GatewayRequestContext } from "./types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type UploadInstallErrorCode = typeof ErrorCodes.INVALID_REQUEST | typeof ErrorCodes.UNAVAILABLE;
+
+const UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE =
+  "Uploaded skill archive installs are disabled by skills.install.allowUploadedArchives";
+
+export function areUploadedSkillArchivesEnabled(config: OpenClawConfig): boolean {
+  return config.skills?.install?.allowUploadedArchives === true;
+}
 
 export type UploadedSkillInstallResult =
   | {
@@ -85,7 +93,15 @@ function makeUploadHandler<P, R>(
   validator: ValidateFunction<P>,
   action: (params: P) => Promise<R>,
 ): GatewayRequestHandlers[string] {
-  return async ({ params, respond }) => {
+  return async ({ params, respond, context }) => {
+    if (!areUploadedSkillArchivesEnabled(context.getRuntimeConfig())) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE),
+      );
+      return;
+    }
     if (!validator(params)) {
       respond(false, undefined, uploadErrorShape(`invalid ${name} params`, validator.errors));
       return;
@@ -109,6 +125,13 @@ export async function installUploadedSkillArchive(params: {
   store?: SkillUploadStore;
 }): Promise<UploadedSkillInstallResult> {
   const store = params.store ?? defaultSkillUploadStore;
+  if (!areUploadedSkillArchivesEnabled(params.context.getRuntimeConfig())) {
+    return {
+      ok: false,
+      error: UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE,
+      errorCode: ErrorCodes.UNAVAILABLE,
+    };
+  }
   try {
     const requestedSlug = validateRequestedSkillSlug(params.slug);
     const requestedSha = normalizeSkillUploadSha256(params.sha256);
