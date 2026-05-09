@@ -125,6 +125,25 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
+  it("uses explicit agent id when no session key is available", () => {
+    useTempStateDir();
+    const recorder = createTrajectoryRuntimeRecorder({
+      agentId: "worker",
+      sessionId: "session-1",
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", { ok: true });
+
+    expect(listTrajectoryRuntimeEvents({ agentId: "worker", sessionId: "session-1" })).toHaveLength(
+      1,
+    );
+    expect(listTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-1" })).toHaveLength(
+      0,
+    );
+    expect(runtimeRecorder.runtimeLocator).toBe("sqlite:worker:trajectory:session-1");
+  });
+
   it("mirrors runtime trajectory capture into the artifact store on flush", async () => {
     useTempStateDir();
     const artifacts = createArtifactStoreRecorder();
@@ -216,7 +235,7 @@ describe("trajectory runtime", () => {
     expect(parsed.map((event) => event.type)).toContain("trace.truncated");
     const truncated = parsed.find((event) => event.type === "trace.truncated");
     expect(truncated?.data).toMatchObject({
-      reason: "trajectory-runtime-file-size-limit",
+      reason: "trajectory-runtime-size-limit",
       limitBytes: 900,
     });
     expect(truncated?.data?.droppedEvents).toBeGreaterThan(0);

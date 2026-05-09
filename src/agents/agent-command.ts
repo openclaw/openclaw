@@ -988,6 +988,7 @@ async function agentCommandInternal(
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
+      agentId: sessionAgentId,
       cfg,
       runId,
       sessionId,

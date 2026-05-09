@@ -17,6 +17,7 @@ export {
 } from "./paths.js";
 
 type TrajectoryRuntimeInit = {
+  agentId?: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   maxRuntimeFileBytes?: number;
@@ -169,7 +170,7 @@ export function createTrajectoryRuntimeRecorder(
     return null;
   }
 
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   const runtimeLocator = `sqlite:${agentId}:trajectory:${params.sessionId}`;
   const maxRuntimeFileBytes = Math.max(
     1,
