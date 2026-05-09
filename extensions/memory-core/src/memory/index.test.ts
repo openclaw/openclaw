@@ -369,7 +369,8 @@ describe("memory index", () => {
     }
   });
 
-  it("stores the default memory index inside the per-agent database", async () => {
+  it("reindexes the default memory tables in place inside the per-agent database", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     const stateDir = path.join(workspaceDir, "managed-memory-state");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const agentDbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });

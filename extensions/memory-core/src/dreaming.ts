@@ -144,7 +144,7 @@ function formatRepairSummary(repair: {
   const actions: string[] = [];
   if (repair.rewroteStore) {
     actions.push(
-      `rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
+      `rewrote recall database${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
     );
   }
   return actions.join(", ");

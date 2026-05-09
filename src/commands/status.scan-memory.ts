@@ -17,7 +17,7 @@ function loadStatusScanDepsRuntimeModule() {
   return statusScanDepsRuntimeModuleLoader.load();
 }
 
-export function resolveDefaultMemoryStorePath(agentId: string): string {
+export function resolveDefaultMemoryDatabasePath(agentId: string): string {
   return resolveOpenClawAgentSqlitePath({ agentId });
 }
 
@@ -25,7 +25,7 @@ export async function resolveStatusMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
   memoryPlugin: MemoryPluginStatus;
-  requireDefaultStore?: (agentId: string) => string;
+  requireDefaultDatabasePath?: (agentId: string) => string;
 }): Promise<MemoryStatusSnapshot | null> {
   const { getMemorySearchManager } = await loadStatusScanDepsRuntimeModule();
   return await resolveSharedMemoryStatusSnapshot({
@@ -34,6 +34,6 @@ export async function resolveStatusMemoryStatusSnapshot(params: {
     memoryPlugin: params.memoryPlugin,
     resolveMemoryConfig: resolveMemorySearchConfig,
     getMemorySearchManager,
-    requireDefaultStore: params.requireDefaultStore,
+    requireDefaultDatabasePath: params.requireDefaultDatabasePath,
   });
 }

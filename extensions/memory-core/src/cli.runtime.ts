@@ -228,7 +228,7 @@ function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): s
   const actions: string[] = [];
   if (repair.rewroteStore) {
     actions.push(
-      `rewrote store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
+      `rewrote recall database${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
     );
   }
   return actions.length > 0 ? actions.join(" · ") : "no changes";
@@ -806,7 +806,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     }
     const requestedProvider = status.requestedProvider ?? status.provider;
     const modelLabel = status.model ?? status.provider;
-    const storePath = status.dbPath ? shortenHomePath(status.dbPath) : "<unknown>";
+    const databasePath = status.dbPath ? shortenHomePath(status.dbPath) : "<unknown>";
     const workspacePath = status.workspaceDir ? shortenHomePath(status.workspaceDir) : "<unknown>";
     const sourceList = status.sources?.length ? status.sources.join(", ") : null;
     const extraPaths = status.workspaceDir
@@ -820,7 +820,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
       `${label("Indexed")} ${success(indexedLabel)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
-      `${label("Store")} ${info(storePath)}`,
+      `${label("Database")} ${info(databasePath)}`,
       `${label("Workspace")} ${info(workspacePath)}`,
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];

@@ -984,10 +984,7 @@ export abstract class MemoryManagerSyncOps {
       targetSessionTranscriptKeys,
       reason: params?.reason,
       progress: progress ?? undefined,
-      useUnsafeReindex:
-        this.settings.store.managedAgentDatabase ||
-        (process.env.OPENCLAW_TEST_FAST === "1" &&
-          process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1"),
+      useUnsafeReindex: this.shouldUseInPlaceReindex(),
       dirtySessionTranscripts: this.dirtySessionTranscripts,
       syncSessionTranscripts: async (targetedParams) => {
         await this.syncSessionTranscripts(targetedParams);
@@ -1021,10 +1018,7 @@ export abstract class MemoryManagerSyncOps {
       });
     try {
       if (needsFullReindex) {
-        if (
-          process.env.OPENCLAW_TEST_FAST === "1" &&
-          process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1"
-        ) {
+        if (this.shouldUseInPlaceReindex()) {
           await this.runUnsafeReindex({
             reason: params?.reason,
             force: params?.force,
@@ -1285,8 +1279,7 @@ export abstract class MemoryManagerSyncOps {
   }): Promise<void> {
     // Managed per-agent DBs cannot use whole-file swaps because the same
     // database also owns sessions, VFS rows, and runtime state. Reset only the
-    // memory tables in place; explicit custom store paths still use the safer
-    // sidecar DB swap above.
+    // memory tables in place.
     this.resetIndex();
 
     const shouldSyncMemory = this.sources.has("memory");
@@ -1334,6 +1327,14 @@ export abstract class MemoryManagerSyncOps {
 
     this.writeMeta(nextMeta);
     this.pruneEmbeddingCacheIfNeeded?.();
+  }
+
+  private shouldUseInPlaceReindex(): boolean {
+    return (
+      this.settings.store.managedAgentDatabase ||
+      (process.env.OPENCLAW_TEST_FAST === "1" &&
+        process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1")
+    );
   }
 
   private resetIndex() {

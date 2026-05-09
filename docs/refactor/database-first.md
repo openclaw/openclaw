@@ -818,6 +818,9 @@ Move these into the global database:
   index tables live in the owning agent database, and the explicit
   `memorySearch.store.path` sidecar opt-in has been retired to doctor config
   migration.
+- Builtin memory reindex resets only memory-owned tables in the agent database.
+  It must not replace the whole SQLite file, because the same database owns
+  sessions, transcripts, VFS rows, artifacts, and runtime caches.
 - Sandbox container/browser registries from monolithic and sharded JSON. Runtime
   writes now use the shared database; legacy JSON import remains.
 - Cron job definitions, schedule state, and run history now use shared SQLite;
@@ -1115,6 +1118,8 @@ keeps only the version-1 schema plus doctor file-to-database import.
      the unshipped legacy sidecar importer is deleted.
    - Move builtin memory-search tables into each agent database. Done; explicit
      custom `memorySearch.store.path` is now removed by doctor config migration.
+     Full reindex runs in place against memory tables only; the old whole-file
+     swap path is not used for managed agent databases.
    - Delete duplicate database openers, WAL setup, permission helpers, and
      close paths from those subsystems.
 
