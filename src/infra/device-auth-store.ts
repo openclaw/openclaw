@@ -58,12 +58,12 @@ export function storeDeviceAuthStore(params: {
   return params.store;
 }
 
-export function parseDeviceAuthStoreForMigration(raw: unknown): DeviceAuthStore | null {
+export function parseDeviceAuthStoreSnapshot(raw: unknown): DeviceAuthStore | null {
   const store = DeviceAuthStoreSchema.safeParse(raw);
   return store.success ? store.data : null;
 }
 
-export function writeDeviceAuthStoreForMigration(
+export function writeDeviceAuthStoreSnapshot(
   env: NodeJS.ProcessEnv | undefined,
   store: DeviceAuthStore,
 ): void {

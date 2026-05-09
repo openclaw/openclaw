@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  normalizeSubagentRunRecordsForMigration,
+  normalizeSubagentRunRecordsSnapshot,
   resolveSubagentStateDir,
-  writeSubagentRegistryRunsForMigration,
+  writeSubagentRegistryRunsSnapshot,
 } from "../../../agents/subagent-registry.store.js";
 import type { SubagentRunRecord } from "../../../agents/subagent-registry.types.js";
 import { loadJsonFile } from "../../../infra/json-file.js";
@@ -44,7 +44,7 @@ function loadLegacySubagentRegistryFile(pathname: string): Map<string, SubagentR
   if (!runsRaw || typeof runsRaw !== "object") {
     return new Map();
   }
-  return normalizeSubagentRunRecordsForMigration({
+  return normalizeSubagentRunRecordsSnapshot({
     runsRaw: runsRaw as Record<string, unknown>,
     isLegacy: record.version === 1,
   });
@@ -70,7 +70,7 @@ export function importLegacySubagentRegistryFileToSqlite(env: NodeJS.ProcessEnv 
     return { imported: false, runs: 0 };
   }
   const runs = loadLegacySubagentRegistryFile(pathname);
-  writeSubagentRegistryRunsForMigration(runs, env);
+  writeSubagentRegistryRunsSnapshot(runs, env);
   try {
     fs.unlinkSync(pathname);
   } catch {

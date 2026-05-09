@@ -295,7 +295,7 @@ export async function setVoiceWakeRoutingConfig(
   return next;
 }
 
-export function writeVoiceWakeRoutingConfigForMigration(
+export function writeVoiceWakeRoutingConfigSnapshot(
   config: VoiceWakeRoutingConfig,
   baseDir?: string,
 ): void {

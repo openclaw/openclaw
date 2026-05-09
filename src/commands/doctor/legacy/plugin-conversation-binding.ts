@@ -3,8 +3,8 @@ import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
 import { expandHomePrefix } from "../../../infra/home-dir.js";
 import {
-  normalizePluginBindingApprovalsForMigration,
-  writePluginBindingApprovalsForMigration,
+  normalizePluginBindingApprovalsSnapshot,
+  writePluginBindingApprovalsSnapshot,
 } from "../../../plugins/conversation-binding.js";
 
 const LEGACY_APPROVALS_PATH = "~/.openclaw/plugin-binding-approvals.json";
@@ -35,10 +35,10 @@ export function importLegacyPluginBindingApprovalFileToSqlite(): {
   if (!legacyPluginBindingApprovalFileExists()) {
     return { imported: false, approvals: 0 };
   }
-  const file = normalizePluginBindingApprovalsForMigration(
+  const file = normalizePluginBindingApprovalsSnapshot(
     JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown,
   );
-  writePluginBindingApprovalsForMigration(file);
+  writePluginBindingApprovalsSnapshot(file);
   try {
     fs.unlinkSync(filePath);
   } catch {

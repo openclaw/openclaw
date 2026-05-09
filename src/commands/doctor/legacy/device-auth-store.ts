@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
 import {
-  parseDeviceAuthStoreForMigration,
-  writeDeviceAuthStoreForMigration,
+  parseDeviceAuthStoreSnapshot,
+  writeDeviceAuthStoreSnapshot,
 } from "../../../infra/device-auth-store.js";
 
 function resolveDeviceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -32,11 +32,11 @@ export function importLegacyDeviceAuthFileToSqlite(env: NodeJS.ProcessEnv = proc
     }
     throw error;
   }
-  const store = parseDeviceAuthStoreForMigration(parsed);
+  const store = parseDeviceAuthStoreSnapshot(parsed);
   if (!store) {
     return { imported: false, tokens: 0 };
   }
-  writeDeviceAuthStoreForMigration(env, store);
+  writeDeviceAuthStoreSnapshot(env, store);
   try {
     fs.rmSync(filePath, { force: true });
   } catch {

@@ -164,7 +164,7 @@ function readPersistentCache(): Map<string, OpenRouterModelCapabilities> | undef
   return readSqliteCache();
 }
 
-export function writeOpenRouterModelCapabilitiesCacheForMigration(
+export function writeOpenRouterModelCapabilitiesCacheSnapshot(
   map: Map<string, OpenRouterModelCapabilities>,
   env?: NodeJS.ProcessEnv,
 ): void {

@@ -103,14 +103,14 @@ async function persistState(state: WebPushRegistrationState, baseDir?: string): 
   );
 }
 
-export async function writeWebPushRegistrationStateForMigration(
+export async function writeWebPushRegistrationStateSnapshot(
   state: WebPushRegistrationState,
   baseDir?: string,
 ): Promise<void> {
   await persistState(state, baseDir);
 }
 
-export function writeWebPushVapidKeysForMigration(keys: VapidKeyPair, baseDir?: string): void {
+export function writeWebPushVapidKeysSnapshot(keys: VapidKeyPair, baseDir?: string): void {
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     WEB_PUSH_SCOPE,
     WEB_PUSH_VAPID_KEY,

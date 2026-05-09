@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
 import {
-  normalizeVoiceWakeConfigForMigration,
-  writeVoiceWakeConfigForMigration,
+  normalizeVoiceWakeConfigSnapshot,
+  writeVoiceWakeConfigSnapshot,
 } from "../../../infra/voicewake.js";
 
 function resolveLegacyPath(baseDir?: string) {
@@ -37,8 +37,8 @@ export async function importLegacyVoiceWakeConfigFileToSqlite(baseDir?: string):
     }
     throw error;
   }
-  const normalized = normalizeVoiceWakeConfigForMigration(raw);
-  writeVoiceWakeConfigForMigration(normalized, baseDir);
+  const normalized = normalizeVoiceWakeConfigSnapshot(raw);
+  writeVoiceWakeConfigSnapshot(normalized, baseDir);
   await fs.rm(filePath, { force: true }).catch(() => undefined);
   return { imported: true, triggers: normalized.triggers.length };
 }

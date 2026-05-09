@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
 import {
-  writeWebPushRegistrationStateForMigration,
-  writeWebPushVapidKeysForMigration,
+  writeWebPushRegistrationStateSnapshot,
+  writeWebPushVapidKeysSnapshot,
   type VapidKeyPair,
   type WebPushRegistrationState,
 } from "../../../infra/push-web.js";
@@ -45,7 +45,7 @@ export async function importLegacyWebPushFilesToSqlite(baseDir?: string): Promis
   try {
     const state = JSON.parse(await fs.readFile(statePath, "utf8")) as WebPushRegistrationState;
     if (state && typeof state === "object") {
-      await writeWebPushRegistrationStateForMigration(state, baseDir);
+      await writeWebPushRegistrationStateSnapshot(state, baseDir);
       subscriptions = Object.keys(state.subscriptionsByEndpointHash ?? {}).length;
       await fs.rm(statePath, { force: true }).catch(() => undefined);
       files += 1;
@@ -60,7 +60,7 @@ export async function importLegacyWebPushFilesToSqlite(baseDir?: string): Promis
   try {
     const keys = JSON.parse(await fs.readFile(vapidPath, "utf8")) as VapidKeyPair;
     if (keys?.publicKey && keys.privateKey) {
-      writeWebPushVapidKeysForMigration(keys, baseDir);
+      writeWebPushVapidKeysSnapshot(keys, baseDir);
       await fs.rm(vapidPath, { force: true }).catch(() => undefined);
       importedVapidKeys = true;
       files += 1;

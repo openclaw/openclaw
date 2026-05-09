@@ -110,7 +110,7 @@ function normalizePersistedRunRecords(params: {
   return out;
 }
 
-export function normalizeSubagentRunRecordsForMigration(params: {
+export function normalizeSubagentRunRecordsSnapshot(params: {
   runsRaw: Record<string, unknown>;
   isLegacy: boolean;
 }): Map<string, SubagentRunRecord> {
@@ -372,7 +372,7 @@ function writeSubagentRegistryRunsToSqlite(
   }, subagentRegistryDbOptions(env));
 }
 
-export function writeSubagentRegistryRunsForMigration(
+export function writeSubagentRegistryRunsSnapshot(
   runs: Map<string, SubagentRunRecord>,
   env: NodeJS.ProcessEnv = process.env,
 ): void {

@@ -342,7 +342,7 @@ function createApprovalRequestId(): string {
   return crypto.randomBytes(9).toString("base64url");
 }
 
-export function normalizePluginBindingApprovalsForMigration(
+export function normalizePluginBindingApprovalsSnapshot(
   value: unknown,
 ): PluginBindingApprovalsFile {
   const parsed = value as Partial<PluginBindingApprovalsFile> | undefined;
@@ -372,7 +372,7 @@ export function normalizePluginBindingApprovalsForMigration(
 
 function loadApprovalsFromSqlite(): PluginBindingApprovalsFile {
   try {
-    return normalizePluginBindingApprovalsForMigration(
+    return normalizePluginBindingApprovalsSnapshot(
       readOpenClawStateKvJson(
         APPROVALS_KV_SCOPE,
         APPROVALS_KV_KEY,
@@ -385,7 +385,7 @@ function loadApprovalsFromSqlite(): PluginBindingApprovalsFile {
   }
 }
 
-export function writePluginBindingApprovalsForMigration(file: PluginBindingApprovalsFile): void {
+export function writePluginBindingApprovalsSnapshot(file: PluginBindingApprovalsFile): void {
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     APPROVALS_KV_SCOPE,
     APPROVALS_KV_KEY,
@@ -398,7 +398,7 @@ export function writePluginBindingApprovalsForMigration(file: PluginBindingAppro
 }
 
 async function saveApprovals(file: PluginBindingApprovalsFile): Promise<void> {
-  writePluginBindingApprovalsForMigration(file);
+  writePluginBindingApprovalsSnapshot(file);
 }
 
 function getApprovals(): PluginBindingApprovalsFile {

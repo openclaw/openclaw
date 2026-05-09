@@ -226,11 +226,11 @@ export function loadDeviceIdentityIfPresentForEnv(
   }
 }
 
-export function parseStoredDeviceIdentityForMigration(value: unknown): StoredDeviceIdentity | null {
+export function parseStoredDeviceIdentitySnapshot(value: unknown): StoredDeviceIdentity | null {
   return parseStoredIdentity(value);
 }
 
-export function writeStoredDeviceIdentityForMigration(
+export function writeStoredDeviceIdentitySnapshot(
   filePath: string,
   stored: StoredDeviceIdentity,
 ): void {
