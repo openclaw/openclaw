@@ -32,4 +32,29 @@ describe("applyAnthropicEphemeralCacheControlMarkers", () => {
       },
     ]);
   });
+
+  it("preserves ttl in custom cacheControl when provided", () => {
+    const payload = {
+      messages: [
+        {
+          role: "system",
+          content: "system prompt",
+        },
+      ],
+    } satisfies Record<string, unknown>;
+
+    applyAnthropicEphemeralCacheControlMarkers(payload, {
+      type: "ephemeral",
+      ttl: "1h",
+    });
+
+    expect(payload.messages).toEqual([
+      {
+        role: "system",
+        content: [
+          { type: "text", text: "system prompt", cache_control: { type: "ephemeral", ttl: "1h" } },
+        ],
+      },
+    ]);
+  });
 });

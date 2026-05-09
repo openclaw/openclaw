@@ -1,5 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { resolveAnthropicCacheRetentionFamily } from "./anthropic-family-cache-semantics.js";
+import {
+  isAnthropicModelRef,
+  resolveAnthropicCacheRetentionFamily,
+} from "./anthropic-family-cache-semantics.js";
 
 type CacheRetention = "none" | "short" | "long";
 
@@ -22,6 +25,7 @@ export function resolveCacheRetention(
 ): CacheRetention | undefined {
   const hasExplicitCacheConfig =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
+
   const family = resolveAnthropicCacheRetentionFamily({
     provider,
     modelApi,
@@ -30,21 +34,31 @@ export function resolveCacheRetention(
   });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
 
+  // Determine if this is a verified OpenRouter→Anthropic route.
+  // OpenRouter uses the "openai-completions" API and the model ref
+  // starts with "anthropic/". This mirrors the endpoint-class +
+  // model-ref check in createOpenRouterSystemCacheWrapper.
+  const isOpenRouterAnthropicRoute =
+    provider === "openrouter" && modelId != null && isAnthropicModelRef(modelId);
+
+  const isEligible = !!family || googleEligible || isOpenRouterAnthropicRoute;
+
+  if (hasExplicitCacheConfig && isEligible) {
+    const newVal = extraParams?.cacheRetention;
+    if (newVal === "none" || newVal === "short" || newVal === "long") {
+      return newVal;
+    }
+    const legacy = extraParams?.cacheControlTtl;
+    if (legacy === "5m") {
+      return "short";
+    }
+    if (legacy === "1h") {
+      return "long";
+    }
+  }
+
   if (!family && !googleEligible) {
     return undefined;
-  }
-
-  const newVal = extraParams?.cacheRetention;
-  if (newVal === "none" || newVal === "short" || newVal === "long") {
-    return newVal;
-  }
-
-  const legacy = extraParams?.cacheControlTtl;
-  if (legacy === "5m") {
-    return "short";
-  }
-  if (legacy === "1h") {
-    return "long";
   }
 
   return family === "anthropic-direct" ? "short" : undefined;

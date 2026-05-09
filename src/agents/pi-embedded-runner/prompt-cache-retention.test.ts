@@ -29,6 +29,69 @@ describe("prompt cache retention", () => {
       resolveCacheRetention(undefined, "google", "google-generative-ai", "gemini-3.1-pro-preview"),
     ).toBeUndefined();
   });
+  it("honours explicit cacheRetention for OpenRouter Anthropic models", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "openrouter",
+        "openai-completions",
+        "anthropic/claude-haiku-4.5",
+      ),
+    ).toBe("long");
+  });
+
+  it('honours explicit cacheRetention "short" for proxy providers', () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "short" },
+        "openrouter",
+        "openai-completions",
+        "anthropic/claude-sonnet-4.6",
+      ),
+    ).toBe("short");
+  });
+
+  it('honours explicit cacheRetention "none" for proxy providers', () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "openrouter",
+        "openai-completions",
+        "anthropic/claude-sonnet-4.6",
+      ),
+    ).toBe("none");
+  });
+
+  it("returns undefined for proxy providers without explicit config", () => {
+    expect(
+      resolveCacheRetention(
+        undefined,
+        "openrouter",
+        "openai-completions",
+        "anthropic/claude-sonnet-4.6",
+      ),
+    ).toBeUndefined();
+  });
+  it("ignores explicit cacheRetention for non-OpenRouter providers without cache family", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "amazon-bedrock",
+        "openai-completions",
+        "some/non-anthropic-model",
+      ),
+    ).toBeUndefined();
+  });
+  it("ignores explicit cacheRetention for OpenRouter non-Anthropic models", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "openrouter",
+        "openai-completions",
+        "deepseek/deepseek-r1",
+      ),
+    ).toBeUndefined();
+  });
 
   it("identifies supported direct Google cache families", () => {
     expect(
