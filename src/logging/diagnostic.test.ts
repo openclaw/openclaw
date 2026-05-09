@@ -1105,6 +1105,35 @@ describe("stuck session diagnostics threshold", () => {
     ).toBe(48 * 60 * 60_000);
     expect(resolveStuckSessionAbortMs(undefined, 30_000)).toBe(10 * 60_000);
   });
+
+  it("suppresses liveness warnings during startup grace window", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay"],
+          intervalMs: 30_000,
+          eventLoopDelayP99Ms: 1_500,
+          eventLoopDelayMaxMs: 2_000,
+        }),
+        startupGraceMs: 60_000,
+      },
+    );
+
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+    vi.advanceTimersByTime(30_000);
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+
+    vi.advanceTimersByTime(60_000);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+  });
 });
 
 describe("diagnostic stability snapshots", () => {

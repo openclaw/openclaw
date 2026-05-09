@@ -123,9 +123,11 @@ type StartDiagnosticHeartbeatOptions = {
   emitMemorySample?: EmitDiagnosticMemorySample;
   sampleLiveness?: SampleDiagnosticLiveness;
   recoverStuckSession?: RecoverStuckSession;
+  startupGraceMs?: number;
 };
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
+let diagnosticLivenessGraceUntilMs = 0;
 let lastDiagnosticLivenessWallAt = 0;
 let lastDiagnosticLivenessCpuUsage: CpuUsage | null = null;
 let lastDiagnosticLivenessEventLoopUtilization: EventLoopUtilization | null = null;
@@ -939,6 +941,9 @@ export function startDiagnosticHeartbeat(
     return;
   }
   startDiagnosticLivenessSampler();
+  if (opts?.startupGraceMs && opts.startupGraceMs > 0) {
+    diagnosticLivenessGraceUntilMs = Date.now() + opts.startupGraceMs;
+  }
   heartbeatInterval = setInterval(() => {
     let heartbeatConfig = config;
     if (!heartbeatConfig) {
@@ -953,7 +958,10 @@ export function startDiagnosticHeartbeat(
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot(now);
-    const livenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
+    const inStartupGrace = now < diagnosticLivenessGraceUntilMs;
+    const livenessSample = inStartupGrace
+      ? null
+      : (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
     const shouldEmitLivenessEvent =
       livenessSample !== null && shouldEmitDiagnosticLivenessEvent(now);
     const shouldEmitLivenessWarning =
@@ -1053,6 +1061,7 @@ export function stopDiagnosticHeartbeat() {
     clearInterval(heartbeatInterval);
     heartbeatInterval = null;
   }
+  diagnosticLivenessGraceUntilMs = 0;
   stopDiagnosticLivenessSampler();
   stopDiagnosticStabilityRecorder();
   uninstallDiagnosticStabilityFatalHook();
