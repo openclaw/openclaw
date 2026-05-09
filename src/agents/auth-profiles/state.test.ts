@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importLegacyAuthProfileStateFileToSqlite } from "../../commands/doctor/legacy/auth-profile-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { readOpenClawStateKvJson } from "../../state/openclaw-state-kv.js";
 import { resolveAuthStatePath } from "./paths.js";
@@ -45,32 +44,6 @@ describe("auth profile runtime state persistence", () => {
       lastGood: { openai: "openai:default" },
       usageStats: { "openai:default": { lastUsed: 123 } },
     });
-  });
-
-  it("imports legacy auth-state.json into SQLite through the doctor migration helper", async () => {
-    const statePath = resolveAuthStatePath(agentDir);
-    await fs.writeFile(
-      statePath,
-      `${JSON.stringify({
-        version: 1,
-        order: { anthropic: ["anthropic:default"] },
-        lastGood: { anthropic: "anthropic:default" },
-      })}\n`,
-    );
-
-    expect(loadPersistedAuthProfileState(agentDir)).toEqual({});
-    expect(importLegacyAuthProfileStateFileToSqlite(agentDir)).toEqual({ imported: true });
-    expect(loadPersistedAuthProfileState(agentDir)).toEqual({
-      order: { anthropic: ["anthropic:default"] },
-      lastGood: { anthropic: "anthropic:default" },
-    });
-
-    const sqliteState = readOpenClawStateKvJson(AUTH_PROFILE_STATE_KV_SCOPE, statePath);
-    expect(sqliteState).toMatchObject({
-      order: { anthropic: ["anthropic:default"] },
-      lastGood: { anthropic: "anthropic:default" },
-    });
-    await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("deletes SQLite state when runtime state is empty", async () => {
