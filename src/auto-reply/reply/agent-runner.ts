@@ -1080,7 +1080,7 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(
+    const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
       resolvedQueue,
@@ -1095,7 +1095,7 @@ export async function runReplyAgent(params: {
       scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
     }
     await touchActiveSessionEntry();
-    if (queuedBehindActiveRun) {
+    if (queuedBehindActiveRun && enqueued) {
       await typingSignals.signalToolStart();
     } else {
       typing.cleanup();

@@ -107,6 +107,7 @@ beforeEach(() => {
     meta: { agentMeta: { usage: { input: 1, output: 1 } } },
   });
   vi.mocked(enqueueFollowupRun).mockClear();
+  vi.mocked(enqueueFollowupRun).mockReturnValue(true);
   vi.mocked(refreshQueuedFollowupSession).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -254,6 +255,27 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(typing.cleanup).not.toHaveBeenCalled();
   });
 
+  it("cleans typing when followup enqueue is rejected behind a live active run", async () => {
+    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      isRunActive: () => true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("starts draining immediately when the active snapshot is already stale", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: false },
@@ -269,6 +291,27 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("still schedules stale-active drain when followup enqueue is rejected", async () => {
+    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      isRunActive: () => false,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
