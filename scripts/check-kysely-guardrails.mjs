@@ -65,6 +65,9 @@ const rawSqliteAllowPathGroups = {
 const rawSqliteAllowPathReasons = new Map();
 for (const [reason, paths] of Object.entries(rawSqliteAllowPathGroups)) {
   for (const allowedPath of paths) {
+    if (rawSqliteAllowPathReasons.has(allowedPath)) {
+      throw new Error(`Duplicate raw SQLite allowlist path: ${allowedPath}`);
+    }
     rawSqliteAllowPathReasons.set(allowedPath, reason);
   }
 }
@@ -187,16 +190,30 @@ function isLikelySqliteReceiver(expression) {
   return ts.isPropertyAccessExpression(unwrapped) && getPropertyNameText(unwrapped.name) === "db";
 }
 
+function isPersistedRowExpression(expression) {
+  const unwrapped = unwrapExpression(expression);
+  if (ts.isPropertyAccessExpression(unwrapped)) {
+    const owner = unwrapExpression(unwrapped.expression);
+    return ts.isIdentifier(owner) && /^(?:row|record|entry)$/u.test(owner.text);
+  }
+  if (ts.isElementAccessExpression(unwrapped)) {
+    const owner = unwrapExpression(unwrapped.expression);
+    return ts.isIdentifier(owner) && /^(?:row|record|entry)$/u.test(owner.text);
+  }
+  return false;
+}
+
 function isPersistedStringCastType(typeText) {
   return [
     /\bTaskRecord\["(?:runtime|scopeKind|status|deliveryStatus|notifyPolicy|terminalOutcome)"\]/u,
     /\bTaskFlowRecord\["(?:status|notifyPolicy)"\]/u,
     /\bTaskFlowSyncMode\b/u,
     /\bVirtualAgentFsEntryKind\b/u,
+    /\b[A-Z][A-Za-z0-9]*(?:Status|Kind|Mode|Policy|Runtime|Outcome)\b/u,
   ].some((pattern) => pattern.test(typeText));
 }
 
-function collectKyselyGuardrailViolations(content, relativePath) {
+export function collectKyselyGuardrailViolations(content, relativePath) {
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
   const imports = collectImports(sourceFile);
   const violations = [];
@@ -206,6 +223,7 @@ function collectKyselyGuardrailViolations(content, relativePath) {
       isSqliteStorePath(relativePath) &&
       (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) &&
       isPersistedStringCastType(node.type.getText(sourceFile)) &&
+      isPersistedRowExpression(node.expression) &&
       !hasAllowComment(sourceFile, node, "sqlite-allow-persisted-cast")
     ) {
       addViolation(
