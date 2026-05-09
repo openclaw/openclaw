@@ -144,6 +144,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - OpenAI/Codex: install the Codex runtime plugin from npm during OpenAI onboarding and load it automatically for implicit OpenAI model routes, while preserving manual PI runtime overrides. Fixes #79358.
+- OpenAI/realtime voice: defer `response.create` while a realtime response is still active, retry after `response.done`/`response.cancelled`, and align GA input transcription/noise-reduction defaults with the Codex realtime reference so Discord/Voice Call consult results can resume speaking instead of tripping the active-response race.
 - Gateway: avoid false degraded event-loop health during rapid health/readiness/status probes unless sustained load has delay co-evidence, while keeping hard delay detection immediate. (#77028) Thanks @rubencu.
 - Codex app-server: keep native hook relays alive for long-running turns so shell and file approvals stay reachable until the configured run window finishes. (#77533) Thanks @rubencu.
 - Gateway/agent: pass the session-key agent id into inline image attachment validation so the first image in a fresh per-agent session uses the agent's vision-capable model override instead of the text-only system default. Fixes #79407. Thanks @pandadev66.
