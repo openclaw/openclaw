@@ -15,8 +15,9 @@ import {
   resetDiagnosticEventsForTest,
 } from "./diagnostic-events.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
+import { importLegacyVoiceWakeConfigFileToSqlite } from "./voicewake-legacy.js";
+import { importLegacyVoiceWakeRoutingConfigFileToSqlite } from "./voicewake-routing-legacy.js";
 import {
-  importLegacyVoiceWakeRoutingConfigFileToSqlite,
   loadVoiceWakeRoutingConfig,
   normalizeVoiceWakeTriggerWord,
   resolveVoiceWakeRouteByTrigger,
@@ -24,7 +25,6 @@ import {
 } from "./voicewake-routing.js";
 import {
   defaultVoiceWakeTriggers,
-  importLegacyVoiceWakeConfigFileToSqlite,
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
 } from "./voicewake.js";

@@ -1,7 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   readOpenClawStateKvJson,
@@ -20,11 +17,11 @@ type WebPushSubscription = {
   updatedAtMs: number;
 };
 
-type WebPushRegistrationState = {
+export type WebPushRegistrationState = {
   subscriptionsByEndpointHash: Record<string, WebPushSubscription>;
 };
 
-type VapidKeyPair = {
+export type VapidKeyPair = {
   publicKey: string;
   privateKey: string;
   subject: string;
@@ -42,8 +39,6 @@ type WebPushSendResult = {
 const WEB_PUSH_SCOPE = "push.web";
 const WEB_PUSH_SUBSCRIPTIONS_KEY = "subscriptions";
 const WEB_PUSH_VAPID_KEY = "vapid-keys";
-const LEGACY_WEB_PUSH_STATE_FILENAME = "push/web-push-subscriptions.json";
-const LEGACY_VAPID_KEYS_FILENAME = "push/vapid-keys.json";
 const MAX_ENDPOINT_LENGTH = 2048;
 const MAX_KEY_LENGTH = 512;
 const DEFAULT_VAPID_SUBJECT = "mailto:openclaw@localhost";
@@ -66,14 +61,6 @@ async function loadWebPushRuntime(): Promise<WebPushRuntime> {
 
 function sqliteOptionsForBaseDir(baseDir: string | undefined): OpenClawStateDatabaseOptions {
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
-}
-
-function resolveLegacyWebPushStatePath(baseDir?: string): string {
-  return path.join(baseDir ?? resolveStateDir(), LEGACY_WEB_PUSH_STATE_FILENAME);
-}
-
-function resolveLegacyVapidKeysPath(baseDir?: string): string {
-  return path.join(baseDir ?? resolveStateDir(), LEGACY_VAPID_KEYS_FILENAME);
 }
 
 function hashEndpoint(endpoint: string): string {
@@ -116,63 +103,20 @@ async function persistState(state: WebPushRegistrationState, baseDir?: string): 
   );
 }
 
-export async function legacyWebPushFilesExist(baseDir?: string): Promise<boolean> {
-  const [stateExists, vapidExists] = await Promise.all([
-    fs
-      .access(resolveLegacyWebPushStatePath(baseDir))
-      .then(() => true)
-      .catch(() => false),
-    fs
-      .access(resolveLegacyVapidKeysPath(baseDir))
-      .then(() => true)
-      .catch(() => false),
-  ]);
-  return stateExists || vapidExists;
+export async function writeWebPushRegistrationStateForMigration(
+  state: WebPushRegistrationState,
+  baseDir?: string,
+): Promise<void> {
+  await persistState(state, baseDir);
 }
 
-export async function importLegacyWebPushFilesToSqlite(baseDir?: string): Promise<{
-  subscriptions: number;
-  importedVapidKeys: boolean;
-  files: number;
-}> {
-  let files = 0;
-  let subscriptions = 0;
-  let importedVapidKeys = false;
-  const statePath = resolveLegacyWebPushStatePath(baseDir);
-  try {
-    const state = JSON.parse(await fs.readFile(statePath, "utf8")) as WebPushRegistrationState;
-    if (state && typeof state === "object") {
-      await persistState(state, baseDir);
-      subscriptions = Object.keys(state.subscriptionsByEndpointHash ?? {}).length;
-      await fs.rm(statePath, { force: true }).catch(() => undefined);
-      files += 1;
-    }
-  } catch (error) {
-    if ((error as { code?: unknown })?.code !== "ENOENT") {
-      throw error;
-    }
-  }
-
-  const vapidPath = resolveLegacyVapidKeysPath(baseDir);
-  try {
-    const keys = JSON.parse(await fs.readFile(vapidPath, "utf8")) as VapidKeyPair;
-    if (keys?.publicKey && keys.privateKey) {
-      writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-        WEB_PUSH_SCOPE,
-        WEB_PUSH_VAPID_KEY,
-        keys as unknown as OpenClawStateJsonValue,
-        sqliteOptionsForBaseDir(baseDir),
-      );
-      await fs.rm(vapidPath, { force: true }).catch(() => undefined);
-      importedVapidKeys = true;
-      files += 1;
-    }
-  } catch (error) {
-    if ((error as { code?: unknown })?.code !== "ENOENT") {
-      throw error;
-    }
-  }
-  return { subscriptions, importedVapidKeys, files };
+export function writeWebPushVapidKeysForMigration(keys: VapidKeyPair, baseDir?: string): void {
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    WEB_PUSH_SCOPE,
+    WEB_PUSH_VAPID_KEY,
+    keys as unknown as OpenClawStateJsonValue,
+    sqliteOptionsForBaseDir(baseDir),
+  );
 }
 
 // --- VAPID keys ---
