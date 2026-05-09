@@ -102,7 +102,11 @@ describe("memory manager readonly recovery", () => {
 
   async function runSyncWithReadonlyRecovery(
     harness: ReadonlyRecoveryHarness,
-    params?: { reason?: string; force?: boolean; sessionTranscripts?: string[] },
+    params?: {
+      reason?: string;
+      force?: boolean;
+      sessionTranscriptScopes?: Array<{ agentId: string; sessionId: string }>;
+    },
   ) {
     return await runMemorySyncWithReadonlyRecovery(harness, params);
   }
@@ -231,9 +235,9 @@ describe("memory manager readonly recovery", () => {
     const harness = createQueuedSyncHarness(pendingSync);
 
     const queued = enqueueMemoryTargetedSessionSync(harness.state, [
-      "  /tmp/first.jsonl ",
-      "",
-      "/tmp/second.jsonl",
+      { agentId: "main", sessionId: "first" },
+      { agentId: "", sessionId: "" },
+      { agentId: "main", sessionId: "second" },
     ]);
 
     expect(harness.sync).not.toHaveBeenCalled();
@@ -244,7 +248,10 @@ describe("memory manager readonly recovery", () => {
     expect(harness.sync).toHaveBeenCalledTimes(1);
     expect(harness.sync).toHaveBeenCalledWith({
       reason: "queued-session-transcripts",
-      sessionTranscripts: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
+      sessionTranscriptScopes: [
+        { agentId: "main", sessionId: "first" },
+        { agentId: "main", sessionId: "second" },
+      ],
     });
     expect(harness.queuedSessionSync).toBeNull();
   });
@@ -257,12 +264,12 @@ describe("memory manager readonly recovery", () => {
     const harness = createQueuedSyncHarness(pendingSync);
 
     const first = enqueueMemoryTargetedSessionSync(harness.state, [
-      "/tmp/first.jsonl",
-      "/tmp/second.jsonl",
+      { agentId: "main", sessionId: "first" },
+      { agentId: "main", sessionId: "second" },
     ]);
     const second = enqueueMemoryTargetedSessionSync(harness.state, [
-      "/tmp/second.jsonl",
-      "/tmp/third.jsonl",
+      { agentId: "main", sessionId: "second" },
+      { agentId: "main", sessionId: "third" },
     ]);
 
     expect(first).toBe(second);
@@ -273,7 +280,11 @@ describe("memory manager readonly recovery", () => {
     expect(harness.sync).toHaveBeenCalledTimes(1);
     expect(harness.sync).toHaveBeenCalledWith({
       reason: "queued-session-transcripts",
-      sessionTranscripts: ["/tmp/first.jsonl", "/tmp/second.jsonl", "/tmp/third.jsonl"],
+      sessionTranscriptScopes: [
+        { agentId: "main", sessionId: "first" },
+        { agentId: "main", sessionId: "second" },
+        { agentId: "main", sessionId: "third" },
+      ],
     });
   });
 
@@ -284,7 +295,10 @@ describe("memory manager readonly recovery", () => {
     });
     const harness = createQueuedSyncHarness(pendingSync);
 
-    const queued = enqueueMemoryTargetedSessionSync(harness.state, ["", "   "]);
+    const queued = enqueueMemoryTargetedSessionSync(harness.state, [
+      { agentId: "", sessionId: "" },
+      { agentId: "   ", sessionId: "   " },
+    ]);
 
     expect(queued).toBe(pendingSync);
     releaseSync();
