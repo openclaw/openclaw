@@ -240,6 +240,43 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
   return Uint8Array.from(Buffer.from(base64Buffer, "base64"));
 }
 
+// Param names that any caller would reasonably treat as "attach this file
+// to the message". Covers everything the shared message-tool send schema
+// declares (`media`, `buffer`, `path`, `filePath`) plus the plural/url
+// variants that agents and channel adapters tend to reach for, so the reply
+// guard refuses identically regardless of which alias the caller picked.
+const REPLY_ATTACHMENT_PARAM_NAMES: readonly string[] = [
+  "media",
+  "mediaUrl",
+  "mediaUrls",
+  "filePath",
+  "fileUrl",
+  "path",
+  "buffer",
+] as const;
+
+// Truthy attachment-param check that tolerates string, array, and object
+// shapes — agents commonly pass `media: "/tmp/x.png"` as a string but also
+// `mediaUrls: ["/tmp/x.png"]` as an array, and we want both to trip the
+// reply guard rather than silently falling through.
+function hasNonEmptyAttachmentValue(params: Record<string, unknown>, name: string): boolean {
+  const value = params[name];
+  if (value == null) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.some(
+      (entry) =>
+        (typeof entry === "string" && entry.trim().length > 0) ||
+        (entry != null && typeof entry === "object"),
+    );
+  }
+  return typeof value === "object";
+}
+
 // Whitelist of expressive-send effect IDs the bridge accepts. Restricting
 // to a fixed set lets us return a clear error for typos ("invisible_ink"
 // vs "invisibleink") instead of silently forwarding gibberish to the
@@ -472,13 +509,13 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       // does not accept attachments — the only path that handles a file is
       // `imsg send --file`, used by sendAttachment/upload-file. Silently
       // dropping the caller's media looked like success and let agents ship
-      // a "here's your image" reply with no attachment attached.
-      const hasMediaParam =
-        readStringParam(params, "media") != null ||
-        readStringParam(params, "mediaUrl") != null ||
-        readStringParam(params, "filePath") != null ||
-        readStringParam(params, "buffer") != null;
-      if (hasMediaParam) {
+      // a "here's your image" reply with no attachment attached. Cover every
+      // attachment-bearing alias the message-tool send schema exposes plus
+      // common plural/url variants agents reach for.
+      const attachmentParam = REPLY_ATTACHMENT_PARAM_NAMES.find((name) =>
+        hasNonEmptyAttachmentValue(params, name),
+      );
+      if (attachmentParam) {
         throw new Error(
           "iMessage reply does not support attachments. Use action 'upload-file' " +
             "(with filePath/filename) or action 'send' (with media) to deliver the file, " +

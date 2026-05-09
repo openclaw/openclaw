@@ -290,7 +290,17 @@ describe("imessage message actions", () => {
     });
     runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
 
-    for (const attachmentField of ["media", "mediaUrl", "filePath", "buffer"]) {
+    const stringValue = "/tmp/anything.png";
+    const cases: Array<{ field: string; value: unknown }> = [
+      { field: "media", value: stringValue },
+      { field: "mediaUrl", value: stringValue },
+      { field: "mediaUrls", value: [stringValue, "/tmp/extra.png"] },
+      { field: "filePath", value: stringValue },
+      { field: "fileUrl", value: stringValue },
+      { field: "path", value: stringValue },
+      { field: "buffer", value: stringValue },
+    ];
+    for (const { field, value } of cases) {
       runtimeMock.sendRichMessage.mockClear();
       await expect(
         imessageMessageActions.handleAction?.({
@@ -300,7 +310,7 @@ describe("imessage message actions", () => {
             chatIdentifier: "team-thread",
             messageId: "message-guid",
             text: "🦞 here it is",
-            [attachmentField]: "/tmp/anything.png",
+            [field]: value,
           },
         } as never),
       ).rejects.toThrow(/iMessage reply does not support attachments/);
