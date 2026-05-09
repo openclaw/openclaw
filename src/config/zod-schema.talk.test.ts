@@ -3,15 +3,15 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 describe("OpenClawSchema talk validation", () => {
   it("accepts a positive integer talk.silenceTimeoutMs", () => {
-    expect(
-      OpenClawSchema.safeParse({
-        talk: {
-          consultThinkingLevel: "low",
-          consultFastMode: true,
-          silenceTimeoutMs: 1500,
-        },
-      }),
-    ).toMatchObject({ success: true });
+    const result = OpenClawSchema.safeParse({
+      talk: {
+        consultThinkingLevel: "low",
+        consultFastMode: true,
+        silenceTimeoutMs: 1500,
+      },
+    });
+
+    expect(result.success).toBe(true);
   });
 
   it("rejects invalid talk.consultThinkingLevel", () => {
