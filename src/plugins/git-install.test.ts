@@ -105,6 +105,7 @@ describe("installPluginFromGitSpec", () => {
       "git",
       "checkout",
       "--detach",
+      "--",
       "v1.2.3",
     ]);
     expect(runCommandWithTimeoutMock.mock.calls[3][0]).toEqual([
@@ -126,6 +127,39 @@ describe("installPluginFromGitSpec", () => {
         },
       }),
     );
+  });
+
+  it("passes -- before ref so option-like refs are not parsed as git flags", async () => {
+    runCommandWithTimeoutMock
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    installPluginFromInstalledPackageDirMock.mockImplementation(
+      async (params: { packageDir: string }) => {
+        await fs.mkdir(params.packageDir, { recursive: true });
+        return {
+          ok: true,
+          pluginId: "demo",
+          targetDir: params.packageDir,
+          version: "1.2.3",
+          extensions: ["index.js"],
+        };
+      },
+    );
+
+    await installPluginFromGitSpec({
+      spec: "git:github.com/acme/demo@--ignore-skip-worktree-bits",
+      expectedPluginId: "demo",
+    });
+
+    expect(runCommandWithTimeoutMock.mock.calls[1][0]).toEqual([
+      "git",
+      "checkout",
+      "--detach",
+      "--",
+      "--ignore-skip-worktree-bits",
+    ]);
   });
 
   it("uses a shallow clone when no ref is requested", async () => {
