@@ -4,6 +4,7 @@ import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import {
+  coercePersistedAuthProfileStore,
   loadPersistedAuthProfileStore,
   mergeAuthProfileStores,
 } from "../agents/auth-profiles/persisted.js";
@@ -31,6 +32,12 @@ type AuthProfileRepairCandidate = {
 };
 
 type LegacyFlatAuthProfileStore = {
+  agentDir?: string;
+  authPath: string;
+  store: AuthProfileStore;
+};
+
+type CanonicalAuthProfileJsonStore = {
   agentDir?: string;
   authPath: string;
   store: AuthProfileStore;
@@ -250,6 +257,26 @@ function resolveLegacyFlatStore(
   };
 }
 
+function resolveCanonicalAuthProfileJsonStore(
+  candidate: AuthProfileRepairCandidate,
+): CanonicalAuthProfileJsonStore | null {
+  if (!fs.existsSync(candidate.authPath)) {
+    return null;
+  }
+  const raw = loadJsonFile(candidate.authPath);
+  if (!raw || typeof raw !== "object" || !("profiles" in raw)) {
+    return null;
+  }
+  const store = coercePersistedAuthProfileStore(raw);
+  if (!store || Object.keys(store.profiles).length === 0) {
+    return null;
+  }
+  return {
+    ...candidate,
+    store,
+  };
+}
+
 function resolveLegacyAuthJsonStore(
   candidate: AuthProfileRepairCandidate,
 ): LegacyAuthJsonStore | null {
@@ -436,6 +463,9 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
   const legacyStores = listAuthProfileRepairCandidates(params.cfg)
     .map(resolveLegacyFlatStore)
     .filter((entry): entry is LegacyFlatAuthProfileStore => entry !== null);
+  const canonicalJsonStores = listAuthProfileRepairCandidates(params.cfg)
+    .map(resolveCanonicalAuthProfileJsonStore)
+    .filter((entry): entry is CanonicalAuthProfileJsonStore => entry !== null);
   const legacyAuthJsonStores = listAuthProfileRepairCandidates(params.cfg)
     .map(resolveLegacyAuthJsonStore)
     .filter((entry): entry is LegacyAuthJsonStore => entry !== null);
@@ -445,17 +475,21 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
     .filter((entry): entry is AwsSdkAuthProfileMarkerStore => entry !== null);
 
   const result: LegacyFlatAuthProfileRepairResult = {
-    detected: [
-      ...legacyStores.map((entry) => entry.authPath),
-      ...legacyAuthJsonStores.map((entry) => entry.legacyPath),
-      ...(legacyOAuthJsonStore ? [legacyOAuthJsonStore.legacyPath] : []),
-      ...awsSdkMarkerStores.map((entry) => entry.authPath),
-    ],
+    detected: Array.from(
+      new Set([
+        ...legacyStores.map((entry) => entry.authPath),
+        ...canonicalJsonStores.map((entry) => entry.authPath),
+        ...legacyAuthJsonStores.map((entry) => entry.legacyPath),
+        ...(legacyOAuthJsonStore ? [legacyOAuthJsonStore.legacyPath] : []),
+        ...awsSdkMarkerStores.map((entry) => entry.authPath),
+      ]),
+    ),
     changes: [],
     warnings: [],
   };
   if (
     legacyStores.length === 0 &&
+    canonicalJsonStores.length === 0 &&
     legacyAuthJsonStores.length === 0 &&
     !legacyOAuthJsonStore &&
     awsSdkMarkerStores.length === 0
@@ -466,6 +500,9 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
   const noteLines = [
     ...legacyStores.map(
       (entry) => `- ${shortenHomePath(entry.authPath)} uses the legacy flat auth profile format.`,
+    ),
+    ...canonicalJsonStores.map(
+      (entry) => `- ${shortenHomePath(entry.authPath)} contains file-backed auth profiles.`,
     ),
     ...legacyAuthJsonStores.map(
       (entry) =>
@@ -483,12 +520,17 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
   ];
   if (legacyStores.length > 0) {
     noteLines.push(
-      `- The gateway expects the canonical version/profiles store; ${formatCliCommand("openclaw doctor --fix")} rewrites this legacy shape with a backup.`,
+      `- Runtime no longer reads credential JSON files; ${formatCliCommand("openclaw doctor --fix")} imports this legacy shape into SQLite and removes the source file.`,
+    );
+  }
+  if (canonicalJsonStores.length > 0) {
+    noteLines.push(
+      `- Runtime now stores auth profiles in SQLite; ${formatCliCommand("openclaw doctor --fix")} imports auth-profiles.json and removes the source file.`,
     );
   }
   if (legacyAuthJsonStores.length > 0 || legacyOAuthJsonStore) {
     noteLines.push(
-      `- Runtime no longer imports retired credential JSON files; ${formatCliCommand("openclaw doctor --fix")} imports them into auth-profiles.json and removes the source files.`,
+      `- Runtime no longer imports retired credential JSON files; ${formatCliCommand("openclaw doctor --fix")} imports them into SQLite and removes the source files.`,
     );
   }
   if (awsSdkMarkerStores.length > 0) {
@@ -510,11 +552,12 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
     try {
       const backupPath = backupAuthProfileStore(entry.authPath, now);
       saveAuthProfileStore(entry.store, entry.agentDir, { syncExternalCli: false });
+      fs.unlinkSync(entry.authPath);
       result.changes.push(
-        `Rewrote ${shortenHomePath(entry.authPath)} to the canonical auth profile format (backup: ${shortenHomePath(backupPath)}).`,
+        `Imported ${shortenHomePath(entry.authPath)} into SQLite (backup: ${shortenHomePath(backupPath)}).`,
       );
     } catch (err) {
-      result.warnings.push(`Failed to rewrite ${shortenHomePath(entry.authPath)}: ${String(err)}`);
+      result.warnings.push(`Failed to import ${shortenHomePath(entry.authPath)}: ${String(err)}`);
     }
   }
   for (const entry of legacyAuthJsonStores) {
@@ -527,7 +570,7 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
       saveAuthProfileStore(merged, entry.agentDir, { syncExternalCli: false });
       fs.unlinkSync(entry.legacyPath);
       result.changes.push(
-        `Imported ${shortenHomePath(entry.legacyPath)} into ${shortenHomePath(entry.authPath)} (backup: ${shortenHomePath(backupPath)}).`,
+        `Imported ${shortenHomePath(entry.legacyPath)} into SQLite (backup: ${shortenHomePath(backupPath)}).`,
       );
     } catch (err) {
       result.warnings.push(`Failed to import ${shortenHomePath(entry.legacyPath)}: ${String(err)}`);
@@ -543,7 +586,7 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
       saveAuthProfileStore(merged, legacyOAuthJsonStore.agentDir, { syncExternalCli: false });
       fs.unlinkSync(legacyOAuthJsonStore.legacyPath);
       result.changes.push(
-        `Imported ${shortenHomePath(legacyOAuthJsonStore.legacyPath)} into ${shortenHomePath(legacyOAuthJsonStore.authPath)} (backup: ${shortenHomePath(backupPath)}).`,
+        `Imported ${shortenHomePath(legacyOAuthJsonStore.legacyPath)} into SQLite (backup: ${shortenHomePath(backupPath)}).`,
       );
     } catch (err) {
       result.warnings.push(
@@ -575,6 +618,25 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
       result.warnings.push(
         `Failed to migrate aws-sdk profile markers from ${shortenHomePath(entry.authPath)}: ${String(err)}`,
       );
+    }
+  }
+  for (const entry of canonicalJsonStores) {
+    try {
+      if (!fs.existsSync(entry.authPath)) {
+        continue;
+      }
+      const backupPath = backupAuthProfileStore(entry.authPath, now);
+      const merged = mergeMissingAuthProfiles({
+        agentDir: entry.agentDir,
+        imported: entry.store,
+      });
+      saveAuthProfileStore(merged, entry.agentDir, { syncExternalCli: false });
+      fs.unlinkSync(entry.authPath);
+      result.changes.push(
+        `Imported ${shortenHomePath(entry.authPath)} into SQLite (backup: ${shortenHomePath(backupPath)}).`,
+      );
+    } catch (err) {
+      result.warnings.push(`Failed to import ${shortenHomePath(entry.authPath)}: ${String(err)}`);
     }
   }
   clearRuntimeAuthProfileStoreSnapshots();

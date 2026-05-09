@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/store.js";
 import {
   createOpenClawTestState,
@@ -50,7 +51,7 @@ afterEach(async () => {
 });
 
 describe("maybeRepairLegacyFlatAuthProfileStores", () => {
-  it("rewrites legacy flat auth-profiles.json stores with a backup", async () => {
+  it("imports legacy flat auth-profiles.json stores into SQLite with a backup", async () => {
     const state = await makeTestState();
     const legacy = {
       "ollama-windows": {
@@ -71,7 +72,8 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
       `Rewrote ${authPath} to the canonical auth profile format (backup: ${authPath}.legacy-flat.123.bak).`,
     ]);
     expect(result.warnings).toStrictEqual([]);
-    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual({
       version: 1,
       profiles: {
         "ollama-windows:default": {
@@ -84,7 +86,35 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     expect(JSON.parse(fs.readFileSync(`${authPath}.legacy-flat.123.bak`, "utf8"))).toEqual(legacy);
   });
 
-  it("imports retired auth.json stores into auth-profiles.json and removes the source", async () => {
+  it("imports canonical auth-profiles.json stores into SQLite and removes the source", async () => {
+    const state = await makeTestState();
+    const legacy = {
+      version: 1,
+      profiles: {
+        "openrouter:default": {
+          type: "api_key",
+          provider: "openrouter",
+          key: "sk-openrouter",
+        },
+      },
+    };
+    const authPath = await state.writeAuthProfiles(legacy);
+
+    const result = await maybeRepairLegacyFlatAuthProfileStores({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 223,
+    });
+
+    expect(result.detected).toEqual([authPath]);
+    expect(result.changes).toHaveLength(1);
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual(legacy);
+    expect(JSON.parse(fs.readFileSync(`${authPath}.legacy-flat.223.bak`, "utf8"))).toEqual(legacy);
+  });
+
+  it("imports retired auth.json stores into SQLite and removes the source", async () => {
     const state = await makeTestState();
     const agentDir = state.agentDir();
     fs.mkdirSync(agentDir, { recursive: true });
@@ -109,7 +139,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     expect(JSON.parse(fs.readFileSync(`${legacyPath}.legacy-auth.234.bak`, "utf8"))).toEqual(
       legacy,
     );
-    expect(JSON.parse(fs.readFileSync(`${agentDir}/auth-profiles.json`, "utf8"))).toEqual({
+    expect(loadPersistedAuthProfileStore(agentDir)).toEqual({
       version: 1,
       profiles: {
         "anthropic:default": {
@@ -121,7 +151,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     });
   });
 
-  it("imports retired oauth.json into auth-profiles.json and removes the source", async () => {
+  it("imports retired oauth.json into SQLite and removes the source", async () => {
     const state = await makeTestState();
     const legacyPath = state.statePath("credentials", "oauth.json");
     const legacy = {
@@ -147,7 +177,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     expect(JSON.parse(fs.readFileSync(`${legacyPath}.legacy-oauth.345.bak`, "utf8"))).toEqual(
       legacy,
     );
-    expect(JSON.parse(fs.readFileSync(`${state.agentDir()}/auth-profiles.json`, "utf8"))).toEqual({
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual({
       version: 1,
       profiles: {
         "openai-codex:default": {
@@ -208,9 +238,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     });
 
     expect(result.detected).toEqual([authPath]);
-    expect(result.changes).toStrictEqual([
-      `Moved aws-sdk profile metadata from ${authPath} to auth.profiles (backup: ${authPath}.aws-sdk-profile.456.bak).`,
-    ]);
+    expect(result.changes).toHaveLength(2);
     expect(result.warnings).toStrictEqual([]);
     expect(cfg).toEqual({
       auth: {
@@ -222,7 +250,8 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
         },
       },
     });
-    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual({
       version: 1,
       profiles: {
         "openrouter:default": {

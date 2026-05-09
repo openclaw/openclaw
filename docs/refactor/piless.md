@@ -28,7 +28,7 @@ persistence mechanisms:
 
 - Gateway session index: `sessions.json`
 - Session transcripts: `*.jsonl`
-- Auth profiles: `auth-profiles.json`
+- Auth profiles: shared SQLite `kv`
 - Config: `openclaw.json`
 - Task registry: SQLite
 - Plugin state: SQLite
@@ -133,25 +133,26 @@ This plan has started landing in slices:
 - TUI last-session restore pointers now use the shared SQLite `kv` store as the
   primary record path. The older `tui/last-session.json` file is imported and
   removed by `openclaw doctor --fix`; runtime TUI reads only SQLite.
-- Auth profile runtime routing state now uses the shared SQLite `kv` store as
-  the primary record path. Older per-agent `auth-state.json` files are imported
-  and removed by `openclaw doctor --fix`; `auth-profiles.json` still owns
-  credentials and stays file-backed. Retired per-agent `auth.json` and shared
-  `credentials/oauth.json` credential files are doctor migration inputs only;
-  runtime no longer imports them.
+- Auth profile credentials and runtime routing state now use the shared SQLite
+  `kv` store as the primary record path. Older `auth-profiles.json`,
+  per-agent `auth-state.json`, retired per-agent `auth.json`, and shared
+  `credentials/oauth.json` files are imported and removed by
+  `openclaw doctor --fix`; runtime no longer reads, writes, imports, or locks
+  those JSON credential stores.
 - PI model discovery uses in-memory `pi-coding-agent` auth storage seeded from
   canonical OpenClaw credentials. It no longer creates or scrubs per-agent
   `auth.json`.
 - Device identity, local device auth tokens, bootstrap tokens, device/node
   pairing ledgers, channel pairing requests/allowlists, inferred commitment
-  records, subagent run records, TUI restore pointers, auth routing state,
+  records, subagent run records, TUI restore pointers, auth profile stores,
   OpenRouter model cache, web push subscriptions/VAPID keys, APNs registration
   state, and update-check state now
   use the shared SQLite `kv` store. `openclaw doctor --fix` imports the legacy
   `identity/*.json`, `devices/*.json`, `nodes/*.json`,
   `credentials/*-pairing.json`, `credentials/*-allowFrom.json`,
   `commitments/commitments.json`, `subagents/runs.json`,
-  `tui/last-session.json`, per-agent `auth-state.json`,
+  `tui/last-session.json`, per-agent `auth-profiles.json`,
+  per-agent `auth-state.json`,
   `cache/openrouter-models.json`, `push/*.json`, and `update-check.json` files
   into SQLite and removes those files after a successful import. Runtime paths
   no longer read or write those JSON ledgers.
@@ -394,8 +395,8 @@ Migration order:
    transcript files.
 7. Keep JSONL export as explicit debug/support output only.
 
-Keep `openclaw.json` and `auth-profiles.json` file-backed until operator
-repair, secret audit, and backup flows can handle the SQLite layout naturally.
+Keep `openclaw.json` as the normal configuration file. Auth profile JSON files
+are legacy doctor inputs only; runtime credentials live in SQLite.
 
 ## Workstream 3: Add VFS Scratch Storage
 

@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { OAUTH_AGENT_ENV_KEYS, createExpiredOauthStore } from "./oauth-test-utils.js";
+import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -69,9 +69,11 @@ afterAll(() => {
 });
 
 async function readPersistedStore(agentDir: string): Promise<AuthProfileStore> {
-  return JSON.parse(
-    await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-  ) as AuthProfileStore;
+  const store = loadPersistedAuthProfileStore(agentDir);
+  if (!store) {
+    throw new Error(`Expected persisted auth store for ${agentDir}`);
+  }
+  return store;
 }
 
 function mockRotatedOpenAICodexRefresh() {
@@ -138,7 +140,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
   });
 
   beforeEach(async () => {
-    resetFileLockStateForTest();
     getOAuthApiKeyMock.mockReset();
     getOAuthApiKeyMock.mockImplementation(async () => {
       throw new Error("Failed to extract accountId from token");
@@ -161,7 +162,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
   });
 
   afterEach(async () => {
-    resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     envSnapshot.restore();
   });

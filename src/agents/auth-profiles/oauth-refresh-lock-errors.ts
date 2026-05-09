@@ -1,12 +1,18 @@
-import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../../infra/file-lock.js";
+import { OPENCLAW_STATE_LOCK_TIMEOUT_ERROR_CODE } from "../../state/openclaw-state-lock.js";
 
-export function isGlobalRefreshLockTimeoutError(error: unknown, lockPath: string): boolean {
+export function isGlobalRefreshLockTimeoutError(
+  error: unknown,
+  scope: string,
+  key: string,
+): boolean {
   const candidate =
     typeof error === "object" && error !== null
-      ? (error as { code?: unknown; lockPath?: unknown })
+      ? (error as { code?: unknown; scope?: unknown; key?: unknown })
       : undefined;
   return (
-    candidate?.code === FILE_LOCK_TIMEOUT_ERROR_CODE && candidate.lockPath === `${lockPath}.lock`
+    candidate?.code === OPENCLAW_STATE_LOCK_TIMEOUT_ERROR_CODE &&
+    candidate.scope === scope &&
+    candidate.key === key
   );
 }
 

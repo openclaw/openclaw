@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import "./oauth-external-auth-passthrough.test-support.js";
@@ -43,7 +42,6 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
   let mainAgentDir = "";
 
   beforeEach(async () => {
-    resetFileLockStateForTest();
     resetOAuthProviderRuntimeMocks({
       refreshProviderOAuthCredentialWithPluginMock,
       formatProviderAuthProfileApiKeyWithPluginMock,
@@ -58,7 +56,6 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
   afterEach(async () => {
     envSnapshot.restore();
-    resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     if (resetOAuthRefreshQueuesForTest) {
       resetOAuthRefreshQueuesForTest();

@@ -17,9 +17,9 @@ Use a two-level SQLite layout:
 - Global database: `~/.openclaw/state/openclaw.sqlite`
 - Agent database: one SQLite database per agent for agent-owned workspace,
   transcript, VFS, artifact, and large per-agent runtime state
-- Configuration stays file-backed: `openclaw.json` and explicit credential or
-  auth-profile files remain outside the database until there is a separate
-  secrets/export design
+- Configuration stays file-backed: `openclaw.json` remains outside the
+  database. Runtime auth profiles move to SQLite; external provider or CLI
+  credential files remain owner-managed outside OpenClaw's database.
 
 The global database is the control-plane database. It owns agent discovery,
 shared gateway state, pairing, device/node state, task and flow ledgers, plugin
@@ -74,19 +74,18 @@ proceed with these assumptions:
 
 - Use `node:sqlite` directly and require the Node 24+ runtime for this storage
   path.
-- Keep exactly one normal configuration file. Do not move config, credentials,
-  provider auth profiles, plugin manifests, or Git workspaces into SQLite in
-  this refactor.
+- Keep exactly one normal configuration file. Do not move config, plugin
+  manifests, or Git workspaces into SQLite in this refactor.
 - Runtime compatibility files are not required. Legacy JSON and JSONL files are
   migration inputs only. The branch-local SQLite sidecars never shipped and are
   deleted instead of imported.
 - `openclaw doctor --fix` owns the legacy file-to-database migration step.
   Runtime startup and `openclaw migrate` should not carry legacy OpenClaw
   database-upgrade paths.
-- Credential compatibility follows the same rule even though credentials stay
-  file-backed: runtime reads canonical `auth-profiles.json` only. Retired
-  per-agent `auth.json` and shared `credentials/oauth.json` files are doctor
-  migration inputs, then removed after import.
+- Credential compatibility follows the same rule: runtime credentials live in
+  SQLite. Old `auth-profiles.json`, per-agent `auth.json`, and shared
+  `credentials/oauth.json` files are doctor migration inputs, then removed
+  after import.
 - Generated model catalog state is database-backed. Runtime code must not write
   `agents/<agentId>/agent/models.json`; existing `models.json` files are legacy
   doctor inputs and are removed after import into the global SQLite KV store.
@@ -637,10 +636,10 @@ sessionId}` and session key context.
 - Config health fingerprints now use shared SQLite KV instead of
   `logs/config-health.json`, keeping the normal config file as the only
   non-credential configuration document.
-- Auth profile runtime no longer imports retired credential JSON files. The
-  canonical credential file remains `auth-profiles.json`; per-agent `auth.json`
-  and shared `credentials/oauth.json` are doctor migration inputs that are
-  removed after import.
+- Auth profile runtime no longer imports or writes credential JSON files. The
+  canonical credential store is SQLite; `auth-profiles.json`, per-agent
+  `auth.json`, and shared `credentials/oauth.json` are doctor migration inputs
+  that are removed after import.
 - PI model discovery now passes canonical credentials into in-memory
   `pi-coding-agent` auth storage. It no longer creates, scrubs, or writes
   per-agent `auth.json` during discovery.
@@ -954,7 +953,6 @@ Move these into agent databases:
 Keep these file-backed for now:
 
 - `openclaw.json`
-- `auth-profiles.json`
 - provider or CLI credential files
 - plugin/package manifests
 - user workspaces and Git repositories when disk mode is selected

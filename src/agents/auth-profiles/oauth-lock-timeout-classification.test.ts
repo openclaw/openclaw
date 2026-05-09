@@ -1,51 +1,50 @@
 import { describe, expect, it } from "vitest";
-import { FILE_LOCK_TIMEOUT_ERROR_CODE, type FileLockTimeoutError } from "../../infra/file-lock.js";
+import {
+  OPENCLAW_STATE_LOCK_TIMEOUT_ERROR_CODE,
+  OpenClawStateLockTimeoutError,
+} from "../../state/openclaw-state-lock.js";
 import {
   buildRefreshContentionError,
   isGlobalRefreshLockTimeoutError,
 } from "./oauth-refresh-lock-errors.js";
-import { resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
-
-function createLockTimeoutError(lockPath: string): FileLockTimeoutError {
-  return Object.assign(new Error(`file lock timeout for ${lockPath.slice(0, -5)}`), {
-    code: FILE_LOCK_TIMEOUT_ERROR_CODE as typeof FILE_LOCK_TIMEOUT_ERROR_CODE,
-    lockPath,
-  });
-}
+import { OAUTH_REFRESH_LOCK_SCOPE, resolveOAuthRefreshLockKey } from "./paths.js";
 
 describe("OAuth refresh lock timeout classification", () => {
-  it("matches only the global refresh lock path", () => {
+  it("matches only the global refresh lock key", () => {
     const profileId = "openai-codex:default";
     const provider = "openai-codex";
-    const refreshLockPath = resolveOAuthRefreshLockPath(provider, profileId);
-    const authStoreLockPath = resolveAuthStorePath("/tmp/openclaw-oauth-lock-timeout/agent");
+    const refreshLockKey = resolveOAuthRefreshLockKey(provider, profileId);
 
     expect(
       isGlobalRefreshLockTimeoutError(
-        createLockTimeoutError(`${refreshLockPath}.lock`),
-        refreshLockPath,
+        new OpenClawStateLockTimeoutError(OAUTH_REFRESH_LOCK_SCOPE, refreshLockKey),
+        OAUTH_REFRESH_LOCK_SCOPE,
+        refreshLockKey,
       ),
     ).toBe(true);
     expect(
       isGlobalRefreshLockTimeoutError(
-        createLockTimeoutError(`${authStoreLockPath}.lock`),
-        refreshLockPath,
+        new OpenClawStateLockTimeoutError("other.scope", refreshLockKey),
+        OAUTH_REFRESH_LOCK_SCOPE,
+        refreshLockKey,
       ),
     ).toBe(false);
   });
 
-  it("builds refresh_contention errors that preserve the file-lock cause", () => {
+  it("builds refresh_contention errors that preserve the SQLite lock cause", () => {
     const profileId = "openai-codex:default";
     const provider = "openai-codex";
-    const refreshLockPath = resolveOAuthRefreshLockPath(provider, profileId);
-    const cause = createLockTimeoutError(`${refreshLockPath}.lock`);
+    const cause = new OpenClawStateLockTimeoutError(
+      OAUTH_REFRESH_LOCK_SCOPE,
+      resolveOAuthRefreshLockKey(provider, profileId),
+    );
 
     const error = buildRefreshContentionError({ provider, profileId, cause });
 
     expect(error.code).toBe("refresh_contention");
     expect(error.cause).toBe(cause);
-    expect(cause.code).toBe(FILE_LOCK_TIMEOUT_ERROR_CODE);
-    expect(cause.lockPath).toBe(`${refreshLockPath}.lock`);
+    expect(cause.code).toBe(OPENCLAW_STATE_LOCK_TIMEOUT_ERROR_CODE);
+    expect(cause.scope).toBe(OAUTH_REFRESH_LOCK_SCOPE);
     expect(error.message).toContain("another process is already refreshing");
     expect(error.message).toContain("Please wait for the in-flight refresh to finish and retry.");
   });

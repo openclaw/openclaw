@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../plugins/provider-external-auth.types.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 import {
+  loadPersistedAuthProfileStore,
+  savePersistedAuthProfileSecretsStore,
+} from "./auth-profiles/persisted.js";
+import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   loadAuthProfileStoreForRuntime,
@@ -73,10 +77,9 @@ describe("ensureAuthProfileStore", () => {
   }
 
   function writeAuthProfileStore(agentDir: string, profiles: Record<string, unknown>): void {
-    fs.writeFileSync(
-      path.join(agentDir, "auth-profiles.json"),
-      `${JSON.stringify({ version: AUTH_STORE_VERSION, profiles }, null, 2)}\n`,
-      "utf8",
+    savePersistedAuthProfileSecretsStore(
+      { version: AUTH_STORE_VERSION, profiles: profiles as never },
+      agentDir,
     );
   }
 
@@ -214,11 +217,7 @@ describe("ensureAuthProfileStore", () => {
           },
         },
       };
-      fs.writeFileSync(
-        path.join(mainDir, "auth-profiles.json"),
-        `${JSON.stringify(mainStore, null, 2)}\n`,
-        "utf8",
-      );
+      writeAuthProfileStore(mainDir, mainStore.profiles);
 
       const agentStore = {
         version: AUTH_STORE_VERSION,
@@ -230,11 +229,7 @@ describe("ensureAuthProfileStore", () => {
           },
         },
       };
-      fs.writeFileSync(
-        path.join(agentDir, "auth-profiles.json"),
-        `${JSON.stringify(agentStore, null, 2)}\n`,
-        "utf8",
-      );
+      writeAuthProfileStore(agentDir, agentStore.profiles);
 
       const store = ensureAuthProfileStore(agentDir);
       expectRecordFields(store.profiles["anthropic:default"], {
@@ -333,10 +328,7 @@ describe("ensureAuthProfileStore", () => {
       expect(store.lastGood?.["openai-codex"]).toBe(freshProfileId);
       expect(store.usageStats?.[staleProfileId]).toBeUndefined();
 
-      const persistedAgentStore = JSON.parse(
-        fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8"),
-      ) as { profiles: Record<string, unknown> };
-      expect(persistedAgentStore.profiles).toHaveProperty(staleProfileId);
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toHaveProperty(staleProfileId);
     } finally {
       restoreAgentDirEnv({ previousStateDir, previousAgentDir, previousPiAgentDir });
       fs.rmSync(root, { recursive: true, force: true });
@@ -697,17 +689,7 @@ describe("ensureAuthProfileStore", () => {
     "normalizes auth-profiles credential aliases with canonical-field precedence: $name",
     ({ name, profile, expected }) => {
       withTempAgentDir("openclaw-auth-alias-", (agentDir) => {
-        const storeData = {
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            "anthropic:work": profile,
-          },
-        };
-        fs.writeFileSync(
-          path.join(agentDir, "auth-profiles.json"),
-          `${JSON.stringify(storeData, null, 2)}\n`,
-          "utf8",
-        );
+        writeAuthProfileStore(agentDir, { "anthropic:work": profile });
 
         const store = ensureAuthProfileStore(agentDir);
         expectRecordFields(store.profiles["anthropic:work"], expected, name);
@@ -856,25 +838,14 @@ describe("ensureAuthProfileStore", () => {
       const workerAgentDir = path.join(stateDir, "agents", "worker", "agent");
       const workerStorePath = path.join(workerAgentDir, "auth-profiles.json");
       fs.mkdirSync(mainAgentDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(mainAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles: {
-              "openai:default": {
-                type: "api_key",
-                provider: "openai",
-                keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
       process.env.OPENCLAW_STATE_DIR = stateDir;
+      writeAuthProfileStore(mainAgentDir, {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      });
       clearRuntimeAuthProfileStoreSnapshots();
 
       const store = loadAuthProfileStoreForRuntime(workerAgentDir, { readOnly: true });
@@ -900,27 +871,16 @@ describe("ensureAuthProfileStore", () => {
       const workerAgentDir = path.join(stateDir, "agents", "worker", "agent");
       const workerStorePath = path.join(workerAgentDir, "auth-profiles.json");
       fs.mkdirSync(mainAgentDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(mainAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles: {
-              "openai-codex:default": {
-                type: "oauth",
-                provider: "openai-codex",
-                access: "main-access",
-                refresh: "main-refresh",
-                expires: Date.now() + 60_000,
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
       process.env.OPENCLAW_STATE_DIR = stateDir;
+      writeAuthProfileStore(mainAgentDir, {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "main-access",
+          refresh: "main-refresh",
+          expires: Date.now() + 60_000,
+        },
+      });
       clearRuntimeAuthProfileStoreSnapshots();
 
       const store = ensureAuthProfileStore(workerAgentDir);
@@ -955,18 +915,14 @@ describe("ensureAuthProfileStore", () => {
             "qwen:not-object": "broken",
           },
         };
-        fs.writeFileSync(
-          path.join(agentDir, "auth-profiles.json"),
-          `${JSON.stringify(invalidStore, null, 2)}\n`,
-          "utf8",
-        );
+        savePersistedAuthProfileSecretsStore(invalidStore as never, agentDir);
         const store = ensureAuthProfileStore(agentDir);
         expect(store.profiles).toStrictEqual({});
         expect(warnSpy).toHaveBeenCalledTimes(1);
         expect(warnSpy).toHaveBeenCalledWith(
           "ignored invalid auth profile entries during store load",
           {
-            source: "auth-profiles.json",
+            source: "SQLite auth profile store",
             dropped: 3,
             reasons: {
               invalid_type: 1,

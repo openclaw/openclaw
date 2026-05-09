@@ -1,5 +1,12 @@
 import { coerceSecretRef } from "../../config/types.secrets.js";
-import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
+import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  readOpenClawStateKvJsonResult,
+  readOpenClawStateKvJsonResultFromDatabase,
+  writeOpenClawStateKvJson,
+  writeOpenClawStateKvJsonInTransaction,
+  type OpenClawStateJsonValue,
+} from "../../state/openclaw-state-kv.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
 import {
@@ -13,6 +20,7 @@ import { resolveAuthStorePath } from "./paths.js";
 import {
   coerceAuthProfileState,
   loadPersistedAuthProfileState,
+  loadPersistedAuthProfileStateFromDatabase,
   mergeAuthProfileState,
 } from "./state.js";
 import type {
@@ -23,6 +31,12 @@ import type {
   OAuthCredential,
   ProfileUsageStats,
 } from "./types.js";
+
+export const AUTH_PROFILE_STORE_KV_SCOPE = "auth-profiles";
+
+export function authProfileStoreKey(agentDir?: string): string {
+  return resolveAuthStorePath(agentDir);
+}
 
 type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
 type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
@@ -572,7 +586,7 @@ export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore 
     }
     normalized[key] = parsed.credential;
   }
-  warnRejectedCredentialEntries("auth-profiles.json", rejected);
+  warnRejectedCredentialEntries("SQLite auth profile store", rejected);
   return {
     version: Number(record.version ?? AUTH_STORE_VERSION),
     profiles: normalized,
@@ -965,16 +979,35 @@ export function buildPersistedAuthProfileSecretsStore(
   };
 }
 
-export function loadPersistedAuthProfileStore(agentDir?: string): AuthProfileStore | null {
-  const authPath = resolveAuthStorePath(agentDir);
-  const raw = loadJsonFile(authPath);
+export type PersistedAuthProfileStoreEntry = {
+  store: AuthProfileStore;
+  updatedAt: number;
+};
+
+export function loadPersistedAuthProfileStoreEntry(
+  agentDir?: string,
+): PersistedAuthProfileStoreEntry | null {
+  const result = readOpenClawStateKvJsonResult(
+    AUTH_PROFILE_STORE_KV_SCOPE,
+    authProfileStoreKey(agentDir),
+  );
+  if (!result.exists || result.value === undefined) {
+    return null;
+  }
+  const raw = result.value;
   const store = coercePersistedAuthProfileStore(raw);
   if (!store) {
     return null;
   }
-  const merged = {
-    ...store,
-    ...mergeAuthProfileState(coerceAuthProfileState(raw), loadPersistedAuthProfileState(agentDir)),
+  return {
+    store: {
+      ...store,
+      ...mergeAuthProfileState(
+        coerceAuthProfileState(raw),
+        loadPersistedAuthProfileState(agentDir),
+      ),
+    },
+    updatedAt: result.updatedAt,
   };
   const canRepairPersistedSecrets =
     options?.rewriteInlineOAuthSecrets === true && process.env.OPENCLAW_AUTH_STORE_READONLY !== "1";
@@ -992,4 +1025,70 @@ export function loadPersistedAuthProfileStore(agentDir?: string): AuthProfileSto
     repairOAuthSecretPayloads:
       options?.repairOAuthSecretPayloads === true || canRepairPersistedSecrets,
   });
+}
+
+export function loadPersistedAuthProfileStoreEntryFromDatabase(
+  database: OpenClawStateDatabase,
+  agentDir?: string,
+): PersistedAuthProfileStoreEntry | null {
+  const result = readOpenClawStateKvJsonResultFromDatabase(
+    database,
+    AUTH_PROFILE_STORE_KV_SCOPE,
+    authProfileStoreKey(agentDir),
+  );
+  if (!result.exists || result.value === undefined) {
+    return null;
+  }
+  const raw = result.value;
+  const store = coercePersistedAuthProfileStore(raw);
+  if (!store) {
+    return null;
+  }
+  return {
+    store: {
+      ...store,
+      ...mergeAuthProfileState(
+        coerceAuthProfileState(raw),
+        loadPersistedAuthProfileStateFromDatabase(database, agentDir),
+      ),
+    },
+    updatedAt: result.updatedAt,
+  };
+}
+
+export function loadPersistedAuthProfileStore(agentDir?: string): AuthProfileStore | null {
+  return loadPersistedAuthProfileStoreEntry(agentDir)?.store ?? null;
+}
+
+export function savePersistedAuthProfileSecretsStore(
+  store: AuthProfileSecretsStore,
+  agentDir?: string,
+): void {
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    AUTH_PROFILE_STORE_KV_SCOPE,
+    authProfileStoreKey(agentDir),
+    store as unknown as OpenClawStateJsonValue,
+  );
+}
+
+export function savePersistedAuthProfileSecretsStoreInTransaction(
+  database: OpenClawStateDatabase,
+  store: AuthProfileSecretsStore,
+  agentDir?: string,
+  updatedAt: number = Date.now(),
+): void {
+  writeOpenClawStateKvJsonInTransaction<OpenClawStateJsonValue>(
+    database,
+    AUTH_PROFILE_STORE_KV_SCOPE,
+    authProfileStoreKey(agentDir),
+    store as unknown as OpenClawStateJsonValue,
+    updatedAt,
+  );
+}
+
+export function hasPersistedAuthProfileSecretsStore(agentDir?: string): boolean {
+  return (
+    readOpenClawStateKvJsonResult(AUTH_PROFILE_STORE_KV_SCOPE, authProfileStoreKey(agentDir))
+      .exists === true
+  );
 }

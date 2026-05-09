@@ -20,7 +20,7 @@ function computeMinimumRetryBudgetMs(): number {
 // refresh critical section. Behavioural tests for the inner `setTimeout`
 // mechanics are deliberately omitted: the implementation is a thin
 // `Promise.race` around `setTimeout`, and exercising it end-to-end requires
-// stepping through nested file-lock I/O that mixes awkwardly with Vitest
+// stepping through SQLite lock coordination that mixes awkwardly with Vitest
 // fake timers. A regression in the timeout wiring would be caught by the
 // #26322 regression test (oauth.concurrent-20-agents.test.ts) because a
 // stuck refresh would time out the whole suite.
@@ -43,8 +43,7 @@ describe("OAuth refresh call timeout (invariants)", () => {
   it("OAUTH_REFRESH_LOCK_OPTIONS.stale leaves a generous safety margin beyond the call timeout", () => {
     // Require at least 30s of headroom between the refresh deadline and
     // the stale threshold: enough to cover normal scheduling jitter and
-    // the file-lock release round-trip without letting peers reclaim a
-    // still-active lock.
+    // SQLite lock release without letting peers reclaim a still-active lock.
     expect(OAUTH_REFRESH_LOCK_OPTIONS.stale - OAUTH_REFRESH_CALL_TIMEOUT_MS).toBeGreaterThanOrEqual(
       30_000,
     );

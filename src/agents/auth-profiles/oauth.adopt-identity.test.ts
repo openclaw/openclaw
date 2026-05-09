@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import "./oauth-external-auth-passthrough.test-support.js";
-import "./oauth-file-lock-passthrough.test-support.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
   createOAuthMainAgentDir,
@@ -17,6 +15,7 @@ import {
   storeWith,
 } from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
+import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -43,6 +42,14 @@ function expectPersistedOpenAICodexProfileWithoutInlineTokens(
   expect(credential).not.toHaveProperty("idToken");
 }
 
+function readPersistedStore(agentDir: string): AuthProfileStore {
+  const store = loadPersistedAuthProfileStore(agentDir);
+  if (!store) {
+    throw new Error(`Expected persisted auth store for ${agentDir}`);
+  }
+  return store;
+}
+
 // Cross-account-leak defense-in-depth: each adopt site in oauth.ts calls the
 // shared identity copy gate before copying main-store credentials into the
 // sub-agent store. Unit tests cover policy variants; this suite proves each
@@ -64,7 +71,6 @@ describe("OAuth credential adoption is identity-gated", () => {
   });
 
   beforeEach(async () => {
-    resetFileLockStateForTest();
     resetOAuthProviderRuntimeMocks({
       refreshProviderOAuthCredentialWithPluginMock,
       formatProviderAuthProfileApiKeyWithPluginMock,
@@ -78,7 +84,6 @@ describe("OAuth credential adoption is identity-gated", () => {
 
   afterEach(async () => {
     envSnapshot.restore();
-    resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     resetOAuthRefreshQueuesForTest();
   });
@@ -135,10 +140,9 @@ describe("OAuth credential adoption is identity-gated", () => {
     expect(result?.apiKey).toBe("sub-own-access");
 
     // Sub-agent store must NOT have been overwritten with main's foreign cred.
-    const subRaw = JSON.parse(
-      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfileWithoutInlineTokens(subRaw.profiles[profileId], {
+    const subRaw = readPersistedStore(subAgentDir);
+    expectOAuthProfileFields(subRaw, profileId, {
+      access: "sub-own-access",
       accountId: "acct-sub",
       expires: subExpiry,
     });
@@ -208,10 +212,9 @@ describe("OAuth credential adoption is identity-gated", () => {
 
     // Main must still hold its foreign cred, untouched (mirror would also
     // refuse because of identity mismatch).
-    const mainRaw = JSON.parse(
-      await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfileWithoutInlineTokens(mainRaw.profiles[profileId], {
+    const mainRaw = readPersistedStore(mainAgentDir);
+    expectOAuthProfileFields(mainRaw, profileId, {
+      access: "main-foreign-access",
       accountId: "acct-other",
       expires: freshExpiry,
     });
@@ -285,10 +288,9 @@ describe("OAuth credential adoption is identity-gated", () => {
     ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
 
     // Sub-agent store must still have its own stale cred \u2014 no leak.
-    const subRaw = JSON.parse(
-      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfileWithoutInlineTokens(subRaw.profiles[profileId], {
+    const subRaw = readPersistedStore(subAgentDir);
+    expectOAuthProfileFields(subRaw, profileId, {
+      access: "sub-stale",
       accountId: "acct-sub",
     });
     expect(JSON.stringify(subRaw)).not.toContain("sub-stale");
