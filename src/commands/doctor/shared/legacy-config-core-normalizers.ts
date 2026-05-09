@@ -245,14 +245,17 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
 } {
   if (typeof raw === "string") {
     const migrated = migrateLegacyRuntimeModelRef(raw);
-    return migrated
-      ? {
-          value: migrated.ref,
-          changed: true,
-          selectedRuntime: migrated.runtime,
-          selectedRefs: [migrated.ref],
-        }
-      : { value: raw, changed: false, selectedRefs: [] };
+    // CLI runtime aliases (claude-cli, codex-cli, google-gemini-cli) use
+    // legacyProvider/model as their canonical format — do not rewrite them.
+    if (!migrated || migrated.cli) {
+      return { value: raw, changed: false, selectedRefs: [] };
+    }
+    return {
+      value: migrated.ref,
+      changed: true,
+      selectedRuntime: migrated.runtime,
+      selectedRefs: [migrated.ref],
+    };
   }
   if (!isRecord(raw)) {
     return { value: raw, changed: false, selectedRefs: [] };
@@ -260,7 +263,8 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
 
   const migratedPrimary =
     typeof raw.primary === "string" ? migrateLegacyRuntimeModelRef(raw.primary) : null;
-  if (!migratedPrimary) {
+  // CLI runtime aliases use legacyProvider/model as their canonical format — skip rewrite.
+  if (!migratedPrimary || migratedPrimary.cli) {
     return { value: raw, changed: false, selectedRefs: [] };
   }
 

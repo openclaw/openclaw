@@ -775,3 +775,57 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
     ]);
   });
 });
+
+describe("legacy migrate runtime model refs — CLI aliases preserved", () => {
+  it("does not rewrite claude-cli/model as model.primary to anthropic/model", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/claude-opus-4-7" },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("does not rewrite claude-cli/model string primary to anthropic/model", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: "claude-cli/claude-opus-4-7",
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("does not rewrite codex-cli/model primary (CLI alias) to openai/model", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "codex-cli/gpt-5.4" },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("does not touch unknown provider prefixes (passes through unchanged)", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+});
