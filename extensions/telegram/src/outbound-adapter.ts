@@ -22,6 +22,12 @@ import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
+import {
+  classifyTelegramRuntimeCommsText,
+  runtimeCommsGuardSuppressedResult,
+  shouldSendTelegramRuntimeCommsMedia,
+  shouldSendTelegramRuntimeCommsText,
+} from "./runtime-comms-guard.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 export const TELEGRAM_POLL_OPTION_LIMIT = 10;
@@ -126,17 +132,44 @@ export async function sendTelegramPayloadMessages(params: {
     text,
     mediaUrls,
     fallbackResult: { messageId: "unknown", chatId: params.to },
-    sendNoMedia: async () =>
-      await params.send(params.to, text, {
+    sendNoMedia: async () => {
+      const context = {
+        to: params.to,
+        accountId: params.baseOpts.accountId,
+        threadId: params.baseOpts.messageThreadId,
+      };
+      if (!(await shouldSendTelegramRuntimeCommsText({ context, text }))) {
+        return runtimeCommsGuardSuppressedResult(
+          params.to,
+          classifyTelegramRuntimeCommsText(text) !== "technical",
+        );
+      }
+      return await params.send(params.to, text, {
         ...payloadOpts,
         buttons,
-      }),
-    send: async ({ text, mediaUrl, isFirst }) =>
-      await params.send(params.to, text, {
+      });
+    },
+    send: async ({ text, mediaUrl, isFirst }) => {
+      const context = {
+        to: params.to,
+        accountId: params.baseOpts.accountId,
+        threadId: params.baseOpts.messageThreadId,
+      };
+      if (!(await shouldSendTelegramRuntimeCommsMedia({ context, mediaUrl }))) {
+        return runtimeCommsGuardSuppressedResult(params.to, true);
+      }
+      if (text && !(await shouldSendTelegramRuntimeCommsText({ context, text }))) {
+        return runtimeCommsGuardSuppressedResult(
+          params.to,
+          classifyTelegramRuntimeCommsText(text) !== "technical",
+        );
+      }
+      return await params.send(params.to, text, {
         ...payloadOpts,
         mediaUrl,
         ...(isFirst ? { buttons } : {}),
-      }),
+      });
+    },
   });
 }
 
@@ -222,6 +255,17 @@ export function createTelegramOutboundAdapter(
           gatewayClientScopes,
           resolveSend,
         });
+        if (
+          !(await shouldSendTelegramRuntimeCommsText({
+            context: { to, accountId, threadId },
+            text,
+          }))
+        ) {
+          return runtimeCommsGuardSuppressedResult(
+            to,
+            classifyTelegramRuntimeCommsText(text) !== "technical",
+          );
+        }
         return await send(to, text, {
           ...baseOpts,
         });
@@ -251,6 +295,26 @@ export function createTelegramOutboundAdapter(
           gatewayClientScopes,
           resolveSend,
         });
+        if (
+          !(await shouldSendTelegramRuntimeCommsMedia({
+            context: { to, accountId, threadId },
+            mediaUrl,
+          }))
+        ) {
+          return runtimeCommsGuardSuppressedResult(to, true);
+        }
+        if (
+          text &&
+          !(await shouldSendTelegramRuntimeCommsText({
+            context: { to, accountId, threadId },
+            text,
+          }))
+        ) {
+          return runtimeCommsGuardSuppressedResult(
+            to,
+            classifyTelegramRuntimeCommsText(text) !== "technical",
+          );
+        }
         return await send(to, text, {
           ...baseOpts,
           mediaUrl,
