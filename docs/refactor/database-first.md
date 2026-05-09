@@ -5,7 +5,7 @@ read_when:
   - Moving OpenClaw runtime data, cache, transcripts, task state, or scratch files into SQLite
   - Designing doctor migrations from legacy JSON or JSONL files
   - Changing backup, restore, VFS, or worker storage behavior
-  - Removing session file locks, pruning, truncation, or JSON compatibility paths
+  - Removing session locks, pruning, truncation, or JSON compatibility paths
 ---
 
 # Database-First State Refactor
@@ -48,6 +48,11 @@ proceed with these assumptions:
 - `openclaw doctor --fix` owns the legacy file-to-database migration step.
   Runtime startup and `openclaw migrate` should not carry legacy OpenClaw
   database-upgrade paths.
+- Runtime must not migrate, normalize, or bridge transcript locators. Active
+  transcript identity is `{agentId, sessionId}` in SQLite. File paths are
+  legacy doctor inputs only, and `sqlite-transcript://...` strings are external
+  handles derived from row identity when a protocol, hook, export, or plugin
+  boundary still needs a string.
 - Backup output should remain one archive file. Database contents should enter
   that archive as compact SQLite snapshots, not raw live WAL sidecars.
 - Transcript search is useful but not required for the first database-first
@@ -75,9 +80,9 @@ interfaces that still look like the old file world:
   stop treating `sessions.json`, transcript JSONL files, and sandbox registry
   JSON as possible write targets.
 - Agent-owned tables live in per-agent SQLite databases. The global DB keeps
-  registry/control-plane rows; transcript identity is a canonical
-  `sqlite-transcript://<agent>/<session>` locator derived from the per-agent
-  transcript rows.
+  registry/control-plane rows; transcript identity is `{agentId, sessionId}` in
+  the per-agent transcript rows. Runtime code must not persist transcript file
+  paths or migrate transcript locators.
 - Doctor already imports several legacy files. The cleanup is to make that a
   single explicit migration implementation that doctor calls, with a durable
   migration report.
@@ -207,17 +212,18 @@ The remaining cleanup is mostly consolidation and deletion:
   transcript files. Gateway chat/media/history paths read transcript rows from
   SQLite; JSONL is now a legacy doctor input or in-memory export
   encoding, not a runtime state file.
-- Runtime session path resolution now canonicalizes active sessions to
-  `sqlite-transcript://<agent>/<session>` locators. Legacy absolute JSONL paths
-  are doctor migration inputs instead of active runtime identity.
-- Gateway transcript-key lookup compares canonical transcript locators directly
-  and no longer realpaths or stats transcript filenames.
+- Runtime session resolution now uses `{agentId, sessionId}`. It may derive a
+  `sqlite-transcript://<agent>/<session>` handle for external boundaries, but it
+  must not store that derived value in active session rows. Legacy absolute
+  JSONL paths are doctor migration inputs only.
+- Gateway transcript-key lookup compares derived SQLite transcript handles at
+  protocol boundaries and no longer realpaths or stats transcript filenames.
 - Automatic compaction transcript rotation writes successor transcript rows
-  directly through the SQLite transcript store and returns canonical SQLite
-  locators instead of durable JSONL file paths.
+  directly through the SQLite transcript store. Session rows keep only the
+  successor session identity, not a durable JSONL path or persisted locator.
 - Managed outgoing image retention keys its transcript-message cache from
-  SQLite transcript stats instead of `fs.stat(sessionFile)`.
-- Runtime session file locks and the standalone legacy `.jsonl.lock` doctor
+  SQLite transcript stats instead of filesystem stat calls.
+- Runtime session locks and the standalone legacy `.jsonl.lock` doctor
   lane have been removed.
 - The Microsoft Teams runtime barrel no longer re-exports the old plugin SDK
   file-lock helper; its durable state paths are SQLite-backed.
@@ -245,39 +251,36 @@ The remaining cleanup is mostly consolidation and deletion:
 - Command-run session metadata helpers now use entry-oriented names and module
   paths; the old `session-store` command helper surface has been removed.
 - Bootstrap header seeding and manual compaction boundary hardening now mutate
-  SQLite transcript rows directly. Runtime callers pass canonical SQLite
-  locators, not writable `.jsonl` paths.
-- Fresh runtime session rows now use virtual
-  `sqlite-transcript://<agent>/<session>` locators instead of fake
-  `agents/<agentId>/sessions/*.jsonl` paths. The old path builders remain for
-  doctor imports and explicit debug/export artifacts.
+  SQLite transcript rows directly. Runtime callers pass session identity, not
+  writable `.jsonl` paths.
+- Fresh runtime session rows no longer store transcript locators. When a caller
+  still needs a string handle, it is derived from `{agentId, sessionId}` as
+  `sqlite-transcript://<agent>/<session>` and discarded at the boundary. The
+  old path builders remain for doctor imports and explicit debug/export
+  artifacts.
 - Starting a new persisted transcript session now always allocates a fresh
   SQLite locator. The session manager no longer reuses a previous file-era
   transcript path as the identity for the new session.
-- Plugin runtime no longer exposes `api.runtime.agent.session.resolveSessionFilePath`;
-  plugin code either uses the SQLite row helpers or creates a
-  `sqlite-transcript://...` locator through `session-store-runtime`.
+- Plugin runtime no longer exposes `api.runtime.agent.session.resolveTranscriptLocatorPath`;
+  plugin code uses SQLite row helpers. Any `sqlite-transcript://...` value is a
+  temporary protocol handle derived from session identity.
 - The public `session-store-runtime` SDK surface no longer exports database
   close/reset test helpers; plugin tests import those through the testing SDK
   surface instead.
-- Active-memory blocking subagent runs now pass virtual SQLite transcript
-  locators to embedded agents instead of creating temporary or persisted
-  `session.jsonl` files under plugin state. The old `transcriptDir` option is
-  now a compatibility no-op.
-- One-off slug generation and Crestodian planner runs now use virtual SQLite
-  transcript locators instead of creating temporary `session.jsonl` files.
-  `SessionManager.open()` preserves those locators instead of resolving them as
-  filesystem paths.
+- Active-memory blocking subagent runs use SQLite transcript rows instead of
+  creating temporary or persisted `session.jsonl` files under plugin state. The
+  old `transcriptDir` option is now a compatibility no-op.
+- One-off slug generation and Crestodian planner runs use SQLite transcript rows
+  instead of creating temporary `session.jsonl` files.
 - `llm-task` helper runs and hidden commitment extraction also use SQLite
-  transcript locators, so these model-only helper sessions no longer create
+  transcript rows, so these model-only helper sessions no longer create
   temporary JSON/JSONL transcript files.
-- `TranscriptSessionManager` default create, list, fork, and branch paths now
-  use SQLite transcript locators unless a caller explicitly supplies a legacy
-  transcript directory.
+- `TranscriptSessionManager` default create, list, fork, and branch paths use
+  SQLite transcript rows unless a caller explicitly supplies a legacy transcript
+  directory for doctor/import/debug handling.
 - Parent transcript fork decisions and fork creation no longer accept
   `storePath` or `sessionsDir`; they use `{agentId, sessionId}` SQLite
-  transcript scope and carry canonical SQLite locators instead of retained
-  filesystem path metadata.
+  transcript scope instead of retained filesystem path metadata.
 - Memory-host no longer exports no-op session-directory transcript
   classification helpers; transcript filtering now derives from SQLite row
   metadata during entry construction.
@@ -294,10 +297,10 @@ The remaining cleanup is mostly consolidation and deletion:
   Zalo Personal, QA Channel, Microsoft Teams, Mattermost, Synology Chat, Tlon,
   Twitch, and QQBot recording paths now read updated-at metadata and record
   inbound session rows through SQLite identity.
-- Transcript locator persistence no longer uses `sessions.json` to find a
-  sibling JSONL location. `resolveSessionTranscriptTarget` and
-  `resolveAndPersistSessionTranscriptLocator` derive transcript identity from
-  `agentId`, `sessionId`, and the stored SQLite session row.
+- Transcript locator persistence is removed from active session rows.
+  `resolveSessionTranscriptTarget` derives any temporary boundary handle from
+  `agentId`, `sessionId`, and optional topic metadata; doctor is the only code
+  that imports legacy transcript file names.
 - Cron persistence now reconciles SQLite `cron_jobs` rows instead of
   deleting/reinserting the whole job table on each save. Plugin target
   writebacks update matching cron rows directly and keep runtime cron state in
@@ -319,11 +322,11 @@ The remaining cleanup is mostly consolidation and deletion:
   `src/gateway/session-transcript-readers.ts` instead of the old
   `session-utils.fs` module name. The fallback retry history check is named for
   SQLite transcript content instead of the old file-helper surface.
-- Bootstrap continuation detection now checks SQLite transcript locators through
+- Bootstrap continuation detection now checks SQLite transcript rows through
   `hasCompletedBootstrapTranscriptTurn`; it no longer exposes a file-shaped
   helper name.
-- Embedded-runner tests now use virtual SQLite transcript locators, and opening
-  a new locator without a duplicate `sessionId` uses the locator's session id
+- Embedded-runner tests now use SQLite transcript identity, and opening a new
+  transcript handle without a duplicate `sessionId` uses the handle's session id
   as the database row identity.
 - Memory indexing helpers now use SQLite transcript terminology end to end:
   host exports list/build session transcript entries, targeted sync queues

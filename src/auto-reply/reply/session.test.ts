@@ -320,16 +320,19 @@ beforeEach(() => {
   sessionForkMocks.forkSessionFromParent
     .mockReset()
     .mockImplementation(async ({ parentEntry, agentId }: ForkSessionParamsForTest) => {
-      if (!parentEntry.sessionFile) {
+      if (!parentEntry.sessionId) {
         return null;
       }
-      const sessionsDir = path.dirname(parentEntry.sessionFile);
+      const parentTranscriptLocator = createSqliteSessionTranscriptLocator({
+        agentId,
+        sessionId: parentEntry.sessionId,
+      });
       const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
-      const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+      const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId, sessionId });
       replaceSqliteSessionTranscriptEvents({
         agentId,
         sessionId,
-        transcriptPath: sessionFile,
+        transcriptPath: transcriptLocator,
         events: [
           {
             type: "session",
@@ -337,11 +340,11 @@ beforeEach(() => {
             id: sessionId,
             timestamp: new Date().toISOString(),
             cwd: process.cwd(),
-            parentSession: parentEntry.sessionFile,
+            parentSession: parentTranscriptLocator,
           },
         ],
       });
-      return { sessionId, sessionFile: path.resolve(sessionFile) };
+      return { sessionId, transcriptLocator };
     });
 });
 afterEach(async () => {
@@ -349,13 +352,15 @@ afterEach(async () => {
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
 describe("initSessionState thread forking", () => {
-  it("forks a new session from the parent session file", async () => {
+  it("forks a new session from the parent transcript locator", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-");
-    const transcriptDir = path.join(root, "thread-transcripts");
 
     const parentSessionId = "parent-session";
-    const parentSessionFile = path.join(transcriptDir, "parent.jsonl");
+    const parentTranscriptLocator = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: parentSessionId,
+    });
     const header = {
       type: "session",
       version: 3,
@@ -380,7 +385,7 @@ describe("initSessionState thread forking", () => {
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: parentSessionId,
-      transcriptPath: parentSessionFile,
+      transcriptPath: parentTranscriptLocator,
       events: [header, message, assistantMessage],
     });
 
@@ -389,7 +394,6 @@ describe("initSessionState thread forking", () => {
     await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
       [parentSessionKey]: {
         sessionId: parentSessionId,
-        sessionFile: parentSessionFile,
         updatedAt: Date.now(),
       },
     });
@@ -425,21 +429,19 @@ describe("initSessionState thread forking", () => {
     const parsedHeader = headerEvent.event as {
       parentSession?: string;
     };
-    const expectedParentSession = path.resolve(parentSessionFile);
-    const actualParentSession = parsedHeader.parentSession
-      ? path.resolve(parsedHeader.parentSession)
-      : undefined;
-    expect(actualParentSession).toBe(expectedParentSession);
+    expect(parsedHeader.parentSession).toBe(parentTranscriptLocator);
     warn.mockRestore();
   });
 
   it("forks from parent when thread session key already exists but was not forked yet", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-existing-");
-    const transcriptDir = path.join(root, "thread-transcripts");
 
     const parentSessionId = "parent-session";
-    const parentSessionFile = path.join(transcriptDir, "parent.jsonl");
+    const parentTranscriptLocator = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: parentSessionId,
+    });
     const header = {
       type: "session",
       version: 3,
@@ -464,7 +466,7 @@ describe("initSessionState thread forking", () => {
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: parentSessionId,
-      transcriptPath: parentSessionFile,
+      transcriptPath: parentTranscriptLocator,
       events: [header, message, assistantMessage],
     });
 
@@ -474,7 +476,6 @@ describe("initSessionState thread forking", () => {
     await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
       [parentSessionKey]: {
         sessionId: parentSessionId,
-        sessionFile: parentSessionFile,
         updatedAt: Date.now(),
       },
       [threadSessionKey]: {
@@ -520,7 +521,7 @@ describe("initSessionState thread forking", () => {
     const transcriptDir = path.join(root, "thread-transcripts");
 
     const parentSessionId = "parent-overflow";
-    const parentSessionFile = path.join(transcriptDir, "parent.jsonl");
+    const parentTranscriptLocator = path.join(transcriptDir, "parent.jsonl");
     const header = {
       type: "session",
       version: 3,
@@ -545,7 +546,7 @@ describe("initSessionState thread forking", () => {
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: parentSessionId,
-      transcriptPath: parentSessionFile,
+      transcriptPath: parentTranscriptLocator,
       events: [header, message, assistantMessage],
     });
 
@@ -555,7 +556,6 @@ describe("initSessionState thread forking", () => {
     await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
       [parentSessionKey]: {
         sessionId: parentSessionId,
-        sessionFile: parentSessionFile,
         updatedAt: Date.now(),
         totalTokens: 170_000,
       },
@@ -580,20 +580,21 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     // Session ID should NOT match the parent — it should be a fresh UUID
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
-    // Session file should NOT be the parent's file (it was not forked)
-    expect(result.sessionEntry.sessionFile).not.toBe(parentSessionFile);
+    expect(result.sessionEntry.transcriptLocator).toBeUndefined();
   });
 
   it("skips fork when resolved parent token estimate exceeds threshold", async () => {
     const root = await makeCaseDir("openclaw-thread-session-overflow-estimated-");
-    const transcriptDir = path.join(root, "thread-transcripts");
 
     const parentSessionId = "parent-overflow-estimated";
-    const parentSessionFile = path.join(transcriptDir, "parent.jsonl");
+    const parentTranscriptLocator = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: parentSessionId,
+    });
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: parentSessionId,
-      transcriptPath: parentSessionFile,
+      transcriptPath: parentTranscriptLocator,
       events: [
         {
           type: "session",
@@ -610,7 +611,6 @@ describe("initSessionState thread forking", () => {
     await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
       [parentSessionKey]: {
         sessionId: parentSessionId,
-        sessionFile: parentSessionFile,
         updatedAt: Date.now(),
         totalTokens: 1,
         totalTokensFresh: false,
@@ -642,11 +642,11 @@ describe("initSessionState thread forking", () => {
     });
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
-    expect(result.sessionEntry.sessionFile).not.toBe(parentSessionFile);
+    expect(result.sessionEntry.transcriptLocator).toBeUndefined();
     expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
   });
 
-  it("records topic-specific session files when MessageThreadId is present", async () => {
+  it("keeps topic identity out of active session rows when MessageThreadId is present", async () => {
     await makeCaseDir("openclaw-topic-session-");
 
     const cfg = {
@@ -663,11 +663,10 @@ describe("initSessionState thread forking", () => {
       commandAuthorized: true,
     });
 
-    const sessionFile = requireString(result.sessionEntry.sessionFile, "topic session file");
-    expect(path.basename(sessionFile)).toBe(`${result.sessionEntry.sessionId}-topic-456.jsonl`);
+    expect(result.sessionEntry.transcriptLocator).toBeUndefined();
   });
 
-  it("records topic-specific session files from SessionKey when MessageThreadId is absent", async () => {
+  it("keeps topic identity out of active session rows when derived from SessionKey", async () => {
     await makeCaseDir("openclaw-topic-session-key-");
 
     const cfg = {
@@ -685,8 +684,7 @@ describe("initSessionState thread forking", () => {
         commandAuthorized: true,
       });
 
-      const sessionFile = requireString(result.sessionEntry.sessionFile, "topic session file");
-      expect(path.basename(sessionFile)).toBe(`${result.sessionEntry.sessionId}-topic-456.jsonl`);
+      expect(result.sessionEntry.transcriptLocator).toBeUndefined();
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -837,7 +835,7 @@ describe("initSessionState RawBody", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toEqual([]);
   });
 
   it("rotates local session state for /new on bound ACP sessions", async () => {
@@ -1240,7 +1238,6 @@ describe("initSessionState RawBody", () => {
     const sessionKey = `agent:${agentId}:telegram:12345`;
     const sessionId = "sess-worker-1";
     const transcriptDir = path.join(stateDir, "transcript-fixtures", agentId);
-    const sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
     const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(transcriptDir, agentId);
 
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -1248,7 +1245,6 @@ describe("initSessionState RawBody", () => {
       await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
         [sessionKey]: {
           sessionId,
-          sessionFile,
           updatedAt: Date.now(),
         },
       });
@@ -1267,7 +1263,7 @@ describe("initSessionState RawBody", () => {
       });
 
       expect(result.sessionEntry.sessionId).toBe(sessionId);
-      expect(result.sessionEntry.sessionFile).toBe(sessionFile);
+      expect(result.sessionEntry.transcriptLocator).toBeUndefined();
     } finally {
       vi.unstubAllEnvs();
     }
@@ -1411,7 +1407,7 @@ describe("initSessionState reset policy", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toEqual([]);
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -1508,7 +1504,7 @@ describe("initSessionState reset policy", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toEqual([]);
   });
 
   it("keeps the existing stale session for /reset soft", async () => {
@@ -2548,7 +2544,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     await seedSessionStoreWithOverrides({
       sessionKey,
       sessionId: existingSessionId,
-      overrides: { sessionFile: transcriptPath, verboseLevel: "on" },
+      overrides: { transcriptLocator: transcriptPath, verboseLevel: "on" },
     });
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
@@ -2600,7 +2596,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
         [sessionKey]: {
           sessionId: existingSessionId,
-          sessionFile: transcriptPath,
+          transcriptLocator: transcriptPath,
           updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
         },
       });
@@ -2656,7 +2652,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
         [sessionKey]: {
           sessionId: existingSessionId,
-          sessionFile: transcriptPath,
+          transcriptLocator: transcriptPath,
           updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
           modelProvider: "claude-cli",
           model: "claude-opus-4-6",

@@ -10,10 +10,8 @@ import {
 import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
 import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js";
 import {
-  createSqliteSessionTranscriptLocator,
   getSessionEntry,
   mergeSessionEntry,
-  parseSqliteSessionTranscriptLocator,
   type SessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions.js";
@@ -22,8 +20,7 @@ import { resolveStableSessionEndTranscript } from "../../gateway/session-transcr
 import { logVerbose } from "../../globals.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { DEFAULT_AGENT_ID, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 
@@ -71,7 +68,6 @@ function emitCompactionSessionLifecycleHooks(params: {
   if (hookRunner.hasHooks("session_end")) {
     const transcript = resolveStableSessionEndTranscript({
       sessionId: params.previousEntry.sessionId,
-      sessionFile: params.previousEntry.sessionFile,
       agentId: resolveAgentIdFromSessionKey(params.sessionKey),
     });
     const payload = buildSessionEndHookPayload({
@@ -79,7 +75,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       sessionKey: params.sessionKey,
       cfg: params.cfg,
       reason: "compaction",
-      sessionFile: transcript.sessionFile,
+      transcriptLocator: transcript.transcriptLocator,
       nextSessionId: params.nextEntry.sessionId,
     });
     void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {
@@ -232,8 +228,8 @@ export async function incrementCompactionCount(params: {
   tokensAfter?: number;
   /** Session id after compaction, when the runtime rotated transcripts. */
   newSessionId?: string;
-  /** Session file after compaction, when the runtime rotated transcripts. */
-  newSessionFile?: string;
+  /** External transcript handle after compaction; not persisted on the session row. */
+  newTranscriptLocator?: string;
 }): Promise<number | undefined> {
   const {
     sessionEntry,
@@ -244,7 +240,6 @@ export async function incrementCompactionCount(params: {
     amount = 1,
     tokensAfter,
     newSessionId,
-    newSessionFile,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -260,27 +255,13 @@ export async function incrementCompactionCount(params: {
     compactionCount: nextCount,
     updatedAt: now,
   };
-  const explicitNewSessionFile = normalizeOptionalString(newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
-  const sessionFileChanged = Boolean(
-    explicitNewSessionFile && explicitNewSessionFile !== entry.sessionFile,
-  );
   if (sessionIdChanged && newSessionId) {
     updates.sessionId = newSessionId;
-    updates.sessionFile =
-      explicitNewSessionFile ??
-      resolveCompactionSessionFile({
-        entry,
-        sessionKey,
-        cfg,
-        newSessionId,
-      });
     updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     updates.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
     );
-  } else if (sessionFileChanged && explicitNewSessionFile) {
-    updates.sessionFile = explicitNewSessionFile;
   }
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
   const tokensAfterCompaction = resolvePositiveTokenCount(tokensAfter);
@@ -309,7 +290,7 @@ export async function incrementCompactionCount(params: {
       }),
     });
   }
-  if ((sessionIdChanged || sessionFileChanged) && cfg) {
+  if (sessionIdChanged && cfg) {
     emitCompactionSessionLifecycleHooks({
       cfg,
       sessionKey,
@@ -318,30 +299,4 @@ export async function incrementCompactionCount(params: {
     });
   }
   return nextCount;
-}
-
-function resolveCompactionSessionFile(params: {
-  entry: SessionEntry;
-  sessionKey: string;
-  cfg?: OpenClawConfig;
-  newSessionId: string;
-}): string {
-  const agentId =
-    resolveAgentIdFromSessionKey(params.sessionKey) ??
-    (params.cfg
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : undefined);
-  return createSqliteSessionTranscriptLocator({
-    agentId: agentId ?? DEFAULT_AGENT_ID,
-    sessionId: params.newSessionId,
-    topicId: extractSqliteTranscriptTopicId(params.entry.sessionFile, params.entry.sessionId),
-  });
-}
-
-function extractSqliteTranscriptTopicId(
-  locator: string | undefined,
-  previousSessionId: string,
-): string | undefined {
-  const parsed = locator ? parseSqliteSessionTranscriptLocator(locator) : undefined;
-  return parsed?.sessionId === previousSessionId ? parsed.topicId : undefined;
 }

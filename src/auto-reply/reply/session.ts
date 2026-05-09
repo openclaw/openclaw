@@ -20,7 +20,7 @@ import {
   type SessionFreshness,
 } from "../../config/sessions/reset.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { resolveAndPersistSessionTranscriptLocator } from "../../config/sessions/session-locator.js";
+import { resolveAndPersistSessionTranscriptIdentity } from "../../config/sessions/session-locator.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -707,28 +707,20 @@ export async function initSessionState(params: {
       if (forked) {
         sessionId = forked.sessionId;
         sessionEntry.sessionId = forked.sessionId;
-        sessionEntry.sessionFile = forked.sessionFile;
         sessionEntry.forkedFromParent = true;
-        log.warn(`forked session created: transcript=${forked.sessionFile}`);
+        log.warn(`forked session created: sessionId=${forked.sessionId}`);
       }
     }
   }
   const threadIdFromSessionKey = parseSessionThreadInfoFast(
     sessionCtxForState.SessionKey ?? sessionKey,
   ).threadId;
-  const fallbackTranscriptLocator = !sessionEntry.sessionFile
-    ? createSqliteSessionTranscriptLocator({
-        sessionId: sessionEntry.sessionId,
-        agentId,
-        topicId: ctx.MessageThreadId ?? threadIdFromSessionKey,
-      })
-    : undefined;
-  const resolvedTranscript = await resolveAndPersistSessionTranscriptLocator({
+  const resolvedTranscript = await resolveAndPersistSessionTranscriptIdentity({
     sessionId: sessionEntry.sessionId,
     sessionKey,
     sessionEntry,
     agentId,
-    fallbackTranscriptLocator,
+    topicId: ctx.MessageThreadId ?? threadIdFromSessionKey,
   });
   sessionEntry = resolvedTranscript.sessionEntry;
   if (isNewSession) {
@@ -762,12 +754,11 @@ export async function initSessionState(params: {
 
   // Resolve the previous transcript before rotating session metadata.
   let previousSessionTranscript: {
-    sessionFile?: string;
+    transcriptLocator?: string;
   } = {};
   if (previousSessionEntry?.sessionId) {
     previousSessionTranscript = resolveStableSessionEndTranscript({
       sessionId: previousSessionEntry.sessionId,
-      sessionFile: previousSessionEntry.sessionFile,
       agentId,
     });
     await retireSessionMcpRuntime({
@@ -782,7 +773,7 @@ export async function initSessionState(params: {
     await resetRegisteredAgentHarnessSessions({
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
-      sessionFile: previousSessionEntry.sessionFile,
+      transcriptLocator: previousSessionTranscript.transcriptLocator,
       reason: previousSessionEndReason ?? "unknown",
     });
     void closeTrackedBrowserTabsForSessions({
@@ -823,7 +814,7 @@ export async function initSessionState(params: {
           sessionKey,
           cfg,
           reason: previousSessionEndReason,
-          sessionFile: previousSessionTranscript.sessionFile,
+          transcriptLocator: previousSessionTranscript.transcriptLocator,
           nextSessionId: effectiveSessionId,
         });
         void hookRunner.runSessionEnd(payload.event, payload.context).catch(() => {});

@@ -47,10 +47,24 @@ function parseSessionEntry(row: SessionEntryRow): SessionEntry | null {
     }
     const store = { [row.session_key]: parsed as SessionEntry };
     normalizeSessionStore(store);
-    return store[row.session_key] ?? null;
+    return stripDerivedTranscriptLocator(store[row.session_key] ?? null);
   } catch {
     return null;
   }
+}
+
+function stripDerivedTranscriptLocator(entry: SessionEntry | null): SessionEntry | null {
+  if (!entry) {
+    return null;
+  }
+  const { transcriptLocator: _derivedTranscriptLocator, ...rest } = entry;
+  return rest;
+}
+
+function serializeSessionEntry(sessionKey: string, entry: SessionEntry): string {
+  const store = { [sessionKey]: entry };
+  normalizeSessionStore(store);
+  return JSON.stringify(stripDerivedTranscriptLocator(store[sessionKey] ?? entry) ?? entry);
 }
 
 function bindSessionEntry(params: {
@@ -60,15 +74,13 @@ function bindSessionEntry(params: {
 }): Insertable<SessionEntriesTable> {
   return {
     session_key: params.sessionKey,
-    entry_json: JSON.stringify(params.entry),
+    entry_json: serializeSessionEntry(params.sessionKey, params.entry),
     updated_at: params.entry.updatedAt ?? params.updatedAt,
   };
 }
 
 function serializeExpectedSessionEntry(sessionKey: string, entry: SessionEntry): string {
-  const store = { [sessionKey]: entry };
-  normalizeSessionStore(store);
-  return JSON.stringify(store[sessionKey] ?? entry);
+  return serializeSessionEntry(sessionKey, entry);
 }
 
 function upsertSessionEntries(
