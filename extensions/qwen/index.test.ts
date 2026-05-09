@@ -1,6 +1,6 @@
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { QWEN_36_PLUS_MODEL_ID, QWEN_BASE_URL } from "./api.js";
+import { QWEN_BASE_URL } from "./api.js";
 import qwenPlugin from "./index.js";
 
 async function registerQwenProvider() {
@@ -9,18 +9,19 @@ async function registerQwenProvider() {
 }
 
 describe("qwen provider plugin", () => {
-  it("keeps qwen3.6-plus out of Coding Plan normalized catalogs", async () => {
+  it("no longer filters qwen3.6-plus from Coding Plan catalogs", async () => {
     const provider = await registerQwenProvider();
 
     const normalized = provider.normalizeConfig?.({
       provider: "qwen",
       providerConfig: {
         baseUrl: QWEN_BASE_URL,
-        models: [{ id: "qwen3.5-plus" }, { id: QWEN_36_PLUS_MODEL_ID }],
+        models: [{ id: "qwen3.5-plus" }, { id: "qwen3.6-plus" }],
       },
     } as never);
 
-    expect(normalized?.models?.map((model) => model.id)).toEqual(["qwen3.5-plus"]);
+    // normalizeConfig no longer filters; returns undefined for unchanged configs
+    expect(normalized).toBeUndefined();
   });
 
   it("does not expose runtime model suppression hooks", async () => {
