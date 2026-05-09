@@ -37,6 +37,32 @@ describe("guardSessionManager integration", () => {
     ]);
   });
 
+  it("uses Codex-style aborted synthetic results for interrupted Responses tool calls", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      allowSyntheticToolResults: true,
+      missingToolResultText: "aborted",
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    appendMessage(assistantToolCall("call_responses_1"));
+    appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "interrupting prompt" }],
+      timestamp: Date.now(),
+    } as AgentMessage);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect((messages[1] as { toolCallId?: string }).toolCallId).toBe("call_responses_1");
+    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toBe(
+      "aborted",
+    );
+  });
+
   it("redacts configured text patterns before persisting transcript messages", () => {
     const cfg = {
       logging: {
