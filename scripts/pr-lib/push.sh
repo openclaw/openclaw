@@ -124,8 +124,12 @@ GRAPHQL
     }}')
   rm -f "$additions_file" "$deletions_file"
 
+  local payload
+  payload=$(jq -n --arg query "$query" --argjson variables "$variables" \
+    '{query: $query, variables: $variables}')
+
   local result
-  result=$(gh api graphql -f query="$query" --input - <<< "$variables" 2>&1) || {
+  result=$(gh api graphql --input - <<< "$payload" 2>&1) || {
     echo "GraphQL push failed: $result" >&2
     return 1
   }
