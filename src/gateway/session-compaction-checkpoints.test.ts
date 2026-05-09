@@ -362,27 +362,9 @@ describe("session-compaction-checkpoints", () => {
     });
   });
 
-  test("async fork ignores legacy checkpoint files that doctor has not imported", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-legacy-fork-"));
-    tempDirs.push(dir);
-
-    const legacySessionFile = path.join(dir, "legacy.jsonl");
-    await fs.writeFile(
-      legacySessionFile,
-      [
-        JSON.stringify({
-          type: "session",
-          id: "legacy-session",
-          timestamp: new Date(0).toISOString(),
-          cwd: dir,
-        }),
-        "",
-      ].join("\n"),
-      "utf-8",
-    );
-
+  test("async fork ignores legacy checkpoint locators that doctor has not imported", async () => {
     const forked = await forkCompactionCheckpointTranscriptAsync({
-      sourceFile: legacySessionFile,
+      sourceFile: path.join(os.tmpdir(), "openclaw-unimported-legacy-session.jsonl"),
     });
 
     expect(forked).toBeNull();
