@@ -1,12 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { applyAcpRuntimeOverlay } from "./acp-runtime-overlay.js";
+import { applyAcpRuntimeOverlay, type AgentRuntimeMetadata } from "./acp-runtime-overlay.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 
-export type AgentRuntimeMetadata = {
-  id: string;
-  source: "implicit" | "model" | "provider" | "session-key";
-};
+export type { AgentRuntimeMetadata };
 
 export function resolveAgentRuntimeMetadata(
   _cfg: OpenClawConfig,
