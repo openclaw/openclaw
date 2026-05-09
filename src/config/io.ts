@@ -198,6 +198,13 @@ export type ConfigWriteOptions = {
    */
   unsetPaths?: string[][];
   /**
+   * Paths that were explicitly set by the caller. Values at these paths are
+   * persisted even when they equal the runtime default, preventing silent data
+   * loss when `config set` is used to anchor schema-required fields at their
+   * default values (issue #79856).
+   */
+  explicitSetPaths?: readonly (readonly string[])[];
+  /**
    * Internal fast path for callers that already hold a fresh config snapshot.
    * Avoids rereading the full config just to prepare an immediate write.
    */
@@ -1992,6 +1999,7 @@ export function createConfigIO(
         nextConfig: cfg,
         rootAuthoredConfig: snapshot.parsed,
         unsetPaths,
+        explicitSetPaths: options.explicitSetPaths,
       });
       try {
         const resolvedIncludes = resolveConfigIncludes(
