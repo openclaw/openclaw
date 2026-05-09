@@ -3,7 +3,6 @@ import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
-import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
@@ -67,21 +66,12 @@ function resolveHeartbeatContext(runId: string, sourceRunId?: string) {
 
 /**
  * Check if heartbeat ACK/noise should be hidden from interactive chat surfaces.
+ * webchat is not a deliverable channel — HEARTBEAT_OK is always suppressed from
+ * the streaming UI regardless of showOk (which gates external channel delivery only).
  */
 function shouldHideHeartbeatChatOutput(runId: string, sourceRunId?: string): boolean {
   const runContext = resolveHeartbeatContext(runId, sourceRunId);
-  if (!runContext?.isHeartbeat) {
-    return false;
-  }
-
-  try {
-    const cfg = getRuntimeConfig();
-    const visibility = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
-    return !visibility.showOk;
-  } catch {
-    // Default to suppressing if we can't load config
-    return true;
-  }
+  return Boolean(runContext?.isHeartbeat);
 }
 
 function normalizeHeartbeatChatFinalText(params: {

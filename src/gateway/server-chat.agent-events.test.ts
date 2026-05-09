@@ -1668,6 +1668,40 @@ describe("agent event handler", () => {
     );
   });
 
+  it("suppresses heartbeat HEARTBEAT_OK from webchat even when showOk is true (#79735)", () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      agents: { defaults: { heartbeat: {} } },
+      channels: { defaults: { heartbeat: { showOk: true } } },
+    });
+
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({ now: 4_000 });
+    chatRunState.registry.add("run-heartbeat-showok", {
+      sessionKey: "session-heartbeat-showok",
+      clientRunId: "client-heartbeat-showok",
+    });
+    registerAgentRunContext("run-heartbeat-showok", {
+      sessionKey: "session-heartbeat-showok",
+      isHeartbeat: true,
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-heartbeat-showok",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "HEARTBEAT_OK" },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
+
+    emitLifecycleEnd(handler, "run-heartbeat-showok");
+
+    const finalPayload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
+    expect(finalPayload.message).toBeUndefined();
+  });
+
   describe("spawnedBy enrichment in chat and agent broadcasts", () => {
     it("includes spawnedBy in chat delta broadcasts for subagent sessions", () => {
       vi.mocked(loadGatewaySessionRow).mockReturnValue({
