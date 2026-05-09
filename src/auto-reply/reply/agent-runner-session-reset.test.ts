@@ -49,7 +49,6 @@ describe("resetReplyRunSession", () => {
   });
 
   it("rotates the session and clears stale runtime and fallback fields", async () => {
-    const transcriptDir = path.join(rootDir, "transcript-fixtures", "main");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
@@ -117,7 +116,6 @@ describe("resetReplyRunSession", () => {
   });
 
   it("rotates from the SQLite row when no in-memory store is available", async () => {
-    const transcriptDir = path.join(rootDir, "transcript-fixtures", "main");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
