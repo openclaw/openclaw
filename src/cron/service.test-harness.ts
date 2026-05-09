@@ -69,8 +69,15 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
   return { makeStorePath, makeStoreKey };
 }
 
-export async function writeCronStoreSnapshot(params: { storePath?: string; jobs: CronJob[] }) {
-  await saveCronStore(params.storePath ?? "default", { version: 1, jobs: params.jobs });
+export async function writeCronStoreSnapshot(params: {
+  storeKey?: string;
+  storePath?: string;
+  jobs: CronJob[];
+}) {
+  await saveCronStore(params.storeKey ?? params.storePath ?? "default", {
+    version: 1,
+    jobs: params.jobs,
+  });
 }
 
 export function installCronTestHooks(options: {

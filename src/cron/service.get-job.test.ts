@@ -7,12 +7,12 @@ import {
 } from "./service.test-harness.js";
 
 const logger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-get-job-" });
+const { makeStoreKey } = createCronStoreHarness({ prefix: "openclaw-cron-get-job-" });
 installCronTestHooks({ logger });
 
-function createCronService(storePath: string, cronEnabled = true) {
+function createCronService(storeKey: string) {
   return new CronService({
-    storeKey: storePath,
+    storeKey,
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
@@ -23,8 +23,8 @@ function createCronService(storePath: string, cronEnabled = true) {
 
 describe("CronService.getJob", () => {
   it("returns added jobs and undefined for missing ids", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createCronService(storePath);
+    const { storeKey } = await makeStoreKey();
+    const cron = createCronService(storeKey);
     await cron.start();
 
     try {
@@ -46,8 +46,8 @@ describe("CronService.getJob", () => {
   });
 
   it("preserves webhook delivery on create", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createCronService(storePath);
+    const { storeKey } = await makeStoreKey();
+    const cron = createCronService(storeKey);
     await cron.start();
 
     try {

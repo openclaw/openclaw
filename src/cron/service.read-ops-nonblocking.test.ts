@@ -1,10 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { CronService } from "./service.js";
-import { writeCronStoreSnapshot } from "./service.test-harness.js";
+import { createCronStoreHarness, writeCronStoreSnapshot } from "./service.test-harness.js";
 
 const noopLogger = {
   debug: vi.fn(),
@@ -12,6 +8,7 @@ const noopLogger = {
   warn: vi.fn(),
   error: vi.fn(),
 };
+const { makeStoreKey } = createCronStoreHarness();
 
 type IsolatedRunResult = {
   status: "ok" | "error" | "skipped";
@@ -33,35 +30,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
       clearTimeout(timeout);
     }
   }
-}
-
-async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
-  const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(dir, "state");
-  return {
-    storePath: path.join(dir, "cron", "jobs.json"),
-    cleanup: async () => {
-      closeOpenClawStateDatabaseForTest();
-      if (originalOpenClawStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
-      }
-      // On macOS, teardown can race with trailing async fs writes and leave
-      // transient ENOTEMPTY/EBUSY errors; let fs.rm handle retries natively.
-      try {
-        await fs.rm(dir, {
-          recursive: true,
-          force: true,
-          maxRetries: 10,
-          retryDelay: 10,
-        });
-      } catch {
-        await fs.rm(dir, { recursive: true, force: true });
-      }
-    },
-  };
 }
 
 function createDeferredIsolatedRun() {
@@ -101,7 +69,7 @@ describe("CronService read ops while job is running", () => {
   it("keeps list and status responsive during a long isolated run", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     let resolveFinished: (() => void) | undefined;
@@ -112,7 +80,7 @@ describe("CronService read ops while job is running", () => {
     const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
-      storeKey: store.storePath,
+      storeKey: store.storeKey,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
@@ -151,7 +119,7 @@ describe("CronService read ops while job is running", () => {
 
       await expect(cron.list({ includeDisabled: true })).resolves.toHaveLength(1);
       await expect(cron.status()).resolves.toEqual(
-        expect.objectContaining({ enabled: true, storeKey: store.storePath }),
+        expect.objectContaining({ enabled: true, storeKey: store.storeKey }),
       );
 
       const running = await cron.list({ includeDisabled: true });
@@ -167,7 +135,7 @@ describe("CronService read ops while job is running", () => {
       const completed = await cron.list({ includeDisabled: true });
       expect(completed[0]?.state.lastStatus).toBe("ok");
 
-      // Ensure the scheduler loop has fully settled before deleting the store directory.
+      // Ensure the scheduler loop has fully settled before the next test case reuses the DB.
       const internal = cron as unknown as { state?: { running?: boolean } };
       for (let i = 0; i < 100; i += 1) {
         if (!internal.state?.running) {
@@ -180,18 +148,17 @@ describe("CronService read ops while job is running", () => {
       cron.stop();
       vi.clearAllTimers();
       vi.useRealTimers();
-      await store.cleanup();
     }
   });
 
   it("keeps list and status responsive during manual cron.run execution", async () => {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
-      storeKey: store.storePath,
+      storeKey: store.storeKey,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
@@ -222,7 +189,7 @@ describe("CronService read ops while job is running", () => {
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during cron.run"),
       ).resolves.toHaveLength(1);
       await expect(withTimeout(cron.status(), 300, "cron.status during cron.run")).resolves.toEqual(
-        expect.objectContaining({ enabled: true, storeKey: store.storePath }),
+        expect.objectContaining({ enabled: true, storeKey: store.storeKey }),
       );
 
       isolatedRun.completeRun({ status: "ok", summary: "manual done" });
@@ -233,17 +200,17 @@ describe("CronService read ops while job is running", () => {
       expect(completed[0]?.state.runningAtMs).toBeUndefined();
     } finally {
       cron.stop();
-      await store.cleanup();
     }
   });
 
   it("keeps list and status responsive after startup defers catch-up runs", async () => {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
     await writeCronStoreSnapshot({
+      storeKey: store.storeKey,
       jobs: [
         {
           id: "startup-catchup",
@@ -264,7 +231,7 @@ describe("CronService read ops while job is running", () => {
     const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
-      storeKey: store.storePath,
+      storeKey: store.storeKey,
       cronEnabled: true,
       log: noopLogger,
       nowMs: () => nowMs,
@@ -282,7 +249,7 @@ describe("CronService read ops while job is running", () => {
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during startup"),
       ).resolves.toHaveLength(1);
       await expect(withTimeout(cron.status(), 300, "cron.status during startup")).resolves.toEqual(
-        expect.objectContaining({ enabled: true, storeKey: store.storePath }),
+        expect.objectContaining({ enabled: true, storeKey: store.storeKey }),
       );
 
       const jobs = await cron.list({ includeDisabled: true });
@@ -291,7 +258,6 @@ describe("CronService read ops while job is running", () => {
       expect(jobs[0]?.state.nextRunAtMs).toBe(nowMs + 120_000);
     } finally {
       cron.stop();
-      await store.cleanup();
     }
   });
 });
