@@ -797,7 +797,9 @@ Move these into agent databases:
 - Trajectory sidecars when they are not explicit export files. Done for runtime
   writes: trajectory capture writes agent-database `trajectory_runtime_events`
   rows and mirrors run-scoped artifacts into SQLite. Legacy sidecars remain
-  readable only as export/migration compatibility input.
+  readable only as export/migration compatibility input. Runtime trajectory
+  capture exposes a SQLite runtime locator; JSONL path helpers are isolated to
+  legacy export/debug support and are not re-exported from the runtime module.
 
 Keep these file-backed for now:
 
