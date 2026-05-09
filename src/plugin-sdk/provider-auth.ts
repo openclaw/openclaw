@@ -232,6 +232,7 @@ export async function resolveCopilotApiToken(params: {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${params.githubToken}`,
+      "Copilot-Integration-Id": "vscode-chat",
       ...buildCopilotIdeHeaders({ includeApiVersion: true }),
     },
   });

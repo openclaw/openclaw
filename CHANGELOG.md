@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- GitHub Copilot: include `Copilot-Integration-Id: vscode-chat` in the `/v2/token` exchange request so the issued API token carries `vscode-chat` scope; without it GitHub issued a restricted `copilot-language-server` token that rejected image tool model requests with HTTP 400. Fixes #79946. Thanks @hclsys.
 - ACP sessions: map canonical runtime options to backend-advertised ACP config keys like Claude's `effort` while keeping persisted OpenClaw state canonical. (#79926) Thanks @InTheCloudDan.
 - Gateway/watch: rebuild or restage missing bundled-plugin dist and runtime-postbuild outputs before launching the Gateway from a source checkout, preventing incomplete watch-mode runtime trees. (#70805) Thanks @rubencu.
 - CLI/update: allow restart health probes from the previous gateway protocol during self-update, and make plugin dry-runs report exact npm target versions instead of `unknown` while preserving unchanged status.
