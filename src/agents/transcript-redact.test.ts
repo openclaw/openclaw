@@ -69,6 +69,48 @@ describe("redactTranscriptMessage", () => {
     expect(msgContent(result) as string).not.toContain("sk-abcdef1234567890xyz");
   });
 
+  it("redacts documented transcript text fields on content-less message types", () => {
+    const msg = {
+      role: "bashExecution",
+      command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
+      output: "failed with sk-abcdef1234567890xyz",
+      exitCode: 1,
+      cancelled: false,
+      truncated: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      command: string;
+      output: string;
+    };
+    expect(result.command).not.toContain("sk-abcdef1234567890xyz");
+    expect(result.output).not.toContain("sk-abcdef1234567890xyz");
+  });
+
+  it("redacts assistant error and summary transcript fields", () => {
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "safe" }],
+      errorMessage: "provider rejected sk-abcdef1234567890xyz",
+    } as unknown as AgentMessage;
+    const summary = {
+      role: "compactionSummary",
+      summary: "summary mentions sk-abcdef1234567890xyz",
+      tokensBefore: 10,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const assistantResult = redactTranscriptMessage(assistant, cfg("tools")) as unknown as {
+      errorMessage: string;
+    };
+    const summaryResult = redactTranscriptMessage(summary, cfg("tools")) as unknown as {
+      summary: string;
+    };
+    expect(assistantResult.errorMessage).not.toContain("sk-abcdef1234567890xyz");
+    expect(summaryResult.summary).not.toContain("sk-abcdef1234567890xyz");
+  });
+
   it("redacts using custom pattern", () => {
     const msg = textMessage("email peter@dc.io ok");
     const result = redactTranscriptMessage(msg, cfg("tools", [EMAIL_PATTERN]));

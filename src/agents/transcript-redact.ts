@@ -58,11 +58,26 @@ function redactTranscriptContent(content: unknown, cfg?: OpenClawConfig): unknow
 export function redactTranscriptMessage(message: AgentMessage, cfg?: OpenClawConfig): AgentMessage {
   const source = message as unknown as Record<string, unknown>;
   const redactedContent = redactTranscriptContent(source.content, cfg);
-  if (redactedContent === source.content) {
-    return message;
+  let next: Record<string, unknown> | null = null;
+  const assignStringField = (key: string) => {
+    const value = source[key];
+    if (typeof value !== "string") {
+      return;
+    }
+    const redacted = redactTranscriptText(value, cfg);
+    if (redacted === value) {
+      return;
+    }
+    next ??= { ...source };
+    next[key] = redacted;
+  };
+  if (redactedContent !== source.content) {
+    next ??= { ...source };
+    next.content = redactedContent;
   }
-  return {
-    ...source,
-    content: redactedContent,
-  } as unknown as AgentMessage;
+  assignStringField("command");
+  assignStringField("output");
+  assignStringField("summary");
+  assignStringField("errorMessage");
+  return (next ?? message) as unknown as AgentMessage;
 }
