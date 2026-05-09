@@ -484,6 +484,10 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
 - CLI backends are text-first; tools are always disabled.
 - Sessions supported when `sessionArg` is set.
 - Image pass-through supported when `imageArg` accepts file paths.
+- `reseedFromRawTranscriptWhenUncompacted: true` lets a backend recover safe
+  invalidated sessions from a bounded raw OpenClaw transcript tail before the
+  first compaction summary exists. Auth profile or credential-epoch changes
+  still never raw-reseed.
 
 ### `agents.defaults.systemPromptOverride`
 

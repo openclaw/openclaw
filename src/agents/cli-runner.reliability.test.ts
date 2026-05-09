@@ -839,27 +839,32 @@ describe("runCliAgent reliability", () => {
     );
 
     try {
-      await expect(
-        runPreparedCliAgent({
+      const result = await runPreparedCliAgent({
+        ...buildPreparedContext({
+          sessionKey: "agent:main:main",
+          runId: "run-retry-success",
+          cliSessionId: "thread-123",
+          openClawHistoryPrompt:
+            "Continue this conversation using the OpenClaw transcript below.\n\nUser: recovered history\n\n<next_user_message>\nhi\n</next_user_message>",
+        }),
+        params: {
           ...buildPreparedContext({
             sessionKey: "agent:main:main",
             runId: "run-retry-success",
             cliSessionId: "thread-123",
-          }),
-          params: {
-            ...buildPreparedContext({
-              sessionKey: "agent:main:main",
-              runId: "run-retry-success",
-              cliSessionId: "thread-123",
-            }).params,
-            agentId: "main",
-            sessionFile,
-            workspaceDir: dir,
-          },
-        }),
-      ).resolves.toMatchObject({
+            openClawHistoryPrompt:
+              "Continue this conversation using the OpenClaw transcript below.\n\nUser: recovered history\n\n<next_user_message>\nhi\n</next_user_message>",
+          }).params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+        },
+      });
+
+      expect(result).toMatchObject({
         payloads: [{ text: "recovered output" }],
       });
+      expect(result.meta.finalPromptText).toContain("User: recovered history");
 
       await vi.waitFor(() => {
         expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);

@@ -150,6 +150,8 @@ export type CliBackendConfig = {
   imagePathScope?: "temp" | "workspace";
   /** Serialize runs for this CLI. */
   serialize?: boolean;
+  /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
+  reseedFromRawTranscriptWhenUncompacted?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
     /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */

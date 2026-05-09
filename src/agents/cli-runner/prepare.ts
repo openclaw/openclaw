@@ -406,18 +406,27 @@ export async function prepareCliRunContext(
     cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
   }
   preparedPrompt = annotateInterSessionPromptText(preparedPrompt, params.inputProvenance);
-  const openClawHistoryPrompt = reusableCliSession.sessionId
-    ? undefined
-    : buildCliSessionHistoryPrompt({
+  const allowRawTranscriptReseed =
+    backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
+  const rawTranscriptReseedReason = reusableCliSession.sessionId
+    ? "session-expired"
+    : reusableCliSession.invalidatedReason;
+  const shouldPrepareOpenClawHistoryPrompt =
+    !reusableCliSession.sessionId || allowRawTranscriptReseed;
+  const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
+    ? buildCliSessionHistoryPrompt({
         messages: await loadCliSessionReseedMessages({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           config: params.config,
+          allowRawTranscriptReseed,
+          rawTranscriptReseedReason,
         }),
         prompt: preparedPrompt,
-      });
+      })
+    : undefined;
   systemPrompt = appendModelIdentitySystemPrompt({
     systemPrompt: applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input),
     model: modelDisplay,
