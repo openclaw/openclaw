@@ -165,12 +165,10 @@ function canBridgeNoDeviceChatApprovalFromBackend(params: {
     matchesRequiredString({
       expected: plan?.sessionKey ?? request.sessionKey,
       actual: params.rawParams.sessionKey,
-      lowercase: true,
     }) &&
     matchesOptionalString({
       expected: plan?.agentId ?? request.agentId,
       actual: params.rawParams.agentId,
-      lowercase: true,
     }) &&
     matchesOptionalString({
       expected: request.turnSourceAccountId,

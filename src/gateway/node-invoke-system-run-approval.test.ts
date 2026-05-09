@@ -708,6 +708,54 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
   });
 
+  test("rejects trusted backend chat replay when session binding casing changes", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "main",
+        sessionKey: "agent:MAIN:telegram:direct:12345",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(makeChatRecord()),
+      nowMs: now,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("rejects trusted backend chat replay when agent binding casing changes", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "Main",
+        sessionKey: "agent:main:telegram:direct:12345",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(makeChatRecord()),
+      nowMs: now,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
   test("rejects trusted backend chat replay when channel target changes", () => {
     const result = sanitizeSystemRunParamsForForwarding({
       rawParams: {
