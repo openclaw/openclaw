@@ -172,6 +172,11 @@ describe("agentCliCommand", () => {
       const request = requireFirstCallArg(callGateway, "gateway") as {
         params?: Record<string, unknown>;
       };
+      expect(request).toMatchObject({
+        clientName: "cli",
+        mode: "cli",
+      });
+      expect(request).not.toHaveProperty("scopes");
       expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
@@ -222,6 +227,11 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(request).toMatchObject({
+        clientName: "gateway-client",
+        mode: "backend",
+        scopes: ["operator.admin"],
+      });
       const params = requireRecord(request.params, "gateway request params");
       expect(params.model).toBe("ollama/qwen3.5:9b");
     });
