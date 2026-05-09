@@ -1,10 +1,12 @@
 import {
+  getSessionEntry,
   mergeSessionEntry,
   setSessionRuntimeModel,
   type SessionEntry,
-  updateSessionStore,
+  upsertSessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
@@ -45,12 +47,33 @@ function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntr
   return next;
 }
 
-export async function updateSessionStoreAfterAgentRun(params: {
+function persistMergedSessionEntry(params: {
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  patch: SessionEntry;
+}): SessionEntry {
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  if (!agentId) {
+    throw new Error(
+      `Session stores are SQLite-only; cannot resolve agent for ${params.sessionKey}`,
+    );
+  }
+  const existing = getSessionEntry({ agentId, sessionKey: params.sessionKey });
+  const merged = mergeSessionEntry(existing, params.patch);
+  upsertSessionEntry({
+    agentId,
+    sessionKey: params.sessionKey,
+    entry: merged,
+  });
+  params.sessionStore[params.sessionKey] = merged;
+  return merged;
+}
+
+export async function updateSessionEntryAfterAgentRun(params: {
   cfg: OpenClawConfig;
   contextTokensOverride?: number;
   sessionId: string;
   sessionKey: string;
-  storePath: string;
   sessionStore: Record<string, SessionEntry>;
   defaultProvider: string;
   defaultModel: string;
@@ -70,7 +93,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
     cfg,
     sessionId,
     sessionKey,
-    storePath,
     sessionStore,
     defaultProvider,
     defaultModel,
@@ -228,21 +250,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
   const metadataPatch = removeLifecycleStateFromMetadataPatch(next);
-  const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
-    store[sessionKey] = merged;
-    return merged;
+  persistMergedSessionEntry({
+    sessionKey,
+    sessionStore,
+    patch: metadataPatch,
   });
-  sessionStore[sessionKey] = persisted;
 }
 
-export async function clearCliSessionInStore(params: {
+export async function clearCliSessionEntry(params: {
   provider: string;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
-  storePath: string;
 }): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath } = params;
+  const { provider, sessionKey, sessionStore } = params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
@@ -252,22 +272,19 @@ export async function clearCliSessionInStore(params: {
   clearCliSession(next, provider);
   next.updatedAt = Date.now();
 
-  const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], next);
-    store[sessionKey] = merged;
-    return merged;
+  return persistMergedSessionEntry({
+    sessionKey,
+    sessionStore,
+    patch: next,
   });
-  sessionStore[sessionKey] = persisted;
-  return persisted;
 }
 
-export async function recordCliCompactionInStore(params: {
+export async function recordCliCompactionInSessionEntry(params: {
   provider: string;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
-  storePath: string;
 }): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath } = params;
+  const { provider, sessionKey, sessionStore } = params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
@@ -278,11 +295,9 @@ export async function recordCliCompactionInStore(params: {
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();
 
-  const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], next);
-    store[sessionKey] = merged;
-    return merged;
+  return persistMergedSessionEntry({
+    sessionKey,
+    sessionStore,
+    patch: next,
   });
-  sessionStore[sessionKey] = persisted;
-  return persisted;
 }
