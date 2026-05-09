@@ -43,7 +43,9 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
       },
     });
 
-    expect(client.headers).toMatchObject({
+    expect(client.headers).toEqual({
+      Authorization: "Bearer sk-test",
+      "Content-Type": "application/json",
       originator: "openclaw",
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
