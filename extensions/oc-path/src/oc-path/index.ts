@@ -35,9 +35,7 @@ export const SDK_VERSION = "0.1.0";
 // AST types
 export type {
   AstBlock,
-  AstCodeBlock,
   AstItem,
-  AstTable,
   Diagnostic,
   FrontmatterEntry,
   ParseResult,
