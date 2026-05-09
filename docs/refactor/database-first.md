@@ -131,8 +131,7 @@ The branch already has a real shared SQLite base:
   The old TUI JSON file is doctor migration input only.
 - Default TTS prefs now live in shared plugin-state SQLite rows keyed under the
   `speech-core` plugin. The old `settings/tts.json` file is doctor migration
-  input only; explicit custom `messages.tts.prefsPath` remains a legacy opt-in
-  file override.
+  input only; runtime no longer reads or writes TTS prefs JSON files.
 - Subagent run recovery and OpenRouter model capability cache runtime modules
   now keep SQLite readers/writers separate from doctor-only legacy JSON import
   helpers.

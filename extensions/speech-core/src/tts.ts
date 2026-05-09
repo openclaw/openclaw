@@ -188,8 +188,8 @@ function normalizeTtsPersonaId(personaId: string | null | undefined): string | u
   return normalizeOptionalLowercaseString(personaId ?? undefined);
 }
 
-function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
-  return resolveTtsPrefsRef(prefsPath);
+function resolveTtsPrefsPathValue(): string {
+  return resolveTtsPrefsRef();
 }
 
 function resolveModelOverridePolicy(
@@ -395,7 +395,6 @@ function collectDirectProviderConfigEntries(raw: TtsConfig): Record<string, Spee
     "modelOverrides",
     "persona",
     "personas",
-    "prefsPath",
     "provider",
     "providers",
     "summaryModel",
@@ -449,7 +448,6 @@ export function resolveTtsConfig(
     summaryModel: normalizeOptionalString(raw.summaryModel),
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
     providerConfigs: collectDirectProviderConfigEntries(raw),
-    prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs,
     rawConfig: raw,
@@ -458,7 +456,7 @@ export function resolveTtsConfig(
 }
 
 export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
-  return resolveTtsPrefsPathValue(config.prefsPath);
+  return resolveTtsPrefsPathValue();
 }
 
 function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefined {
@@ -503,7 +501,7 @@ function resolveEffectiveTtsAutoState(params: {
     channelId: params.channelId,
     accountId: params.accountId,
   });
-  const prefsPath = resolveTtsPrefsPathValue(raw.prefsPath);
+  const prefsPath = resolveTtsPrefsPathValue();
   const sessionAuto = normalizeTtsAutoMode(params.sessionAuto);
   if (sessionAuto) {
     return { autoMode: sessionAuto, prefsPath };
