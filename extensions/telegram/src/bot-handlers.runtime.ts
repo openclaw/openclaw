@@ -60,7 +60,10 @@ import {
   resolveInboundMediaFileId,
 } from "./bot-handlers.media.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
-import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
+import type {
+  TelegramMessageContextOptions,
+  TelegramPromptContextEntry,
+} from "./bot-message-context.types.js";
 import {
   parseTelegramNativeCommandCallbackData,
   RegisterTelegramHandlerParams,
@@ -547,6 +550,80 @@ export const registerTelegramHandlers = ({
     };
   };
 
+  const toPromptContextMessage = (
+    node: TelegramCachedMessageNode,
+    flags?: { replyTarget?: boolean },
+  ) => ({
+    message_id: node.messageId,
+    thread_id: node.threadId,
+    sender: node.sender,
+    sender_id: node.senderId,
+    sender_username: node.senderUsername,
+    timestamp_ms: node.timestamp,
+    body: node.body,
+    media_type: node.mediaType,
+    media_ref: node.mediaRef,
+    reply_to_id: node.replyToId,
+    is_reply_target: flags?.replyTarget === true ? true : undefined,
+  });
+
+  const buildPromptContextForMessage = (
+    msg: Message,
+    replyChainNodes: TelegramCachedMessageNode[],
+  ): TelegramPromptContextEntry[] => {
+    const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
+    const currentNode = messageCache.get({
+      accountId,
+      chatId: msg.chat.id,
+      messageId,
+    });
+    const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
+    const currentWindow = messageCache.recentBefore({
+      accountId,
+      chatId: msg.chat.id,
+      messageId,
+      ...(Number.isFinite(threadId) ? { threadId } : {}),
+      limit: 10,
+    });
+    const replyTargetId = replyChainNodes[0]?.messageId;
+    const replyTargetWindow = messageCache.around({
+      accountId,
+      chatId: msg.chat.id,
+      messageId: replyTargetId,
+      ...(Number.isFinite(threadId) ? { threadId } : {}),
+      before: 2,
+      after: 2,
+    });
+    const entries: TelegramPromptContextEntry[] = [];
+    if (currentWindow.length > 0) {
+      entries.push({
+        label: "Current local chat window",
+        source: "telegram",
+        type: "chat_window",
+        payload: {
+          order: "chronological",
+          relation: "before_current_message",
+          messages: currentWindow.map((node) => toPromptContextMessage(node)),
+        },
+      });
+    }
+    if (replyTargetWindow.length > 0) {
+      entries.push({
+        label: "Nearby reply target window",
+        source: "telegram",
+        type: "chat_window",
+        payload: {
+          order: "chronological",
+          relation: "around_reply_target",
+          messages: replyTargetWindow.map((node) =>
+            toPromptContextMessage(node, { replyTarget: node.messageId === replyTargetId }),
+          ),
+        },
+      });
+    }
+    return entries;
+  };
+
   const resolveReplyMediaForChain = async (
     ctx: TelegramContext,
     chain: TelegramCachedMessageNode[],
@@ -598,7 +675,16 @@ export const registerTelegramHandlers = ({
   ) => {
     const replyChainNodes = buildReplyChainForMessage(msg);
     const { replyMedia, replyChain } = await resolveReplyMediaForChain(ctx, replyChainNodes);
-    await processMessage(ctx, allMedia, storeAllowFrom, options, replyMedia, replyChain);
+    const promptContext = buildPromptContextForMessage(msg, replyChainNodes);
+    await processMessage(
+      ctx,
+      allMedia,
+      storeAllowFrom,
+      options,
+      replyMedia,
+      replyChain,
+      promptContext,
+    );
   };
 
   const isAllowlistAuthorized = (

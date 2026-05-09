@@ -30,6 +30,21 @@ export type TelegramMessageCache = {
     chatId: string | number;
     messageId?: string;
   }) => TelegramCachedMessageNode | null;
+  recentBefore: (params: {
+    accountId: string;
+    chatId: string | number;
+    messageId?: string;
+    threadId?: number;
+    limit: number;
+  }) => TelegramCachedMessageNode[];
+  around: (params: {
+    accountId: string;
+    chatId: string | number;
+    messageId?: string;
+    threadId?: number;
+    before: number;
+    after: number;
+  }) => TelegramCachedMessageNode[];
 };
 
 type MessageWithExternalReply = Message & { external_reply?: Message };
@@ -49,6 +64,10 @@ function telegramMessageCacheKey(params: {
   messageId: string;
 }) {
   return `${params.accountId}:${params.chatId}:${params.messageId}`;
+}
+
+function telegramMessageCacheKeyPrefix(params: { accountId: string; chatId: string | number }) {
+  return `${params.accountId}:${params.chatId}:`;
 }
 
 export function resolveTelegramMessageCachePath(storePath: string): string {
@@ -284,6 +303,24 @@ export function createTelegramMessageCache(params?: {
     return entry;
   };
 
+  const listChatMessages = (params: {
+    accountId: string;
+    chatId: string | number;
+    threadId?: number;
+  }) => {
+    const prefix = telegramMessageCacheKeyPrefix(params);
+    const threadId = params.threadId != null ? String(params.threadId) : undefined;
+    return Array.from(messages, ([key, node]) => ({ key, node }))
+      .filter(({ key, node }) => {
+        if (!key.startsWith(prefix)) {
+          return false;
+        }
+        return threadId === undefined || node.threadId === threadId;
+      })
+      .map(({ node }) => node)
+      .sort(compareCachedMessageNodes);
+  };
+
   return {
     record: ({ accountId, chatId, msg, threadId }) => {
       const entry = normalizeMessageNode(msg, { threadId });
@@ -312,7 +349,48 @@ export function createTelegramMessageCache(params?: {
       return entry;
     },
     get,
+    recentBefore: ({ accountId, chatId, messageId, threadId, limit }) => {
+      if (!messageId || limit <= 0) {
+        return [];
+      }
+      const targetId = Number(messageId);
+      if (!Number.isFinite(targetId)) {
+        return [];
+      }
+      return listChatMessages({ accountId, chatId, threadId })
+        .filter((entry) => {
+          const entryId = Number(entry.messageId);
+          return Number.isFinite(entryId) && entryId < targetId;
+        })
+        .slice(-limit);
+    },
+    around: ({ accountId, chatId, messageId, threadId, before, after }) => {
+      if (!messageId) {
+        return [];
+      }
+      const entries = listChatMessages({ accountId, chatId, threadId });
+      const targetIndex = entries.findIndex((entry) => entry.messageId === messageId);
+      if (targetIndex === -1) {
+        return [];
+      }
+      return entries.slice(
+        Math.max(0, targetIndex - Math.max(0, before)),
+        targetIndex + Math.max(0, after) + 1,
+      );
+    },
   };
+}
+
+function compareCachedMessageNodes(
+  left: TelegramCachedMessageNode,
+  right: TelegramCachedMessageNode,
+) {
+  const leftId = Number(left.messageId);
+  const rightId = Number(right.messageId);
+  if (Number.isFinite(leftId) && Number.isFinite(rightId)) {
+    return leftId - rightId;
+  }
+  return (left.messageId ?? "").localeCompare(right.messageId ?? "");
 }
 
 export function buildTelegramReplyChain(params: {

@@ -219,4 +219,77 @@ describe("telegram message cache", () => {
       await rm(persistedPath, { force: true });
     }
   });
+
+  it("returns recent chat messages before the current message", () => {
+    const cache = createTelegramMessageCache();
+    for (const id of [41, 42, 43, 44]) {
+      cache.record({
+        accountId: "default",
+        chatId: 7,
+        threadId: 100,
+        msg: {
+          chat: { id: 7, type: "supergroup", title: "Ops" },
+          message_thread_id: 100,
+          message_id: id,
+          date: 1736380700 + id,
+          text: `live message ${id}`,
+          from: { id, is_bot: false, first_name: `User ${id}` },
+        } as Message,
+      });
+    }
+    cache.record({
+      accountId: "default",
+      chatId: 7,
+      threadId: 200,
+      msg: {
+        chat: { id: 7, type: "supergroup", title: "Ops" },
+        message_thread_id: 200,
+        message_id: 142,
+        date: 1736380743,
+        text: "different topic",
+        from: { id: 99, is_bot: false, first_name: "Other" },
+      } as Message,
+    });
+
+    expect(
+      cache
+        .recentBefore({
+          accountId: "default",
+          chatId: 7,
+          threadId: 100,
+          messageId: "44",
+          limit: 2,
+        })
+        .map((entry) => entry.messageId),
+    ).toEqual(["42", "43"]);
+  });
+
+  it("returns nearby messages around a stale reply target", () => {
+    const cache = createTelegramMessageCache();
+    for (const id of [100, 101, 102, 200, 201]) {
+      cache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat: { id: 7, type: "group", title: "Ops" },
+          message_id: id,
+          date: 1736380700 + id,
+          text: `message ${id}`,
+          from: { id, is_bot: false, first_name: `User ${id}` },
+        } as Message,
+      });
+    }
+
+    expect(
+      cache
+        .around({
+          accountId: "default",
+          chatId: 7,
+          messageId: "101",
+          before: 1,
+          after: 1,
+        })
+        .map((entry) => entry.messageId),
+    ).toEqual(["100", "101", "102"]);
+  });
 });
