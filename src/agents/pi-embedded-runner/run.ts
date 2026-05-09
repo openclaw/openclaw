@@ -262,6 +262,23 @@ function createEmptyAuthProfileStore(): AuthProfileStore {
   };
 }
 
+function createScopedAuthProfileStore(
+  store: AuthProfileStore,
+  profileId: string | undefined,
+): AuthProfileStore {
+  const normalizedProfileId = profileId?.trim();
+  const profiles = store.profiles ?? {};
+  const credential = normalizedProfileId ? profiles[normalizedProfileId] : undefined;
+  return credential && normalizedProfileId
+    ? {
+        version: store.version,
+        profiles: {
+          [normalizedProfileId]: credential,
+        },
+      }
+    : createEmptyAuthProfileStore();
+}
+
 function buildTraceToolSummary(params: {
   toolMetas?: Array<{ toolName: string; meta?: string }>;
   hadFailure: boolean;
@@ -779,6 +796,9 @@ export async function runEmbeddedPiAgent(
         lastProfileId = forwardedPluginHarnessProfileId;
       }
       startupStages.mark("auth");
+      const runAttemptAuthProfileStore = pluginHarnessOwnsTransport
+        ? createScopedAuthProfileStore(attemptAuthProfileStore, lastProfileId)
+        : attemptAuthProfileStore;
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
         config: params.config,
@@ -1213,7 +1233,7 @@ export async function runEmbeddedPiAgent(
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             initialReplayState: accumulatedReplayState,
             authStorage,
-            authProfileStore: attemptAuthProfileStore,
+            authProfileStore: runAttemptAuthProfileStore,
             modelRegistry,
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,

@@ -286,6 +286,18 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
           refresh: "refresh",
           expires: Date.now() + 60_000,
         },
+        "openai-codex:other": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "other-access",
+          refresh: "other-refresh",
+          expires: Date.now() + 60_000,
+        },
+        "anthropic:work": {
+          type: "api_key" as const,
+          provider: "anthropic",
+          key: "sk-ant",
+        },
       },
     };
     mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(codexAuthStore);
@@ -333,7 +345,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     );
     const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
-    expect(harnessParams?.authProfileStore).toBe(codexAuthStore);
+    expect(Object.keys(harnessParams?.authProfileStore.profiles ?? {})).toEqual([
+      "openai-codex:work",
+    ]);
     expect(harnessParams?.authProfileStore.profiles["openai-codex:work"]).toMatchObject({
       provider: "openai-codex",
     });
