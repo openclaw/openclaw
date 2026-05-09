@@ -75,15 +75,13 @@ describe("media-understanding provider registry", () => {
       },
     } as never;
     const registry = buildMediaUnderstandingRegistry(undefined, cfg);
-    const glmProvider = getMediaUnderstandingProvider("glm", registry);
+    const glmProvider = requireMediaProvider(registry, "glm");
     const textOnlyProvider = getMediaUnderstandingProvider("textOnly", registry);
 
-    expect(glmProvider).toMatchObject({
-      id: "glm",
-      capabilities: ["image"],
-      describeImage: expect.any(Function),
-      describeImages: expect.any(Function),
-    });
+    expect(glmProvider.id).toBe("glm");
+    expect(glmProvider.capabilities).toEqual(["image"]);
+    expect(typeof glmProvider.describeImage).toBe("function");
+    expect(typeof glmProvider.describeImages).toBe("function");
     expect(textOnlyProvider).toBeUndefined();
   });
 

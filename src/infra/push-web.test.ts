@@ -37,10 +37,10 @@ vi.mock("web-push", () => ({
 function expectLoadedSubscription(
   loaded: Awaited<ReturnType<typeof loadWebPushSubscription>>,
 ): WebPushSubscription {
-  expect(loaded).toEqual(expect.objectContaining({ endpoint: expect.any(String) }));
   if (loaded === null) {
     throw new Error("Expected loaded web push subscription");
   }
+  expect(loaded.endpoint).not.toBe("");
   return loaded;
 }
 

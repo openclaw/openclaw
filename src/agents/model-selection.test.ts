@@ -709,6 +709,25 @@ describe("model-selection", () => {
       ).toBe("google");
     });
 
+    it("infers proxy providers from canonicalized nested Google catalog ids", () => {
+      const cfg = {
+        models: {
+          providers: {
+            kilocode: {
+              models: [{ id: "google/gemini-3-pro-preview" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "google/gemini-3.1-pro-preview",
+        }),
+      ).toBe("kilocode");
+    });
+
     it("returns undefined when provider catalog matches are ambiguous", () => {
       const cfg = {
         models: {
@@ -749,13 +768,36 @@ describe("model-selection", () => {
         },
       } as unknown as OpenClawConfig;
 
-      expect(buildConfiguredModelCatalog({ cfg })).toContainEqual(
-        expect.objectContaining({
-          provider: "google",
-          id: "gemini-3.1-pro-preview",
-          name: "Gemini 3 Pro",
-        }),
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "google" && entry.id === "gemini-3.1-pro-preview",
       );
+      expect(model?.provider).toBe("google");
+      expect(model?.id).toBe("gemini-3.1-pro-preview");
+      expect(model?.name).toBe("Gemini 3 Pro");
+    });
+
+    it("emits canonical nested Google Gemini 3.1 ids from proxy provider catalog rows", () => {
+      const cfg = {
+        models: {
+          providers: {
+            kilocode: {
+              models: [
+                {
+                  id: "google/gemini-3-pro-preview",
+                  name: "Gemini 3 Pro",
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "kilocode" && entry.id === "google/gemini-3.1-pro-preview",
+      );
+      expect(model?.provider).toBe("kilocode");
+      expect(model?.id).toBe("google/gemini-3.1-pro-preview");
+      expect(model?.name).toBe("Gemini 3 Pro");
     });
   });
 
@@ -921,13 +963,11 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
       });
 
-      expect(result.allowedCatalog).toEqual([
-        expect.objectContaining({
-          provider: "modelscope",
-          id: "qwen/qwen3.5-35b-a3b",
-          input: ["text", "image"],
-        }),
-      ]);
+      expect(result.allowedCatalog).toHaveLength(1);
+      const allowed = result.allowedCatalog[0];
+      expect(allowed?.provider).toBe("modelscope");
+      expect(allowed?.id).toBe("qwen/qwen3.5-35b-a3b");
+      expect(allowed?.input).toEqual(["text", "image"]);
     });
 
     it("applies configured provider metadata and alias to synthetic allowlist entries", () => {
@@ -1822,11 +1862,6 @@ describe("model-selection", () => {
       const cfg = {} as OpenClawConfig;
 
       expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
-    });
-
-    it("falls back to medium when no provider thinking policy is active", () => {
-      const cfg = {} as OpenClawConfig;
-
       expect(
         resolveThinkingDefault({
           cfg,
@@ -1841,7 +1876,11 @@ describe("model-selection", () => {
             },
           ],
         }),
-      ).toBe("medium");
+      ).toBe("adaptive");
+    });
+
+    it("falls back to medium when no provider thinking policy is active", () => {
+      const cfg = {} as OpenClawConfig;
 
       expect(
         resolveThinkingDefault({

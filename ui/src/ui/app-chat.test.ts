@@ -19,6 +19,8 @@ const { executeSlashCommandMock, setLastActiveSessionKeyMock } = vi.hoisted(() =
   setLastActiveSessionKeyMock: vi.fn(),
 }));
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
 vi.mock("./app-last-active-session.ts", () => ({
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
@@ -601,7 +603,7 @@ describe("handleSendChat", () => {
     expect(confirm).toHaveBeenCalledWith("Start a new session? This will reset the current chat.");
     expect(request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("keep this draft");
-    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatRunId).toBeNull();
     expect(host.refreshSessionsAfterChat.size).toBe(0);
   });
@@ -621,7 +623,7 @@ describe("handleSendChat", () => {
 
     expect(request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("keep this draft");
-    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatRunId).toBeNull();
     expect(host.refreshSessionsAfterChat.size).toBe(0);
   });
@@ -683,7 +685,7 @@ describe("handleSendChat", () => {
     await handleSendChat(host);
 
     expect(onSlashAction).toHaveBeenCalledWith("new-session");
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
     expect(host.chatMessage).toBe("");
@@ -946,7 +948,7 @@ describe("handleSendChat", () => {
       }),
     );
     expect(host.chatMessage).toBe("send this");
-    expect(host.chatAttachments).toEqual([]);
+    expect(host.chatAttachments).toStrictEqual([]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
 
@@ -1120,13 +1122,13 @@ describe("handleSendChat", () => {
         sessionKey: "agent:main",
         message: "/btw what changed?",
         deliver: false,
-        idempotencyKey: expect.any(String),
+        idempotencyKey: expect.stringMatching(uuidPattern),
       }),
     );
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
-    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatMessage).toBe("");
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("/btw what changed?");
@@ -1155,7 +1157,7 @@ describe("handleSendChat", () => {
         deliver: false,
       }),
     );
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
   });
 
@@ -1181,7 +1183,7 @@ describe("handleSendChat", () => {
       }),
     );
     expect(host.chatRunId).toBeNull();
-    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatMessage).toBe("");
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("/btw summarize this");
@@ -1218,7 +1220,7 @@ describe("handleSendChat", () => {
     const second = handleSendChat(host, "same prompt");
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatMessages).toHaveLength(1);
 
     sent.resolve({ runId: host.chatRunId, status: "started" });
@@ -1245,7 +1247,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
     expect(host.chatMessage).toBe("/btw what changed?");
@@ -1282,7 +1284,7 @@ describe("handleSendChat", () => {
     await handleSendChat(host);
 
     expect(request).toHaveBeenCalledWith("sessions.reset", { key: "main" });
-    expect(host.chatMessages).toEqual([]);
+    expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatSideResult).toBeNull();
     expect(host.chatSideResultTerminalRuns?.size).toBe(0);
     expect(host.chatRunId).toBeNull();
@@ -1337,7 +1339,7 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main:main",
       message: "tighten the plan",
       deliver: false,
-      idempotencyKey: expect.any(String),
+      idempotencyKey: expect.stringMatching(uuidPattern),
       attachments: undefined,
     });
     expect(host.chatRunId).toBe("run-1");
@@ -1442,7 +1444,7 @@ describe("handleSendChat", () => {
 
     removeQueuedMessage(host, "queued");
 
-    expect(host.chatQueue).toEqual([]);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:queued");
   });

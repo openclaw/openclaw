@@ -1061,6 +1061,49 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("suppresses persisted prompts for subagent announce task-completion handoffs", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "runtime-only announce bookkeeping",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:main:subagent:child",
+            childSessionId: "child-session-id",
+            announceType: "completion",
+            taskLabel: "child task",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child result",
+            statsLine: "tokens=10",
+            replyInstruction: "Deliver the child result.",
+          },
+        ],
+        idempotencyKey: "test-subagent-announce-suppress-prompt",
+      },
+      { reqId: "subagent-announce-suppress-prompt" },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      suppressPromptPersistence?: boolean;
+      message?: string;
+    }>();
+    expect(callArgs.suppressPromptPersistence).toBe(true);
+    expect(callArgs.message).toMatch(/^\[Inter-session message\]/);
+    expect(callArgs.message).toContain("sourceTool=subagent_announce");
+  });
+
   it("rejects public transcriptMessage overrides", async () => {
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
     mocks.agentCommand.mockClear();
@@ -3321,7 +3364,7 @@ describe("gateway agent handler chat.abort integration", () => {
     );
   });
 
-  it("does not overwrite or evict a pre-existing chatAbortControllers entry with the same runId", async () => {
+  it("does not dispatch a duplicate agent run when dedupe was evicted but the run is active", async () => {
     prime();
     mocks.agentCommand.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -3340,6 +3383,8 @@ describe("gateway agent handler chat.abort integration", () => {
       ownerDeviceId: undefined,
     };
     context.chatAbortControllers.set(runId, preExisting);
+    context.dedupe.delete(`agent:${runId}`);
+    const respond = vi.fn();
 
     await invokeAgent(
       {
@@ -3348,16 +3393,14 @@ describe("gateway agent handler chat.abort integration", () => {
         sessionKey: "agent:main:main",
         idempotencyKey: runId,
       },
-      { context, reqId: runId },
+      { context, reqId: runId, respond },
     );
 
     expect(context.chatAbortControllers.get(runId)).toBe(preExisting);
-    // Cleanup after the agent run completes must not evict the pre-existing
-    // entry owned by a concurrent chat.send.
-    await waitForAssertion(() => {
-      expect(mocks.agentCommand).toHaveBeenCalled();
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
+      cached: true,
+      runId,
     });
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(context.chatAbortControllers.get(runId)).toBe(preExisting);
   });
 });

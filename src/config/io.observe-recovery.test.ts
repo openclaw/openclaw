@@ -91,6 +91,10 @@ describe("config observe recovery", () => {
     return clobberFiles;
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fsp.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
   async function readLastObserveEvent(
     auditPath: string,
   ): Promise<Record<string, unknown> | undefined> {
@@ -351,7 +355,7 @@ describe("config observe recovery", () => {
 
       expect(recovered.parsed).toEqual(editedConfig);
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(edited.raw);
-      await expect(fsp.stat(auditPath)).rejects.toThrow();
+      await expectPathMissing(auditPath);
     });
   });
 
@@ -717,7 +721,7 @@ describe("config observe recovery", () => {
       await expect(
         promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
       ).resolves.toBe(false);
-      await expect(fsp.stat(resolveLastKnownGoodConfigPath(configPath))).rejects.toThrow();
+      await expectPathMissing(resolveLastKnownGoodConfigPath(configPath));
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("Config last-known-good promotion skipped"),
       );

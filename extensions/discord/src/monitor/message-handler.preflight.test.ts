@@ -888,7 +888,7 @@ describe("preflightDiscordMessage", () => {
 
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
-    expect(expectPreflightResult(result)).toEqual(expect.any(Object));
+    expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-on");
   });
 
   it("hydrates mention metadata from REST when bot mention syntax is present but mentions are missing", async () => {
@@ -934,7 +934,7 @@ describe("preflightDiscordMessage", () => {
       botUserId: botId,
     });
 
-    expect(expectPreflightResult(result)).toEqual(expect.any(Object));
+    expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-hydrated");
   });
 
   it("still drops bot control commands without a real mention when allowBots=mentions", async () => {
@@ -973,7 +973,7 @@ describe("preflightDiscordMessage", () => {
 
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
-    expect(expectPreflightResult(result)).toEqual(expect.any(Object));
+    expect(expectPreflightResult(result).message.id).toBe("m-bot-command-with-mention");
   });
 
   it("routes ordinary guild text control commands through authorization instead of dropping them", async () => {
@@ -1629,7 +1629,7 @@ describe("preflightDiscordMessage", () => {
           "guild-1": { channels: { [channelId]: { enabled: true, requireMention: true } } },
         },
       });
-      expect(expectPreflightResult(result)).toEqual(expect.any(Object));
+      expect(expectPreflightResult(result).message.id).toBe("m-binding-2");
     } finally {
       routeSpy.mockRestore();
       ensureSpy.mockRestore();
@@ -1701,7 +1701,10 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
       webhookId: "wh-1",
       webhookToken: "tok-1",
     });
-    expect(binding).toEqual(expect.any(Object));
+    expect(binding).toMatchObject({
+      threadId: "thread-1",
+      targetSessionKey: "agent:main:subagent:child-1",
+    });
 
     manager.unbindThread({
       threadId: "thread-1",

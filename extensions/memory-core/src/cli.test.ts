@@ -21,6 +21,10 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   })),
 );
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 vi.mock("./cli.host.runtime.js", async () => {
   const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
     import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
@@ -98,9 +102,12 @@ describe("memory cli", () => {
   const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
 
   function expectCliSync(sync: ReturnType<typeof vi.fn>) {
-    expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-    );
+    const syncCall = sync.mock.calls[0]?.[0] as
+      | { reason?: unknown; force?: unknown; progress?: unknown }
+      | undefined;
+    expect(syncCall?.reason).toBe("cli");
+    expect(syncCall?.force).toBe(false);
+    expect(typeof syncCall?.progress).toBe("function");
   }
 
   function makeMemoryStatus(overrides: Record<string, unknown> = {}) {
@@ -589,7 +596,7 @@ describe("memory cli", () => {
       await runMemoryCli(["status", "--fix"]);
 
       expectLogged(log, "Repair: rewrote store");
-      await expect(fs.stat(lockPath)).rejects.toThrow();
+      await expectPathMissing(lockPath);
       const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
         entries: Record<string, { conceptTags?: string[] }>;
       };

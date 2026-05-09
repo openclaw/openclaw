@@ -398,9 +398,10 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expectButtonByText(container, "Light Green").click();
+    const customThemeButton = expectButtonByText(container, "Light Green");
+    customThemeButton.click();
 
-    expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
+    expect(setTheme).toHaveBeenCalledWith("custom", { element: customThemeButton });
     expect(onOpenCustomThemeImport).not.toHaveBeenCalled();
   });
 });

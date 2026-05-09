@@ -36,6 +36,17 @@ describe("media store", () => {
     return await fn(store, home);
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    let statError: unknown;
+    try {
+      await fs.stat(targetPath);
+    } catch (error) {
+      statError = error;
+    }
+    expect(statError).toBeInstanceOf(Error);
+    expect((statError as NodeJS.ErrnoException).code).toBe("ENOENT");
+  }
+
   async function expectOriginalFilenameCase(params: {
     filename: string;
     expected: string;
@@ -130,15 +141,20 @@ describe("media store", () => {
       );
       await withTempStore(async (_store) => {
         const mediaDir = await storeWithMock.ensureMediaDir();
-        await expect(
-          storeWithMock.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "failed-buffer"),
-        ).rejects.toMatchObject({ code: "ENOSPC" });
+        let saveError: unknown;
+        try {
+          await storeWithMock.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "failed-buffer");
+        } catch (error) {
+          saveError = error;
+        }
+        expect(saveError).toBeInstanceOf(Error);
+        expect((saveError as NodeJS.ErrnoException).code).toBe("ENOSPC");
 
         const failedDir = path.join(mediaDir, "failed-buffer");
         const entries = await fs.readdir(failedDir).catch(() => []);
         expect(attemptedRelPaths).toHaveLength(1);
         expect(path.basename(attemptedRelPaths[0] ?? "")).toMatch(/^[^/\\]+\.ogg$/);
-        expect(entries).toEqual([]);
+        expect(entries).toStrictEqual([]);
       });
     } finally {
       vi.doUnmock("../infra/file-store.js");
@@ -216,7 +232,7 @@ describe("media store", () => {
         const past = Date.now() - 10_000;
         await fs.utimes(saved.path, past / 1000, past / 1000);
         await store.cleanOldMedia(1);
-        await expect(fs.stat(saved.path)).rejects.toThrow();
+        await expectPathMissing(saved.path);
       },
     });
   }
@@ -256,12 +272,21 @@ describe("media store", () => {
         params.setupSource !== undefined
           ? await params.setupSource(home)
           : path.join(home, params.relativeSourcePath ?? "");
-      const rejection = expect(store.saveMediaSource(sourcePath)).rejects;
       if (typeof params.expectedError === "string") {
+        const rejection = expect(store.saveMediaSource(sourcePath)).rejects;
         await rejection.toThrow(params.expectedError);
         return;
       }
-      await rejection.toMatchObject(params.expectedError);
+      let sourceError: unknown;
+      try {
+        await store.saveMediaSource(sourcePath);
+      } catch (error) {
+        sourceError = error;
+      }
+      expect(sourceError).toBeInstanceOf(Error);
+      for (const [key, value] of Object.entries(params.expectedError)) {
+        expect((sourceError as Record<string, unknown>)[key]).toStrictEqual(value);
+      }
     });
   }
 
@@ -290,14 +315,14 @@ describe("media store", () => {
       const state = await params.setup(store);
       await params.run(store);
       for (const removedFile of state.removedFiles) {
-        await expect(fs.stat(removedFile)).rejects.toThrow();
+        await expectPathMissing(removedFile);
       }
       for (const preservedFile of state.preservedFiles) {
         const stat = await fs.stat(preservedFile);
         expect(stat.isFile()).toBe(true);
       }
       for (const removedDir of state.removedDirs ?? []) {
-        await expect(fs.stat(removedDir)).rejects.toThrow();
+        await expectPathMissing(removedDir);
       }
       for (const preservedDir of state.preservedDirs ?? []) {
         const stat = await fs.stat(preservedDir);
@@ -420,7 +445,7 @@ describe("media store", () => {
           await expect(
             store.saveMediaBuffer(Buffer.from("escape"), "text/plain", traversalSubdir),
           ).rejects.toThrow("unsafe media subdir");
-          await expect(fs.stat(outsideDir)).rejects.toThrow();
+          await expectPathMissing(outsideDir);
         });
       },
     },
@@ -513,7 +538,7 @@ describe("media store", () => {
 
           await store.cleanOldMedia(1);
 
-          await expect(fs.stat(saved.path)).rejects.toThrow();
+          await expectPathMissing(saved.path);
           const inboundStat = await fs.stat(inboundDir);
           expect(inboundStat.isDirectory()).toBe(true);
         });

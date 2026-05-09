@@ -131,7 +131,7 @@ describe("resolveGatewayCredentialsFromConfig", () => {
         urlOverride: "wss://example.com",
       },
     );
-    expect(resolved).toEqual({});
+    expect(resolved).toStrictEqual({});
   });
 
   it("uses env credentials for env-sourced url overrides", () => {

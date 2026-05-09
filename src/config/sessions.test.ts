@@ -104,6 +104,10 @@ describe("sessions", () => {
     return path.join(canonicalParent, path.basename(filePath));
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
   const deriveSessionKeyCases = [
     {
       name: "returns normalized per-sender key",
@@ -799,7 +803,7 @@ describe("sessions", () => {
     const store = loadSessionStore(storePath);
     expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-6");
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
-    await expect(fs.stat(`${storePath}.lock`)).rejects.toThrow();
+    await expectPathMissing(`${storePath}.lock`);
   });
 
   it("updateSessionStoreEntry re-reads disk inside the writer slot instead of using stale cache", async () => {

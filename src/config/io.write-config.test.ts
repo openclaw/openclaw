@@ -1335,7 +1335,7 @@ describe("config io write", () => {
         expect(postWriteSnapshot.sourceConfig.meta?.lastTouchedAt).toMatch(
           /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u,
         );
-        expect(postWriteSnapshot.sourceConfig.plugins?.entries?.demo?.config).toEqual({});
+        expect(postWriteSnapshot.sourceConfig.plugins?.entries?.demo?.config).toStrictEqual({});
       } finally {
         unsubscribe();
         mockLoadPluginManifestRegistry.mockReturnValue({

@@ -788,6 +788,10 @@ vi.mock("./status-runtime-shared.ts", () => ({
   ),
 }));
 
+import {
+  resolveStatusRuntimeSnapshot,
+  resolveStatusUsageSummary,
+} from "./status-runtime-shared.ts";
 import { resolvePairingRecoveryContext, statusCommand } from "./status.command.js";
 
 const runtime = {
@@ -1020,6 +1024,37 @@ describe("statusCommand", () => {
     );
   });
 
+  it("scopes usage resolution to the scanned config", async () => {
+    const snapshotMock = resolveStatusRuntimeSnapshot as Mock;
+    const usageMock = resolveStatusUsageSummary as Mock;
+    snapshotMock.mockClear();
+    usageMock.mockClear();
+
+    await statusCommand({ usage: true, timeoutMs: 1234 }, runtime as never);
+
+    const params = snapshotMock.mock.calls.at(-1)?.[0] as
+      | {
+          config: unknown;
+          timeoutMs?: number;
+          usage?: boolean;
+          resolveUsage?: (input: { config: unknown; timeoutMs?: number }) => Promise<unknown>;
+        }
+      | undefined;
+    expect(params).toBeDefined();
+    expect(params).toMatchObject({ usage: true, timeoutMs: 1234 });
+    if (!params?.resolveUsage) {
+      throw new Error("missing status usage resolver");
+    }
+    await params.resolveUsage({
+      timeoutMs: 1234,
+      config: params.config,
+    });
+    expect(usageMock).toHaveBeenCalledWith({
+      timeoutMs: 1234,
+      config: params?.config,
+    });
+  });
+
   it("keeps default text status off the security audit path", async () => {
     await statusCommand({}, runtime as never);
 
@@ -1249,7 +1284,9 @@ describe("statusCommand", () => {
 
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
-    expect(payload.gateway.error ?? payload.gateway.authWarning).toEqual(expect.any(String));
+    const gatewayAuthMessage = payload.gateway.error ?? payload.gateway.authWarning;
+    expect(typeof gatewayAuthMessage).toBe("string");
+    expect(gatewayAuthMessage.trim().length).toBeGreaterThan(0);
     if (Array.isArray(payload.secretDiagnostics) && payload.secretDiagnostics.length > 0) {
       expect(
         payload.secretDiagnostics.some((entry: string) => entry.includes("gateway.auth.token")),

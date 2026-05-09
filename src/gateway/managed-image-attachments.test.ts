@@ -81,6 +81,10 @@ function requireAttachmentIdFromUrl(url: unknown): string {
   return attachmentId;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 async function createFixture(
   stateDir: string,
   options?: { sessionKey?: string; attachmentId?: string; filename?: string },
@@ -438,7 +442,7 @@ describe("createManagedOutgoingImageBlocks", () => {
       }),
     ).rejects.toThrow(/Generated image 1.*byte limit/);
 
-    await expect(fs.readdir(path.join(stateDir, "media", "outgoing", "records"))).rejects.toThrow();
+    await expectPathMissing(path.join(stateDir, "media", "outgoing", "records"));
   });
 
   it("rewrites local image sources into managed display blocks without leaking the source path", async () => {
@@ -762,7 +766,7 @@ describe("createManagedOutgoingImageBlocks", () => {
       stateDir,
       localRoots: [stateDir],
     });
-    expect(blocks).toEqual([]);
+    expect(blocks).toStrictEqual([]);
     const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
     let originals: string[] | null = null;
     try {
@@ -770,7 +774,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     } catch (error) {
       expect(error).toMatchObject({ code: "ENOENT" });
     }
-    expect(originals ?? []).toEqual([]);
+    expect(originals ?? []).toStrictEqual([]);
   });
 
   it("skips oversized downloaded non-image sources instead of failing finalization", async () => {
@@ -784,7 +788,7 @@ describe("createManagedOutgoingImageBlocks", () => {
       localRoots: [stateDir],
       limits: { maxBytes: 1024 },
     });
-    expect(blocks).toEqual([]);
+    expect(blocks).toStrictEqual([]);
     const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
     let originals: string[] | null = null;
     try {
@@ -792,7 +796,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     } catch (error) {
       expect(error).toMatchObject({ code: "ENOENT" });
     }
-    expect(originals ?? []).toEqual([]);
+    expect(originals ?? []).toStrictEqual([]);
   });
 
   it("does not reap older transient records while creating a new managed image", async () => {
@@ -910,7 +914,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       deletedFileCount: 1,
       retainedCount: 0,
     });
-    await expect(fs.access(fixture.originalPath)).rejects.toThrow();
+    await expectPathMissing(fixture.originalPath);
   });
 
   it("retains committed records that are still referenced by a full-image block", async () => {

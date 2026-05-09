@@ -495,7 +495,7 @@ describe("openshell sandbox backend e2e", () => {
         await bridge.writeFile({ filePath: "nested/remote-only.txt", data: "hello-remote\n" });
         await expect(
           fs.readFile(path.join(workspaceDir, "nested", "remote-only.txt"), "utf8"),
-        ).rejects.toThrow();
+        ).rejects.toMatchObject({ code: "ENOENT" });
         await expect(bridge.readFile({ filePath: "nested/remote-only.txt" })).resolves.toEqual(
           Buffer.from("hello-remote\n"),
         );

@@ -130,7 +130,9 @@ describeLive("xai live", () => {
         : [];
       expect(payloadTools.length).toBeGreaterThan(0);
       const firstFunction = payloadTools[0]?.function;
-      expect(firstFunction).toEqual(expect.any(Object));
+      expect(firstFunction).not.toBeNull();
+      expect(typeof firstFunction).toBe("object");
+      expect(Array.isArray(firstFunction)).toBe(false);
       expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
     });
   }, 90_000);

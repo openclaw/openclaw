@@ -34,10 +34,10 @@ const mockLogInfo = vi.mocked(logInfo);
 const mockLogWarn = vi.mocked(logWarn);
 
 function expectProxyHandle(handle: Awaited<ReturnType<typeof startProxy>>): ProxyHandle {
-  expect(handle).toEqual(expect.objectContaining({ proxyUrl: expect.any(String) }));
   if (handle === null) {
     throw new Error("Expected managed proxy handle");
   }
+  expect(handle.proxyUrl).not.toBe("");
   return handle;
 }
 
@@ -155,10 +155,10 @@ describe("startProxy", () => {
     });
 
     const activeProxyUrl = getActiveManagedProxyUrl();
-    expect(activeProxyUrl).toEqual(expect.any(URL));
     if (activeProxyUrl === undefined) {
       throw new Error("Expected active managed proxy URL");
     }
+    expect(activeProxyUrl).toBeInstanceOf(URL);
     expect(activeProxyUrl.href).toBe("http://127.0.0.1:3128/");
 
     await stopProxy(expectProxyHandle(handle));

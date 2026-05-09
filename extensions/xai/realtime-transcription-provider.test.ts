@@ -186,14 +186,14 @@ describe("xai realtime transcription provider", () => {
 
     await expect(session.connect()).rejects.toThrow("Streaming ASR unavailable");
     expect(session.isConnected()).toBe(false);
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
-    expect(onError.mock.calls[0]?.[0].message).toBe("Streaming ASR unavailable");
+    const error = onError.mock.calls[0]?.[0];
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("Streaming ASR unavailable");
   });
 
   it("accepts xAI realtime aliases", () => {
     const provider = buildXaiRealtimeTranscriptionProvider();
-    expect(provider.aliases).toEqual(
-      expect.arrayContaining(["xai-realtime", "grok-stt-streaming"]),
-    );
+    expect(provider.aliases).toContain("xai-realtime");
+    expect(provider.aliases).toContain("grok-stt-streaming");
   });
 });

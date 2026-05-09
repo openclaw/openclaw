@@ -93,6 +93,7 @@ function applyRuntimeToolsAllow<T extends { name: string }>(tools: T[], toolsAll
 }
 
 type OpenClawCodingTool = ReturnType<typeof createOpenClawCodingTools>[number];
+type OpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
 
 function toolNameList(tools: readonly { name: string }[]): string[] {
   return tools.map((tool) => tool.name);
@@ -113,6 +114,28 @@ function requireToolExecute(tool: OpenClawCodingTool): NonNullable<OpenClawCodin
   return tool.execute;
 }
 
+function latestCreateOpenClawToolsOptions(): OpenClawToolsOptions {
+  const calls = vi.mocked(createOpenClawTools).mock.calls;
+  const lastCall = calls.at(-1);
+  const options = lastCall?.[0];
+  if (!options) {
+    throw new Error("expected createOpenClawTools call");
+  }
+  return options;
+}
+
+function expectListIncludes(
+  list: readonly string[] | undefined,
+  expected: readonly string[],
+): void {
+  if (!list) {
+    throw new Error("expected string list");
+  }
+  for (const value of expected) {
+    expect(list.includes(value)).toBe(true);
+  }
+}
+
 describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
@@ -129,9 +152,7 @@ describe("createOpenClawCodingTools", () => {
     const values = new Set<string>();
     collectActionValues(action, values);
 
-    expect([...values]).toEqual(
-      expect.arrayContaining(["restart", "config.get", "config.patch", "config.apply"]),
-    );
+    expectListIncludes([...values], ["restart", "config.get", "config.patch", "config.apply"]);
   });
 
   it("exposes only an explicitly authorized owner-only tool to non-owner sessions", () => {
@@ -193,11 +214,23 @@ describe("createOpenClawCodingTools", () => {
       runtimeToolAllowlist: ["memory_search", "memory_get"],
     });
 
-    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginToolAllowlist: expect.arrayContaining(["memory_search", "memory_get"]),
-      }),
-    );
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const options = latestCreateOpenClawToolsOptions();
+    expectListIncludes(options.pluginToolAllowlist, ["memory_search", "memory_get"]);
+  });
+
+  it("passes source reply delivery mode to OpenClaw tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      forceMessageTool: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expect(latestCreateOpenClawToolsOptions().sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   it("skips unrelated tool families when construction is planned from a narrow allowlist", () => {
@@ -241,11 +274,8 @@ describe("createOpenClawCodingTools", () => {
       },
     });
 
-    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        disablePluginTools: true,
-      }),
-    );
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expect(latestCreateOpenClawToolsOptions().disablePluginTools).toBe(true);
   });
 
   it("keeps plugin-only construction off the OpenClaw core factory", () => {
@@ -276,11 +306,11 @@ describe("createOpenClawCodingTools", () => {
       config: { tools: { alsoAllow: ["lobster"] } },
     });
 
-    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginToolAllowlist: ["lobster", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY],
-      }),
-    );
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toStrictEqual([
+      "lobster",
+      DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+    ]);
   });
 
   it("passes explicit denylist entries to OpenClaw tool factory planning", () => {
@@ -291,11 +321,8 @@ describe("createOpenClawCodingTools", () => {
       config: { tools: { deny: ["pdf"] } },
     });
 
-    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginToolDenylist: expect.arrayContaining(["pdf"]),
-      }),
-    );
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["pdf"]);
   });
 
   it("records core tool-prep stages for hot-path diagnostics", () => {
@@ -307,23 +334,21 @@ describe("createOpenClawCodingTools", () => {
       senderIsOwner: true,
     });
 
-    expect(stages).toEqual(
-      expect.arrayContaining([
-        "tool-policy",
-        "workspace-policy",
-        "base-coding-tools",
-        "shell-tools",
-        "openclaw-tools:test-helper",
-        "openclaw-tools",
-        "message-provider-policy",
-        "model-provider-policy",
-        "authorization-policy",
-        "schema-normalization",
-        "tool-hooks",
-        "abort-wrappers",
-        "deferred-followup-descriptions",
-      ]),
-    );
+    expectListIncludes(stages, [
+      "tool-policy",
+      "workspace-policy",
+      "base-coding-tools",
+      "shell-tools",
+      "openclaw-tools:test-helper",
+      "openclaw-tools",
+      "message-provider-policy",
+      "model-provider-policy",
+      "authorization-policy",
+      "schema-normalization",
+      "tool-hooks",
+      "abort-wrappers",
+      "deferred-followup-descriptions",
+    ]);
     expect(stages.indexOf("tool-policy")).toBeLessThan(stages.indexOf("workspace-policy"));
     expect(stages.indexOf("workspace-policy")).toBeLessThan(stages.indexOf("base-coding-tools"));
     expect(stages.indexOf("openclaw-tools:test-helper")).toBeLessThan(
@@ -338,7 +363,7 @@ describe("createOpenClawCodingTools", () => {
     const missingNames = toolNames.filter(
       (name) => !defaultTools.some((candidate) => candidate.name === name),
     );
-    expect(missingNames).toEqual([]);
+    expect(missingNames).toStrictEqual([]);
 
     for (const name of toolNames) {
       const tool = defaultTools.find((candidate) => candidate.name === name);
@@ -447,7 +472,7 @@ describe("createOpenClawCodingTools", () => {
       })
       .filter((entry) => entry.type !== "object");
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("does not expose provider-specific message tools", () => {
@@ -805,7 +830,7 @@ describe("createOpenClawCodingTools", () => {
         `${tool.name}.parameters`,
         GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
       );
-      expect(violations).toEqual([]);
+      expect(violations).toStrictEqual([]);
     }
   });
 
@@ -828,7 +853,7 @@ describe("createOpenClawCodingTools", () => {
           const keyword = violation.split(".").at(-1) ?? "";
           return XAI_UNSUPPORTED_SCHEMA_KEYWORDS.has(keyword);
         }),
-      ).toEqual([]);
+      ).toStrictEqual([]);
     }
   });
 

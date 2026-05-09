@@ -48,6 +48,16 @@ exit 0
   await writeFile(logPath, "");
 }
 
+async function expectMissingPath(path: string): Promise<void> {
+  try {
+    await stat(path);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected missing path: ${path}`);
+}
+
 async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   const rootDir = await sandboxRootTracker.make("suite");
   const scriptPath = join(rootDir, "scripts", "docker", "setup.sh");
@@ -293,7 +303,7 @@ describe("scripts/docker/setup.sh", () => {
     const prestartCliRunLines = collectMatchingLines(prestartLines, (line) =>
       /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line),
     );
-    expect(prestartCliRunLines).toEqual([]);
+    expect(prestartCliRunLines).toStrictEqual([]);
   });
 
   it("forces BuildKit for local and sandbox docker builds", async () => {
@@ -318,7 +328,7 @@ describe("scripts/docker/setup.sh", () => {
       buildLines,
       (line) => !line.includes("DOCKER_BUILDKIT=1"),
     );
-    expect(buildLinesWithoutBuildKit).toEqual([]);
+    expect(buildLinesWithoutBuildKit).toStrictEqual([]);
   });
 
   it("precreates config identity dir for CLI device auth writes", async () => {
@@ -462,7 +472,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain("Sandbox requires Docker CLI");
     const log = await readDockerLog(activeSandbox);
     expect(log).toContain("config set agents.defaults.sandbox.mode off");
-    await expect(stat(join(activeSandbox.rootDir, "docker-compose.sandbox.yml"))).rejects.toThrow();
+    await expectMissingPath(join(activeSandbox.rootDir, "docker-compose.sandbox.yml"));
   });
 
   it("skips sandbox gateway restart when sandbox config writes fail", async () => {
@@ -497,9 +507,7 @@ describe("scripts/docker/setup.sh", () => {
         expect.stringContaining("up -d --force-recreate openclaw-gateway"),
       );
       expect(forceRecreateLine).not.toContain("docker-compose.sandbox.yml");
-      await expect(
-        stat(join(activeSandbox.rootDir, "docker-compose.sandbox.yml")),
-      ).rejects.toThrow();
+      await expectMissingPath(join(activeSandbox.rootDir, "docker-compose.sandbox.yml"));
     });
   });
 

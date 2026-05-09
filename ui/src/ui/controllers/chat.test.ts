@@ -156,7 +156,7 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
     expect(state.chatRunId).toBe("run-1");
     expect(state.chatStream).toBe("Working...");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("returns null for delta from another run", () => {
@@ -225,7 +225,7 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("drops HEARTBEAT_OK final payload from another run without clearing active stream", () => {
@@ -236,7 +236,7 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
@@ -298,7 +298,7 @@ describe("handleChatEvent", () => {
     };
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatRunId).toBe("run-user");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("keeps active stream for unowned final payloads", () => {
@@ -312,7 +312,7 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("keeps active stream while appending unowned assistant finals", () => {
@@ -346,7 +346,7 @@ describe("handleChatEvent", () => {
       expect(state.chatRunId).toBe("run-user");
       expect(state.chatStream).toBe("Working...");
       expect(state.chatStreamStartedAt).toBe(123);
-      expect(state.chatMessages).toEqual([]);
+      expect(state.chatMessages).toStrictEqual([]);
     },
   );
 
@@ -395,7 +395,7 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("does not persist null stream on final with no message", () => {
@@ -411,7 +411,7 @@ describe("handleChatEvent", () => {
       state: "final",
     };
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("prefers final payload message over streamed text", () => {
@@ -587,7 +587,7 @@ describe("handleChatEvent", () => {
     const payload = createOtherRunNoReplyFinalPayload();
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
   });
@@ -610,7 +610,7 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
   });
@@ -655,7 +655,7 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("does not persist NO_REPLY stream text on abort", () => {
@@ -673,7 +673,7 @@ describe("handleChatEvent", () => {
     } as unknown as ChatEventPayload;
 
     expect(handleChatEvent(state, payload)).toBe("aborted");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("keeps user messages containing NO_REPLY text", () => {
@@ -1235,7 +1235,7 @@ describe("loadChatHistory retry handling", () => {
 
     await loadChatHistory(state);
 
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatThinkingLevel).toBeNull();
     expect(state.lastError).toContain("operator.read");
     expect(state.chatLoading).toBe(false);

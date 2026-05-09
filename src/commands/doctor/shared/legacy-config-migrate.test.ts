@@ -127,7 +127,7 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
 
@@ -147,7 +147,7 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
 
@@ -297,7 +297,7 @@ describe("legacy bundled provider discovery migrate", () => {
     });
 
     expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 });
 
@@ -351,7 +351,7 @@ describe("legacy migrate sandbox scope aliases", () => {
         "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
       ]),
     );
-    expect(res.config?.agents?.defaults).toEqual({});
+    expect(res.config?.agents?.defaults).toStrictEqual({});
     expect(res.config?.agents?.list?.[0]).toEqual({
       id: "reviewer",
     });
@@ -431,7 +431,7 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
 });
@@ -656,7 +656,7 @@ describe("legacy migrate heartbeat config", () => {
     });
 
     expect(res.changes).toContain("Removed empty top-level heartbeat.");
-    expect(res.config).toEqual(expect.any(Object));
+    expect(res.config).not.toBeNull();
     if (res.config === null) {
       throw new Error("Expected migrated config");
     }

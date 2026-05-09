@@ -205,22 +205,22 @@ If the gateway logs `imessage: dropping group message from chat_id=<id>` or the 
 
 ## Action parity at a glance
 
-| Action                                                     | legacy BlueBubbles                  | bundled iMessage                                                                     |
-| ---------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
-| Send text / SMS fallback                                   | ✅                                  | ✅                                                                                   |
-| Send media (photo, video, file, voice)                     | ✅                                  | ✅                                                                                   |
-| Threaded reply (`reply_to_guid`)                           | ✅                                  | ✅ (closes [#51892](https://github.com/openclaw/openclaw/issues/51892))              |
-| Tapback (`react`)                                          | ✅                                  | ✅                                                                                   |
-| Edit / unsend (macOS 13+ recipients)                       | ✅                                  | ✅                                                                                   |
-| Send with screen effect                                    | ✅                                  | ✅ (closes part of [#9394](https://github.com/openclaw/openclaw/issues/9394))        |
-| Rich text bold / italic / underline / strikethrough        | ✅                                  | ✅ (typed-run formatting via attributedBody)                                         |
-| Rename group / set group icon                              | ✅                                  | ✅                                                                                   |
-| Add / remove participant, leave group                      | ✅                                  | ✅                                                                                   |
-| Read receipts and typing indicator                         | ✅                                  | ✅ (gated on private API probe)                                                      |
-| Same-sender DM coalescing                                  | ✅                                  | ✅ (DM-only; opt-in via `channels.imessage.coalesceSameSenderDms`)                   |
-| Catchup of inbound messages received while gateway is down | ✅ (webhook replay + history fetch) | _(not yet — tracked at [#78649](https://github.com/openclaw/openclaw/issues/78649))_ |
+| Action                                                     | legacy BlueBubbles                  | bundled iMessage                                                                                                        |
+| ---------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Send text / SMS fallback                                   | ✅                                  | ✅                                                                                                                      |
+| Send media (photo, video, file, voice)                     | ✅                                  | ✅                                                                                                                      |
+| Threaded reply (`reply_to_guid`)                           | ✅                                  | ✅ (closes [#51892](https://github.com/openclaw/openclaw/issues/51892))                                                 |
+| Tapback (`react`)                                          | ✅                                  | ✅                                                                                                                      |
+| Edit / unsend (macOS 13+ recipients)                       | ✅                                  | ✅                                                                                                                      |
+| Send with screen effect                                    | ✅                                  | ✅ (closes part of [#9394](https://github.com/openclaw/openclaw/issues/9394))                                           |
+| Rich text bold / italic / underline / strikethrough        | ✅                                  | ✅ (typed-run formatting via attributedBody)                                                                            |
+| Rename group / set group icon                              | ✅                                  | ✅                                                                                                                      |
+| Add / remove participant, leave group                      | ✅                                  | ✅                                                                                                                      |
+| Read receipts and typing indicator                         | ✅                                  | ✅ (gated on private API probe)                                                                                         |
+| Same-sender DM coalescing                                  | ✅                                  | ✅ (DM-only; opt-in via `channels.imessage.coalesceSameSenderDms`)                                                      |
+| Catchup of inbound messages received while gateway is down | ✅ (webhook replay + history fetch) | ✅ (opt-in via `channels.imessage.catchup.enabled`; closes [#78649](https://github.com/openclaw/openclaw/issues/78649)) |
 
-The catchup gap is the most operationally significant one for production deployments: planned restarts, mac sleep, or an unexpected gateway crash that takes more than a few seconds will silently drop any inbound iMessage traffic that arrives during the gap when running on bundled iMessage. BlueBubbles' webhook + history-fetch flow recovered those messages on reconnect, but BlueBubbles is no longer supported. There is no supported migration path that preserves catchup today; wait for [#78649](https://github.com/openclaw/openclaw/issues/78649).
+iMessage catchup is now available as an opt-in feature on the bundled plugin. On gateway startup, if `channels.imessage.catchup.enabled` is `true`, the gateway runs one `chats.list` + per-chat `messages.history` pass against the same JSON-RPC client used by `imsg watch`, replays each missed inbound row through the live dispatch path (allowlists, group policy, debouncer, echo cache), and persists a per-account cursor so subsequent startups pick up where they left off. See [Catching up after gateway downtime](/channels/imessage#catching-up-after-gateway-downtime) for tuning.
 
 ## Pairing, sessions, and ACP bindings
 
