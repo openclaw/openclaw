@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -14,7 +13,7 @@ export type DeviceIdentity = {
   privateKeyPem: string;
 };
 
-type StoredIdentity = {
+export type StoredDeviceIdentity = {
   version: 1;
   deviceId: string;
   publicKeyPem: string;
@@ -28,10 +27,6 @@ const DEVICE_IDENTITY_PATH_KEY_PREFIX = "path:";
 
 function resolveDefaultIdentityPath(): string {
   return path.join(resolveStateDir(), "identity", "device.json");
-}
-
-function resolveIdentityPathForEnv(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "identity", "device.json");
 }
 
 function stateDbOptionsForIdentityPath(filePath: string): { env: NodeJS.ProcessEnv } {
@@ -106,7 +101,7 @@ function generateIdentity(): DeviceIdentity {
   return { deviceId, publicKeyPem, privateKeyPem };
 }
 
-function parseStoredIdentity(value: unknown): StoredIdentity | null {
+function parseStoredIdentity(value: unknown): StoredDeviceIdentity | null {
   if (
     !value ||
     typeof value !== "object" ||
@@ -118,10 +113,10 @@ function parseStoredIdentity(value: unknown): StoredIdentity | null {
   ) {
     return null;
   }
-  return value as StoredIdentity;
+  return value as StoredDeviceIdentity;
 }
 
-function readStoredIdentity(filePath: string): StoredIdentity | null {
+function readStoredIdentity(filePath: string): StoredDeviceIdentity | null {
   return parseStoredIdentity(
     readOpenClawStateKvJson(
       DEVICE_IDENTITY_SCOPE,
@@ -131,13 +126,13 @@ function readStoredIdentity(filePath: string): StoredIdentity | null {
   );
 }
 
-function readStoredIdentityForEnv(env: NodeJS.ProcessEnv): StoredIdentity | null {
+function readStoredIdentityForEnv(env: NodeJS.ProcessEnv): StoredDeviceIdentity | null {
   return parseStoredIdentity(
     readOpenClawStateKvJson(DEVICE_IDENTITY_SCOPE, DEVICE_IDENTITY_KEY, { env }),
   );
 }
 
-function writeStoredIdentity(filePath: string, stored: StoredIdentity): void {
+function writeStoredIdentity(filePath: string, stored: StoredDeviceIdentity): void {
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     DEVICE_IDENTITY_SCOPE,
     identityKeyForPath(filePath),
@@ -154,7 +149,7 @@ export function loadOrCreateDeviceIdentity(
     if (parsed) {
       const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
       if (derivedId && derivedId !== parsed.deviceId) {
-        const updated: StoredIdentity = {
+        const updated: StoredDeviceIdentity = {
           ...parsed,
           deviceId: derivedId,
         };
@@ -176,7 +171,7 @@ export function loadOrCreateDeviceIdentity(
   }
 
   const identity = generateIdentity();
-  const stored: StoredIdentity = {
+  const stored: StoredDeviceIdentity = {
     version: 1,
     deviceId: identity.deviceId,
     publicKeyPem: identity.publicKeyPem,
@@ -231,38 +226,15 @@ export function loadDeviceIdentityIfPresentForEnv(
   }
 }
 
-export function legacyDeviceIdentityFileExists(env: NodeJS.ProcessEnv = process.env): boolean {
-  try {
-    return fs.existsSync(resolveIdentityPathForEnv(env));
-  } catch {
-    return false;
-  }
+export function parseStoredDeviceIdentityForMigration(value: unknown): StoredDeviceIdentity | null {
+  return parseStoredIdentity(value);
 }
 
-export function importLegacyDeviceIdentityFileToSqlite(env: NodeJS.ProcessEnv = process.env): {
-  imported: boolean;
-} {
-  const filePath = resolveIdentityPathForEnv(env);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch (error) {
-    if ((error as { code?: unknown })?.code === "ENOENT") {
-      return { imported: false };
-    }
-    throw error;
-  }
-  const stored = parseStoredIdentity(parsed);
-  if (!stored) {
-    return { imported: false };
-  }
+export function writeStoredDeviceIdentityForMigration(
+  filePath: string,
+  stored: StoredDeviceIdentity,
+): void {
   writeStoredIdentity(filePath, stored);
-  try {
-    fs.rmSync(filePath, { force: true });
-  } catch {
-    // Import succeeded; a later doctor pass can remove the stale file.
-  }
-  return { imported: true };
 }
 
 export function signDevicePayload(privateKeyPem: string, payload: string): string {
