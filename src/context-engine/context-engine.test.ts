@@ -146,7 +146,6 @@ class MockContextEngine implements ContextEngine {
   async compact(_params: {
     sessionId: string;
     sessionKey?: string;
-    transcriptLocator: string;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -226,7 +225,6 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
     sessionId: string;
     sessionKey?: string;
     transcriptScope?: unknown;
-    transcriptLocator: string;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -248,7 +246,6 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
     sessionId: string;
     sessionKey?: string;
     transcriptScope?: unknown;
-    transcriptLocator: string;
     runtimeContext?: Record<string, unknown>;
   }): Promise<ContextEngineMaintenanceResult> {
     this.maintainCalls.push({ ...params });
@@ -296,7 +293,6 @@ class SessionKeyRuntimeErrorEngine implements ContextEngine {
   async compact(_params: {
     sessionId: string;
     sessionKey?: string;
-    transcriptLocator: string;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -354,7 +350,6 @@ class LegacyAssembleStrictEngine implements ContextEngine {
   async compact(_params: {
     sessionId: string;
     sessionKey?: string;
-    transcriptLocator: string;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
@@ -396,7 +391,6 @@ describe("Engine contract tests", () => {
 
     await engine.compact({
       sessionId: "s1",
-      transcriptLocator: "/tmp/session.json",
       runtimeContext: {
         agentId: "main",
         workspaceDir: "/tmp/workspace",
@@ -415,7 +409,6 @@ describe("Engine contract tests", () => {
     const compactRuntimeSpy = installCompactRuntimeSpy();
     const result = await delegateCompactionToRuntime({
       sessionId: "s2",
-      transcriptLocator: "/tmp/session.json",
       tokenBudget: 4096,
       runtimeContext: {
         agentId: "main",
@@ -601,7 +594,6 @@ describe("Legacy sessionKey compatibility", () => {
       sessionId: "s1",
       sessionKey: "agent:main:test",
       transcriptScope: { agentId: "main", sessionId: "s1" },
-      transcriptLocator: "/tmp/session.json",
     });
 
     expect(firstAssembled.estimatedTokens).toBe(7);
@@ -654,7 +646,6 @@ describe("Legacy sessionKey compatibility", () => {
       sessionId: "s1",
       sessionKey: "agent:main:test",
       transcriptScope: { agentId: "main", sessionId: "s1" },
-      transcriptLocator: "/tmp/session.json",
     });
 
     expect(strictEngine.maintainCalls).toHaveLength(3);

@@ -313,12 +313,12 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.loadSessionEntry.mockReset();
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
+      agentId: "main",
       entry: {
         sessionId: "agent:main:main",
         updatedAt: 0,
       },
       store: {},
-      agentId: "main",
       canonicalKey: "agent:main:main",
     });
     mocks.deliveryContextFromSession.mockReset();
@@ -598,13 +598,13 @@ describe("scheduleRestartSentinelWake", () => {
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
+      agentId: "main",
       entry: {
         sessionId: "agent:main:group",
         updatedAt: 0,
         origin: { provider: "telegram", chatType: "group" },
       },
       store: {},
-      agentId: "main",
       canonicalKey: "agent:main:group",
     });
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "telegram:-1001" });
@@ -641,15 +641,14 @@ describe("scheduleRestartSentinelWake", () => {
     });
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
+      agentId: "main",
       entry: {
         sessionId: "agent:main:telegram:group:-1003826723328:topic:13757",
         updatedAt: 0,
         origin: { provider: "telegram", chatType: "group" },
       },
       store: {},
-      storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:telegram:group:-1003826723328:topic:13757",
-      legacyKey: undefined,
     });
     mocks.deliveryContextFromSession.mockReturnValue({
       channel: "telegram",

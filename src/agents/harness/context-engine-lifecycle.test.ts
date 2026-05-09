@@ -43,7 +43,6 @@ const sessionParams = {
   sessionIdUsed: "session-1",
   sessionId: "session-1",
   sessionKey: "agent:main",
-  transcriptLocator: "agent:main:session-1",
 };
 
 describe("harness context engine lifecycle", () => {
@@ -84,7 +83,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
-      transcriptLocator: sessionParams.transcriptLocator,
+      transcriptScope: { agentId: "main", sessionId: sessionParams.sessionId },
       messagesSnapshot: [
         beforePromptUser,
         beforePromptRuntimeContext,
@@ -129,7 +128,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
-      transcriptLocator: sessionParams.transcriptLocator,
+      transcriptScope: { agentId: "main", sessionId: sessionParams.sessionId },
       messagesSnapshot: [
         beforePromptUser,
         beforePromptRuntimeContext,

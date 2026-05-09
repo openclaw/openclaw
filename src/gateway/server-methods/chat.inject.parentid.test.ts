@@ -19,7 +19,7 @@ afterEach(() => {
 // current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
   it("appends a Pi session entry that includes parentId", async () => {
-    const { dir, transcriptLocator, sessionId } = createSqliteTranscriptFixtureSync({
+    const { dir, agentId, sessionId } = createSqliteTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-",
       sessionId: "sess-1",
     });
@@ -27,7 +27,7 @@ describe("gateway chat.inject transcript writes", () => {
 
     try {
       const appended = await appendInjectedAssistantMessageToTranscript({
-        transcriptLocator,
+        agentId,
         sessionId,
         message: "hello",
       });
@@ -55,7 +55,7 @@ describe("gateway chat.inject transcript writes", () => {
   });
 
   it("links injected messages after oversized SQLite transcript entries", async () => {
-    const { dir, transcriptLocator, sessionId } = createSqliteTranscriptFixtureSync({
+    const { dir, agentId, sessionId } = createSqliteTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-large-",
       sessionId: "sess-1",
     });
@@ -77,7 +77,7 @@ describe("gateway chat.inject transcript writes", () => {
       });
 
       const appended = await appendInjectedAssistantMessageToTranscript({
-        transcriptLocator,
+        agentId,
         sessionId,
         message: "hello",
       });
@@ -105,7 +105,7 @@ describe("gateway chat.inject transcript writes", () => {
   });
 
   it("mirrors injected assistant messages into SQLite when agent and session scope are known", async () => {
-    const { dir, transcriptLocator } = createSqliteTranscriptFixtureSync({
+    const { dir, agentId } = createSqliteTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-sqlite-",
       sessionId: "sess-1",
     });
@@ -114,8 +114,7 @@ describe("gateway chat.inject transcript writes", () => {
 
     try {
       const appended = await appendInjectedAssistantMessageToTranscript({
-        transcriptLocator,
-        agentId: "main",
+        agentId,
         sessionId: "sess-1",
         message: "sqlite hello",
       });

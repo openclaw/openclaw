@@ -17,7 +17,6 @@ function createAttemptParams(): AgentHarnessAttemptParams {
     sessionId: "session-1",
     sessionKey: "session-key",
     runId: "run-1",
-    transcriptLocator: "sqlite-transcript://main/session-1",
     workspaceDir: "/tmp/workspace",
     timeoutMs: 5_000,
     provider: "codex",
