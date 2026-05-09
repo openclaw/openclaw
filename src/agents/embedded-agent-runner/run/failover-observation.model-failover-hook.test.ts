@@ -7,8 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { FailoverHookRunner } from "./failover-observation.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 
-function makeHookRunner(onEmit?: ReturnType<typeof vi.fn>): FailoverHookRunner {
-  const fn = onEmit ?? vi.fn().mockResolvedValue(undefined);
+function makeHookRunner(onEmit?: unknown): FailoverHookRunner {
+  const fn = (onEmit ?? (async () => undefined)) as FailoverHookRunner["runModelFailover"];
   return {
     hasHooks: (_hookName: "model_failover") => true,
     runModelFailover: fn,
@@ -38,7 +38,7 @@ describe("createFailoverDecisionLogger: model_failover hook emission", () => {
     logger("fallback_model", { status: 429 });
 
     expect(runModelFailover).toHaveBeenCalledTimes(1);
-    const [event, ctx] = runModelFailover.mock.calls[0]!;
+    const [event, ctx] = runModelFailover.mock.calls[0];
     expect(event).toMatchObject({
       runId: "run-test-1",
       agentId: "main",
@@ -50,6 +50,7 @@ describe("createFailoverDecisionLogger: model_failover hook emission", () => {
       decision: "fallback_model",
       failoverReason: "rate_limit",
       fallbackConfigured: true,
+      sourceRecoverable: true,
       status: 429,
     });
     expect(ctx).toMatchObject({
@@ -68,7 +69,7 @@ describe("createFailoverDecisionLogger: model_failover hook emission", () => {
     logger("rotate_profile");
 
     expect(runModelFailover).toHaveBeenCalledTimes(1);
-    const [event] = runModelFailover.mock.calls[0]!;
+    const [event] = runModelFailover.mock.calls[0];
     expect(event.decision).toBe("rotate_profile");
     expect(event.status).toBeUndefined();
   });
@@ -96,6 +97,25 @@ describe("createFailoverDecisionLogger: model_failover hook emission", () => {
     expect(runModelFailover).not.toHaveBeenCalled();
   });
 
+  it("marks hard source failures as not worth probing again later", () => {
+    const runModelFailover = vi.fn().mockResolvedValue(undefined);
+    const hookRunner = makeHookRunner(runModelFailover);
+
+    const logger = createFailoverDecisionLogger({
+      ...BASE_INPUT,
+      failoverReason: "model_not_found",
+      hookRunner,
+    });
+    logger("fallback_model", { status: 404 });
+
+    const [event] = runModelFailover.mock.calls[0];
+    expect(event).toMatchObject({
+      failoverReason: "model_not_found",
+      sourceRecoverable: false,
+      status: 404,
+    });
+  });
+
   it("emits hook for assistant stage with timedOut=true", () => {
     const runModelFailover = vi.fn().mockResolvedValue(undefined);
     const hookRunner = makeHookRunner(runModelFailover);
@@ -113,7 +133,7 @@ describe("createFailoverDecisionLogger: model_failover hook emission", () => {
     logger("surface_error");
 
     expect(runModelFailover).toHaveBeenCalledTimes(1);
-    const [event] = runModelFailover.mock.calls[0]!;
+    const [event] = runModelFailover.mock.calls[0];
     expect(event).toMatchObject({
       stage: "assistant",
       decision: "surface_error",

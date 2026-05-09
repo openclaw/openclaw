@@ -7,7 +7,7 @@ export type PluginEntryConfig = {
     /**
      * Controls access to raw conversation content from conversation hooks including
      * before_agent_run, before_model_resolve, before_agent_reply, llm_input, llm_output,
-     * before_agent_finalize, and agent_end.
+     * before_agent_finalize, agent_end, and model_failure_terminal.
      * Non-bundled plugins must opt in explicitly; bundled plugins stay allowed unless disabled.
      */
     allowConversationAccess?: boolean;
