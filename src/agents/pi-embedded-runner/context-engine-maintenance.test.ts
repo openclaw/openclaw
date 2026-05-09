@@ -80,7 +80,7 @@ function firstMaintainParams(maintain: { mock: { calls: unknown[][] } }): Record
 
 function expectRecordFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
   for (const [key, value] of Object.entries(expected)) {
-    expect(record[key]).toBe(value);
+    expect(record[key]).toStrictEqual(value);
   }
 }
 
