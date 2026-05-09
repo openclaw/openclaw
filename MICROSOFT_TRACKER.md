@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-05-08 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-05-09 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -17,12 +17,12 @@
 
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 6      | 42     | 48      | 0      | 48        |
-| Windows platform          | 67     | 41     | 108     | 0      | 108       |
+| MS Teams (channel plugin) | 6      | 44     | 50      | 0      | 50        |
+| Windows platform          | 67     | 40     | 107     | 0      | 107       |
 | WSL                       | 9      | 5      | 14      | 0      | 14        |
-| Azure                     | 4      | 6      | 10      | 0      | 10        |
+| Azure                     | 5      | 6      | 11      | 0      | 11        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **86** | **94** | **180** | **0**  | **180**   |
+| **Total**                 | **87** | **95** | **182** | **0**  | **182**   |
 
 ---
 
@@ -54,9 +54,12 @@
 | [ ]       | P0       | #73590 | feat: add tool-scoped hooks and fork guard                                                           | XL   |             |
 | [ ]       | P0       | #63827 | fix(security): preserve dmPolicy settings during wizard runs                                         | XL   |             |
 | [ ]       | P0       | #46423 | fix(cron): retry recurring jobs on transient errors with backoff                                     | XL   |             |
+| [ ]       | P1       | #79444 | [codex] refresh plugin regression fixtures                                                           | S    |             |
 | [ ]       | P1       | #77784 | Add Teams delegated auth for plugin tools                                                            | XL   |             |
 | [ ]       | P1       | #71449 | fix(startup): clarify gateway vs channel readiness                                                   | XL   |             |
 | [ ]       | P1       | #48014 | feat(msteams): add DefaultAzureCredential auth type for passwordless Teams auth                      | L    |             |
+| [ ]       | P2       | #79491 | fix(gateway): keep newer node session on stale disconnect                                            | XL   |             |
+| [ ]       | P2       | #79476 | fix(google): support Vertex ADC from GCE metadata service accounts                                   | XL   |             |
 | [ ]       | P2       | #79092 | refactor: centralize channel ingress access                                                          | XL   | @steipete   |
 | [ ]       | P2       | #78850 | fix(msteams): make resolveMSTeamsRouteSessionKey idempotent against pre-suffixed bases (#66771)      | S    |             |
 | [ ]       | P2       | #78839 | [codex] Add Teams member-info action gate                                                            | S    |             |
@@ -87,7 +90,6 @@
 | [ ]       | P2       | #57364 | fix(msteams): delete FileConsentCard after user accepts, declines, or upload expires                 | S    |             |
 | [ ]       | P2       | #55828 | feat(msteams): add native plugin interactivity parity                                                | XL   |             |
 | [ ]       | P2       | #55485 | Config: plumb opt-in SSRF policy for web fetch, citation redirects, and remote media                 | L    |             |
-| [ ]       | P2       | #51570 | Add OpenClaw User-Agent header to all outbound HTTP requests                                         | S    | @SidU       |
 | [ ]       | P2       | #50875 | feat: add before_identity_resolve plugin hook                                                        | M    |             |
 | [ ]       | P2       | #46303 | fix: drain inbound debounce buffer and followup queues before SIGUSR1 reload                         | XL   |             |
 | [ ]       | P2       | #43190 | MS Teams: add channel archive persistence and deleted-channel cleanup                                | XL   |             |
@@ -102,8 +104,7 @@
 | Resolved? | Priority | #      | Title                                                                                                                                                     | Labels               | Assignee    |
 | --------- | -------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------- |
 | [ ]       | P0       | #74350 | [Security] Windows ACL audit bypass: Anonymous and Guest SIDs are misclassified as "group" instead of "world"                                             |                      |             |
-| [ ]       | P1       | #78677 | [Bug]: Remote inbound media staging spawns hardcoded /usr/bin/scp (broken on Windows / non-FHS layouts)                                                   | `bug` `bug:behavior` |             |
-| [ ]       | P1       | #78514 | [Bug]: WhatsApp plugin install fails on Windows native (Node 22, npm 10.9.3)                                                                              | `bug` `regression`   | @vincentkoc |
+| [ ]       | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                         |                      |             |
 | [ ]       | P1       | #77734 | Gateway crashes every 3 minutes on Windows - CIAO PROBING CANCELLED (bonjour plugin)                                                                      | `bug` `bug:crash`    |             |
 | [ ]       | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                            | `bug` `regression`   |             |
 | [ ]       | P1       | #76699 | 2026.5.x: Telegram media download broken - event loop saturation on Windows                                                                               |                      |             |
@@ -120,11 +121,12 @@
 | [ ]       | P1       | #62055 | Windows: CLI crashes with stack overflow / heap OOM on v2026.4.5 (large ESM module graph exceeds V8 default stack)                                        |                      |             |
 | [ ]       | P1       | #59362 | [Bug]: Windows: exec tool causes console window flash when spawning commands                                                                              | `bug` `regression`   |             |
 | [ ]       | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                        |                      |             |
-| [ ]       | P1       | #53947 | writeTextFileAtomic (sync) crashes with EPERM on Docker volumes mounted from Windows                                                                      | `stale`              |             |
+| [ ]       | P1       | #53947 | writeTextFileAtomic (sync) crashes with EPERM on Docker volumes mounted from Windows                                                                      |                      |             |
 | [ ]       | P1       | #47643 | [Bug]: Persistent Telegram Channel Issues: Sync Failures, Loops, and Config Changes Not Applying on Windows                                               | `bug` `regression`   |             |
 | [ ]       | P1       | #46378 | [Bug]: 安装配置界面windows会卡死                                                                                                                          | `bug` `regression`   |             |
 | [ ]       | P1       | #42011 | [Bug]: Control UI chat can stay stuck on "Stop" after embedded run timeout on Windows                                                                     | `bug` `bug:crash`    |             |
 | [ ]       | P1       | #39038 | [Bug]: OpenClaw节点程序在Windows 11 24H2上启动后卡在PATH信息，无法连接Gateway                                                                             | `bug` `bug:crash`    |             |
+| [ ]       | P2       | #79708 | Bug: memory index --force fails with EBUSY on Windows                                                                                                     |                      |             |
 | [ ]       | P2       | #79099 | Windows gateway probe still reports unreachable while gateway health is OK on 2026.5.6                                                                    |                      |             |
 | [ ]       | P2       | #78640 | fix(memory): EPERM on Windows persists after 64187 retry — needs copyFile/unlink fallback (was in closed PR 71611)                                        |                      |             |
 | [ ]       | P2       | #78435 | [Bug]: `channels.slack.start-account` phase blocks event loop 5+ minutes while a model_call is in flight (Windows, 2026.5.4)                              |                      |             |
@@ -183,7 +185,8 @@
 | [ ]       | P0       | #74383 | fix(security): classify broad Windows SIDs as world principals                       | S    |             |
 | [ ]       | P0       | #63074 | fix(security): classify dangerous Windows sandbox binds first                        | M    |             |
 | [ ]       | P0       | #38846 | security(windows): enhance command argument validation                               | S    |             |
-| [ ]       | P2       | #78902 | fix(plugins): avoid managed npm prefix on Windows                                    | XS   |             |
+| [ ]       | P2       | #79694 | fix(update): hide post-core update and completion cache child windows on Windows     | XS   |             |
+| [ ]       | P2       | #79505 | [AI-assisted] fix(status): restore Codex usage windows                               | S    |             |
 | [ ]       | P2       | #76245 | [codex] Fallback when Windows gateway task exits early                               | S    |             |
 | [ ]       | P2       | #75649 | fix(windows): preserve staged update handoff                                         | XL   |             |
 | [ ]       | P2       | #74425 | fix: ensure CLI processes exit after command completion on Windows                   | S    |             |
@@ -199,7 +202,6 @@
 | [ ]       | P2       | #67655 | fix(exec): fail closed on Windows shell wrappers in allowlist mode                   | XS   |             |
 | [ ]       | P2       | #64110 | feat: Deleting scheduled tasks also clears tasks in the queue.                       | L    |             |
 | [ ]       | P2       | #63651 | fix: remove duplicate restart message on Windows (schtasks)                          | S    |             |
-| [ ]       | P2       | #62910 | fix(scripts): avoid DEP0190 when spawning .cmd files on Windows (Node.js v24)        | S    |             |
 | [ ]       | P2       | #60678 | fix(acpx): add windowsHide to MCP proxy spawn on Windows                             | XS   |             |
 | [ ]       | P2       | #59705 | [codex] improve parallels windows smoke logging                                      | M    |             |
 | [ ]       | P2       | #59013 | fix: tolerate EPERM in session write-lock on Windows                                 | S    |             |
@@ -217,7 +219,6 @@
 | [ ]       | P2       | #45380 | Make env-prefixed npm scripts work on Windows                                        | S    |             |
 | [ ]       | P2       | #44228 | fix(reply): normalize Windows media paths for dedupe                                 | XS   |             |
 | [ ]       | P2       | #44215 | fix(path): add Windows PATH bootstrap dirs                                           | S    |             |
-| [ ]       | P2       | #43975 | fix(windows): bootstrap UTF-8 before running gateway task script                     | S    |             |
 | [ ]       | P2       | #42131 | fix(doctor): case-insensitive safe-bin trusted dir matching on macOS/Windows         | S    |             |
 | [ ]       | P2       | #39644 | fix(windows): PowerShell completion install and time-format detection                | S    |             |
 | [ ]       | P2       | #38932 | docs(gateway): add Windows no-Docker hardening fallback guide                        | XS   |             |
@@ -263,11 +264,12 @@
 
 ### Bugs / Crashes
 
-| Resolved? | Priority | #      | Title                                                                                                         | Labels | Assignee |
-| --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------- | ------ | -------- |
-| [ ]       | P2       | #60546 | [Bug]: microsoft-foundry provider selects Claude deployments but routes them through OpenAI Foundry endpoints |        |          |
-| [ ]       | P2       | #48793 | feat: centralized PluginResourceManager interface for consistent async cleanup across all channel plugins     |        |          |
-| [ ]       | P2       | #48788 | feat: centralized filename encoding utility for multi-encoding Content-Disposition handling                   |        |          |
+| Resolved? | Priority | #      | Title                                                                                                                                | Labels | Assignee |
+| --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------ | -------- |
+| [ ]       | P2       | #79570 | openai-responses adapter is unusable against Azure OpenAI: every turn returns a synthetic 0-token refusal (openai-completions works) |        |          |
+| [ ]       | P2       | #60546 | [Bug]: microsoft-foundry provider selects Claude deployments but routes them through OpenAI Foundry endpoints                        |        |          |
+| [ ]       | P2       | #48793 | feat: centralized PluginResourceManager interface for consistent async cleanup across all channel plugins                            |        |          |
+| [ ]       | P2       | #48788 | feat: centralized filename encoding utility for multi-encoding Content-Disposition handling                                          |        |          |
 
 ### Feature Requests
 
@@ -328,11 +330,11 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1       | #67177 | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint                         |
 | MS Teams (channel plugin) | issue | P1       | #65329 | bug(msteams): DM inline images and file attachments silently dropped                                                                                    |
 | MS Teams (channel plugin) | issue | P1       | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply                                                      |
+| MS Teams (channel plugin) | pr    | P1       | #79444 | [codex] refresh plugin regression fixtures                                                                                                              |
 | MS Teams (channel plugin) | pr    | P1       | #77784 | Add Teams delegated auth for plugin tools                                                                                                               |
 | MS Teams (channel plugin) | pr    | P1       | #71449 | fix(startup): clarify gateway vs channel readiness                                                                                                      |
 | MS Teams (channel plugin) | pr    | P1       | #48014 | feat(msteams): add DefaultAzureCredential auth type for passwordless Teams auth                                                                         |
-| Windows platform          | issue | P1       | #78677 | [Bug]: Remote inbound media staging spawns hardcoded /usr/bin/scp (broken on Windows / non-FHS layouts)                                                 |
-| Windows platform          | issue | P1       | #78514 | [Bug]: WhatsApp plugin install fails on Windows native (Node 22, npm 10.9.3)                                                                            |
+| Windows platform          | issue | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                       |
 | Windows platform          | issue | P1       | #77734 | Gateway crashes every 3 minutes on Windows - CIAO PROBING CANCELLED (bonjour plugin)                                                                    |
 | Windows platform          | issue | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                          |
 | Windows platform          | issue | P1       | #76699 | 2026.5.x: Telegram media download broken - event loop saturation on Windows                                                                             |
@@ -364,9 +366,7 @@ _No currently open items found._
 
 ## Appendix: Stale Items (Consider Closing)
 
-| Category         | Type  | Priority | #      | Title                                                                                |
-| ---------------- | ----- | -------- | ------ | ------------------------------------------------------------------------------------ |
-| Windows platform | issue | P1       | #53947 | writeTextFileAtomic (sync) crashes with EPERM on Docker volumes mounted from Windows |
+_No matching items found._
 
 ## Audit Notes
 
