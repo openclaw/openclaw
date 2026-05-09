@@ -190,8 +190,6 @@ const allowedExactPaths = new Set([
   "extensions/qqbot/src/state-migrations.ts",
   "extensions/telegram/src/state-migrations.ts",
   "src/trajectory/export.ts",
-  "src/trajectory/paths.ts",
-  "extensions/memory-wiki/src/chatgpt-import.ts",
   "extensions/memory-wiki/src/log-migration.ts",
 ]);
 
