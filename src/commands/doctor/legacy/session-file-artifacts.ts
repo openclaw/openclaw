@@ -1,12 +1,19 @@
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
-import {
-  isCompactionCheckpointTranscriptFileName,
-  isTrajectoryRuntimeArtifactName,
-} from "../../../config/sessions/artifacts.js";
 import { resolveRequiredHomeDir } from "../../../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../../routing/session-key.js";
+
+const LEGACY_COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
+  /^(.+)\.checkpoint\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
+
+function isLegacyCompactionCheckpointTranscriptFileName(fileName: string): boolean {
+  return LEGACY_COMPACTION_CHECKPOINT_TRANSCRIPT_RE.test(fileName);
+}
+
+function isLegacyTrajectoryRuntimeArtifactName(fileName: string): boolean {
+  return fileName.endsWith(".trajectory.jsonl");
+}
 
 function resolveLegacyAgentSessionsDir(
   agentId?: string,
@@ -33,10 +40,10 @@ export function isPrimaryLegacySessionTranscriptFileName(fileName: string): bool
   if (!fileName.endsWith(".jsonl")) {
     return false;
   }
-  if (isTrajectoryRuntimeArtifactName(fileName)) {
+  if (isLegacyTrajectoryRuntimeArtifactName(fileName)) {
     return false;
   }
-  if (isCompactionCheckpointTranscriptFileName(fileName)) {
+  if (isLegacyCompactionCheckpointTranscriptFileName(fileName)) {
     return false;
   }
   return true;

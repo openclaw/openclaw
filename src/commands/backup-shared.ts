@@ -6,7 +6,7 @@ import {
   resolveOAuthDir,
   resolveStateDir,
 } from "../config/config.js";
-import { formatFilesystemTimestamp } from "../config/sessions/artifacts.js";
+import { formatFilesystemTimestamp } from "../infra/filesystem-timestamp.js";
 import { pathExists, shortenHomePath } from "../utils.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
 

@@ -396,6 +396,9 @@ sessionId}` and session key context.
   and transcript row helpers. Raw SQLite database open/path and close/reset
   helpers live in the focused `sqlite-runtime` SDK surface, so plugin tests no
   longer pull the deprecated broad testing barrel for database cleanup.
+- Legacy `.jsonl` trajectory/checkpoint filename classifiers now live in the
+  doctor legacy session-file module. Core session validation no longer imports
+  file-artifact helpers to decide normal SQLite session ids.
 - Active-memory blocking subagent runs use SQLite transcript rows instead of
   creating temporary or persisted `session.jsonl` files under plugin state. The
   old `transcriptDir` option is removed.
