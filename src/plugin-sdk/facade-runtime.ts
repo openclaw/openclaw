@@ -75,18 +75,17 @@ function resolveFacadeModuleLocationUncached(params: {
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
   const env = params.env ?? process.env;
-  if (areBundledPluginsDisabled(env)) {
-    return null;
-  }
-  const bundledPluginsDir = resolveBundledPluginsDir(env);
-  const bundledLocation = resolveBundledFacadeModuleLocation({
-    ...params,
-    currentModulePath: CURRENT_MODULE_PATH,
-    packageRoot: OPENCLAW_PACKAGE_ROOT,
-    bundledPluginsDir,
-  });
-  if (bundledLocation) {
-    return bundledLocation;
+  if (!areBundledPluginsDisabled(env)) {
+    const bundledPluginsDir = resolveBundledPluginsDir(env);
+    const bundledLocation = resolveBundledFacadeModuleLocation({
+      ...params,
+      currentModulePath: CURRENT_MODULE_PATH,
+      packageRoot: OPENCLAW_PACKAGE_ROOT,
+      bundledPluginsDir,
+    });
+    if (bundledLocation) {
+      return bundledLocation;
+    }
   }
   return resolveRegistryPluginModuleLocation(params);
 }

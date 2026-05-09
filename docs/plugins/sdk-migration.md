@@ -427,7 +427,7 @@ releases.
     | Need | Import |
     | --- | --- |
     | System event queue helpers | `openclaw/plugin-sdk/system-event-runtime` |
-    | Heartbeat event and visibility helpers | `openclaw/plugin-sdk/heartbeat-runtime` |
+    | Heartbeat wake, event, and visibility helpers | `openclaw/plugin-sdk/heartbeat-runtime` |
     | Pending delivery queue drain | `openclaw/plugin-sdk/delivery-queue-runtime` |
     | Channel activity telemetry | `openclaw/plugin-sdk/channel-activity-runtime` |
     | In-memory dedupe caches | `openclaw/plugin-sdk/dedupe-runtime` |
@@ -545,7 +545,7 @@ releases.
   | `plugin-sdk/ssrf-policy` | SSRF policy helpers | Host allowlist and private-network policy helpers |
   | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |
   | `plugin-sdk/system-event-runtime` | System event helpers | `enqueueSystemEvent`, `peekSystemEventEntries` |
-  | `plugin-sdk/heartbeat-runtime` | Heartbeat helpers | Heartbeat event and visibility helpers |
+  | `plugin-sdk/heartbeat-runtime` | Heartbeat helpers | Heartbeat wake, event, and visibility helpers |
   | `plugin-sdk/delivery-queue-runtime` | Delivery queue helpers | `drainPendingDeliveries` |
   | `plugin-sdk/channel-activity-runtime` | Channel activity helpers | `recordChannelActivity` |
   | `plugin-sdk/dedupe-runtime` | Dedupe helpers | In-memory dedupe caches |
