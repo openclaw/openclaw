@@ -140,12 +140,11 @@ function shouldHideHistoryMessage(message: unknown): boolean {
 }
 
 function hasTranscriptMeta(message: unknown): boolean {
-  return Boolean(
-    message &&
-    typeof message === "object" &&
-    (message as { __openclaw?: unknown }).__openclaw &&
-    typeof (message as { __openclaw?: unknown }).__openclaw === "object",
-  );
+  const marker =
+    message && typeof message === "object"
+      ? (message as Record<string, unknown>)["__openclaw"]
+      : undefined;
+  return Boolean(marker && typeof marker === "object");
 }
 
 function isLocallyOptimisticHistoryMessage(message: unknown): boolean {
@@ -280,6 +279,49 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
+type ChatHistorySnapshot = {
+  messages: unknown[];
+  thinkingLevel: string | null;
+};
+
+const chatHistorySnapshotCache = new WeakMap<object, Map<string, ChatHistorySnapshot>>();
+
+function getChatHistoryCache(state: object): Map<string, ChatHistorySnapshot> {
+  let cache = chatHistorySnapshotCache.get(state);
+  if (!cache) {
+    cache = new Map();
+    chatHistorySnapshotCache.set(state, cache);
+  }
+  return cache;
+}
+
+export function rememberChatHistorySnapshot(
+  state: Pick<ChatState, "sessionKey" | "chatMessages" | "chatThinkingLevel">,
+  sessionKeyOverride?: string,
+) {
+  const sessionKey = (sessionKeyOverride ?? state.sessionKey)?.trim();
+  if (!sessionKey) {
+    return;
+  }
+  getChatHistoryCache(state as object).set(sessionKey, {
+    messages: Array.isArray(state.chatMessages) ? [...state.chatMessages] : [],
+    thinkingLevel: state.chatThinkingLevel ?? null,
+  });
+}
+
+export function restoreChatHistorySnapshot(
+  state: Pick<ChatState, "sessionKey" | "chatMessages" | "chatThinkingLevel">,
+  sessionKey: string,
+): boolean {
+  const cached = getChatHistoryCache(state as object).get(sessionKey.trim());
+  if (!cached) {
+    return false;
+  }
+  state.chatMessages = [...cached.messages];
+  state.chatThinkingLevel = cached.thinkingLevel;
+  return true;
+}
+
 function maybeResetToolStream(state: ChatState) {
   const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
   if (
@@ -302,7 +344,7 @@ export async function loadChatHistory(state: ChatState) {
   const previousMessages = state.chatMessages;
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
-  state.chatLoading = true;
+  state.chatLoading = previousMessages.length === 0;
   state.lastError = null;
   try {
     let res: { messages?: Array<unknown>; sessionId?: string; thinkingLevel?: string };
@@ -343,6 +385,7 @@ export async function loadChatHistory(state: ChatState) {
     state.currentSessionId =
       typeof res.sessionId === "string" && res.sessionId.trim() ? res.sessionId : null;
     state.chatThinkingLevel = res.thinkingLevel ?? null;
+    rememberChatHistorySnapshot(state, sessionKey);
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
     maybeResetToolStream(state);

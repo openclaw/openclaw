@@ -173,6 +173,43 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBe(true);
   });
 
+  test("persists control UI pinned session preferences", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: {
+          key: MAIN_SESSION_KEY,
+          controlUiPinnedSessionKeys: ["main", "agent:main:subagent:planner"],
+          controlUiPinnedSessionSlotCount: 4,
+        },
+      }),
+    );
+    expect(entry.controlUiPinnedSessionKeys).toEqual(["main", "agent:main:subagent:planner"]);
+    expect(entry.controlUiPinnedSessionSlotCount).toBe(4);
+  });
+
+  test("clears control UI pinned session preferences when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "session-main",
+        updatedAt: Date.now(),
+        controlUiPinnedSessionKeys: ["main"],
+        controlUiPinnedSessionSlotCount: 4,
+      },
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          controlUiPinnedSessionKeys: null,
+          controlUiPinnedSessionSlotCount: null,
+        },
+      }),
+    );
+    expect(entry.controlUiPinnedSessionKeys).toBeUndefined();
+    expect(entry.controlUiPinnedSessionSlotCount).toBeUndefined();
+  });
+
   test("clears fastMode when patch sets null", async () => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: { fastMode: true } as SessionEntry,

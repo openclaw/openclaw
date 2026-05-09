@@ -1821,6 +1821,8 @@ export function buildGatewaySessionRow(params: {
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
     elevatedLevel: entry?.elevatedLevel,
+    controlUiPinnedSessionKeys: entry?.controlUiPinnedSessionKeys,
+    controlUiPinnedSessionSlotCount: entry?.controlUiPinnedSessionSlotCount,
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,
     outputTokens: entry?.outputTokens,

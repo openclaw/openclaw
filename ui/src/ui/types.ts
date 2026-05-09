@@ -438,6 +438,8 @@ export type GatewaySessionRow = {
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
+  controlUiPinnedSessionKeys?: string[];
+  controlUiPinnedSessionSlotCount?: number;
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;

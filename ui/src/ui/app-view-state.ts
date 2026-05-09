@@ -124,6 +124,9 @@ export type AppViewState = {
   realtimeTalkDetail: string | null;
   realtimeTalkTranscript: string | null;
   chatManualRefreshInFlight: boolean;
+  sidebarPinnedSessionEditingKey?: string | null;
+  sidebarPinnedSessionRenameDraft?: string;
+  sidebarPinnedSessionCreating?: boolean;
   chatHeaderControlsHidden: boolean;
   chatMobileControlsOpen: boolean;
   nodesLoading: boolean;

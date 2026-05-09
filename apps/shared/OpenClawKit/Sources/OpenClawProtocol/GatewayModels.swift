@@ -2042,6 +2042,8 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let verboselevel: AnyCodable?
     public let tracelevel: AnyCodable?
     public let reasoninglevel: AnyCodable?
+    public let controluipinnedsessionkeys: AnyCodable?
+    public let controluipinnedsessionslotcount: AnyCodable?
     public let responseusage: AnyCodable?
     public let elevatedlevel: AnyCodable?
     public let exechost: AnyCodable?
@@ -2065,6 +2067,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         verboselevel: AnyCodable?,
         tracelevel: AnyCodable?,
         reasoninglevel: AnyCodable?,
+        controluipinnedsessionkeys: AnyCodable?,
+        controluipinnedsessionslotcount: AnyCodable?,
         responseusage: AnyCodable?,
         elevatedlevel: AnyCodable?,
         exechost: AnyCodable?,
@@ -2087,6 +2091,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.verboselevel = verboselevel
         self.tracelevel = tracelevel
         self.reasoninglevel = reasoninglevel
+        self.controluipinnedsessionkeys = controluipinnedsessionkeys
+        self.controluipinnedsessionslotcount = controluipinnedsessionslotcount
         self.responseusage = responseusage
         self.elevatedlevel = elevatedlevel
         self.exechost = exechost
@@ -2111,6 +2117,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         case verboselevel = "verboseLevel"
         case tracelevel = "traceLevel"
         case reasoninglevel = "reasoningLevel"
+        case controluipinnedsessionkeys = "controlUiPinnedSessionKeys"
+        case controluipinnedsessionslotcount = "controlUiPinnedSessionSlotCount"
         case responseusage = "responseUsage"
         case elevatedlevel = "elevatedLevel"
         case exechost = "execHost"

@@ -64,6 +64,8 @@ export type GatewaySessionRow = {
   traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
+  controlUiPinnedSessionKeys?: string[];
+  controlUiPinnedSessionSlotCount?: number;
   sendPolicy?: "allow" | "deny";
   inputTokens?: number;
   outputTokens?: number;

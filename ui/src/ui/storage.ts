@@ -5,6 +5,9 @@ const LOCAL_ASSISTANT_IDENTITY_KEY = "openclaw.control.assistant.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
+export const MIN_PINNED_SESSION_SLOTS = 3;
+export const MAX_PINNED_SESSION_SLOTS = 12;
+export const MAX_PINNED_SESSION_KEYS = MAX_PINNED_SESSION_SLOTS;
 
 function settingsKeyForGateway(gatewayUrl: string): string {
   return `${SETTINGS_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
@@ -34,6 +37,34 @@ import {
   type LocalUserIdentity,
 } from "./user-identity.ts";
 
+export function normalizePinnedSessionKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of value) {
+    const key = normalizeOptionalString(entry);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push(key);
+    if (normalized.length >= MAX_PINNED_SESSION_KEYS) {
+      break;
+    }
+  }
+  return normalized;
+}
+
+export function normalizePinnedSessionSlotCount(value: unknown): number {
+  if (!Number.isFinite(value)) {
+    return MIN_PINNED_SESSION_SLOTS;
+  }
+  const normalized = Math.trunc(Number(value));
+  return Math.max(MIN_PINNED_SESSION_SLOTS, Math.min(MAX_PINNED_SESSION_SLOTS, normalized));
+}
+
 export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
 export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
 
@@ -55,6 +86,8 @@ export type UiSettings = {
   token: string;
   sessionKey: string;
   lastActiveSessionKey: string;
+  pinnedSessionKeys?: string[];
+  pinnedSessionSlotCount?: number;
   theme: ThemeName;
   themeMode: ThemeMode;
   chatFocusMode: boolean;
@@ -87,7 +120,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const configured =
     typeof window !== "undefined" &&
-    normalizeOptionalString(window.__OPENCLAW_CONTROL_UI_BASE_PATH__);
+    normalizeOptionalString(window["__OPENCLAW_CONTROL_UI_BASE_PATH__"]);
   const basePath = configured
     ? normalizeBasePath(configured)
     : inferBasePathFromPathname(location.pathname);
@@ -196,6 +229,8 @@ export function loadSettings(): UiSettings {
     token: loadSessionToken(defaultUrl),
     sessionKey: "main",
     lastActiveSessionKey: "main",
+    pinnedSessionKeys: [],
+    pinnedSessionSlotCount: MIN_PINNED_SESSION_SLOTS,
     theme: "claw",
     themeMode: "system",
     chatFocusMode: false,
@@ -233,6 +268,8 @@ export function loadSettings(): UiSettings {
       token: loadSessionToken(gatewayUrl),
       sessionKey: scopedSessionSelection.sessionKey,
       lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
+      pinnedSessionKeys: normalizePinnedSessionKeys(parsed.pinnedSessionKeys),
+      pinnedSessionSlotCount: normalizePinnedSessionSlotCount(parsed.pinnedSessionSlotCount),
       theme: theme === "custom" && !customTheme ? "claw" : theme,
       themeMode: mode,
       chatFocusMode:
@@ -346,6 +383,8 @@ function persistSettings(next: UiSettings) {
   const storage = getSafeLocalStorage();
   const scope = normalizeGatewayTokenScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
+  const pinnedSessionKeys = normalizePinnedSessionKeys(next.pinnedSessionKeys);
+  const pinnedSessionSlotCount = normalizePinnedSessionSlotCount(next.pinnedSessionSlotCount);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
     // Try to migrate from legacy key or other scopes
@@ -388,6 +427,8 @@ function persistSettings(next: UiSettings) {
     borderRadius: next.borderRadius,
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
+    ...(pinnedSessionKeys.length > 0 ? { pinnedSessionKeys } : {}),
+    ...(pinnedSessionSlotCount > MIN_PINNED_SESSION_SLOTS ? { pinnedSessionSlotCount } : {}),
     ...(next.locale ? { locale: next.locale } : {}),
   };
   const serialized = JSON.stringify(persisted);
