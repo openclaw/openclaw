@@ -3762,6 +3762,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 
 ### Fixes
 
+- Browser: time out remote CDP Playwright tab enumeration and evict stuck scoped connections so unstable remote browsers fail fast instead of blocking Gateway browser requests. Fixes #58968. Thanks @KeaneYan.
 - Agents/exec approvals: return approved WebChat gateway exec output inline after native approval instead of leaving the model waiting for an async follow-up. (#82019) Thanks @Zac-W.
 - CLI/node: reject invalid explicit `node run --port` values instead of silently falling back to the configured or default port. Fixes #83923. Thanks @davinci282828.
 - CLI: reject explicit port numbers above 65535 before they reach Gateway or Node bind paths. Fixes #83900. (#84008) Thanks @hclsys.
