@@ -14,6 +14,22 @@ function createDeferred<T = void>() {
   return { promise, resolve };
 }
 
+async function raceWithNextMacrotask(promise: Promise<unknown>): Promise<"resolved" | "pending"> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), 0);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 const mocks = vi.hoisted(() => ({
   refreshChatMock: vi.fn(async () => {}),
   scheduleChatScrollMock: vi.fn(),
@@ -237,10 +253,7 @@ describe("refreshActiveTab", () => {
     mocks.loadUsageMock.mockReturnValueOnce(new Promise<void>(() => undefined));
 
     const refresh = refreshActiveTab(host as never);
-    const outcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const outcome = await raceWithNextMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
     expect(mocks.loadChannelsMock).toHaveBeenCalled();
@@ -255,10 +268,7 @@ describe("refreshActiveTab", () => {
     mocks.loadConfigSchemaMock.mockReturnValueOnce(schema.promise);
 
     const refresh = refreshActiveTab(host as never);
-    const outcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const outcome = await raceWithNextMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
     expect(mocks.loadConfigSchemaMock).toHaveBeenCalledOnce();
@@ -285,10 +295,7 @@ describe("refreshActiveTab", () => {
     });
 
     const refresh = refreshActiveTab(host as never);
-    const outcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const outcome = await raceWithNextMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
     expect(mocks.loadChannelsMock.mock.calls.map(([, probe]) => probe)).toEqual([false, true]);
@@ -335,10 +342,7 @@ describe("refreshActiveTab", () => {
     mocks.loadCronRunsMock.mockReturnValueOnce(new Promise<"ok">(() => undefined));
 
     const refresh = refreshActiveTab(host as never);
-    const outcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const outcome = await raceWithNextMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
