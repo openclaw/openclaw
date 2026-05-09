@@ -342,6 +342,20 @@ const listBuiltBundledPluginEntries = (deps) => {
     .toSorted((left, right) => left.id.localeCompare(right.id));
 };
 
+const listBuiltBundledPluginRuntimeOverlayDirs = (deps) => {
+  const distExtensionsRoot = path.join(resolveRuntimePostBuildDistRoot(deps), "extensions");
+  let entries = [];
+  try {
+    entries = deps.fs.readdirSync(distExtensionsRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && entry.name !== "node_modules")
+    .map((entry) => entry.name)
+    .toSorted((left, right) => left.localeCompare(right));
+};
+
 const listRequiredBundledPluginMetadataOutputs = (pluginEntries, deps) =>
   pluginEntries.flatMap(({ id, hasManifest, hasPackageJson }) => {
     const builtPluginDir = path.join(resolveRuntimePostBuildDistRoot(deps), "extensions", id);
@@ -386,13 +400,13 @@ const listRuntimeOverlaySourcePaths = (sourceDir, deps) => {
   return paths.toSorted((left, right) => left.localeCompare(right));
 };
 
-const listRequiredBundledPluginRuntimeOverlayOutputs = (pluginEntries, deps) => {
+const listRequiredBundledPluginRuntimeOverlayOutputs = (deps) => {
   const distRoot = resolveRuntimePostBuildDistRoot(deps);
   const runtimeRoot = resolveRuntimePostBuildRuntimeRoot(deps);
   const runtimePaths = [];
-  for (const pluginEntry of pluginEntries) {
-    const distPluginDir = path.join(distRoot, "extensions", pluginEntry.id);
-    const runtimePluginDir = path.join(runtimeRoot, "extensions", pluginEntry.id);
+  for (const pluginId of listBuiltBundledPluginRuntimeOverlayDirs(deps)) {
+    const distPluginDir = path.join(distRoot, "extensions", pluginId);
+    const runtimePluginDir = path.join(runtimeRoot, "extensions", pluginId);
     for (const sourcePath of listRuntimeOverlaySourcePaths(distPluginDir, deps)) {
       runtimePaths.push(path.join(runtimePluginDir, path.relative(distPluginDir, sourcePath)));
     }
@@ -443,7 +457,7 @@ export const listRequiredRuntimePostBuildOutputs = (deps) => {
     ...listRequiredOpenClawExtensionAliasOutputs(deps),
     ...listRequiredStaticExtensionAssetOutputs(deps),
     ...listRequiredBundledPluginMetadataOutputs(builtPluginEntries, deps),
-    ...listRequiredBundledPluginRuntimeOverlayOutputs(builtPluginEntries, deps),
+    ...listRequiredBundledPluginRuntimeOverlayOutputs(deps),
   ];
 };
 

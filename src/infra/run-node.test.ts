@@ -1777,6 +1777,49 @@ describe("run-node script", () => {
     });
   });
 
+  it("reports missing runtime overlay outputs from restored dist without plugin sources", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIST_EXTENSION_INDEX]: "export default {};\n",
+          [DIST_EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [DIST_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
+          [DIST_RUNTIME_EXTENSION_INDEX]: "export default {};\n",
+          [DIST_RUNTIME_EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIST_ENTRY,
+          DIST_EXTENSION_INDEX,
+          DIST_EXTENSION_MANIFEST,
+          DIST_EXTENSION_PACKAGE,
+          DIST_RUNTIME_EXTENSION_INDEX,
+          DIST_RUNTIME_EXTENSION_MANIFEST,
+          DIST_RUNTIME_EXTENSION_PACKAGE,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, "extensions"), { recursive: true, force: true });
+      await fs.rm(resolvePath(tmp, DIST_RUNTIME_EXTENSION_INDEX));
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: true,
+        reason: "missing_runtime_postbuild_output",
+      });
+    });
+  });
+
   it("does not require OpenClaw SDK alias outputs when dist extensions are absent", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
