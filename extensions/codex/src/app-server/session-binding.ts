@@ -38,7 +38,8 @@ export type CodexAppServerThreadBinding = {
   schemaVersion: 1;
   threadId: string;
   sessionKey?: string;
-  sessionFile: string;
+  sessionId: string;
+  sessionFile?: string;
   cwd: string;
   authProfileId?: string;
   model?: string;
@@ -58,6 +59,7 @@ export type CodexAppServerBindingIdentity =
   | string
   | {
       sessionKey?: string;
+      sessionId?: string;
       sessionFile?: string;
     };
 
@@ -65,19 +67,22 @@ function normalizeCodexAppServerBindingIdentity(identity: CodexAppServerBindingI
   primaryKey: string;
   legacySessionFileKey?: string;
   sessionKey?: string;
-  sessionFile: string;
+  sessionId: string;
+  sessionFile?: string;
 } {
   if (typeof identity === "string") {
-    const sessionFile = identity.trim();
-    return { primaryKey: sessionFile, sessionFile };
+    const sessionId = identity.trim();
+    return { primaryKey: sessionId, sessionId };
   }
   const sessionKey = identity.sessionKey?.trim() || undefined;
+  const sessionId = identity.sessionId?.trim() || "";
   const sessionFile = identity.sessionFile?.trim() || "";
   return {
-    primaryKey: sessionKey ? `session-key:${sessionKey}` : sessionFile,
+    primaryKey: sessionKey ? `session-key:${sessionKey}` : sessionId || sessionFile,
     legacySessionFileKey: sessionKey && sessionFile ? sessionFile : undefined,
     sessionKey,
-    sessionFile,
+    sessionId,
+    ...(sessionFile ? { sessionFile } : {}),
   };
 }
 
@@ -104,6 +109,10 @@ function normalizeCodexAppServerBinding(
       typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()
         ? parsed.sessionKey.trim()
         : identity.sessionKey,
+    sessionId:
+      typeof parsed.sessionId === "string" && parsed.sessionId.trim()
+        ? parsed.sessionId.trim()
+        : identity.sessionId,
     sessionFile:
       typeof parsed.sessionFile === "string" && parsed.sessionFile.trim()
         ? parsed.sessionFile
@@ -161,9 +170,10 @@ export async function writeCodexAppServerBinding(
   identity: CodexAppServerBindingIdentity,
   binding: Omit<
     CodexAppServerThreadBinding,
-    "schemaVersion" | "sessionKey" | "sessionFile" | "createdAt" | "updatedAt"
+    "schemaVersion" | "sessionKey" | "sessionId" | "sessionFile" | "createdAt" | "updatedAt"
   > & {
     sessionKey?: string;
+    sessionId?: string;
     sessionFile?: string;
     createdAt?: string;
   },
@@ -174,7 +184,10 @@ export async function writeCodexAppServerBinding(
   const payload: CodexAppServerThreadBinding = {
     schemaVersion: 1,
     sessionKey: binding.sessionKey?.trim() || normalized.sessionKey,
-    sessionFile: binding.sessionFile?.trim() || normalized.sessionFile,
+    sessionId: binding.sessionId?.trim() || normalized.sessionId,
+    ...(binding.sessionFile?.trim() || normalized.sessionFile
+      ? { sessionFile: binding.sessionFile?.trim() || normalized.sessionFile }
+      : {}),
     threadId: binding.threadId,
     cwd: binding.cwd,
     authProfileId: binding.authProfileId,

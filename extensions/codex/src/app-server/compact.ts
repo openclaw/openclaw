@@ -46,7 +46,8 @@ export async function maybeCompactCodexAppServerSession(
       primary = await activeContextEngine.compact({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
+        transcriptScope: { agentId: params.agentId ?? "main", sessionId: params.sessionId },
+        transcriptLocator: params.sessionId,
         tokenBudget: params.contextTokenBudget,
         currentTokenCount: params.currentTokenCount,
         compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
@@ -71,7 +72,8 @@ export async function maybeCompactCodexAppServerSession(
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
-          sessionFile: params.sessionFile,
+          transcriptScope: { agentId: params.agentId ?? "main", sessionId: params.sessionId },
+          transcriptLocator: params.sessionId,
           reason: "compaction",
           runtimeContext: params.contextEngineRuntimeContext,
           config: params.config,
@@ -111,7 +113,7 @@ async function compactCodexNativeThread(
 ): Promise<EmbeddedPiCompactResult | undefined> {
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const binding = await readCodexAppServerBinding(
-    { sessionKey: params.sessionKey, sessionFile: params.sessionFile },
+    { sessionKey: params.sessionKey, sessionId: params.sessionId },
     { config: params.config },
   );
   if (!binding?.threadId) {

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import {
   appendSessionTranscriptMessage,
   emitSessionTranscriptUpdate,
-  resolveSqliteSessionTranscriptScopeForLocator,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -65,10 +64,9 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
 }
 
 export async function mirrorCodexAppServerTranscript(params: {
-  transcriptLocator: string;
-  sessionId?: string;
+  agentId: string;
+  sessionId: string;
   sessionKey?: string;
-  agentId?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
   config?: unknown;
@@ -81,13 +79,10 @@ export async function mirrorCodexAppServerTranscript(params: {
     return;
   }
 
-  const resolvedScope = resolveSqliteSessionTranscriptScopeForLocator({
-    transcriptLocator: params.transcriptLocator,
-  });
-  const agentId = params.agentId?.trim() || resolvedScope?.agentId || DEFAULT_AGENT_ID;
-  const sessionId = params.sessionId?.trim() || resolvedScope?.sessionId;
+  const agentId = params.agentId.trim() || DEFAULT_AGENT_ID;
+  const sessionId = params.sessionId.trim();
   if (!sessionId) {
-    throw new Error("Codex transcript mirror requires a SQLite transcript locator or session id.");
+    throw new Error("Codex transcript mirror requires a session id.");
   }
 
   for (const message of messages) {
@@ -116,7 +111,6 @@ export async function mirrorCodexAppServerTranscript(params: {
         : nextMessage
     ) as AgentMessage;
     await appendSessionTranscriptMessage({
-      transcriptLocator: params.transcriptLocator,
       agentId,
       sessionId,
       message: messageToAppend,
@@ -128,14 +122,12 @@ export async function mirrorCodexAppServerTranscript(params: {
     emitSessionTranscriptUpdate({
       agentId,
       sessionId,
-      transcriptLocator: params.transcriptLocator,
       sessionKey: params.sessionKey,
     });
   } else {
     emitSessionTranscriptUpdate({
       agentId,
       sessionId,
-      transcriptLocator: params.transcriptLocator,
     });
   }
 }

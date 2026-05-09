@@ -3,31 +3,24 @@ import {
   buildSessionContext,
   loadSqliteSessionTranscriptEvents,
   migrateSessionEntries,
-  resolveSqliteSessionTranscriptScopeForLocator,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 export type CodexMirroredSessionHistoryScope = {
-  transcriptLocator: string;
-  agentId?: string;
-  sessionId?: string;
+  agentId: string;
+  sessionId: string;
 };
 
 export async function readCodexMirroredSessionHistoryMessages(
   scope: CodexMirroredSessionHistoryScope,
 ): Promise<AgentMessage[] | undefined> {
   try {
-    const resolvedScope =
-      resolveSqliteSessionTranscriptScopeForLocator({
-        transcriptLocator: scope.transcriptLocator,
-      }) ??
-      (scope.agentId && scope.sessionId
-        ? { agentId: scope.agentId, sessionId: scope.sessionId }
-        : undefined);
-    if (!resolvedScope) {
+    const agentId = scope.agentId.trim();
+    const sessionId = scope.sessionId.trim();
+    if (!agentId || !sessionId) {
       return [];
     }
-    const entries = loadSqliteSessionTranscriptEvents(resolvedScope)
+    const entries = loadSqliteSessionTranscriptEvents({ agentId, sessionId })
       .map((entry) => entry.event)
       .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
     if (entries.length === 0) {
