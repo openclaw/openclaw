@@ -144,6 +144,9 @@ vi.mock("./exec-file.js", () => ({
   execFileUtf8: vi.fn(async (file: string, args: string[]) => {
     const call = normalizeLaunchctlArgs(file, args);
     state.launchctlCalls.push(call);
+    if (call[0] === "kickstart") {
+      callOrderState.events.push("kickstart");
+    }
     if (call[0] === "list") {
       return { stdout: state.listOutput, stderr: "", code: 0 };
     }
@@ -1012,10 +1015,7 @@ describe("launchd install", () => {
     await restartLaunchAgent({ env, stdout: new PassThrough() });
 
     expect(logRetentionState.applyGatewayLogRetention).toHaveBeenCalledWith(env);
-    const retentionIndex = callOrderState.events.indexOf("retention");
-    const kickstartIndex = state.launchctlCalls.findIndex((call) => call[0] === "kickstart");
-    expect(retentionIndex).toBeGreaterThanOrEqual(0);
-    expect(kickstartIndex).toBeGreaterThanOrEqual(0);
+    expect(callOrderState.events).toStrictEqual(["retention", "kickstart"]);
   });
 
   it("surfaces detached handoff failures", async () => {
