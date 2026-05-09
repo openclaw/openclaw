@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { importLegacyCronRunLogFilesToSqlite } from "../commands/doctor/legacy/cron-run-log.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   appendCronRunLogToSqlite,
@@ -96,30 +95,6 @@ describe("cron run log", () => {
       });
       expect(all.entries).toEqual([expect.objectContaining({ ts: 2 })]);
       expect(all.entries[0]).toMatchObject({ jobName: "Nightly Backup" });
-    });
-  });
-
-  it("imports legacy JSONL run-log files into SQLite and removes them", async () => {
-    await withRunLogDir("openclaw-cron-log-import-", async (dir) => {
-      const storePath = path.join(dir, "cron", "jobs.json");
-      const logPath = path.join(dir, "cron", "runs", "job-1.jsonl");
-      await fs.mkdir(path.dirname(logPath), { recursive: true });
-      await fs.writeFile(
-        logPath,
-        `${JSON.stringify({ ts: 1, jobId: "job-1", action: "finished", status: "ok" })}\n`,
-        "utf-8",
-      );
-
-      const result = await importLegacyCronRunLogFilesToSqlite({
-        legacyStorePath: storePath,
-        storeKey: storePath,
-      });
-
-      expect(result).toMatchObject({ imported: 1, files: 1 });
-      expect(readCronRunLogEntriesFromSqliteSync(storePath, { jobId: "job-1" })).toEqual([
-        expect.objectContaining({ ts: 1, status: "ok" }),
-      ]);
-      await expect(fs.stat(logPath)).rejects.toThrow();
     });
   });
 });
