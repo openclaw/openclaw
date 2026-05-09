@@ -1082,8 +1082,8 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("routes bidi realtime consults through a configured voice agent session target", async () => {
-    resolveAgentRouteMock.mockImplementation((params: { peer?: { id?: string } }) => {
-      if (params.peer?.id === "maintainers") {
+    resolveAgentRouteMock.mockImplementation((params?: { peer?: { id?: string } }) => {
+      if (params?.peer?.id === "maintainers") {
         return {
           agentId: "main",
           sessionKey: "agent:main:discord:channel:maintainers",
