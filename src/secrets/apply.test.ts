@@ -3,6 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  AUTH_PROFILE_STORE_KV_SCOPE,
+  authProfileStoreKey,
+} from "../agents/auth-profiles/persisted.js";
+import {
+  readOpenClawStateKvJsonResult,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
+import {
   buildTalkTestProviderConfig,
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
@@ -34,7 +43,8 @@ type ApplyFixture = {
   rootDir: string;
   stateDir: string;
   configPath: string;
-  authStorePath: string;
+  authStoreAgentDir: string;
+  stateDbPath: string;
   authJsonPath: string;
   envPath: string;
   env: NodeJS.ProcessEnv;
@@ -74,7 +84,8 @@ function buildFixturePaths(rootDir: string) {
     rootDir,
     stateDir,
     configPath: path.join(stateDir, "openclaw.json"),
-    authStorePath: path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
+    authStoreAgentDir: path.join(stateDir, "agents", "main", "agent"),
+    stateDbPath: path.join(stateDir, "state", "openclaw.sqlite"),
     authJsonPath: path.join(stateDir, "agents", "main", "agent", "auth.json"),
     envPath: path.join(stateDir, ".env"),
   };
@@ -85,7 +96,7 @@ async function createApplyFixture(): Promise<ApplyFixture> {
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-apply-")),
   );
   await fs.mkdir(path.dirname(paths.configPath), { recursive: true });
-  await fs.mkdir(path.dirname(paths.authStorePath), { recursive: true });
+  await fs.mkdir(paths.authStoreAgentDir, { recursive: true });
   return {
     ...paths,
     env: {
@@ -96,6 +107,27 @@ async function createApplyFixture(): Promise<ApplyFixture> {
   };
 }
 
+function writeAuthStoreFixture(fixture: ApplyFixture, value: unknown): void {
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    AUTH_PROFILE_STORE_KV_SCOPE,
+    authProfileStoreKey(fixture.authStoreAgentDir),
+    value as OpenClawStateJsonValue,
+    { env: fixture.env },
+  );
+}
+
+function readAuthStoreFixture<T>(fixture: ApplyFixture): T {
+  const result = readOpenClawStateKvJsonResult(
+    AUTH_PROFILE_STORE_KV_SCOPE,
+    authProfileStoreKey(fixture.authStoreAgentDir),
+    { env: fixture.env },
+  );
+  if (!result.exists || result.value === undefined) {
+    throw new Error("Expected auth profile store fixture to exist.");
+  }
+  return result.value as T;
+}
+
 async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<void> {
   await writeJsonFile(fixture.configPath, {
     models: {
@@ -104,7 +136,7 @@ async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<void> {
       },
     },
   });
-  await writeJsonFile(fixture.authStorePath, {
+  writeAuthStoreFixture(fixture, {
     version: 1,
     profiles: {
       "openai:default": {
@@ -287,9 +319,9 @@ describe("secrets apply", () => {
     };
     expect(nextConfig.models.providers.openai.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
 
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = readAuthStoreFixture<{
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
-    };
+    }>(fixture);
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
     expect(nextAuthStore.profiles["openai:default"].keyRef).toEqual({
       source: "env",
@@ -309,7 +341,7 @@ describe("secrets apply", () => {
   });
 
   it("preserves auth-profile tokenRef during provider scrub", async () => {
-    await writeJsonFile(fixture.authStorePath, {
+    writeAuthStoreFixture(fixture, {
       version: 1,
       profiles: {
         "openai:bot": {
@@ -327,15 +359,15 @@ describe("secrets apply", () => {
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
 
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = readAuthStoreFixture<{
       profiles: { "openai:bot": { token?: string; tokenRef?: unknown } };
-    };
+    }>(fixture);
     expect(nextAuthStore.profiles["openai:bot"].token).toBeUndefined();
     expect(nextAuthStore.profiles["openai:bot"].tokenRef).toEqual(OPENAI_API_KEY_ENV_REF);
   });
 
   it("scrubs malformed auth-profile ref residue during provider scrub", async () => {
-    await writeJsonFile(fixture.authStorePath, {
+    writeAuthStoreFixture(fixture, {
       version: 1,
       profiles: {
         "openai:default": {
@@ -353,9 +385,9 @@ describe("secrets apply", () => {
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
 
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = readAuthStoreFixture<{
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
-    };
+    }>(fixture);
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
     expect(nextAuthStore.profiles["openai:default"].keyRef).toBeUndefined();
   });
@@ -399,7 +431,7 @@ describe("secrets apply", () => {
     }
     const execScriptPath = path.join(fixture.rootDir, "resolver.sh");
     await writeOpenAiExecResolverConfig({ fixture, execScriptPath });
-    await writeJsonFile(fixture.authStorePath, {
+    writeAuthStoreFixture(fixture, {
       version: 1,
       profiles: {
         "openai:default": {
@@ -429,7 +461,7 @@ describe("secrets apply", () => {
         },
       },
     });
-    await writeJsonFile(fixture.authStorePath, {
+    writeAuthStoreFixture(fixture, {
       version: 1,
       profiles: {
         "openai:default": {
@@ -524,11 +556,11 @@ describe("secrets apply", () => {
 
     const result = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(result.changed).toBe(true);
-    expect(result.changedFiles).toContain(fixture.authStorePath);
+    expect(result.changedFiles).toContain(fixture.stateDbPath);
 
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = readAuthStoreFixture<{
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
-    };
+    }>(fixture);
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
     expect(nextAuthStore.profiles["openai:default"].keyRef).toEqual({
       source: "env",
@@ -561,7 +593,7 @@ describe("secrets apply", () => {
     };
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = readAuthStoreFixture<{
       profiles: {
         "openai:bot": {
           type: string;
@@ -569,7 +601,7 @@ describe("secrets apply", () => {
           tokenRef?: unknown;
         };
       };
-    };
+    }>(fixture);
     expect(nextAuthStore.profiles["openai:bot"]).toEqual({
       type: "token",
       provider: "openai",
@@ -590,12 +622,11 @@ describe("secrets apply", () => {
     const first = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(first.changed).toBe(true);
     const configAfterFirst = await fs.readFile(fixture.configPath, "utf8");
-    const authStoreAfterFirst = await fs.readFile(fixture.authStorePath, "utf8");
+    const authStoreAfterFirst = readAuthStoreFixture(fixture);
     const authJsonAfterFirst = await fs.readFile(fixture.authJsonPath, "utf8");
     const envAfterFirst = await fs.readFile(fixture.envPath, "utf8");
 
     await fs.chmod(fixture.configPath, 0o400);
-    await fs.chmod(fixture.authStorePath, 0o400);
 
     const second = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(second.mode).toBe("write");
@@ -603,7 +634,7 @@ describe("secrets apply", () => {
     expect(stripVolatileConfigMeta(configAfterSecond)).toEqual(
       stripVolatileConfigMeta(configAfterFirst),
     );
-    await expect(fs.readFile(fixture.authStorePath, "utf8")).resolves.toBe(authStoreAfterFirst);
+    expect(readAuthStoreFixture(fixture)).toEqual(authStoreAfterFirst);
     await expect(fs.readFile(fixture.authJsonPath, "utf8")).resolves.toBe(authJsonAfterFirst);
     await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe(envAfterFirst);
   });

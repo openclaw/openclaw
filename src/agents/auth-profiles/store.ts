@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION, EXTERNAL_CLI_SYNC_TTL_MS } from "./constants.js";
@@ -31,6 +32,7 @@ import type { AuthProfileStore } from "./types.js";
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   externalCli?: ExternalCliAuthDiscovery;
   readOnly?: boolean;
   syncExternalCli?: boolean;
@@ -39,6 +41,7 @@ type LoadAuthProfileStoreOptions = {
 };
 
 type SaveAuthProfileStoreOptions = {
+  env?: NodeJS.ProcessEnv;
   filterExternalAuthProfiles?: boolean;
   syncExternalCli?: boolean;
 };
@@ -334,7 +337,7 @@ function loadAuthProfileStoreForAgent(
 ): AuthProfileStore {
   const readOnly = options?.readOnly === true;
   const authPath = resolveAuthStorePath(agentDir);
-  const persisted = loadPersistedAuthProfileStoreEntry(agentDir);
+  const persisted = loadPersistedAuthProfileStoreEntry(agentDir, { env: options?.env });
   const authMtimeMs = persisted?.updatedAt ?? null;
   if (!readOnly) {
     const cached = readCachedAuthProfileStore({
@@ -398,16 +401,23 @@ export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthPr
   return loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, allowKeychainPrompt: false });
 }
 
-export function loadAuthProfileStoreWithoutExternalProfiles(agentDir?: string): AuthProfileStore {
-  const options: LoadAuthProfileStoreOptions = { readOnly: true, allowKeychainPrompt: false };
-  const store = loadAuthProfileStoreForAgent(agentDir, options);
+export function loadAuthProfileStoreWithoutExternalProfiles(
+  agentDir?: string,
+  options?: Pick<LoadAuthProfileStoreOptions, "env">,
+): AuthProfileStore {
+  const loadOptions: LoadAuthProfileStoreOptions = {
+    readOnly: true,
+    allowKeychainPrompt: false,
+    ...(options?.env ? { env: options.env } : {}),
+  };
+  const store = loadAuthProfileStoreForAgent(agentDir, loadOptions);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
     return store;
   }
 
-  const mainStore = loadAuthProfileStoreForAgent(undefined, options);
+  const mainStore = loadAuthProfileStoreForAgent(undefined, loadOptions);
   return mergeAuthProfileStores(mainStore, store);
 }
 
@@ -532,10 +542,13 @@ export function saveAuthProfileStore(
   options?: SaveAuthProfileStoreOptions,
 ): void {
   const localStore = buildLocalAuthProfileStoreForSave({ store, agentDir, options });
-  runOpenClawStateWriteTransaction((database) => {
-    saveAuthProfileStoreInTransaction(database, localStore, agentDir);
-  });
-  refreshAuthProfileStoreCache(localStore, agentDir);
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      saveAuthProfileStoreInTransaction(database, localStore, agentDir);
+    },
+    { env: options?.env },
+  );
+  refreshAuthProfileStoreCache(localStore, agentDir, { env: options?.env });
 }
 
 function saveAuthProfileStoreInTransaction(
@@ -549,9 +562,13 @@ function saveAuthProfileStoreInTransaction(
   savePersistedAuthProfileStateInTransaction(database, localStore, agentDir, updatedAt);
 }
 
-function refreshAuthProfileStoreCache(store: AuthProfileStore, agentDir?: string): void {
+function refreshAuthProfileStoreCache(
+  store: AuthProfileStore,
+  agentDir?: string,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
   const authPath = resolveAuthStorePath(agentDir);
-  const persisted = loadPersistedAuthProfileStoreEntry(agentDir);
+  const persisted = loadPersistedAuthProfileStoreEntry(agentDir, options);
   writeCachedAuthProfileStore({
     authPath,
     authMtimeMs: persisted?.updatedAt ?? null,

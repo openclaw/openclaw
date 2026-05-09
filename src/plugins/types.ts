@@ -1787,7 +1787,7 @@ export type ProviderPlugin = {
    * Provider-owned external auth profile discovery.
    *
    * Use this when credentials are managed by an external tool and should be visible
-   * to runtime auth resolution without being written back into `auth-profiles.json`
+   * to runtime auth resolution without being written back into the persisted auth store
    * by core.
    */
   resolveExternalAuthProfiles?: (

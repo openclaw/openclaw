@@ -3,10 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import { coercePersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import {
+  AUTH_PROFILE_STORE_KV_SCOPE,
+  authProfileStoreKey,
+  buildPersistedAuthProfileSecretsStore,
+  coercePersistedAuthProfileStore,
+} from "../agents/auth-profiles/persisted.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   replaceConfigFile,
@@ -17,8 +20,17 @@ import {
 import type { ConfigWriteOptions } from "../config/io.js";
 import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  deleteOpenClawStateKvJson,
+  readOpenClawStateKvJsonResult,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+  type OpenClawStateKvJsonReadResult,
+} from "../state/openclaw-state-kv.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
+import { listAuthProfileStoreAgentDirs } from "./auth-store-paths.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import { deletePathStrict, getPath, setPathCreateStrict } from "./path-utils.js";
@@ -34,11 +46,11 @@ import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isNonEmptyString, isRecord, writeTextFileAtomic } from "./shared.js";
 import {
-  listAuthProfileStorePaths,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
 } from "./storage-scan.js";
+import { AUTH_PROFILE_TARGET_CONFIG_FILE } from "./target-registry-types.js";
 
 type FileSnapshot = {
   existed: boolean;
@@ -57,10 +69,11 @@ type ProjectedState = {
   configSnapshot: ConfigFileSnapshot;
   configPath: string;
   configWriteOptions: ConfigWriteOptions;
-  authStoreByPath: Map<string, Record<string, unknown>>;
+  authStoreByAgentDir: Map<string, Record<string, unknown>>;
   authJsonByPath: Map<string, Record<string, unknown>>;
   envRawByPath: Map<string, string>;
   changedFiles: Set<string>;
+  env: NodeJS.ProcessEnv;
   warnings: string[];
   refsChecked: number;
   skippedExecRefs: number;
@@ -77,12 +90,14 @@ type ConfigTargetMutationResult = {
   scrubbedValues: Set<string>;
   providerTargets: Set<string>;
   configChanged: boolean;
-  authStoreByPath: Map<string, Record<string, unknown>>;
+  authStoreByAgentDir: Map<string, Record<string, unknown>>;
 };
 
 type MutableAuthProfileStore = Record<string, unknown> & {
   profiles: Record<string, unknown>;
 };
+
+type AuthStoreSnapshot = OpenClawStateKvJsonReadResult;
 
 export type SecretsApplyResult = {
   mode: "dry-run" | "write";
@@ -232,19 +247,21 @@ async function projectPlanState(params: {
     planTargets: params.plan.targets,
     nextConfig,
     stateDir,
-    authStoreByPath: new Map<string, Record<string, unknown>>(),
+    env: params.env,
+    authStoreByAgentDir: new Map<string, Record<string, unknown>>(),
     changedFiles,
   });
   if (targetMutations.configChanged) {
     changedFiles.add(configPath);
   }
 
-  const authStoreByPath = scrubAuthStoresForProviderTargets({
+  const authStoreByAgentDir = scrubAuthStoresForProviderTargets({
     nextConfig,
     stateDir,
+    env: params.env,
     providerTargets: targetMutations.providerTargets,
     scrubbedValues: targetMutations.scrubbedValues,
-    authStoreByPath: targetMutations.authStoreByPath,
+    authStoreByAgentDir: targetMutations.authStoreByAgentDir,
     changedFiles,
     warnings,
     enabled: options.scrubAuthProfilesForProviderTargets,
@@ -268,7 +285,7 @@ async function projectPlanState(params: {
     env: params.env,
     nextConfig,
     resolvedTargets: targetMutations.resolvedTargets,
-    authStoreByPath,
+    authStoreByAgentDir,
     write: params.write,
     allowExecInDryRun: params.allowExecInDryRun,
     checkFullRuntime,
@@ -279,10 +296,11 @@ async function projectPlanState(params: {
     configSnapshot: snapshot,
     configPath,
     configWriteOptions: writeOptions,
-    authStoreByPath,
+    authStoreByAgentDir,
     authJsonByPath,
     envRawByPath,
     changedFiles,
+    env: params.env,
     warnings,
     refsChecked: validation.refsChecked,
     skippedExecRefs: validation.skippedExecRefs,
@@ -294,7 +312,8 @@ function applyConfigTargetMutations(params: {
   planTargets: SecretsPlanTarget[];
   nextConfig: OpenClawConfig;
   stateDir: string;
-  authStoreByPath: Map<string, Record<string, unknown>>;
+  env: NodeJS.ProcessEnv;
+  authStoreByAgentDir: Map<string, Record<string, unknown>>;
   changedFiles: Set<string>;
 }): ConfigTargetMutationResult {
   const resolvedTargets = params.planTargets.map((target) => ({
@@ -306,13 +325,14 @@ function applyConfigTargetMutations(params: {
   let configChanged = false;
 
   for (const { target, resolved } of resolvedTargets) {
-    if (resolved.entry.configFile === "auth-profiles.json") {
+    if (resolved.entry.configFile === AUTH_PROFILE_TARGET_CONFIG_FILE) {
       const authStoreChanged = applyAuthProfileTargetMutation({
         target,
         resolved,
         nextConfig: params.nextConfig,
         stateDir: params.stateDir,
-        authStoreByPath: params.authStoreByPath,
+        env: params.env,
+        authStoreByAgentDir: params.authStoreByAgentDir,
         scrubbedValues,
       });
       if (authStoreChanged) {
@@ -320,13 +340,7 @@ function applyConfigTargetMutations(params: {
         if (!agentId) {
           throw new Error(`Missing required agentId for auth-profiles target ${target.path}.`);
         }
-        params.changedFiles.add(
-          resolveAuthStorePathForAgent({
-            nextConfig: params.nextConfig,
-            stateDir: params.stateDir,
-            agentId,
-          }),
-        );
+        params.changedFiles.add(resolveOpenClawStateSqlitePath(params.env));
       }
       continue;
     }
@@ -368,27 +382,33 @@ function applyConfigTargetMutations(params: {
     scrubbedValues,
     providerTargets,
     configChanged,
-    authStoreByPath: params.authStoreByPath,
+    authStoreByAgentDir: params.authStoreByAgentDir,
   };
 }
 
 function scrubAuthStoresForProviderTargets(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
+  env: NodeJS.ProcessEnv;
   providerTargets: Set<string>;
   scrubbedValues: Set<string>;
-  authStoreByPath: Map<string, Record<string, unknown>>;
+  authStoreByAgentDir: Map<string, Record<string, unknown>>;
   changedFiles: Set<string>;
   warnings: string[];
   enabled: boolean;
 }): Map<string, Record<string, unknown>> {
   if (!params.enabled || params.providerTargets.size === 0) {
-    return params.authStoreByPath;
+    return params.authStoreByAgentDir;
   }
 
-  for (const authStorePath of listAuthProfileStorePaths(params.nextConfig, params.stateDir)) {
-    const existing = params.authStoreByPath.get(authStorePath);
-    const parsed = existing ?? readJsonObjectIfExists(authStorePath).value;
+  for (const agentDir of listAuthProfileStoreAgentDirs(params.nextConfig, params.stateDir)) {
+    const existing = params.authStoreByAgentDir.get(agentDir);
+    const parsed =
+      existing ??
+      readPersistedAuthProfileStoreObject({
+        agentDir,
+        env: params.env,
+      });
     if (!parsed || !isRecord(parsed.profiles)) {
       continue;
     }
@@ -422,17 +442,17 @@ function scrubAuthStoresForProviderTargets(params: {
       }
       if (profile.kind === "oauth" && (profile.hasAccess || profile.hasRefresh)) {
         params.warnings.push(
-          `Provider "${provider}" has OAuth credentials in ${authStorePath}; those still take precedence and are out of scope for static SecretRef migration.`,
+          `Provider "${provider}" has OAuth credentials in SQLite auth profile store for ${agentDir}; those still take precedence and are out of scope for static SecretRef migration.`,
         );
       }
     }
     if (mutated) {
-      params.authStoreByPath.set(authStorePath, nextStore);
-      params.changedFiles.add(authStorePath);
+      params.authStoreByAgentDir.set(agentDir, nextStore);
+      params.changedFiles.add(resolveOpenClawStateSqlitePath(params.env));
     }
   }
 
-  return params.authStoreByPath;
+  return params.authStoreByAgentDir;
 }
 
 function ensureMutableAuthStore(
@@ -450,25 +470,31 @@ function resolveAuthStoreForTarget(params: {
   target: SecretsPlanTarget;
   nextConfig: OpenClawConfig;
   stateDir: string;
-  authStoreByPath: Map<string, Record<string, unknown>>;
-}): { path: string; store: MutableAuthProfileStore } {
+  env: NodeJS.ProcessEnv;
+  authStoreByAgentDir: Map<string, Record<string, unknown>>;
+}): { agentDir: string; store: MutableAuthProfileStore } {
   const agentId = (params.target.agentId ?? "").trim();
   if (!agentId) {
     throw new Error(`Missing required agentId for auth-profiles target ${params.target.path}.`);
   }
-  const authStorePath = resolveAuthStorePathForAgent({
+  const agentDir = resolveAuthStoreAgentDirForAgent({
     nextConfig: params.nextConfig,
     stateDir: params.stateDir,
     agentId,
   });
-  const existing = params.authStoreByPath.get(authStorePath);
-  const loaded = existing ?? readJsonObjectIfExists(authStorePath).value;
+  const existing = params.authStoreByAgentDir.get(agentDir);
+  const loaded =
+    existing ??
+    readPersistedAuthProfileStoreObject({
+      agentDir,
+      env: params.env,
+    });
   const store = ensureMutableAuthStore(isRecord(loaded) ? loaded : undefined);
-  params.authStoreByPath.set(authStorePath, store);
-  return { path: authStorePath, store };
+  params.authStoreByAgentDir.set(agentDir, store);
+  return { agentDir, store };
 }
 
-function resolveAuthStorePathForAgent(params: {
+function resolveAuthStoreAgentDirForAgent(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   agentId: string;
@@ -479,15 +505,9 @@ function resolveAuthStorePathForAgent(params: {
     normalizedAgentId,
   )?.agentDir?.trim();
   if (configuredAgentDir) {
-    return resolveUserPath(resolveAuthStorePath(configuredAgentDir));
+    return resolveUserPath(configuredAgentDir);
   }
-  return path.join(
-    resolveUserPath(params.stateDir),
-    "agents",
-    normalizedAgentId,
-    "agent",
-    "auth-profiles.json",
-  );
+  return path.join(resolveUserPath(params.stateDir), "agents", normalizedAgentId, "agent");
 }
 
 function ensureAuthProfileContainer(params: {
@@ -546,17 +566,19 @@ function applyAuthProfileTargetMutation(params: {
   resolved: ResolvedPlanTargetEntry["resolved"];
   nextConfig: OpenClawConfig;
   stateDir: string;
-  authStoreByPath: Map<string, Record<string, unknown>>;
+  env: NodeJS.ProcessEnv;
+  authStoreByAgentDir: Map<string, Record<string, unknown>>;
   scrubbedValues: Set<string>;
 }): boolean {
-  if (params.resolved.entry.configFile !== "auth-profiles.json") {
+  if (params.resolved.entry.configFile !== AUTH_PROFILE_TARGET_CONFIG_FILE) {
     return false;
   }
   const { store } = resolveAuthStoreForTarget({
     target: params.target,
     nextConfig: params.nextConfig,
     stateDir: params.stateDir,
-    authStoreByPath: params.authStoreByPath,
+    env: params.env,
+    authStoreByAgentDir: params.authStoreByAgentDir,
   });
   let changed = ensureAuthProfileContainer({
     target: params.target,
@@ -653,7 +675,7 @@ async function validateProjectedSecretsState(params: {
   env: NodeJS.ProcessEnv;
   nextConfig: OpenClawConfig;
   resolvedTargets: ResolvedPlanTargetEntry[];
-  authStoreByPath: Map<string, Record<string, unknown>>;
+  authStoreByAgentDir: Map<string, Record<string, unknown>>;
   write: boolean;
   allowExecInDryRun: boolean;
   checkFullRuntime: boolean;
@@ -690,8 +712,8 @@ async function validateProjectedSecretsState(params: {
   }
 
   const authStoreLookup = new Map<string, Record<string, unknown>>();
-  for (const [authStorePath, store] of params.authStoreByPath.entries()) {
-    authStoreLookup.set(resolveUserPath(authStorePath), store);
+  for (const [agentDir, store] of params.authStoreByAgentDir.entries()) {
+    authStoreLookup.set(resolveUserPath(agentDir), store);
   }
   if (params.checkFullRuntime) {
     await prepareSecretsRuntimeSnapshot({
@@ -700,10 +722,12 @@ async function validateProjectedSecretsState(params: {
       // Dry-run preflight only needs auth-store materialization when this plan
       // actually touches auth-profile state. Write mode keeps the stricter
       // whole-runtime check.
-      includeAuthStoreRefs: params.write || params.authStoreByPath.size > 0,
+      includeAuthStoreRefs: params.write || params.authStoreByAgentDir.size > 0,
       loadAuthStore: (agentDir?: string) => {
-        const storePath = resolveUserPath(resolveAuthStorePath(agentDir));
-        const override = authStoreLookup.get(storePath);
+        const resolvedAgentDir = agentDir
+          ? resolveUserPath(agentDir)
+          : path.join(resolveStateDir(params.env, os.homedir), "agents", "main", "agent");
+        const override = authStoreLookup.get(resolvedAgentDir);
         if (override) {
           return (
             coercePersistedAuthProfileStore(structuredClone(override)) ?? {
@@ -712,7 +736,10 @@ async function validateProjectedSecretsState(params: {
             }
           );
         }
-        return loadAuthProfileStoreForSecretsRuntime(agentDir);
+        return readAuthProfileStoreFromState({
+          agentDir: resolvedAgentDir,
+          env: params.env,
+        });
       },
     });
   }
@@ -752,6 +779,80 @@ function toJsonWrite(pathname: string, value: Record<string, unknown>): ApplyWri
     content: `${JSON.stringify(value, null, 2)}\n`,
     mode: 0o600,
   };
+}
+
+function readPersistedAuthProfileStoreObject(params: {
+  agentDir: string;
+  env: NodeJS.ProcessEnv;
+}): Record<string, unknown> | null {
+  const result = readOpenClawStateKvJsonResult(
+    AUTH_PROFILE_STORE_KV_SCOPE,
+    authProfileStoreKey(params.agentDir),
+    { env: params.env },
+  );
+  return result.exists && isRecord(result.value) ? result.value : null;
+}
+
+function readAuthProfileStoreFromState(params: { agentDir: string; env: NodeJS.ProcessEnv }) {
+  const raw = readPersistedAuthProfileStoreObject(params);
+  return (
+    coercePersistedAuthProfileStore(raw) ?? {
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+    }
+  );
+}
+
+function persistProjectedAuthProfileStore(params: {
+  agentDir: string;
+  store: Record<string, unknown>;
+  env: NodeJS.ProcessEnv;
+}): void {
+  const coerced = coercePersistedAuthProfileStore(params.store) ?? {
+    version: AUTH_STORE_VERSION,
+    profiles: {},
+  };
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    AUTH_PROFILE_STORE_KV_SCOPE,
+    authProfileStoreKey(params.agentDir),
+    buildPersistedAuthProfileSecretsStore(coerced) as unknown as OpenClawStateJsonValue,
+    { env: params.env },
+  );
+}
+
+function captureAuthStoreSnapshot(params: {
+  snapshots: Map<string, AuthStoreSnapshot>;
+  agentDir: string;
+  env: NodeJS.ProcessEnv;
+}): void {
+  if (params.snapshots.has(params.agentDir)) {
+    return;
+  }
+  params.snapshots.set(
+    params.agentDir,
+    readOpenClawStateKvJsonResult(
+      AUTH_PROFILE_STORE_KV_SCOPE,
+      authProfileStoreKey(params.agentDir),
+      { env: params.env },
+    ),
+  );
+}
+
+function restoreAuthStoreSnapshot(params: {
+  agentDir: string;
+  snapshot: AuthStoreSnapshot;
+  env: NodeJS.ProcessEnv;
+}): void {
+  const key = authProfileStoreKey(params.agentDir);
+  if (!params.snapshot.exists || params.snapshot.value === undefined) {
+    deleteOpenClawStateKvJson(AUTH_PROFILE_STORE_KV_SCOPE, key, { env: params.env });
+    return;
+  }
+  const { value, updatedAt } = params.snapshot;
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(AUTH_PROFILE_STORE_KV_SCOPE, key, value, {
+    env: params.env,
+    now: () => updatedAt,
+  });
 }
 
 export async function runSecretsApply(params: {
@@ -807,6 +908,7 @@ export async function runSecretsApply(params: {
 
   const io = createSecretsConfigIO({ env });
   const snapshots = new Map<string, FileSnapshot>();
+  const authStoreSnapshots = new Map<string, AuthStoreSnapshot>();
   const capture = (pathname: string) => {
     if (!snapshots.has(pathname)) {
       snapshots.set(pathname, captureFileSnapshot(pathname));
@@ -815,9 +917,12 @@ export async function runSecretsApply(params: {
 
   capture(projected.configPath);
   const writes: ApplyWrite[] = [];
-  for (const [pathname, value] of projected.authStoreByPath.entries()) {
-    capture(pathname);
-    writes.push(toJsonWrite(pathname, value));
+  for (const agentDir of projected.authStoreByAgentDir.keys()) {
+    captureAuthStoreSnapshot({
+      snapshots: authStoreSnapshots,
+      agentDir,
+      env: projected.env,
+    });
   }
   for (const [pathname, value] of projected.authJsonByPath.entries()) {
     capture(pathname);
@@ -840,10 +945,28 @@ export async function runSecretsApply(params: {
       io,
       afterWrite: { mode: "auto" },
     });
+    for (const [agentDir, store] of projected.authStoreByAgentDir.entries()) {
+      persistProjectedAuthProfileStore({
+        agentDir,
+        store,
+        env: projected.env,
+      });
+    }
     for (const write of writes) {
       writeTextFileAtomic(write.path, write.content, write.mode);
     }
   } catch (err) {
+    for (const [agentDir, snapshot] of authStoreSnapshots.entries()) {
+      try {
+        restoreAuthStoreSnapshot({
+          agentDir,
+          snapshot,
+          env: projected.env,
+        });
+      } catch {
+        // Best effort only; preserve original error.
+      }
+    }
     for (const [pathname, snapshot] of snapshots.entries()) {
       try {
         restoreFileSnapshot(pathname, snapshot);

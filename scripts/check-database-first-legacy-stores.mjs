@@ -39,6 +39,8 @@ const legacyStoreMarkers = [
   },
   { label: "subagent registry JSON", pattern: /\bsubagents[/\\]runs\.json\b/u },
   { label: "OpenRouter model cache JSON", pattern: /\bopenrouter-models\.json\b/u },
+  { label: "auth profile JSON", pattern: /\bauth-profiles\.json\b/u },
+  { label: "auth profile state JSON", pattern: /\bauth-state\.json\b/u },
   { label: "exec approvals JSON", pattern: /\bexec-approvals\.json\b/u },
   { label: "workspace setup JSON", pattern: /\bworkspace-state\.json\b/u },
   {
