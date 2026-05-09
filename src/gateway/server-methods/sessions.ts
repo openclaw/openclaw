@@ -16,7 +16,6 @@ import {
   listSessionEntries,
   patchSessionEntry,
   resolveMainSessionKey,
-  createSqliteSessionTranscriptLocator,
   type SessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions.js";
@@ -394,15 +393,11 @@ function cloneCheckpointSessionEntry(params: {
   };
 }
 
-function ensureSessionTranscriptLocator(params: {
+function ensureSessionTranscriptScope(params: {
   sessionId: string;
   agentId: string;
-}): { ok: true; transcriptLocator: string } | { ok: false; error: string } {
+}): { ok: true } | { ok: false; error: string } {
   try {
-    const transcriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    });
     if (
       !hasSqliteSessionTranscriptEvents({ agentId: params.agentId, sessionId: params.sessionId })
     ) {
@@ -419,7 +414,7 @@ function ensureSessionTranscriptLocator(params: {
         event: header,
       });
     }
-    return { ok: true, transcriptLocator };
+    return { ok: true };
   } catch (err) {
     return {
       ok: false,
@@ -1087,7 +1082,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, created.error);
       return;
     }
-    const ensured = ensureSessionTranscriptLocator({
+    const ensured = ensureSessionTranscriptScope({
       sessionId: created.entry.sessionId,
       agentId: targetAgentId,
     });
@@ -1239,10 +1234,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const branchedSession = await forkCompactionCheckpointTranscriptAsync({
       agentId: target.agentId,
-      parentTranscriptLocator: checkpoint.preCompaction.transcriptLocator,
       sourceSessionId: checkpoint.preCompaction.sessionId,
     });
-    if (!branchedSession?.transcriptLocator) {
+    if (!branchedSession?.sessionId) {
       respond(
         false,
         undefined,
@@ -1355,10 +1349,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const target = resolveGatewaySessionDatabaseTarget({ cfg: loaded.cfg, key: canonicalKey });
     const restoredSession = await forkCompactionCheckpointTranscriptAsync({
       agentId: target.agentId,
-      parentTranscriptLocator: checkpoint.preCompaction.transcriptLocator,
       sourceSessionId: checkpoint.preCompaction.sessionId,
     });
-    if (!restoredSession?.transcriptLocator) {
+    if (!restoredSession?.sessionId) {
       respond(
         false,
         undefined,
@@ -1855,17 +1848,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const transcriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: target.agentId,
-      sessionId,
-    });
-    if (
-      !transcriptLocator ||
-      !hasSqliteSessionTranscriptEvents({
-        agentId: target.agentId,
-        sessionId,
-      })
-    ) {
+    if (!hasSqliteSessionTranscriptEvents({ agentId: target.agentId, sessionId })) {
       respond(
         true,
         {

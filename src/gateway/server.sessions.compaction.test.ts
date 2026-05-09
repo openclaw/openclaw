@@ -4,9 +4,7 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { readTranscriptStateForSession } from "../agents/transcript/transcript-state.js";
 import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
@@ -23,10 +21,6 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
-
-function sqliteTranscript(sessionId: string, agentId = DEFAULT_AGENT_ID): string {
-  return createSqliteSessionTranscriptLocator({ agentId, sessionId });
-}
 
 test("sessions.compaction.* lists checkpoints and branches or restores from pre-compaction snapshots", async () => {
   const { dir } = await createSessionStoreDir();
@@ -108,7 +102,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     key: string;
     checkpoint: {
       checkpointId: string;
-      preCompaction: { sessionId: string; transcriptLocator?: string };
+      preCompaction: { sessionId: string };
     };
   }>(ws, "sessions.compaction.get", {
     key: "main",
@@ -128,7 +122,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
         ok: true;
         sourceKey: string;
         key: string;
-        entry: { sessionId: string; transcriptLocator?: string; parentSessionKey?: string };
+        entry: { sessionId: string; parentSessionKey?: string };
       }>
     >
   >;
@@ -137,7 +131,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
       ok: true;
       sourceKey: string;
       key: string;
-      entry: { sessionId: string; transcriptLocator?: string; parentSessionKey?: string };
+      entry: { sessionId: string; parentSessionKey?: string };
     }>(ws, "sessions.compaction.branch", {
       key: "main",
       checkpointId: "checkpoint-1",
@@ -174,7 +168,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
         ok: true;
         key: string;
         sessionId: string;
-        entry: { sessionId: string; transcriptLocator?: string; compactionCheckpoints?: unknown[] };
+        entry: { sessionId: string; compactionCheckpoints?: unknown[] };
       }>
     >
   >;
@@ -183,7 +177,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
       ok: true;
       key: string;
       sessionId: string;
-      entry: { sessionId: string; transcriptLocator?: string; compactionCheckpoints?: unknown[] };
+      entry: { sessionId: string; compactionCheckpoints?: unknown[] };
     }>(ws, "sessions.compaction.restore", {
       key: "main",
       checkpointId: "checkpoint-1",
@@ -215,9 +209,8 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
 
 test("sessions.compact without maxLines runs embedded manual compaction for checkpoint-capable flows", async () => {
   const { dir } = await createSessionStoreDir();
-  const transcriptLocator = sqliteTranscript("sess-main");
   replaceSqliteSessionTranscriptEvents({
-    agentId: DEFAULT_AGENT_ID,
+    agentId: "main",
     sessionId: "sess-main",
     events: [
       {
