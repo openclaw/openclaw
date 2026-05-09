@@ -66,7 +66,7 @@ The remaining work is not choosing SQLite; it is deleting compatibility-shaped
 interfaces that still look like the old file world:
 
 - Some compatibility call surfaces still carry `storePath` for explicit
-  migration/export/path metadata, but hot session reads and writes now resolve
+  migration/export/debug metadata, but hot session reads and writes now resolve
   the SQLite row from `{ agentId, sessionKey }` instead of treating the path as
   the runtime identity.
 - Session writes no longer pass through the old in-process `store-writer.ts`
@@ -75,8 +75,9 @@ interfaces that still look like the old file world:
   stop treating `sessions.json`, transcript JSONL files, and sandbox registry
   JSON as possible write targets.
 - Agent-owned tables live in per-agent SQLite databases. The global DB keeps
-  registry/control-plane rows plus lightweight locators such as transcript file
-  mappings.
+  registry/control-plane rows; transcript identity is a canonical
+  `sqlite-transcript://<agent>/<session>.jsonl` locator derived from the
+  per-agent transcript rows.
 - Doctor already imports several legacy files. The cleanup is to make that a
   single explicit migration implementation that doctor calls, with a durable
   migration report.
@@ -200,21 +201,20 @@ The remaining cleanup is mostly consolidation and deletion:
   standalone JSON import helper is gone, and migration merges upsert newer rows
   instead of replacing the whole session table.
 - Transcript events, VFS rows, and tool artifact rows now write to the per-agent
-  database. The global DB keeps transcript-file path metadata for migration,
-  export, and lookup.
+  database. The unshipped global transcript-file mapping table is gone; doctor
+  records legacy source paths in durable migration rows instead.
 - Runtime transcript lookup no longer scans JSONL byte offsets or probes legacy
   transcript files. Gateway chat/media/history paths read transcript rows from
   SQLite; JSONL is now a legacy doctor input or in-memory export
   encoding, not a runtime state file.
 - Runtime session path resolution now canonicalizes active sessions to
-  `sqlite-transcript://<agent>/<session>.jsonl` locators. Legacy absolute
-  JSONL paths are normalized during normal row updates instead of being kept as
-  active runtime identity.
+  `sqlite-transcript://<agent>/<session>.jsonl` locators. Legacy absolute JSONL
+  paths are doctor migration inputs instead of active runtime identity.
 - Gateway transcript-key lookup compares canonical transcript locators directly
   and no longer realpaths or stats transcript filenames.
 - Automatic compaction transcript rotation writes successor transcript rows
-  directly through the SQLite transcript store. The retained `.jsonl` path is
-  metadata for legacy/export callers, not a durable file write.
+  directly through the SQLite transcript store and returns canonical SQLite
+  locators instead of durable JSONL file paths.
 - Managed outgoing image retention keys its transcript-message cache from
   SQLite transcript stats instead of `fs.stat(sessionFile)`.
 - Runtime session file locks and the standalone legacy `.jsonl.lock` doctor
@@ -245,8 +245,8 @@ The remaining cleanup is mostly consolidation and deletion:
 - Command-run session metadata helpers now use entry-oriented names and module
   paths; the old `session-store` command helper surface has been removed.
 - Bootstrap header seeding and manual compaction boundary hardening now mutate
-  SQLite transcript rows directly. They may retain a `.jsonl`-shaped
-  transcript path as metadata, but they do not create or rewrite the file.
+  SQLite transcript rows directly. Runtime callers pass canonical SQLite
+  locators, not writable `.jsonl` paths.
 - Fresh runtime session rows now use virtual
   `sqlite-transcript://<agent>/<session>.jsonl` locators instead of fake
   `agents/<agentId>/sessions/*.jsonl` paths. The old path builders remain for
@@ -277,8 +277,8 @@ The remaining cleanup is mostly consolidation and deletion:
   transcript directory.
 - Parent transcript fork decisions and fork creation no longer accept
   `storePath` or `sessionsDir`; they use `{agentId, sessionId}` SQLite
-  transcript scope and derive any retained path metadata from the parent
-  session entry.
+  transcript scope and carry canonical SQLite locators instead of retained
+  filesystem path metadata.
 - Memory-host no longer exports no-op session-directory transcript
   classification helpers; transcript filtering now derives from SQLite row
   metadata during entry construction.
@@ -319,7 +319,7 @@ The remaining cleanup is mostly consolidation and deletion:
 - Gateway transcript reader helpers now live in
   `src/gateway/session-transcript-readers.ts` instead of the old
   `session-utils.fs` module name. The fallback retry history check is named for
-  SQLite transcript content instead of transcript-file content.
+  SQLite transcript content instead of the old file-helper surface.
 - Bootstrap continuation detection now checks SQLite transcript locators through
   `hasCompletedBootstrapTranscriptTurn`; it no longer exposes a file-shaped
   helper name.
@@ -369,7 +369,7 @@ The remaining cleanup is mostly consolidation and deletion:
   files. It imports the active branch into SQLite and removes the legacy source.
 - Session-memory hook transcript lookup and context-engine transcript rewrite
   helpers are now named around SQLite transcript paths/state instead of runtime
-  transcript-file reads or file rewrites.
+  legacy-file reads or file rewrites.
 - Codex app-server conversation bindings now key SQLite plugin state by
   OpenClaw session key when available, with transcript-path lookups kept only as
   a legacy fallback for existing bindings.
@@ -966,8 +966,8 @@ keeps only the version-1 schema plus doctor file-to-database import.
      as read-only state instead of writing `session.store` config.
      `/status` and chat-driven trajectory export no longer propagate legacy
      store paths; transcript usage fallback reads SQLite by agent/session
-     identity. Remaining `storePath` call surfaces are migration/path metadata,
-     transcript-path metadata, and older RPC response fields that still carry
+     identity. Remaining `storePath` call surfaces are migration/debug metadata
+     and older RPC response fields that still carry
      SQLite keys for compatibility.
      Gateway combined-session loading no longer has a special runtime branch for
      non-templated `session.store` values; it aggregates per-agent SQLite rows.

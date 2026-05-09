@@ -100,7 +100,7 @@ Compaction summarization preserves opaque identifiers by default (`identifierPol
 When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, OpenClaw triggers normal local compaction before a run if the active SQLite transcript reaches that size. This is useful for long-running sessions where provider-side context management may keep model context healthy while the local transcript keeps growing. It does not split raw transcript events; it asks the normal compaction pipeline to create a semantic summary.
 
 <Warning>
-The byte guard requires `truncateAfterCompaction: true`. Without transcript rotation, the active file would not shrink and the guard remains inactive.
+The byte guard requires `truncateAfterCompaction: true`. Without transcript rotation, the active SQLite transcript would not shrink and the guard remains inactive.
 </Warning>
 
 ### Successor transcripts
