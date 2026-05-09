@@ -59,6 +59,7 @@ type OpenAIRealtimeVoiceProviderConfig = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   interruptResponseOnInputAudio?: boolean;
+  minBargeInAudioEndMs?: number;
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
@@ -73,6 +74,7 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   interruptResponseOnInputAudio?: boolean;
+  minBargeInAudioEndMs?: number;
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
@@ -84,6 +86,7 @@ const OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
   "Conversation already has an active response in progress:";
 const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
+const OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 
 type RealtimeEvent = {
   type: string;
@@ -177,10 +180,16 @@ function normalizeProviderConfig(
       typeof raw?.interruptResponseOnInputAudio === "boolean"
         ? raw.interruptResponseOnInputAudio
         : undefined,
+    minBargeInAudioEndMs: asNonNegativeInteger(raw?.minBargeInAudioEndMs),
     azureEndpoint: trimToUndefined(raw?.azureEndpoint),
     azureDeployment: trimToUndefined(raw?.azureDeployment),
     azureApiVersion: trimToUndefined(raw?.azureApiVersion),
   };
+}
+
+function asNonNegativeInteger(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  return number === undefined || number < 0 ? undefined : Math.floor(number);
 }
 
 type OpenAIRealtimeApiKeyResolution =
@@ -815,6 +824,19 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       responseStartTimestamp !== null &&
       assistantItemId !== null &&
       (this.markQueue.length > 0 || options?.audioPlaybackActive === true);
+    const audioEndMs = shouldInterruptProvider
+      ? Math.max(0, this.latestMediaTimestamp - responseStartTimestamp)
+      : null;
+    const minBargeInAudioEndMs =
+      this.config.minBargeInAudioEndMs ?? OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS;
+    if (audioEndMs !== null && audioEndMs < minBargeInAudioEndMs) {
+      this.config.onEvent?.({
+        direction: "client",
+        type: "conversation.item.truncate.skipped",
+        detail: `reason=barge-in audioEndMs=${audioEndMs} minAudioEndMs=${minBargeInAudioEndMs}`,
+      });
+      return;
+    }
     if (
       options?.audioPlaybackActive === true &&
       this.responseActive &&
@@ -824,8 +846,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.responseCancelInFlight = true;
     }
     if (shouldInterruptProvider) {
-      const elapsedMs = this.latestMediaTimestamp - responseStartTimestamp;
-      const audioEndMs = Math.max(0, elapsedMs);
       this.sendEvent(
         {
           type: "conversation.item.truncate",
@@ -1074,6 +1094,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         prefixPaddingMs: config.prefixPaddingMs,
         interruptResponseOnInputAudio:
           req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
+        minBargeInAudioEndMs: config.minBargeInAudioEndMs,
         azureEndpoint: config.azureEndpoint,
         azureDeployment: config.azureDeployment,
         azureApiVersion: config.azureApiVersion,

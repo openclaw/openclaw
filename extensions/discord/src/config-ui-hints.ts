@@ -217,6 +217,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Realtime Barge-In",
     help: "Allow Discord speaker-start events to interrupt active realtime playback. Set true to keep manual interruption when provider input-audio interruption is disabled for echo control.",
   },
+  "voice.realtime.minBargeInAudioEndMs": {
+    label: "Discord Realtime Minimum Barge-In Audio (ms)",
+    help: "Minimum assistant playback duration before a Discord barge-in truncates realtime audio. Default: 250; set 0 for immediate interruption in low-echo rooms.",
+  },
   "voice.realtime.providers": {
     label: "Discord Realtime Provider Settings",
     help: "Provider-specific realtime voice settings keyed by provider id.",

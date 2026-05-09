@@ -150,6 +150,8 @@ export type DiscordVoiceRealtimeConfig = {
   consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
   /** Allow Discord speaker-start events to interrupt active realtime playback. */
   bargeIn?: boolean;
+  /** Minimum assistant playback duration before a barge-in truncates audio. Default: 250ms; set 0 for immediate interruption. */
+  minBargeInAudioEndMs?: number;
   /** Debounce window before buffered transcripts are sent to the OpenClaw agent. */
   debounceMs?: number;
   /** Provider-specific realtime voice config keyed by provider id. */
