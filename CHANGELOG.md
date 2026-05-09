@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions/ACP: add `openclaw sessions link` — a read-only diagnostic command that prints the OpenClaw session-store key, ACP/copilot-side session id, resolved copilot state path, and a `ok`/`MISSING_STATE_DIR`/`MISSING_ACP_ID` status flag for every discovered ACP session. Supports `--agent <id>` to scope output to one agent, `--store <path>` for custom store paths, and `--json` for machine-readable output. (#79542)
 - Active Memory: support concrete `plugins.entries.active-memory.config.toolsAllow` recall tool names for custom memory plugins while keeping the built-in memory-core default on `memory_search`/`memory_get` and preserving `memory_recall` automatically for `plugins.slots.memory: "memory-lancedb"`.
 - Telegram/Feishu: honor configured per-agent and global `reasoningDefault` values when deciding whether channel reasoning previews should stream or stay hidden, addressing the preview-default part of #73182. Thanks @anagnorisis2peripeteia.
 - Docker: run the runtime image under `tini` so long-lived containers reap orphaned child processes and forward signals correctly. (#77885) Thanks @VintageAyu.

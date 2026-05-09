@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
+import {
+  resolveAgentSessionStoreTargetsSync,
+  resolveAllAgentSessionStoreTargetsSync,
+} from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
@@ -111,6 +114,8 @@ export async function acpSessionsLinkCommand(
         agentId: opts.agent?.trim() || "unknown",
       },
     ];
+  } else if (opts.agent?.trim()) {
+    targets = resolveAgentSessionStoreTargetsSync(cfg, opts.agent.trim());
   } else {
     targets = resolveAllAgentSessionStoreTargetsSync(cfg, {});
   }

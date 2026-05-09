@@ -13,6 +13,19 @@ import {
 process.env.FORCE_COLOR = "0";
 
 // ---------------------------------------------------------------------------
+// Hoisted mocks for resolver routing tests
+// ---------------------------------------------------------------------------
+const targetsMocks = vi.hoisted(() => ({
+  resolveAgentSessionStoreTargetsSync: vi.fn<[], []>().mockReturnValue([]),
+  resolveAllAgentSessionStoreTargetsSync: vi.fn<[], []>().mockReturnValue([]),
+}));
+
+vi.mock("../config/sessions/targets.js", () => ({
+  resolveAgentSessionStoreTargetsSync: targetsMocks.resolveAgentSessionStoreTargetsSync,
+  resolveAllAgentSessionStoreTargetsSync: targetsMocks.resolveAllAgentSessionStoreTargetsSync,
+}));
+
+// ---------------------------------------------------------------------------
 // Config mock — same pattern as sessions.test-helpers.ts
 // ---------------------------------------------------------------------------
 vi.mock("../config/config.js", () => ({
@@ -384,5 +397,36 @@ describe("acpSessionsLinkCommand", () => {
 
     expect(logs).toHaveLength(1);
     expect(logs[0]).toContain("No ACP sessions found");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agent filter routing — verify --agent uses the scoped resolver, not all-agents
+// ---------------------------------------------------------------------------
+
+describe("acpSessionsLinkCommand agent filter routing", () => {
+  beforeEach(() => {
+    targetsMocks.resolveAgentSessionStoreTargetsSync.mockClear();
+    targetsMocks.resolveAllAgentSessionStoreTargetsSync.mockClear();
+  });
+
+  it("calls the scoped resolver when --agent is set (no --store)", async () => {
+    const { runtime } = makeRuntime();
+    await acpSessionsLinkCommand({ agent: "copilot" }, runtime);
+
+    expect(targetsMocks.resolveAgentSessionStoreTargetsSync).toHaveBeenCalledOnce();
+    expect(targetsMocks.resolveAgentSessionStoreTargetsSync).toHaveBeenCalledWith(
+      expect.anything(),
+      "copilot",
+    );
+    expect(targetsMocks.resolveAllAgentSessionStoreTargetsSync).not.toHaveBeenCalled();
+  });
+
+  it("calls the all-agents resolver when --agent is absent (no --store)", async () => {
+    const { runtime } = makeRuntime();
+    await acpSessionsLinkCommand({}, runtime);
+
+    expect(targetsMocks.resolveAllAgentSessionStoreTargetsSync).toHaveBeenCalledOnce();
+    expect(targetsMocks.resolveAgentSessionStoreTargetsSync).not.toHaveBeenCalled();
   });
 });
