@@ -664,6 +664,7 @@ Docs: https://docs.openclaw.ai
 - CLI/launcher: forward termination signals to compile-cache respawn children, so killing a wrapper process no longer leaves the security audit worker orphaned. Fixes #77458. Thanks @jaikharbanda.
 - Plugins/registry: recover managed-npm external plugins from the owned npm root when a stale persisted registry would otherwise hide them after package-manager upgrades. Fixes #77266. Thanks @p3nchan.
 - fix(gateway): clamp unbound websocket auth scopes [AI]. (#77413) Thanks @pgondhi987.
+- Diffs plugin: accept `defaults.ttlSeconds` as a plugin-wide artifact lifetime default, so LAN-viewable diff links can keep their configured six-hour TTL without doctor quarantining the plugin entry.
 - Gate zalouser startup name matching [AI]. (#77411) Thanks @pgondhi987.
 - Active Memory: send a bounded latest-message search query to the recall worker so channel/runtime metadata does not become the memory search string. Fixes #65309. Thanks @joeykrug, @westley3601, @pimenov, and @tasi333.
 - fix(device-pair): require pairing scope for pair command [AI]. (#76377) Thanks @pgondhi987.
