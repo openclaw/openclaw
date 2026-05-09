@@ -1,3 +1,4 @@
+import { canonicalizeDefaultAgentWorkspacePath } from "../agents/workspace-default.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import type { DmScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,13 +11,14 @@ export function applyLocalSetupWorkspaceConfig(
   baseConfig: OpenClawConfig,
   workspaceDir: string,
 ): OpenClawConfig {
+  const persistedWorkspaceDir = canonicalizeDefaultAgentWorkspacePath(workspaceDir);
   return {
     ...baseConfig,
     agents: {
       ...baseConfig.agents,
       defaults: {
         ...baseConfig.agents?.defaults,
-        workspace: workspaceDir,
+        workspace: persistedWorkspaceDir,
       },
     },
     gateway: {

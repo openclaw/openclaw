@@ -48,6 +48,30 @@ describe("setupCommand", () => {
     });
   });
 
+  it("persists the default workspace as a portable path on first run", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const deps = createSetupDeps(home);
+      const workspace = path.join(home, ".openclaw", "workspace");
+
+      await setupCommand({ workspace }, runtime, deps);
+
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        agents?: { defaults?: { workspace?: string } };
+      };
+
+      expect(raw.agents?.defaults?.workspace).toBe("~/.openclaw/workspace");
+      expect(deps.ensureAgentWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ dir: workspace }),
+      );
+    });
+  });
+
   it("explains that plain setup only initializes local files", async () => {
     await withTempHome(async (home) => {
       const runtime = {
@@ -162,7 +186,7 @@ describe("setupCommand", () => {
         gateway?: { mode?: string };
       };
 
-      expect(raw.agents?.defaults?.workspace).toBe(workspace);
+      expect(raw.agents?.defaults?.workspace).toBe("~/.openclaw/workspace");
       expect(raw.gateway?.mode).toBe("local");
     });
   });

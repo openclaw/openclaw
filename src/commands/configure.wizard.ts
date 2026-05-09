@@ -2,6 +2,7 @@ import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
+import { canonicalizeDefaultAgentWorkspacePath } from "../agents/workspace-default.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
@@ -585,7 +586,7 @@ export async function runConfigureWizard(
           ...nextConfig.agents,
           defaults: {
             ...nextConfig.agents?.defaults,
-            workspace: workspaceDir,
+            workspace: canonicalizeDefaultAgentWorkspacePath(workspaceDir),
           },
         },
       };
