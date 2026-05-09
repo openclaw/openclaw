@@ -938,9 +938,14 @@ function createSessionMcpRuntimeManager(
 
   const bumpIdleTtlForRuntimeKey = (runtimeKey: string, idleTtlMs: number) => {
     // Take the max across attached sessions so one strict-TTL session can't
-    // evict a runtime another session expected to keep alive.
+    // evict a runtime another session expected to keep alive. The sweep treats
+    // ttl <= 0 as "never evict", so 0 is unbounded: it wins over any nonzero
+    // TTL and can't be overridden by a later attaching session.
     const previous = idleTtlMsByRuntimeKey.get(runtimeKey);
-    if (previous === undefined || idleTtlMs > previous) {
+    if (previous === 0) {
+      return;
+    }
+    if (idleTtlMs === 0 || previous === undefined || idleTtlMs > previous) {
       idleTtlMsByRuntimeKey.set(runtimeKey, idleTtlMs);
     }
   };
@@ -1055,6 +1060,7 @@ function createSessionMcpRuntimeManager(
       if (previousRuntimeKey && previousRuntimeKey !== desiredRuntimeKey) {
         detachSessionFromRuntimeKey(params.sessionId, previousRuntimeKey);
         if ((sessionIdsByRuntimeKey.get(previousRuntimeKey)?.size ?? 0) === 0) {
+          const stalePending = createInFlight.get(previousRuntimeKey);
           const stale = runtimesByKey.get(previousRuntimeKey);
           createInFlight.delete(previousRuntimeKey);
           runtimesByKey.delete(previousRuntimeKey);
@@ -1062,6 +1068,16 @@ function createSessionMcpRuntimeManager(
           sessionIdsByRuntimeKey.delete(previousRuntimeKey);
           if (stale) {
             await stale.dispose();
+          }
+          if (stalePending) {
+            // The pending promise's .then writes the runtime into runtimesByKey
+            // under previousRuntimeKey. Wait for it to settle, drop the orphan
+            // entry, and dispose the runtime so we don't leak an MCP child.
+            const pendingRuntime = await stalePending.promise.catch(() => undefined);
+            runtimesByKey.delete(previousRuntimeKey);
+            if (pendingRuntime) {
+              await pendingRuntime.dispose();
+            }
           }
         }
       }

@@ -1647,7 +1647,7 @@ process.on("SIGINT", shutdown);`,
         },
       };
     };
-    const manager = __testing.createSessionMcpRuntimeManager({
+    const manager = testing.createSessionMcpRuntimeManager({
       createRuntime,
       now: () => now,
       enableIdleSweepTimer: false,
@@ -1901,6 +1901,102 @@ process.on("SIGINT", shutdown);`,
     expect(disposed[0].startsWith("__mcp-shared__::")).toBe(true);
     // Both sessions are detached when the shared runtime is evicted.
     expect(manager.listSessionIds()).toEqual([]);
+  });
+
+  it("preserves a disabled TTL when another session attaches with a finite TTL", async () => {
+    let now = 1_000;
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      let lastUsedAt = now;
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        get lastUsedAt() {
+          return lastUsedAt;
+        },
+        markUsed: () => {
+          lastUsedAt = now;
+        },
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
+
+    // First attacher disables idle eviction (TTL=0).
+    await manager.getOrCreate({
+      sessionId: "session-zero-ttl",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, runtimeScope: "shared", sessionIdleTtlMs: 0 } },
+    });
+    // Second attacher has a finite TTL. The shared runtime must keep TTL=0
+    // (unbounded) so the disabling session's expectation is honored.
+    await manager.getOrCreate({
+      sessionId: "session-finite-ttl",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, runtimeScope: "shared", sessionIdleTtlMs: 60 } },
+    });
+
+    now += 60_000_000;
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
+    expect(disposed).toEqual([]);
+  });
+
+  it("disposes a previous in-flight runtime when a session moves to a new key", async () => {
+    const now = 1_000;
+    const created: string[] = [];
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push(params.sessionId);
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
+
+    // Concurrent calls for the same sessionId across different scopes. The
+    // session-scope call sets an in-flight runtime under sessionId="A"; the
+    // shared-scope call moves the session to a new runtimeKey before that
+    // in-flight has landed. The previous in-flight runtime must be awaited
+    // and disposed, not orphaned in runtimesByKey.
+    const sessionScopeCall = manager.getOrCreate({
+      sessionId: "A",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {} } },
+    });
+    const sharedScopeCall = manager.getOrCreate({
+      sessionId: "A",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, runtimeScope: "shared" } },
+    });
+
+    await Promise.all([sessionScopeCall, sharedScopeCall]);
+
+    // Two runtimes were created (one per scope). The session-scoped one,
+    // identified by sessionId="A", was awaited and disposed by the shared call.
+    expect(created).toHaveLength(2);
+    expect(disposed).toEqual(["A"]);
+    // Only the shared runtime remains attached to the session.
+    expect(manager.listSessionIds()).toEqual(["A"]);
   });
 });
 
