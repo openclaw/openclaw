@@ -352,7 +352,6 @@ export const sharedVitestConfig = {
         "src/agents/pi-tool-definition-adapter.ts",
         "src/agents/tools/discord-actions*.ts",
         "src/agents/tools/slack-actions.ts",
-        "src/infra/state-migrations.ts",
         "src/infra/skills-remote.ts",
         "src/infra/update-check.ts",
         "src/infra/ports-inspect.ts",

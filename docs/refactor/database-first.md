@@ -154,10 +154,10 @@ The branch already has a real shared SQLite base:
 - Pairing state, plugin binding approvals, and cron job state now follow the
   same split: runtime modules expose SQLite-backed operations and narrow
   migration writers, while doctor imports/removes the old JSON files through
-  `*-legacy` modules.
+  `src/commands/doctor/legacy/*` modules.
 - `src/commands/doctor-sqlite-state.ts` already imports several legacy JSON
   state files, including node host config, into SQLite from doctor.
-- `src/infra/state-migrations.ts` already imports legacy `sessions.json` and
+- `src/commands/doctor/state-migrations.ts` imports legacy `sessions.json` and
   `*.jsonl` transcripts into SQLite and removes successful sources.
 
 The remaining cleanup is mostly consolidation and deletion:
