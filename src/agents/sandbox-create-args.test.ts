@@ -77,6 +77,7 @@ describe("buildSandboxCreateArgs", () => {
         "create",
         "--name",
         "openclaw-sbx-test",
+        "--init",
         "--label",
         "openclaw.sandbox=1",
         "--label",
@@ -340,5 +341,20 @@ describe("buildSandboxCreateArgs", () => {
       createdAtMs: 1700000000000,
     });
     expect(args).toEqual(expect.arrayContaining(["--network", "container:peer"]));
+  });
+
+  it("passes --init so tini reaps zombie processes in long-running sandboxes", () => {
+    const cfg = createSandboxConfig();
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-init",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+    expect(args).toContain("--init");
+    // --init must appear after `create` so Docker parses it as a `create` flag.
+    const createIdx = args.indexOf("create");
+    const initIdx = args.indexOf("--init");
+    expect(initIdx).toBeGreaterThan(createIdx);
   });
 });
