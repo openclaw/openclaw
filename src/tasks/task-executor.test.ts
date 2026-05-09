@@ -120,6 +120,16 @@ function requireCreatedFlowTask(
   return result.task;
 }
 
+function expectCancelRequestedAt(value: unknown): number {
+  expect(typeof value).toBe("number");
+  if (typeof value !== "number") {
+    throw new Error("Expected numeric cancelRequestedAt");
+  }
+  expect(Number.isInteger(value)).toBe(true);
+  expect(value).toBeGreaterThan(0);
+  return value;
+}
+
 function createRunningAcpChildTaskRun(
   overrides: Partial<Parameters<typeof createRunningTaskRun>[0]> = {},
 ) {
@@ -581,10 +591,10 @@ describe("task-executor", () => {
         reason: "One or more child tasks are still active.",
         flow: expect.objectContaining({
           flowId: flow.flowId,
-          cancelRequestedAt: expect.any(Number),
           status: "queued",
         }),
       });
+      const cancelRequestedAt = expectCancelRequestedAt(cancelled.flow?.cancelRequestedAt);
 
       failTaskRunByRunId({
         runId: "run-flow-sticky-cancel",
@@ -600,7 +610,7 @@ describe("task-executor", () => {
       });
       expect(getTaskFlowById(flow.flowId)).toMatchObject({
         flowId: flow.flowId,
-        cancelRequestedAt: expect.any(Number),
+        cancelRequestedAt,
         status: "cancelled",
         endedAt: 50,
       });
