@@ -9,7 +9,7 @@ import {
 } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
+const { makeStoreKey } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
 describe("CronService interval/cron jobs fire on time", () => {
@@ -61,8 +61,9 @@ describe("CronService interval/cron jobs fire on time", () => {
   };
 
   it("fires an every-type main job when the timer fires a few ms late", async () => {
-    const store = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      storeKey,
       logger: noopLogger,
     });
 
@@ -91,12 +92,12 @@ describe("CronService interval/cron jobs fire on time", () => {
     expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(firstDueAt + 10_000);
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("fires a cron-expression job when the timer fires a few ms late", async () => {
-    const store = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      storeKey,
       logger: noopLogger,
     });
 
@@ -127,16 +128,16 @@ describe("CronService interval/cron jobs fire on time", () => {
     expect(updated?.state.nextRunAtMs).toBe(firstDueAt + 60_000);
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("keeps legacy every jobs due while minute cron jobs recompute schedules", async () => {
-    const store = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
     await writeCronStoreSnapshot({
+      storeKey,
       jobs: [
         {
           id: "legacy-every",
@@ -166,6 +167,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     });
 
     const cron = new CronService({
+      storeKey,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
@@ -198,6 +200,5 @@ describe("CronService interval/cron jobs fire on time", () => {
     expect(sfJob?.state.nextRunAtMs).toBe(nowMs + 8 * 60_000);
 
     cron.stop();
-    await store.cleanup();
   });
 });
