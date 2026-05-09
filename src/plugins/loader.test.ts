@@ -1486,7 +1486,7 @@ describe("loadOpenClawPlugins", () => {
           id: "late-attachment-plugin",
           name: "Late Attachment Plugin",
           source: "/tmp/late-attachment-plugin/index.cjs",
-          registrationMode: "eager",
+          registrationMode: "full",
           config: {},
           runtime: {} as never,
           logger: {
@@ -1518,7 +1518,7 @@ describe("loadOpenClawPlugins", () => {
           sessionKey: "agent:main:main",
           files: [{ path: "./proof-report.txt" }],
           text: "attachment ready",
-        } as const;
+        };
         const lateResult = capturedApi?.sendSessionAttachment(attachmentParams);
 
         expect(lateResult).toBe(sendSessionAttachment.mock.results[0]?.value);
