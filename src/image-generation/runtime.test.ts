@@ -43,15 +43,17 @@ describe("image-generation runtime", () => {
     const authStore = { version: 1, profiles: {} } as const;
     let seenAuthStore: unknown;
     let seenTimeoutMs: number | undefined;
+    let seenSsrfPolicy: unknown;
     const provider: ImageGenerationProvider = {
       id: "image-plugin",
       capabilities: {
         generate: {},
         edit: { enabled: false },
       },
-      async generateImage(req: { authStore?: unknown; timeoutMs?: number }) {
+      async generateImage(req: { authStore?: unknown; timeoutMs?: number; ssrfPolicy?: unknown }) {
         seenAuthStore = req.authStore;
         seenTimeoutMs = req.timeoutMs;
+        seenSsrfPolicy = req.ssrfPolicy;
         return {
           images: [
             {
@@ -78,6 +80,7 @@ describe("image-generation runtime", () => {
       agentDir: "/tmp/agent",
       authStore,
       timeoutMs: 12_345,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
     expect(result.provider).toBe("image-plugin");
@@ -85,6 +88,7 @@ describe("image-generation runtime", () => {
     expect(result.attempts).toStrictEqual([]);
     expect(seenAuthStore).toEqual(authStore);
     expect(seenTimeoutMs).toBe(12_345);
+    expect(seenSsrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
     expect(result.images).toEqual([
       {
         buffer: Buffer.from("png-bytes"),

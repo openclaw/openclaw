@@ -971,7 +971,7 @@ describe("createImageGenerateTool", () => {
 
   it("passes web_fetch SSRF policy to remote reference images", async () => {
     stubImageGenerationProviders();
-    stubEditedImageFlow({ width: 1024, height: 1024 });
+    const generateImage = stubEditedImageFlow({ width: 1024, height: 1024 });
     const defaultTool = requireImageGenerateTool(
       createImageGenerateTool({
         config: {
@@ -1011,6 +1011,11 @@ describe("createImageGenerateTool", () => {
 
     expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
       "http://198.18.0.153/reference.png",
+      expect.objectContaining({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    );
+    expect(generateImage).toHaveBeenLastCalledWith(
       expect.objectContaining({
         ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       }),

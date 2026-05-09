@@ -166,6 +166,7 @@ describe("OpenAI-compatible image provider helper", () => {
       prompt: "draw a square",
       count: 2,
       size: "512x512",
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       cfg: {
         models: {
           providers: {
@@ -188,6 +189,7 @@ describe("OpenAI-compatible image provider helper", () => {
       expect.objectContaining({
         url: "https://sample.example/v1/images/generations",
         allowPrivateNetwork: true,
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
         dispatcherPolicy: { request: { allowPrivateNetwork: true } },
         body: {
           model: "custom-image",
