@@ -33,6 +33,7 @@ Automatic migration covers:
 
 - creating or reusing a pre-migration snapshot under `~/Backups/openclaw-migrations/`
 - reusing your cached Matrix credentials
+- moving legacy top-level Matrix credentials to the selected named account
 - keeping the same account selection and `channels.matrix` config
 - importing old Matrix sync stores into SQLite plugin state
 - importing old Matrix IndexedDB crypto snapshots into SQLite plugin blobs

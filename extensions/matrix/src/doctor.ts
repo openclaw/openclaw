@@ -9,6 +9,7 @@ import {
   legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
 } from "./doctor-contract.js";
+import { autoMigrateLegacyMatrixCredentials } from "./legacy-credentials.js";
 import {
   autoMigrateLegacyMatrixState,
   autoPrepareLegacyMatrixCrypto,
@@ -166,6 +167,22 @@ export async function applyMatrixDoctorRepair(params: {
 
   if (!matrixSnapshotReady) {
     return { changes, warnings };
+  }
+
+  const credentialsRepair = autoMigrateLegacyMatrixCredentials({
+    cfg: params.cfg,
+    env: params.env,
+  });
+  if (credentialsRepair.changes.length > 0) {
+    changes.push(
+      [
+        "Matrix legacy credentials migrated.",
+        ...credentialsRepair.changes.map((entry) => `- ${entry}`),
+      ].join("\n"),
+    );
+  }
+  if (credentialsRepair.warnings.length > 0) {
+    warnings.push(credentialsRepair.warnings.map((entry) => `- ${entry}`).join("\n"));
   }
 
   const matrixStateRepair = await autoMigrateLegacyMatrixState({

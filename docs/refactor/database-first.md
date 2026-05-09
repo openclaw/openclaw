@@ -208,6 +208,9 @@ The branch already has a real shared SQLite base:
   same split: runtime modules expose SQLite-backed operations and neutral
   snapshot helpers, while doctor imports/removes the old JSON files through
   `src/commands/doctor/legacy/*` modules.
+- Matrix named-account credential upgrade no longer happens during runtime
+  reads. Doctor owns the old top-level `credentials/matrix/credentials.json`
+  rename when a single/default Matrix account can be resolved.
 - Core pairing and cron runtime modules no longer export legacy JSON path
   builders. Doctor-owned legacy modules construct `pending.json`, `paired.json`,
   `bootstrap.json`, and `cron/jobs.json` source paths for import tests and
