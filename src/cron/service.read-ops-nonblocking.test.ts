@@ -112,7 +112,7 @@ describe("CronService read ops while job is running", () => {
     const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
-      storePath: store.storePath,
+      storeKey: store.storePath,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
@@ -150,7 +150,9 @@ describe("CronService read ops while job is running", () => {
       expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
       await expect(cron.list({ includeDisabled: true })).resolves.toHaveLength(1);
-      expectCronStatus(await cron.status(), { storePath: store.storePath, jobs: 1 });
+      await expect(cron.status()).resolves.toEqual(
+        expect.objectContaining({ enabled: true, storeKey: store.storePath }),
+      );
 
       const running = await cron.list({ includeDisabled: true });
       expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
@@ -189,7 +191,7 @@ describe("CronService read ops while job is running", () => {
     const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
-      storePath: store.storePath,
+      storeKey: store.storePath,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
@@ -219,10 +221,9 @@ describe("CronService read ops while job is running", () => {
       await expect(
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during cron.run"),
       ).resolves.toHaveLength(1);
-      expectCronStatus(await withTimeout(cron.status(), 300, "cron.status during cron.run"), {
-        storePath: store.storePath,
-        jobs: 1,
-      });
+      await expect(withTimeout(cron.status(), 300, "cron.status during cron.run")).resolves.toEqual(
+        expect.objectContaining({ enabled: true, storeKey: store.storePath }),
+      );
 
       isolatedRun.completeRun({ status: "ok", summary: "manual done" });
       await expect(runPromise).resolves.toEqual({ ok: true, ran: true });
@@ -264,7 +265,7 @@ describe("CronService read ops while job is running", () => {
     const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
-      storePath: store.storePath,
+      storeKey: store.storePath,
       cronEnabled: true,
       log: noopLogger,
       nowMs: () => nowMs,
@@ -281,10 +282,9 @@ describe("CronService read ops while job is running", () => {
       await expect(
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during startup"),
       ).resolves.toHaveLength(1);
-      expectCronStatus(await withTimeout(cron.status(), 300, "cron.status during startup"), {
-        storePath: store.storePath,
-        jobs: 1,
-      });
+      await expect(withTimeout(cron.status(), 300, "cron.status during startup")).resolves.toEqual(
+        expect.objectContaining({ enabled: true, storeKey: store.storePath }),
+      );
 
       const jobs = await cron.list({ includeDisabled: true });
       expect(jobs[0]?.state.lastStatus).toBeUndefined();

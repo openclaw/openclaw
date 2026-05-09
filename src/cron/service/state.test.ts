@@ -16,7 +16,7 @@ describe("cron service state seam coverage", () => {
         warn: vi.fn(),
         error: vi.fn(),
       },
-      storePath: "/tmp/cron/jobs.json",
+      storeKey: "test-cron-store",
       cronEnabled: true,
       defaultAgentId: "ops",
       enqueueSystemEvent,
@@ -31,7 +31,7 @@ describe("cron service state seam coverage", () => {
     expect(state.warnedDisabled).toBe(false);
     expect(state.storeLoadedAtMs).toBeNull();
 
-    expect(state.deps.storePath).toBe("/tmp/cron/jobs.json");
+    expect(state.deps.storeKey).toBe("test-cron-store");
     expect(state.deps.cronEnabled).toBe(true);
     expect(state.deps.defaultAgentId).toBe("ops");
     expect(state.deps.enqueueSystemEvent).toBe(enqueueSystemEvent);
@@ -50,7 +50,7 @@ describe("cron service state seam coverage", () => {
         warn: vi.fn(),
         error: vi.fn(),
       },
-      storePath: "/tmp/cron/jobs.json",
+      storeKey: "test-cron-store",
       cronEnabled: false,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
