@@ -112,12 +112,24 @@ describe("appendSessionTranscriptMessage - redaction", () => {
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).not.toContain("plainsecretvalue123");
     expect(raw).not.toContain("hunter2");
+    expect(raw).toContain("OPENAI_API_KEY=sk-abc…0xyz openclaw health");
     expect(raw).toContain("openclaw health");
 
     const [msg] = readMessages(sessionFile) as Array<{
-      content: Array<{ arguments: unknown }>;
+      content: Array<{
+        arguments: {
+          command: string;
+          env: { nested: string[] };
+          apiKey: string;
+          password: string;
+        };
+      }>;
     }>;
     expect(JSON.stringify(msg.content[0].arguments)).not.toContain("sk-abcdef1234567890xyz");
+    expect(msg.content[0].arguments.command).toBe("OPENAI_API_KEY=sk-abc…0xyz openclaw health");
+    expect(msg.content[0].arguments.env.nested[0]).toBe("token sk-abc…0xyz");
+    expect(msg.content[0].arguments.apiKey).toBe("plains…e123");
+    expect(msg.content[0].arguments.password).toBe("***");
   });
 
   it("masks secrets in tool-result details before writing to disk", async () => {
@@ -155,10 +167,18 @@ describe("appendSessionTranscriptMessage - redaction", () => {
 
     const [msg] = readMessages(sessionFile) as Array<{
       content: Array<{ text: string }>;
-      details: unknown;
+      details: {
+        apiKey: string;
+        password: string;
+        nested: { accessToken: string[] };
+        safe: string;
+      };
     }>;
     expect(msg.content[0].text).not.toContain("sk-abcdef1234567890xyz");
     expect(JSON.stringify(msg.details)).not.toContain("plainsecretvalue123");
+    expect(msg.details.apiKey).toBe("plains…e123");
+    expect(msg.details.password).toBe("***");
+    expect(msg.details.nested.accessToken[0]).toBe("nested…t123");
   });
 });
 

@@ -482,13 +482,21 @@ describe("installSessionToolResultGuard", () => {
     const messages = getPersistedMessages(sm);
     const toolResult = messages.find((m) => m.role === "toolResult") as unknown as {
       content: Array<{ text: string }>;
-      details: unknown;
+      details: {
+        apiKey: string;
+        password: string;
+        nested: { accessToken: string[] };
+        safe: string;
+      };
     };
     const serializedToolResult = JSON.stringify(toolResult);
     expect(toolResult.content[0].text).not.toContain("sk-abcdef1234567890xyz");
     expect(serializedToolResult).not.toContain("plainsecretvalue123");
     expect(serializedToolResult).not.toContain("hunter2");
     expect(serializedToolResult).not.toContain("nestedplainsecret123");
+    expect(toolResult.details.apiKey).toBe("plains…e123");
+    expect(toolResult.details.password).toBe("***");
+    expect(toolResult.details.nested.accessToken[0]).toBe("nested…t123");
     expect(serializedToolResult).toContain("visible");
   });
 

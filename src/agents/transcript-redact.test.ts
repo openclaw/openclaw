@@ -79,8 +79,16 @@ describe("redactTranscriptMessage", () => {
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
     const block = (msgContent(result) as Array<{ arguments: unknown }>)[0];
+    const argumentsValue = block.arguments as {
+      command: string;
+      env: { nested: string[] };
+      count: number;
+    };
     const serializedArguments = JSON.stringify(block.arguments);
     expect(serializedArguments).not.toContain("sk-abcdef1234567890xyz");
+    expect(argumentsValue.command).toBe("OPENAI_API_KEY=sk-abc…0xyz openclaw health");
+    expect(argumentsValue.env.nested[0]).toBe("token sk-abc…0xyz");
+    expect(argumentsValue.count).toBe(1);
     expect(serializedArguments).toContain("openclaw health");
     expect(block.arguments).not.toBe(
       (msgContent(msg) as Array<{ arguments: unknown }>)[0].arguments,
@@ -107,10 +115,19 @@ describe("redactTranscriptMessage", () => {
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
     const block = (msgContent(result) as Array<{ arguments: unknown }>)[0];
+    const argumentsValue = block.arguments as {
+      apiKey: string;
+      password: string;
+      nested: { accessToken: string[] };
+      safe: string;
+    };
     const serializedArguments = JSON.stringify(block.arguments);
     expect(serializedArguments).not.toContain("plainsecretvalue123");
     expect(serializedArguments).not.toContain("hunter2");
     expect(serializedArguments).not.toContain("nestedplainsecret123");
+    expect(argumentsValue.apiKey).toBe("plains…e123");
+    expect(argumentsValue.password).toBe("***");
+    expect(argumentsValue.nested.accessToken[0]).toBe("nested…t123");
     expect(serializedArguments).toContain("visible");
   });
 
@@ -135,10 +152,19 @@ describe("redactTranscriptMessage", () => {
       details: unknown;
     };
     const serializedDetails = JSON.stringify(result.details);
+    const details = result.details as {
+      apiKey: string;
+      password: string;
+      nested: { accessToken: string[] };
+      safe: string;
+    };
     expect(result.content[0].text).not.toContain("sk-abcdef1234567890xyz");
     expect(serializedDetails).not.toContain("plainsecretvalue123");
     expect(serializedDetails).not.toContain("hunter2");
     expect(serializedDetails).not.toContain("nestedplainsecret123");
+    expect(details.apiKey).toBe("plains…e123");
+    expect(details.password).toBe("***");
+    expect(details.nested.accessToken[0]).toBe("nested…t123");
     expect(serializedDetails).toContain("visible");
   });
 
