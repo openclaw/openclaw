@@ -704,4 +704,472 @@ describe("repairSessionFileIfNeeded", () => {
     const after = await fs.readFile(file, "utf-8");
     expect(after).toBe(`${content}\n`);
   });
+
+  it("drops the dead-end orphan when retry forks a parentId chain (#48810)", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const root = {
+      type: "message",
+      id: "root-1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "kick off task" },
+    };
+    // Two compaction events written under the same parentId — the retry pattern
+    // from #48810. The first never gets a continuation and is the dead-end
+    // orphan; the second carries the rest of the chain.
+    const orphanCompaction = {
+      type: "compaction",
+      id: "compact-orphan",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+    };
+    const winnerCompaction = {
+      type: "compaction",
+      id: "compact-winner",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+    };
+    const followUp = {
+      type: "message",
+      id: "msg-after-compact",
+      parentId: winnerCompaction.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "post-compact reply" },
+    };
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(root),
+      JSON.stringify(orphanCompaction),
+      JSON.stringify(winnerCompaction),
+      JSON.stringify(followUp),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const debug = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedOrphanForkEntries).toBe(1);
+    expect(result.droppedLines).toBe(0);
+    expect(debug.mock.calls[0]?.[0]).toContain("dropped 1 orphan fork entry");
+    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(`${content}\n`);
+
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedLines = repaired.trim().split("\n");
+    expect(repairedLines).toHaveLength(4);
+    const ids = repairedLines.map((line) => (JSON.parse(line) as { id?: string }).id);
+    expect(ids).toEqual(["session-1", root.id, winnerCompaction.id, followUp.id]);
+  });
+
+  it("keeps every sibling when more than one branch carries descendants", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const root = {
+      type: "message",
+      id: "root-2",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "branching task" },
+    };
+    const branchA = {
+      type: "message",
+      id: "branch-a",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "branch A reply" },
+    };
+    const branchAChild = {
+      type: "message",
+      id: "branch-a-child",
+      parentId: branchA.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "follow up on A" },
+    };
+    const branchB = {
+      type: "message",
+      id: "branch-b",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "branch B reply" },
+    };
+    const branchBChild = {
+      type: "message",
+      id: "branch-b-child",
+      parentId: branchB.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "follow up on B" },
+    };
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(root),
+      JSON.stringify(branchA),
+      JSON.stringify(branchAChild),
+      JSON.stringify(branchB),
+      JSON.stringify(branchBChild),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    expect(result.droppedOrphanForkEntries ?? 0).toBe(0);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(`${content}\n`);
+  });
+
+  it("keeps every sibling when no branch has descendants yet", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const root = {
+      type: "message",
+      id: "root-3",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "fresh task" },
+    };
+    const candidateA = {
+      type: "message",
+      id: "candidate-a",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "first candidate" },
+    };
+    const candidateB = {
+      type: "message",
+      id: "candidate-b",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "second candidate" },
+    };
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(root),
+      JSON.stringify(candidateA),
+      JSON.stringify(candidateB),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    expect(result.droppedOrphanForkEntries ?? 0).toBe(0);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(`${content}\n`);
+  });
+
+  it("reconciles independent forks at multiple parentIds in one pass", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const root = {
+      type: "message",
+      id: "root-4",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "long task" },
+    };
+    const firstOrphan = {
+      type: "compaction",
+      id: "compact-first-orphan",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+    };
+    const firstWinner = {
+      type: "compaction",
+      id: "compact-first-winner",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+    };
+    const midway = {
+      type: "message",
+      id: "midway",
+      parentId: firstWinner.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "still going" },
+    };
+    const secondOrphan = {
+      type: "compaction",
+      id: "compact-second-orphan",
+      parentId: midway.id,
+      timestamp: new Date().toISOString(),
+    };
+    const secondWinner = {
+      type: "compaction",
+      id: "compact-second-winner",
+      parentId: midway.id,
+      timestamp: new Date().toISOString(),
+    };
+    const tail = {
+      type: "message",
+      id: "tail",
+      parentId: secondWinner.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "wrap up" },
+    };
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(root),
+      JSON.stringify(firstOrphan),
+      JSON.stringify(firstWinner),
+      JSON.stringify(midway),
+      JSON.stringify(secondOrphan),
+      JSON.stringify(secondWinner),
+      JSON.stringify(tail),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedOrphanForkEntries).toBe(2);
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedLines = repaired.trim().split("\n");
+    const ids = repairedLines.map((line) => (JSON.parse(line) as { id?: string }).id);
+    expect(ids).toEqual([
+      "session-1",
+      root.id,
+      firstWinner.id,
+      midway.id,
+      secondWinner.id,
+      tail.id,
+    ]);
+  });
+
+  it("leaves linear transcripts without sibling collisions untouched", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const a = {
+      type: "message",
+      id: "linear-a",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "hi" },
+    };
+    const b = {
+      type: "message",
+      id: "linear-b",
+      parentId: a.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "hello" },
+    };
+    const c = {
+      type: "message",
+      id: "linear-c",
+      parentId: b.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "thanks" },
+    };
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(a),
+      JSON.stringify(b),
+      JSON.stringify(c),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    expect(result.droppedOrphanForkEntries ?? 0).toBe(0);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(`${content}\n`);
+  });
+
+  it("ignores legacy entries that omit parentId entirely when scanning for forks", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const legacyA = {
+      type: "message",
+      id: "legacy-a",
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "old style" },
+    };
+    const legacyB = {
+      type: "message",
+      id: "legacy-b",
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "still old style" },
+    };
+    const content = [JSON.stringify(header), JSON.stringify(legacyA), JSON.stringify(legacyB)].join(
+      "\n",
+    );
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    expect(result.droppedOrphanForkEntries ?? 0).toBe(0);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(`${content}\n`);
+  });
+
+  it("preserves a generic message leaf branch next to a continued sibling (#79635 P2 regression)", async () => {
+    // clawsweeper review on PR #79635 [P2]: a session JSONL is a tree, so a
+    // legitimate side branch can naturally be a leaf next to a continued
+    // branch. Before the compaction-only carve-out, that legitimate leaf
+    // would be dropped on load. Pin the carve-out so generic message leaves
+    // are always preserved.
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const root = {
+      type: "message",
+      id: "root-leaf-pin",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "fork-friendly transcript" },
+    };
+    const continuedSibling = {
+      type: "message",
+      id: "continued-sibling",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "main branch reply" },
+    };
+    const continuedChild = {
+      type: "message",
+      id: "continued-child",
+      parentId: continuedSibling.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "follow up on main" },
+    };
+    const leafSibling = {
+      type: "message",
+      id: "leaf-sibling",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "deliberate side branch reply" },
+    };
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(root),
+      JSON.stringify(continuedSibling),
+      JSON.stringify(continuedChild),
+      JSON.stringify(leafSibling),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    expect(result.droppedOrphanForkEntries ?? 0).toBe(0);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(`${content}\n`);
+  });
+
+  it("preserves a compaction leaf when its only sibling is a non-compaction continued branch", async () => {
+    // Defensive carve-out: even for a `type: "compaction"` leaf, if the only
+    // sibling under the same parentId is a non-compaction message that
+    // continues the chain, there's no compaction winner — so we have no
+    // "compaction-vs-compaction" loser signal. Keep both.
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const root = {
+      type: "message",
+      id: "root-mixed",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "mixed-sibling transcript" },
+    };
+    const continuedMessage = {
+      type: "message",
+      id: "continued-message",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "regular continuation" },
+    };
+    const continuedChild = {
+      type: "message",
+      id: "continued-message-child",
+      parentId: continuedMessage.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "follow up" },
+    };
+    const compactionLeaf = {
+      type: "compaction",
+      id: "compaction-leaf",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+    };
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(root),
+      JSON.stringify(continuedMessage),
+      JSON.stringify(continuedChild),
+      JSON.stringify(compactionLeaf),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    expect(result.droppedOrphanForkEntries ?? 0).toBe(0);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(`${content}\n`);
+  });
+
+  it("drops only the compaction loser even when a non-compaction sibling also shares the parentId", async () => {
+    // Mixed siblings: a compaction-vs-compaction fork (drop the loser)
+    // PLUS an unrelated message sibling. The message sibling must be
+    // preserved untouched even though it would also satisfy the old
+    // "zero-descendant sibling next to a sibling-with-descendants" rule.
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const root = {
+      type: "message",
+      id: "root-mixed-fork",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "kick off" },
+    };
+    const compactionLoser = {
+      type: "compaction",
+      id: "mixed-compact-loser",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+    };
+    const compactionWinner = {
+      type: "compaction",
+      id: "mixed-compact-winner",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+    };
+    const winnerChild = {
+      type: "message",
+      id: "winner-child",
+      parentId: compactionWinner.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "post-compact reply" },
+    };
+    const unrelatedMessageLeaf = {
+      type: "message",
+      id: "unrelated-message-leaf",
+      parentId: root.id,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "deliberate aside" },
+    };
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(root),
+      JSON.stringify(compactionLoser),
+      JSON.stringify(compactionWinner),
+      JSON.stringify(winnerChild),
+      JSON.stringify(unrelatedMessageLeaf),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedOrphanForkEntries).toBe(1);
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedLines = repaired.trim().split("\n");
+    const ids = repairedLines.map((line) => (JSON.parse(line) as { id?: string }).id);
+    expect(ids).toEqual([
+      "session-1",
+      root.id,
+      compactionWinner.id,
+      winnerChild.id,
+      unrelatedMessageLeaf.id,
+    ]);
+  });
 });

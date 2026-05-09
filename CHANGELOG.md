@@ -206,6 +206,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/agent: pass the session-key agent id into inline image attachment validation so the first image in a fresh per-agent session uses the agent's vision-capable model override instead of the text-only system default. Fixes #79407. Thanks @pandadev66.
+- Sessions/repair: drop dead-end orphan entries that the compaction retry path leaves under a shared parentId, so downstream chain walkers no longer break at the fork. The on-load repair only removes a `type: "compaction"` sibling when it has zero descendants and another `type: "compaction"` sibling under the same parentId already carries the continuation; generic non-compaction leaves and deliberate two-branch transcripts are left alone. Fixes #48810.
 - Gateway/maintenance: prune dedupe overflow against a stable excess count and keep active agent retries from starting duplicate runs after cache eviction. (#73841) Thanks @thesomewhatyou.
 - Control UI/subagents: suppress internal `subagent_announce` handoff prompts from requester transcripts and hide legacy inter-session wrapper rows so completed subagent results no longer surface runtime context in WebChat history. (#79618) Thanks @joshavant.
 - Discord: preserve username target resolution for Discord outbound sends. (#79076) Thanks @vincentkoc.
