@@ -60,18 +60,26 @@ async function createRealtimeServer(params?: {
   return { url: `ws://127.0.0.1:${port}` };
 }
 
+function createSignal() {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((next) => {
+    resolve = next;
+  });
+  if (!resolve) {
+    throw new Error("Expected frame signal resolver to be initialized");
+  }
+  return { promise, resolve };
+}
+
 describe("createRealtimeTranscriptionWebSocketSession", () => {
   it("flushes queued binary audio after an open-ready connection", async () => {
     const frames: Buffer[] = [];
-    let resolveFrames!: () => void;
-    const framesReady = new Promise<void>((resolve) => {
-      resolveFrames = resolve;
-    });
+    const framesReady = createSignal();
     const server = await createRealtimeServer({
       onBinary: (payload) => {
         frames.push(payload);
         if (Buffer.concat(frames).toString() === "queuedafter") {
-          resolveFrames();
+          framesReady.resolve();
         }
       },
     });
@@ -88,7 +96,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.sendAudio(Buffer.from("queued"));
     await session.connect();
     session.sendAudio(Buffer.from("after"));
-    await framesReady;
+    await framesReady.promise;
     expect(Buffer.concat(frames).toString()).toBe("queuedafter");
     expect(session.isConnected()).toBe(true);
     session.close();
@@ -96,16 +104,13 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
 
   it("lets providers mark ready after a JSON handshake", async () => {
     const frames: unknown[] = [];
-    let resolveFrames!: () => void;
-    const framesReady = new Promise<void>((resolve) => {
-      resolveFrames = resolve;
-    });
+    const framesReady = createSignal();
     const server = await createRealtimeServer({
       initialEvent: { type: "session.created" },
       onText: (payload) => {
         frames.push(payload);
         if (frames.length === 2) {
-          resolveFrames();
+          framesReady.resolve();
         }
       },
     });
@@ -126,7 +131,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
 
     session.sendAudio(Buffer.from("queued"));
     await session.connect();
-    await framesReady;
+    await framesReady.promise;
     expect(frames).toEqual([
       { type: "session.update" },
       { type: "input_audio.append", audio: Buffer.from("queued").toString("base64") },
@@ -156,7 +161,10 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
 
     await expect(session.connect()).rejects.toThrow("nope");
     expect(session.isConnected()).toBe(false);
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    expect(onError).toHaveBeenCalledTimes(1);
+    const setupError = onError.mock.calls[0]?.[0];
+    expect(setupError).toBeInstanceOf(Error);
+    expect(setupError.message).toBe("nope");
   });
 
   it("reports pre-ready closes separately from connection timeouts", async () => {
@@ -176,9 +184,9 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     await expect(session.connect()).rejects.toThrow(
       "test realtime transcription connection closed before ready",
     );
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
-    expect(onError.mock.calls[0]?.[0]).toMatchObject({
-      message: "test realtime transcription connection closed before ready",
-    });
+    expect(onError).toHaveBeenCalledTimes(1);
+    const closeError = onError.mock.calls[0]?.[0];
+    expect(closeError).toBeInstanceOf(Error);
+    expect(closeError.message).toBe("test realtime transcription connection closed before ready");
   });
 });

@@ -95,7 +95,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       stateDir,
       installRecords: {},
     });
-    expect(staleIndex.plugins.some((plugin) => plugin.pluginId === "whatsapp")).toBe(false);
+    expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("whatsapp");
     writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
 
     const result = loadPluginRegistrySnapshotWithMetadata({
@@ -150,7 +150,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
   });
 
   it("keeps persisted package plugins when file hashes match", () => {
@@ -188,7 +188,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
   });
 
   it("detects same-size same-mtime manifest replacements", () => {

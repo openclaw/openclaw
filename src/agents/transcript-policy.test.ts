@@ -366,6 +366,25 @@ describe("resolveTranscriptPolicy", () => {
     expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
   });
 
+  it("enables assistant prefill stripping for unowned Claude OpenAI Responses routes (#79688)", () => {
+    const claudePolicy = resolveTranscriptPolicy({
+      provider: "anthropic-foundry",
+      modelId: "anthropic-foundry/claude-opus-4-7",
+      modelApi: "openai-responses",
+    });
+    expect(claudePolicy.sanitizeToolCallIds).toBe(true);
+    expect(claudePolicy.toolCallIdMode).toBe("strict");
+    expect(claudePolicy.validateAnthropicTurns).toBe(true);
+    expect(claudePolicy.validateGeminiTurns).toBe(false);
+
+    const gptPolicy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+    });
+    expect(gptPolicy.validateAnthropicTurns).toBe(false);
+  });
+
   it("preserves thinking blocks for newer Claude models in unowned Anthropic transport fallback", () => {
     // Opus 4.6 via custom proxy: should NOT drop thinking blocks
     const opus46 = resolveTranscriptPolicy({

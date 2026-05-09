@@ -142,20 +142,19 @@ describe("tsdown config", () => {
       (config) => typeof config.outDir === "string" && config.outDir.startsWith("dist/extensions/"),
     );
 
-    expect(extensionGraphs).toEqual([]);
+    expect(extensionGraphs).toStrictEqual([]);
   });
 
   it("does not emit plugin-sdk or hooks from a separate dist graph", () => {
     const configs = asConfigArray(tsdownConfig);
+    const hookEntries = configs.flatMap((config) =>
+      Array.isArray(config.entry)
+        ? config.entry.filter((entry) => entry.includes("src/hooks/"))
+        : [],
+    );
 
-    expect(configs.some((config) => config.outDir === "dist/plugin-sdk")).toBe(false);
-    expect(
-      configs.some((config) =>
-        Array.isArray(config.entry)
-          ? config.entry.some((entry) => entry.includes("src/hooks/"))
-          : false,
-      ),
-    ).toBe(false);
+    expect(configs.map((config) => config.outDir)).not.toContain("dist/plugin-sdk");
+    expect(hookEntries).toStrictEqual([]);
   });
 
   it("externalizes known heavy native dependencies", () => {
@@ -200,7 +199,7 @@ describe("tsdown config", () => {
       (_level, log) => handled.push(log),
     );
 
-    expect(handled).toEqual([]);
+    expect(handled).toStrictEqual([]);
   });
 
   it("keeps unresolved imports outside extension source visible", () => {

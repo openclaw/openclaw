@@ -1,11 +1,15 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
+
+vi.mock("../../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: vi.fn(() => undefined),
+}));
 
 type MutableSession = {
   _baseSystemPrompt?: string;
@@ -93,6 +97,37 @@ describe("buildEmbeddedSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Embedded Stable\n\nStable provider guidance.");
+  });
+
+  it("uses config-backed sub-agent delegation mode", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              delegationMode: "prefer",
+            },
+          },
+        },
+      },
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        agentId: "main",
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [{ name: "sessions_spawn" } as never],
+      userTimezone: "UTC",
+    });
+
+    expect(prompt).toContain("## Sub-Agent Delegation");
+    expect(prompt).toContain("Mode: prefer");
   });
 
   it("can omit base memory guidance for non-legacy context engines", () => {

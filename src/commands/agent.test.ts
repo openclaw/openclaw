@@ -193,12 +193,15 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
   };
   const joinPath = (...parts: string[]): string => {
     const separator = parts.some((part) => part.includes("\\")) ? "\\" : "/";
-    return parts
-      .map((part, index) =>
-        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, ""),
-      )
-      .filter(Boolean)
-      .join(separator);
+    const normalizedParts: string[] = [];
+    for (const [index, part] of parts.entries()) {
+      const normalized =
+        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, "");
+      if (normalized.length > 0) {
+        normalizedParts.push(normalized);
+      }
+    }
+    return normalizedParts.join(separator);
   };
   const resolveSessionFile = (sessionId: string, agentId: string, sessionsDir?: string): string =>
     joinPath(sessionsDir ?? ".openclaw", "agents", agentId, "sessions", `${sessionId}.jsonl`);
@@ -362,13 +365,19 @@ describe("agentCommand", () => {
     });
   });
 
-  it("does not enable Codex for one-shot OpenAI overrides when the agent forces PI", async () => {
+  it("does not enable Codex for one-shot OpenAI overrides when the provider forces PI", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
-      mockConfig(home, storePath, {
-        agentRuntime: { id: "pi" },
-        models: undefined,
-      });
+      const cfg = mockConfig(home, storePath, { models: undefined });
+      cfg.models = {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "pi" },
+            models: [],
+          },
+        },
+      };
 
       await agentCommand(
         {

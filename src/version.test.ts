@@ -149,6 +149,14 @@ describe("version resolution", () => {
     ).toBe("9.9.9");
   });
 
+  function restoreEnvValue(key: string, value: string | undefined) {
+    if (value === undefined) {
+      delete process.env[key];
+      return;
+    }
+    process.env[key] = value;
+  }
+
   it("prefers runtime VERSION over stale OPENCLAW_VERSION for compatibility checks", () => {
     const previous = process.env.OPENCLAW_VERSION;
     const previousService = process.env.OPENCLAW_SERVICE_VERSION;
@@ -159,9 +167,9 @@ describe("version resolution", () => {
       process.env.npm_package_version = "2026.3.25-package";
       expect(resolveCompatibilityHostVersion()).toBe(VERSION);
     } finally {
-      process.env.OPENCLAW_VERSION = previous;
-      process.env.OPENCLAW_SERVICE_VERSION = previousService;
-      process.env.npm_package_version = previousPackage;
+      restoreEnvValue("OPENCLAW_VERSION", previous);
+      restoreEnvValue("OPENCLAW_SERVICE_VERSION", previousService);
+      restoreEnvValue("npm_package_version", previousPackage);
     }
   });
 

@@ -31,6 +31,13 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 - Check `.crabbox.yaml` for repo defaults, but override provider explicitly.
   Even if config still says AWS, maintainer validation should normally pass
   `--provider blacksmith-testbox`.
+- For live/provider bugs, check keys on the local Mac before downgrading to
+  mocks: source local `~/.profile` and test only presence/length. If Crabbox
+  does not already have the key, copy only the exact needed key into the remote
+  process environment for that one command. Do not print it, do not sync it as a
+  repo file, and do not leave it in remote shell history or logs. If no
+  secret-safe injection path is available, say true live provider auth is
+  blocked instead of silently using a fake key.
 - Prefer local targeted tests for tight edit loops. Broad gates belong remote.
 - Do not treat inherited shell env as operator intent. In particular,
   `OPENCLAW_LOCAL_CHECK_MODE=throttled` from the local shell is not permission
@@ -130,6 +137,81 @@ unclear:
 ```sh
 blacksmith testbox list
 ```
+
+## Efficient Bug E2E Verification
+
+Use the smallest Crabbox lane that proves the reported user path, not just the
+touched code. Aim for one after-fix E2E proof before commenting, closing, or
+opening a PR for a user-visible bug.
+
+Pick the lane by symptom:
+
+- Docker/setup/install bug: build a package tarball and run the matching
+  `scripts/e2e/*-docker.sh` or package script. This proves npm packaging,
+  install paths, runtime deps, config writes, and container behavior.
+- Provider/model/auth bug: prefer true live E2E. First source local Mac
+  `~/.profile`, then inject the single needed key into Crabbox if needed. Scrub
+  unrelated provider env vars in the child command so interactive defaults do
+  not drift to another provider. If only a dummy key is used, label the proof
+  narrowly, e.g. "UI/install path only; live provider auth not exercised."
+- Channel delivery bug: use the channel Docker/live lane when available; include
+  setup, config, gateway start, send/receive or agent-turn proof, and redacted
+  logs.
+- Gateway/session/tool bug: prefer an end-to-end CLI or Gateway RPC command that
+  creates real state and inspects the resulting files/API output.
+- Pure parser/config bug: targeted tests may be enough, but still run a
+  Crabbox command when OS, package, Docker, secrets, or service lifecycle could
+  change behavior.
+
+Efficient flow:
+
+1. Reproduce or prove the pre-fix symptom when feasible. If the issue cannot be
+   reproduced, capture the exact command and observed behavior instead.
+2. Patch locally and run narrow local tests for edit speed.
+3. Run one Crabbox E2E command that starts from the user-facing entrypoint:
+   package install, Docker setup, onboarding, channel add, gateway start, or
+   agent turn as appropriate.
+4. Record proof as: Testbox id, command, environment shape, redacted secret
+   source, and copied success/failure output.
+5. If the issue says "cannot reproduce", ask for the missing config/log fields
+   that would distinguish the tested path from the reporter's path.
+
+Keep it efficient:
+
+- Reuse existing E2E scripts and helper assertions before writing ad hoc shell.
+- Use one-shot Crabbox for a single proof; use a reusable Testbox only when
+  several commands must share built images, installed packages, or live state.
+- Prefer `OPENCLAW_CURRENT_PACKAGE_TGZ` with Docker/package lanes when testing a
+  candidate tarball; prefer the repo's package helper instead of direct source
+  execution when the bug might be packaging/install related.
+- Keep secrets redacted. It is fine to report key presence, source, and length;
+  never print secret values.
+- Include `--timing-json` on broad or flaky runs when command duration or sync
+  behavior matters.
+
+Interactive CLI/onboarding:
+
+- For full-screen or prompt-heavy CLI flows, run the target command inside tmux
+  on the Crabbox and drive it with `tmux send-keys`; capture proof with
+  `tmux capture-pane`, redacted through `sed`.
+- Prefer deterministic arrow navigation over search typing for Clack-style
+  searchable selects. Raw `send-keys -l openai` may not trigger filtering in a
+  tmux pane; inspect option order locally or on-box and send exact Down/Enter
+  sequences.
+- Isolate mutable state with `OPENCLAW_STATE_DIR=$(mktemp -d)`. Plugin npm
+  installs live under that state dir (`npm/node_modules/...`), not under
+  `OPENCLAW_CONFIG_DIR`. Verify downloads by checking the state dir, package
+  lock, and installed package metadata.
+- To test automatic setup installs against local package artifacts, use
+  `OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1` plus
+  `OPENCLAW_PLUGIN_INSTALL_OVERRIDES='{"plugin-id":"npm-pack:/tmp/plugin.tgz"}'`.
+  Pack with `npm pack`, set an isolated `OPENCLAW_STATE_DIR`, and verify the
+  package under `npm/node_modules`. Overrides are test-only and must not be
+  treated as official/trusted-source installs.
+- For OpenAI/Codex onboarding proof, the useful markers are the UI line
+  `Installed Codex plugin`, `npm/node_modules/@openclaw/codex`, and the
+  package-lock entry showing the bundled `@openai/codex` dependency. A dummy
+  OpenAI-shaped key can prove only UI/install behavior; it is not live auth.
 
 ## Reuse And Keepalive
 

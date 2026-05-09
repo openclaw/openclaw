@@ -265,7 +265,7 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
     expectFirstInstallPlanCallOmitsToken();
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
@@ -284,7 +284,7 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(resolveSecretRefValuesMock).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
     expectFirstInstallPlanCallOmitsToken();
@@ -301,7 +301,7 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
     const writeParams = replaceConfigFileMock.mock.calls[0]?.[0] as {
       nextConfig?: { gateway?: { auth?: { token?: string } } };
@@ -312,7 +312,9 @@ describe("runDaemonInstall", () => {
     );
     expectFirstInstallPlanCallOmitsToken();
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    expect(actionState.warnings.some((warning) => warning.includes("Auto-generated"))).toBe(true);
+    expect(actionState.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("Auto-generated")]),
+    );
   });
 
   it("continues Linux install when service probe hits a non-fatal systemd bus failure", async () => {
@@ -322,7 +324,7 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 

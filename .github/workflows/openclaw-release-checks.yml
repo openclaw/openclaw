@@ -599,7 +599,7 @@ jobs:
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: mock-openai
-      telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-current-session-status-tool,telegram-mention-gating
+      telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-status-command,telegram-other-bot-command-gating,telegram-context-command,telegram-mentioned-message-reply,telegram-reply-chain-exact-marker,telegram-stream-final-single-message,telegram-long-final-reuses-preview,telegram-mention-gating
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -705,11 +705,11 @@ jobs:
           case "${QA_PARITY_LANE}" in
             candidate)
               model="${OPENCLAW_CI_OPENAI_MODEL}"
-              alt_model="openai/gpt-5.4-alt"
+              alt_model="openai/gpt-5.5-alt"
               ;;
             baseline)
-              model="anthropic/claude-opus-4-6"
-              alt_model="anthropic/claude-sonnet-4-6"
+              model="anthropic/claude-opus-4-7"
+              alt_model="anthropic/claude-sonnet-4-7"
               ;;
             *)
               echo "Unknown QA parity lane: ${QA_PARITY_LANE}" >&2
@@ -779,7 +779,7 @@ jobs:
             --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
             --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
             --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --baseline-label anthropic/claude-opus-4-6 \
+            --baseline-label anthropic/claude-opus-4-7 \
             --output-dir .artifacts/qa-e2e/parity
 
       - name: Upload parity artifacts

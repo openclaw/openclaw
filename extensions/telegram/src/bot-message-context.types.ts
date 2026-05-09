@@ -7,7 +7,9 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-types";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
+import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -22,6 +24,10 @@ export type TelegramMessageContextOptions = {
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
 };
+
+export type TelegramPromptContextEntry = NonNullable<
+  MsgContext["UntrustedStructuredContext"]
+>[number];
 
 export type TelegramLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
@@ -70,6 +76,8 @@ export type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
   replyMedia?: TelegramMediaRef[];
+  replyChain?: TelegramReplyChainEntry[];
+  promptContext?: TelegramPromptContextEntry[];
   storeAllowFrom: string[];
   options?: TelegramMessageContextOptions;
   bot: Bot;

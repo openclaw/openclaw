@@ -10,7 +10,6 @@ import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import {
   clearCachedIMessagePrivateApiStatus,
   getCachedIMessagePrivateApiStatus,
-  imessageRpcSupportsMethod,
   setCachedIMessagePrivateApiStatus,
   type IMessagePrivateApiStatus,
 } from "./private-api-status.js";

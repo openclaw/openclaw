@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
   resolveAgentConfig,
@@ -40,6 +40,7 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -78,11 +79,9 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
-import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
-  canonicalizeSpawnedByForAgent,
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
@@ -223,7 +222,9 @@ export function deriveSessionTitle(
   }
 
   const sanitizedDisplayName = normalizeOptionalString(
-    typeof entry.displayName === "string" ? stripInboundMetadata(entry.displayName).trim() : entry.displayName,
+    typeof entry.displayName === "string"
+      ? stripInboundMetadata(entry.displayName).trim()
+      : entry.displayName,
   );
   if (sanitizedDisplayName) {
     return sanitizedDisplayName;
@@ -1016,13 +1017,20 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   const agents = agentIds.map((id) => {
     const meta = configuredById.get(id);
     const model = resolveGatewayAgentModel(cfg, id);
+    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     return Object.assign(
       {
         id,
         name: meta?.name,
         identity: meta?.identity,
         workspace: resolveAgentWorkspaceDir(cfg, id),
-        agentRuntime: resolveAgentRuntimeMetadata(cfg, id),
+        agentRuntime: resolveModelAgentRuntimeMetadata({
+          cfg,
+          agentId: id,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
+          sessionKey: resolveAgentMainSessionKey({ cfg, agentId: id }),
+        }),
       },
       model ? { model } : {},
     );
@@ -1715,7 +1723,6 @@ export function buildGatewaySessionRow(params: {
   const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
     resolveLatestCompactionCheckpoint(entry),
   );
-  const agentRuntime = resolveAgentRuntimeMetadata(cfg, sessionAgentId);
   const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
   const selectedOrRuntimeModel = selectedModel?.model ?? model;
   const rowModelIdentity = lightweight
@@ -1728,6 +1735,13 @@ export function buildGatewaySessionRow(params: {
       });
   const rowModelProvider = rowModelIdentity.provider;
   const rowModel = rowModelIdentity.model;
+  const agentRuntime = resolveModelAgentRuntimeMetadata({
+    cfg,
+    agentId: sessionAgentId,
+    provider: rowModelProvider,
+    model: rowModel,
+    sessionKey: key,
+  });
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({

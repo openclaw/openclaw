@@ -76,6 +76,18 @@ export type TalkConfig = {
   providers?: Record<string, TalkProviderConfig>;
   /** Realtime Talk provider, model, voice, mode, transport, and brain config. */
   realtime?: TalkRealtimeConfig;
+  /** Optional thinking level override for the agent run behind Talk realtime consults. */
+  consultThinkingLevel?:
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "adaptive"
+    | "max";
+  /** Optional fast mode override for the agent run behind Talk realtime consults. */
+  consultFastMode?: boolean;
   /** BCP 47 locale id used for Talk speech recognition on device nodes. */
   speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */
@@ -196,6 +208,13 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /**
+   * When `mode="serve"` and an externally configured Tailscale Funnel route
+   * already covers the gateway port, skip re-applying `tailscale serve` on
+   * startup. Lets operators manage Funnel exposure outside OpenClaw without
+   * losing it across gateway restarts.
+   */
+  preserveFunnel?: boolean;
 };
 
 export type GatewayRemoteConfig = {

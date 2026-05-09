@@ -179,6 +179,16 @@ function createProviderUsageModuleMock() {
   };
 }
 
+function formatPrimaryModelLabel(provider: string | undefined, model: string): string {
+  return provider ? `${provider}/${model}` : model;
+}
+
+function formatStatusLines(primary: string, taskLineOverride: string | undefined): string {
+  return taskLineOverride
+    ? `OpenClaw\n🧠 Model: ${primary}\n${taskLineOverride}`
+    : `OpenClaw\n🧠 Model: ${primary}`;
+}
+
 function createCommandsStatusRuntimeModuleMock() {
   return {
     buildStatusText: async (params: {
@@ -207,9 +217,7 @@ function createCommandsStatusRuntimeModuleMock() {
           )
         : undefined;
       const primary =
-        params.primaryModelLabelOverride ??
-        [params.provider, params.model].filter(Boolean).join("/") ??
-        params.model;
+        params.primaryModelLabelOverride ?? formatPrimaryModelLabel(params.provider, params.model);
       const customAuth = params.provider
         ? resolveUsableCustomProviderApiKeyMock({ provider: params.provider })
         : null;
@@ -232,9 +240,7 @@ function createCommandsStatusRuntimeModuleMock() {
         includeTranscriptUsage: params.includeTranscriptUsage,
         workspaceDir: params.workspaceDir,
       });
-      return ["OpenClaw", `🧠 Model: ${primary}`, params.taskLineOverride]
-        .filter(Boolean)
-        .join("\n");
+      return formatStatusLines(primary, params.taskLineOverride);
     },
   };
 }
@@ -884,9 +890,18 @@ describe("session_status tool", () => {
       sessionKey: "current",
       model: "anthropic/claude-sonnet-4-6",
     });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
+    const details = result.details as {
+      ok?: boolean;
+      sessionKey?: string;
+      model?: string;
+      modelProvider?: string;
+      modelOverride?: string | null;
+    };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
+    expect(details.model).toBe("claude-sonnet-4-6");
+    expect(details.modelProvider).toBe("anthropic");
+    expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
     expect(updateSessionStoreMock).toHaveBeenCalled();
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,
@@ -900,7 +915,7 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toEqual(expect.any(String));
+    expect(saved.sessionId).toBeTypeOf("string");
     expect(saved.sessionId.trim().length).toBeGreaterThan(0);
   });
 
@@ -928,7 +943,7 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toEqual(expect.any(String));
+    expect(saved.sessionId).toBeTypeOf("string");
     expect(saved.sessionId.trim().length).toBeGreaterThan(0);
   });
 
@@ -2023,7 +2038,9 @@ describe("session_status tool", () => {
 
     const tool = getSessionStatusTool();
 
-    await tool.execute("call3", { model: "default" });
+    const result = await tool.execute("call3", { model: "default" });
+    const details = result.details as { modelOverride?: string | null };
+    expect(details.modelOverride).toBeNull();
     expect(updateSessionStoreMock).toHaveBeenCalled();
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,

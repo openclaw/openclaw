@@ -18,7 +18,7 @@ describe("multi-agent agentDir validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path === "agents.list")).toBe(true);
+      expect(res.issues.map((issue) => issue.path)).toContain("agents.list");
       expect(res.issues[0]?.message).toContain("Duplicate agentDir");
     }
   });

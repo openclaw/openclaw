@@ -180,12 +180,15 @@ function requireManager(result: SearchManagerResult): SearchManager {
 }
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -572,7 +575,7 @@ describe("getMemorySearchManager caching", () => {
 
     expect(replacementAttempt.manager).toBe(fallbackManager);
     expect(firstPrimary.close).not.toHaveBeenCalled();
-    await expect(firstManager.search("hello")).resolves.toEqual([]);
+    await expect(firstManager.search("hello")).resolves.toStrictEqual([]);
 
     const firstAgain = await getMemorySearchManager({ cfg: firstCfg, agentId });
     expect(firstAgain.manager).toBe(firstManager);

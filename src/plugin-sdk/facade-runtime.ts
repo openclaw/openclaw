@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
   getCachedPluginSourceModuleLoader,
   type PluginModuleLoaderCache,
@@ -74,7 +74,11 @@ function resolveFacadeModuleLocationUncached(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
+  const env = params.env ?? process.env;
+  if (areBundledPluginsDisabled(env)) {
+    return null;
+  }
+  const bundledPluginsDir = resolveBundledPluginsDir(env);
   const bundledLocation = resolveBundledFacadeModuleLocation({
     ...params,
     currentModulePath: CURRENT_MODULE_PATH,

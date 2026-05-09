@@ -212,7 +212,7 @@ describe("probeGateway", () => {
 
     expect(eventLoopReadyState.calls).toHaveLength(1);
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(1_000);
-    expect(gatewayClientState.options).not.toBeNull();
+    expect(gatewayClientState.options?.url).toBe("ws://127.0.0.1:18789");
     expect(gatewayClientState.startCalls).toBe(1);
   });
 
@@ -243,7 +243,7 @@ describe("probeGateway", () => {
     });
     expect(eventLoopReadyState.calls).toHaveLength(1);
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(250);
-    expect(gatewayClientState.options).not.toBeNull();
+    expect(gatewayClientState.options?.url).toBe("ws://127.0.0.1:18789");
     expect(gatewayClientState.startCalls).toBe(0);
   });
 
@@ -352,7 +352,7 @@ describe("probeGateway", () => {
 
     expect(result.ok).toBe(true);
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
-    expect(gatewayClientState.requests).toEqual([]);
+    expect(gatewayClientState.requests).toStrictEqual([]);
   });
 
   it("keeps device identity enabled for authenticated lightweight probes", async () => {
@@ -365,7 +365,7 @@ describe("probeGateway", () => {
 
     expect(result.ok).toBe(true);
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
-    expect(gatewayClientState.requests).toEqual([]);
+    expect(gatewayClientState.requests).toStrictEqual([]);
   });
 
   it("falls back to token/password auth when device identity cannot be persisted", async () => {
@@ -429,7 +429,7 @@ describe("probeGateway", () => {
       close: { code: 1008, reason: "pairing required" },
       auth: { capability: "pairing_pending" },
     });
-    expect(gatewayClientState.requests).toEqual([]);
+    expect(gatewayClientState.requests).toStrictEqual([]);
   });
 
   it("reports write-capable auth when hello-ok scopes include operator.write", async () => {

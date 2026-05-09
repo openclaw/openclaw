@@ -35,11 +35,7 @@ import type {
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
-import {
-  formatReasoningMessage,
-  stripDowngradedToolCallText,
-  THINKING_TAG_SCAN_RE,
-} from "./pi-embedded-utils.js";
+import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
@@ -831,31 +827,31 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!state.streamReasoning || !params.onReasoningStream) {
       return;
     }
-    const formatted = formatReasoningMessage(text);
-    if (!formatted) {
+    const trimmed = text.trim();
+    if (!trimmed) {
       return;
     }
-    if (formatted === state.lastStreamedReasoning) {
+    if (trimmed === state.lastStreamedReasoning) {
       return;
     }
     // Compute delta: new text since the last emitted reasoning.
-    // Guard against non-prefix changes (e.g. trim/format altering earlier content).
+    // Guard against non-prefix changes (e.g. trim altering earlier content).
     const prior = state.lastStreamedReasoning ?? "";
-    const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
-    state.lastStreamedReasoning = formatted;
+    const delta = trimmed.startsWith(prior) ? trimmed.slice(prior.length) : trimmed;
+    state.lastStreamedReasoning = trimmed;
 
     // Broadcast thinking event to WebSocket clients in real-time
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",
       data: {
-        text: formatted,
+        text: trimmed,
         delta,
       },
     });
 
     void params.onReasoningStream({
-      text: formatted,
+      text: trimmed,
     });
   };
 

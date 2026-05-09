@@ -142,10 +142,9 @@ const OPENROUTER_CATALOG = [
 ] as const;
 
 function expectRouterModelFiltering(options: Array<{ value: string }>) {
-  expect(options.some((opt) => opt.value === "openrouter/auto")).toBe(false);
-  expect(options.some((opt) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free")).toBe(
-    true,
-  );
+  const values = options.map((option) => option.value);
+  expect(values).not.toContain("openrouter/auto");
+  expect(values).toContain("openrouter/meta-llama/llama-3.3-70b:free");
 }
 
 function createSelectAllMultiselect() {
@@ -497,7 +496,7 @@ describe("promptDefaultModel", () => {
       browseCatalogOnDemand: true,
     });
 
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(select.mock.calls[0]?.[0]).toMatchObject({
       searchable: false,
@@ -534,7 +533,7 @@ describe("promptDefaultModel", () => {
       browseCatalogOnDemand: true,
     });
 
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(select.mock.calls[0]?.[0]).toMatchObject({
       searchable: false,
@@ -745,7 +744,7 @@ describe("promptDefaultModel", () => {
       runtime: {} as never,
     });
 
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(resolveProviderModelPickerEntries).not.toHaveBeenCalled();
     expect(providerModelPickerContributionRuntime.resolve).not.toHaveBeenCalled();
@@ -1123,7 +1122,7 @@ describe("promptModelAllowlist", () => {
     const result = await promptModelAllowlist({ config, prompter });
 
     expect(text.mock.calls[0]?.[0]?.initialValue).toBe("");
-    expect(result).toEqual({});
+    expect(result).toStrictEqual({});
   });
 
   it("shows existing fallbacks in the no-catalog allowlist prompt when an allowlist exists", async () => {

@@ -172,10 +172,8 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       ],
     });
 
-    expect(result).toMatchObject({
-      changed: true,
-      rewrittenEntries: 1,
-    });
+    expect(result.changed).toBe(true);
+    expect(result.rewrittenEntries).toBe(1);
     expect(result.bytesFreed).toBeGreaterThan(0);
 
     const branchMessages = getBranchMessages(sessionManager);
@@ -215,7 +213,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       "rewritten summary entry",
     );
     expect(sessionManager.getLabel(rewrittenSummaryEntry.id)).toBe("bookmark");
-    expect(sessionManager.getBranch().some((entry) => entry.type === "label")).toBe(true);
+    expect(sessionManager.getBranch().map((entry) => entry.type)).toContain("label");
   });
 
   it("remaps compaction keep markers when rewritten entries change ids", () => {
@@ -287,10 +285,11 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     expect((branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "[exact replacement]" },
     ]);
-    expect(branchMessages[2]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "summarized" }],
-    });
+    const replayedAssistant = branchMessages[2];
+    if (!replayedAssistant || replayedAssistant.role !== "assistant") {
+      throw new Error("expected rewritten suffix to replay the assistant summary");
+    }
+    expect(replayedAssistant.content).toEqual([{ type: "text", text: "summarized" }]);
   });
 });
 

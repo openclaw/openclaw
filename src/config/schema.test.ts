@@ -408,38 +408,54 @@ describe("config schema", () => {
   });
 
   it("rejects allowPrivateNetwork on media-understanding request config", () => {
-    expect(() =>
-      ToolsSchema.parse({
-        media: {
-          image: {
-            models: [
-              {
-                provider: "openai",
-                model: "gpt-4.1-mini",
-                request: {
-                  allowPrivateNetwork: true,
-                },
+    const result = ToolsSchema.safeParse({
+      media: {
+        image: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-4.1-mini",
+              request: {
+                allowPrivateNetwork: true,
               },
-            ],
-          },
+            },
+          ],
         },
-      }),
-    ).toThrow();
+      },
+    });
+
+    expect(result).toMatchObject({ success: false });
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          keys: ["allowPrivateNetwork"],
+          path: ["media", "image", "models", 0, "request"],
+        }),
+      );
+    }
   });
 
   it("rejects unknown keys inside web fetch firecrawl config", () => {
-    expect(() =>
-      ToolsSchema.parse({
-        web: {
-          fetch: {
-            firecrawl: {
-              enabled: true,
-              nope: true,
-            },
+    const result = ToolsSchema.safeParse({
+      web: {
+        fetch: {
+          firecrawl: {
+            enabled: true,
+            nope: true,
           },
         },
-      }),
-    ).toThrow();
+      },
+    });
+
+    expect(result).toMatchObject({ success: false });
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          keys: ["nope"],
+          path: ["web", "fetch", "firecrawl"],
+        }),
+      );
+    }
   });
 
   it("keeps tags in the allowed taxonomy", () => {
@@ -475,7 +491,7 @@ describe("config schema", () => {
     const lookup = lookupConfigSchema(baseSchema, "gateway.auth");
     expect(lookup?.path).toBe("gateway.auth");
     expect(lookup?.hintPath).toBe("gateway.auth");
-    expect(lookup?.children.some((child) => child.key === "token")).toBe(true);
+    expect(lookup?.children.map((child) => child.key)).toContain("token");
     const tokenChild = lookup?.children.find((child) => child.key === "token");
     expect(tokenChild?.path).toBe("gateway.auth.token");
     expect(tokenChild?.hint?.sensitive).toBe(true);

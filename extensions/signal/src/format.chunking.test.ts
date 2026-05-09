@@ -62,7 +62,7 @@ describe("splitSignalFormattedText", () => {
     it("empty text returns empty array", () => {
       // Empty input produces no chunks (not an empty chunk)
       const chunks = markdownToSignalTextChunks("", 100);
-      expect(chunks).toEqual([]);
+      expect(chunks).toStrictEqual([]);
     });
 
     it("text under limit returns single chunk unchanged", () => {
@@ -85,7 +85,7 @@ describe("splitSignalFormattedText", () => {
       // First chunk should contain the bold style
       const firstChunk = chunks[0];
       expect(firstChunk.text).toContain("bold");
-      expect(firstChunk.styles.some((s) => s.style === "BOLD")).toBe(true);
+      expect(firstChunk.styles.map((style) => style.style)).toContain("BOLD");
       // The bold style should start at position 0 in the first chunk
       const boldStyle = requireStyle(firstChunk, "BOLD");
       expect(boldStyle.start).toBe(0);
@@ -104,7 +104,7 @@ describe("splitSignalFormattedText", () => {
       if (!chunkWithBold) {
         throw new Error("chunk containing bold text missing");
       }
-      expect(chunkWithBold.styles.some((s) => s.style === "BOLD")).toBe(true);
+      expect(chunkWithBold.styles.map((style) => style.style)).toContain("BOLD");
 
       // The bold style should have chunk-local offset (not original text offset)
       const boldStyle = requireStyle(chunkWithBold, "BOLD");
@@ -211,7 +211,7 @@ describe("splitSignalFormattedText", () => {
       // Bold should be preserved in first chunk
       const firstChunk = chunks[0];
       if (firstChunk.text.includes("bold")) {
-        expect(firstChunk.styles.some((s) => s.style === "BOLD")).toBe(true);
+        expect(firstChunk.styles.map((style) => style.style)).toContain("BOLD");
       }
     });
 

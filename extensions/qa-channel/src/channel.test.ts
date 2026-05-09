@@ -1,5 +1,8 @@
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
-import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  createStartAccountContext,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   createTestRegistry,
@@ -11,6 +14,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 
+type QaRunPreparedTurn = Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0];
+
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
@@ -21,11 +26,19 @@ function installQaChannelTestRegistry() {
   );
 }
 
+function expectDispatchedContext(ctx: Record<string, unknown> | null): Record<string, unknown> {
+  expect(ctx).not.toBeNull();
+  if (ctx === null) {
+    throw new Error("Expected dispatched context");
+  }
+  return ctx;
+}
+
 function createMockQaRuntime(params?: {
   onDispatch?: (ctx: Record<string, unknown>) => void;
 }): PluginRuntime {
   const sessionUpdatedAt = new Map<string, number>();
-  return {
+  return createPluginRuntimeMock({
     channel: {
       mentions: {
         buildMentionRegexes() {
@@ -88,8 +101,28 @@ function createMockQaRuntime(params?: {
           });
         },
       },
+      turn: {
+        async runPrepared(turn: QaRunPreparedTurn) {
+          await turn.recordInboundSession({
+            storePath: turn.storePath,
+            sessionKey:
+              typeof turn.ctxPayload.SessionKey === "string"
+                ? turn.ctxPayload.SessionKey
+                : turn.routeSessionKey,
+            ctx: turn.ctxPayload,
+            onRecordError: turn.record?.onRecordError ?? (() => undefined),
+          });
+          return {
+            admission: turn.admission ?? { kind: "dispatch" as const },
+            dispatched: true,
+            ctxPayload: turn.ctxPayload,
+            routeSessionKey: turn.routeSessionKey,
+            dispatchResult: await turn.runDispatch(),
+          };
+        },
+      },
     },
-  } as unknown as PluginRuntime;
+  } as unknown as PluginRuntime);
 }
 
 function createQaChannelConfig(params: { baseUrl: string; allowFrom?: string[] }) {
@@ -382,16 +415,12 @@ describe("qa-channel plugin", () => {
         timeoutMs: 15_000,
       });
 
-      expect(dispatchedCtx).not.toBeNull();
-      if (!dispatchedCtx) {
-        throw new Error("expected dispatched context");
-      }
-      const mediaCtx: {
+      const mediaCtx = expectDispatchedContext(dispatchedCtx) as {
         MediaPath?: string;
         MediaPaths?: string[];
         MediaType?: string;
         MediaTypes?: string[];
-      } = dispatchedCtx;
+      };
       expect(mediaCtx.MediaPath).toEqual(expect.stringContaining("red-top-blue-bottom"));
       expect(mediaCtx.MediaType).toBe("image/png");
       expect(mediaCtx.MediaPaths).toEqual([mediaCtx.MediaPath]);

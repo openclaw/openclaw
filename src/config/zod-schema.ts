@@ -268,6 +268,10 @@ const TalkSchema = z
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     realtime: TalkRealtimeSchema.optional(),
+    consultThinkingLevel: z
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+      .optional(),
+    consultFastMode: z.boolean().optional(),
     speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
@@ -911,6 +915,7 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            preserveFunnel: z.boolean().optional(),
           })
           .strict()
           .optional(),
@@ -1075,6 +1080,7 @@ export const OpenClawSchema = z
         load: z
           .object({
             extraDirs: z.array(z.string()).optional(),
+            allowSymlinkTargets: z.array(z.string()).optional(),
             watch: z.boolean().optional(),
             watchDebounceMs: z.number().int().min(0).optional(),
           })

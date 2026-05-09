@@ -679,7 +679,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       providerStreamFn,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-completions",
@@ -704,7 +703,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       providerStreamFn,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-completions",
@@ -729,7 +727,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
   it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-responses",
@@ -745,7 +742,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const currentStreamFn = vi.fn();
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: currentStreamFn as never,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-responses",
@@ -755,6 +751,27 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
 
     expect(streamFn).toBe(currentStreamFn);
+  });
+
+  it("routes runtime-auth custom currentStreamFn values through boundary-aware transports", async () => {
+    const currentStreamFn = vi.fn();
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      sessionId: "session-1",
+      model: {
+        api: "anthropic-messages",
+        provider: "cloudflare-ai-gateway",
+        id: "claude-sonnet-4-6",
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic",
+        maxTokens: 1024,
+        contextWindow: 200_000,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      } as never,
+      resolvedApiKey: "sk-ant-test",
+    });
+
+    expect(streamFn).not.toBe(currentStreamFn);
   });
 });
 
@@ -2434,7 +2451,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
-    expect(seenContext.messages).toEqual([]);
+    expect(seenContext.messages).toStrictEqual([]);
   });
 
   it("drops ambiguous mangled replay names instead of guessing a tool", async () => {
@@ -2459,7 +2476,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
-    expect(seenContext.messages).toEqual([]);
+    expect(seenContext.messages).toStrictEqual([]);
   });
 
   it("preserves matching tool results for retained errored assistant turns", async () => {
@@ -2973,8 +2990,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       // drain
     }
 
-    expect(partialToolCall.arguments).toEqual({});
-    expect(streamedToolCall.arguments).toEqual({});
+    expect(partialToolCall.arguments).toStrictEqual({});
+    expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("keeps incomplete partial JSON unchanged until a complete object exists", async () => {
@@ -2999,7 +3016,7 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       // drain
     }
 
-    expect(partialToolCall.arguments).toEqual({});
+    expect(partialToolCall.arguments).toStrictEqual({});
   });
 
   it("does not repair tool arguments when trailing junk exceeds the Kimi-specific allowance", async () => {
@@ -3031,8 +3048,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       // drain
     }
 
-    expect(partialToolCall.arguments).toEqual({});
-    expect(streamedToolCall.arguments).toEqual({});
+    expect(partialToolCall.arguments).toStrictEqual({});
+    expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("clears a cached repair when later deltas make the trailing suffix invalid", async () => {
@@ -3076,8 +3093,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       // drain
     }
 
-    expect(partialToolCall.arguments).toEqual({});
-    expect(streamedToolCall.arguments).toEqual({});
+    expect(partialToolCall.arguments).toStrictEqual({});
+    expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("clears a cached repair when a later delta adds a single oversized trailing suffix", async () => {
@@ -3115,8 +3132,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       // drain
     }
 
-    expect(partialToolCall.arguments).toEqual({});
-    expect(streamedToolCall.arguments).toEqual({});
+    expect(partialToolCall.arguments).toStrictEqual({});
+    expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("preserves preexisting tool arguments when later reevaluation fails", async () => {
@@ -3153,7 +3170,7 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     }
 
     expect(partialToolCall.arguments).toEqual({ path: "/etc/hosts" });
-    expect(streamedToolCall.arguments).toEqual({});
+    expect(streamedToolCall.arguments).toStrictEqual({});
   });
 });
 

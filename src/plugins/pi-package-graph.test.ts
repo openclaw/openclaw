@@ -37,15 +37,25 @@ function readPiDependencySpecs() {
   }));
 }
 
+function collectMissingSpecNames(specs: Array<{ name: string; spec?: string }>): string[] {
+  const names: string[] = [];
+  for (const entry of specs) {
+    if (!entry.spec) {
+      names.push(entry.name);
+    }
+  }
+  return names;
+}
+
 function expectNoGraphViolations(violations: string[], message: string) {
-  expect(violations, message).toEqual([]);
+  expect(violations, message).toStrictEqual([]);
 }
 
 describe("pi package graph guardrails", () => {
   it("keeps root Pi packages aligned to the same exact version", () => {
     const specs = readPiDependencySpecs();
 
-    const missing = specs.filter((entry) => !entry.spec).map((entry) => entry.name);
+    const missing = collectMissingSpecNames(specs);
     expectNoGraphViolations(
       missing,
       `Missing required root Pi dependencies: ${missing.join(", ") || "<none>"}. Mixed or incomplete Pi root dependencies create an unsupported package graph.`,

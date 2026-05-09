@@ -68,7 +68,6 @@ describe("AgentRuntimePlan", () => {
     expect(plan.transport.extraParams).toMatchObject({
       parallel_tool_calls: true,
       text_verbosity: "low",
-      openaiWsWarmup: false,
     });
     expect(prepareProviderExtraParamsMock).toHaveBeenCalledTimes(1);
     void plan.transport.extraParams;
@@ -108,7 +107,6 @@ describe("AgentRuntimePlan", () => {
     expect(plan.transport.extraParams).toMatchObject({
       parallel_tool_calls: true,
       text_verbosity: "low",
-      openaiWsWarmup: false,
     });
     expect(
       plan.transport.resolveExtraParams({
@@ -118,7 +116,6 @@ describe("AgentRuntimePlan", () => {
     ).toMatchObject({
       parallel_tool_calls: false,
       text_verbosity: "low",
-      openaiWsWarmup: false,
     });
     expect(
       plan.prompt.resolveSystemPromptContribution({
@@ -156,7 +153,7 @@ describe("AgentRuntimePlan", () => {
 
     expect(normalized).toHaveLength(1);
     expect(normalized[0]?.name).toBe("ping");
-    expect(normalized[0]?.parameters).toBeTypeOf("object");
+    expect(normalized[0]?.parameters).toStrictEqual({});
   });
 
   it("does not forward OpenAI API-key profiles into the Codex harness auth slot", () => {

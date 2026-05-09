@@ -554,7 +554,7 @@ describe("plugin-sdk package contract guardrails", () => {
       .map(([entrypoint]) => entrypoint)
       .toSorted();
 
-    expect(duplicates).toEqual([]);
+    expect(duplicates).toStrictEqual([]);
   });
 
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
@@ -645,7 +645,7 @@ describe("plugin-sdk package contract guardrails", () => {
       );
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("keeps Matrix dependencies local to the Matrix plugin", () => {
@@ -659,42 +659,43 @@ describe("plugin-sdk package contract guardrails", () => {
       "fake-indexeddb",
       "matrix-js-sdk",
     ]) {
-      expect(matrixRuntimeDeps.get(dep)).toEqual(expect.any(String));
+      expect(matrixRuntimeDeps.get(dep)).toBeTypeOf("string");
+      expect(matrixRuntimeDeps.get(dep)).not.toBe("");
       expect(rootRuntimeDeps.has(dep)).toBe(false);
     }
     expect(rootRuntimeDeps.has("@openclaw/plugin-package-contract")).toBe(false);
   });
 
   it("keeps extension sources on public sdk or local package seams", () => {
-    expect(collectExtensionCoreImportLeaks()).toEqual([]);
+    expect(collectExtensionCoreImportLeaks()).toStrictEqual([]);
   });
 
   it("keeps extension production sources off repo test helpers", () => {
-    expect(collectExtensionTestHelperImportLeaks()).toEqual([]);
+    expect(collectExtensionTestHelperImportLeaks()).toStrictEqual([]);
   });
 
   it("keeps extension sources off deprecated plugin-sdk compatibility imports", () => {
-    expect(collectDeprecatedExtensionSdkImports()).toEqual([]);
+    expect(collectDeprecatedExtensionSdkImports()).toStrictEqual([]);
   });
 
   it("keeps real tests off deprecated plugin-sdk testing barrels", () => {
-    expect(collectDeprecatedTestBarrelImports()).toEqual([]);
+    expect(collectDeprecatedTestBarrelImports()).toStrictEqual([]);
   });
 
   it("keeps the package testing barrel as a single deprecated bridge", () => {
-    expect(collectDeprecatedPackageTestingBridgeDrift()).toEqual([]);
+    expect(collectDeprecatedPackageTestingBridgeDrift()).toStrictEqual([]);
   });
 
   it(
     "keeps extension test-api exports consumed",
     () => {
-      expect(collectUnusedExtensionTestApiExports()).toEqual([]);
+      expect(collectUnusedExtensionTestApiExports()).toStrictEqual([]);
     },
     PACKAGE_CONTRACT_SCAN_TIMEOUT_MS,
   );
 
   it("keeps reserved SDK compatibility subpaths inside their owning bundled plugins", () => {
-    expect(collectCrossOwnerReservedSdkImports()).toEqual([]);
+    expect(collectCrossOwnerReservedSdkImports()).toStrictEqual([]);
   });
 
   it("keeps reserved SDK compatibility subpaths actively used", () => {
@@ -703,10 +704,10 @@ describe("plugin-sdk package contract guardrails", () => {
       (entrypoint) => !usedReserved.has(entrypoint),
     );
 
-    expect(unusedReserved).toEqual([]);
+    expect(unusedReserved).toStrictEqual([]);
   });
 
   it("keeps generic core poll helpers free of plugin owner names", () => {
-    expect(collectGenericCoreOwnerNameLeaks()).toEqual([]);
+    expect(collectGenericCoreOwnerNameLeaks()).toStrictEqual([]);
   });
 });
