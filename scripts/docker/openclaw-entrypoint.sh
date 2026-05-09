@@ -59,9 +59,13 @@ if disable_dev_auth == "1":
 if ollama_model:
     models = config.setdefault("models", {})
     providers = models.setdefault("providers", {})
+    # apiKey intentionally absent: Openclaw's Control UI / credentials
+    # store owns the key, so the operator pastes it via Settings →
+    # Providers and it persists on the state-dir volume. Set
+    # OPENAI_API_KEY env var on Railway *as well* if you want a
+    # fallback that survives volume wipes.
     providers["ollama"] = {
         "baseUrl": "https://ollama.com/v1",
-        "apiKey": {"source": "env", "provider": "default", "id": "OPENAI_API_KEY"},
         "api": "openai-completions",
         "models": [
             {
