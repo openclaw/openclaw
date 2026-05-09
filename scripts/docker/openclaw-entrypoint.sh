@@ -21,13 +21,13 @@ set -e
 STATE_DIR="${OPENCLAW_STATE_DIR:-/root/.openclaw}"
 mkdir -p "$STATE_DIR"
 
-if [ -n "$OPENCLAW_PUBLIC_ORIGIN" ]; then
+if [ -n "$OPENCLAW_PUBLIC_ORIGIN" ] || [ "$OPENCLAW_DISABLE_DEVICE_AUTH" = "1" ]; then
   CONFIG_PATH="$STATE_DIR/openclaw.json"
-  # Merge (or create) origins list. We use python to JSON-parse +
-  # patch idempotently; jq isn't installed in the upstream image.
-  python3 - "$CONFIG_PATH" "$OPENCLAW_PUBLIC_ORIGIN" <<'PY' || true
+  # Merge (or create) gateway config idempotently. Uses python because
+  # jq isn't installed in the upstream image.
+  python3 - "$CONFIG_PATH" "${OPENCLAW_PUBLIC_ORIGIN:-}" "${OPENCLAW_DISABLE_DEVICE_AUTH:-0}" <<'PY' || true
 import json, os, sys
-config_path, public_origin = sys.argv[1], sys.argv[2]
+config_path, public_origin, disable_dev_auth = sys.argv[1], sys.argv[2], sys.argv[3]
 config = {}
 if os.path.exists(config_path):
     try:
@@ -38,14 +38,16 @@ if os.path.exists(config_path):
 config.setdefault("$schema", "https://openclaw.ai/config.json")
 gw = config.setdefault("gateway", {})
 ui = gw.setdefault("controlUi", {})
-origins = ui.setdefault("allowedOrigins", [])
-desired = [public_origin, "http://localhost:18789", "http://127.0.0.1:18789"]
-for o in desired:
-    if o and o not in origins:
-        origins.append(o)
+if public_origin:
+    origins = ui.setdefault("allowedOrigins", [])
+    for o in [public_origin, "http://localhost:18789", "http://127.0.0.1:18789"]:
+        if o and o not in origins:
+            origins.append(o)
+if disable_dev_auth == "1":
+    ui["dangerouslyDisableDeviceAuth"] = True
 with open(config_path, "w") as f:
     json.dump(config, f, indent=2)
-print(f"openclaw.json origins: {origins}", file=sys.stderr)
+print(f"openclaw.json patched: origins={ui.get('allowedOrigins')} disableDeviceAuth={ui.get('dangerouslyDisableDeviceAuth', False)}", file=sys.stderr)
 PY
 fi
 
