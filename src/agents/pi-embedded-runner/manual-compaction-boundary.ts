@@ -72,15 +72,15 @@ function hasMessagesToSummarizeBeforeKeptTail(params: {
 }
 
 export async function hardenManualCompactionBoundary(params: {
-  sessionFile: string;
+  transcriptLocator: string;
   preserveRecentTail?: boolean;
 }): Promise<HardenedManualCompactionBoundary> {
   const scope = resolveSqliteSessionTranscriptScopeForPath({
-    transcriptPath: params.sessionFile,
+    transcriptPath: params.transcriptLocator,
   });
   if (!scope) {
     throw new Error(
-      `Legacy transcript has not been imported into SQLite: ${params.sessionFile}. Run "openclaw doctor --fix" to build the session database.`,
+      `SQLite transcript is missing from the state database: ${params.transcriptLocator}. Run "openclaw doctor --fix" if legacy transcript files still need import.`,
     );
   }
   const events = loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
@@ -155,7 +155,7 @@ export async function hardenManualCompactionBoundary(params: {
   });
   replaceSqliteSessionTranscriptEvents({
     ...scope,
-    transcriptPath: params.sessionFile,
+    transcriptPath: params.transcriptLocator,
     events: [header, ...replacedEntries],
   });
 
