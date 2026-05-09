@@ -75,7 +75,6 @@ export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 export {
   loadCronStore,
   resolveCronStoreKey,
-  resolveCronStorePath,
   saveCronStore,
   updateCronStoreJobs,
 } from "../cron/store.js";

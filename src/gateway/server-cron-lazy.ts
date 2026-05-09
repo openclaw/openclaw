@@ -16,7 +16,7 @@ type LoadedGatewayCronState = {
 };
 
 export function createLazyGatewayCronState(params: LazyGatewayCronParams): GatewayCronState {
-  const storePath = resolveCronStoreKey(params.cfg.cron?.store);
+  const storePath = resolveCronStoreKey();
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
   let loaded: LoadedGatewayCronState | null = null;
   let loading: Promise<LoadedGatewayCronState> | null = null;

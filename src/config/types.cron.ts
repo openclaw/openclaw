@@ -30,7 +30,6 @@ export type CronFailureDestinationConfig = {
 
 export type CronConfig = {
   enabled?: boolean;
-  store?: string;
   maxConcurrentRuns?: number;
   /** Override default retry policy for one-shot jobs on transient errors. */
   retry?: CronRetryConfig;

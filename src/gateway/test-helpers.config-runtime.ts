@@ -119,9 +119,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     if (typeof testState.cronEnabled === "boolean") {
       fileCron.enabled = testState.cronEnabled;
     }
-    if (typeof testState.cronStorePath === "string") {
-      fileCron.store = testState.cronStorePath;
-    }
     const cron = Object.keys(fileCron).length > 0 ? fileCron : undefined;
 
     return {

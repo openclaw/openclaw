@@ -110,7 +110,10 @@ describe("cron run log", () => {
         "utf-8",
       );
 
-      const result = await importLegacyCronRunLogFilesToSqlite({ storePath });
+      const result = await importLegacyCronRunLogFilesToSqlite({
+        legacyStorePath: storePath,
+        storeKey: storePath,
+      });
 
       expect(result).toMatchObject({ imported: 1, files: 1 });
       expect(readCronRunLogEntriesFromSqliteSync(storePath, { jobId: "job-1" })).toEqual([

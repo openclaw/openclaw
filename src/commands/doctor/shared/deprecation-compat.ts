@@ -122,6 +122,16 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-cron-store",
+    owner: "config",
+    introduced: "2026-05-09",
+    source: "cron.store",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.gateway.ts",
+    replacement: "shared SQLite cron store",
+    docsPath: "/automation/cron-jobs",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-mcp-server-type-alias",
     owner: "config",
     introduced: "2026-04-27",

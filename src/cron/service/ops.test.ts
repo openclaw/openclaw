@@ -260,7 +260,7 @@ describe("cron service ops seam coverage", () => {
       ),
       "utf-8",
     );
-    await importLegacyCronStoreToSqlite(storePath);
+    await importLegacyCronStoreToSqlite({ legacyStorePath: storePath, storeKey: storePath });
 
     const state = createCronServiceState({
       storePath,

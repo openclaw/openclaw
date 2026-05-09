@@ -144,6 +144,26 @@ describe("legacy memory search store migrate", () => {
   });
 });
 
+describe("legacy cron store migrate", () => {
+  it("removes ignored cron.store path config", () => {
+    const res = migrateLegacyConfigForTest({
+      cron: {
+        enabled: true,
+        store: "~/.openclaw/cron/jobs.json",
+        maxConcurrentRuns: 2,
+      },
+    });
+
+    expect(res.config?.cron).toEqual({
+      enabled: true,
+      maxConcurrentRuns: 2,
+    });
+    expect(res.changes).toContain(
+      "Removed cron.store; cron jobs now use the shared SQLite database.",
+    );
+  });
+});
+
 describe("legacy session parent fork migrate", () => {
   it("removes ignored session.store", () => {
     const res = migrateLegacyConfigForTest({

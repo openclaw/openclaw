@@ -23,11 +23,13 @@ type CronJobRow = {
   state_json: string;
 };
 
+const DEFAULT_CRON_STORE_KEY = "default";
+
 function resolveDefaultCronDir(): string {
   return path.join(resolveConfigDir(), "cron");
 }
 
-function resolveDefaultCronStoreKey(): string {
+function resolveDefaultLegacyCronStorePath(): string {
   return path.join(resolveDefaultCronDir(), "jobs.json");
 }
 
@@ -42,8 +44,9 @@ export type CronStateFile = {
   jobs: Record<string, CronStateFileEntry>;
 };
 
-function cronStoreKey(storePath: string): string {
-  return path.resolve(storePath);
+function cronStoreKey(storeKey: string): string {
+  const normalized = storeKey.trim();
+  return normalized || DEFAULT_CRON_STORE_KEY;
 }
 
 function getCronJobsKysely(db: import("node:sqlite").DatabaseSync) {
@@ -73,7 +76,11 @@ function extractStateFile(store: CronStoreFile): CronStateFile {
 
 export const extractCronStateFileForMigration = extractStateFile;
 
-export function resolveCronStoreKey(configuredLegacyStorePath?: string) {
+export function resolveCronStoreKey(): string {
+  return DEFAULT_CRON_STORE_KEY;
+}
+
+export function resolveLegacyCronStorePath(configuredLegacyStorePath?: string): string {
   if (configuredLegacyStorePath?.trim()) {
     const raw = configuredLegacyStorePath.trim();
     if (raw.startsWith("~")) {
@@ -81,14 +88,8 @@ export function resolveCronStoreKey(configuredLegacyStorePath?: string) {
     }
     return path.resolve(raw);
   }
-  return resolveDefaultCronStoreKey();
+  return resolveDefaultLegacyCronStorePath();
 }
-
-/**
- * @deprecated Use `resolveCronStoreKey`. The returned value is now a SQLite
- * partition key and legacy import namespace, not a runtime JSON store path.
- */
-export const resolveCronStorePath = resolveCronStoreKey;
 
 function ensureJobStateObject(job: CronStoreFile["jobs"][number]): void {
   if (!job.state || typeof job.state !== "object") {
