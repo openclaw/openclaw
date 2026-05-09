@@ -964,7 +964,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     await createContextEngineAttemptRunner({
       contextEngine: createTestContextEngine({
         ...createContextEngineBootstrapAndAssemble(),
-        info: { ownsCompaction: true },
+        info: {
+          id: "test-context-engine",
+          name: "Test Context Engine",
+          ownsCompaction: true,
+        },
         afterTurn,
       }),
       sessionKey,
