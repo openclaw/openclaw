@@ -19,6 +19,7 @@ const resolveSessionAgentIdsMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn();
 const listAgentEntriesMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
+const wrapProviderStreamFnMock = vi.fn();
 const registerProviderStreamForModelMock = vi.fn();
 const diagDebugMock = vi.fn();
 
@@ -76,6 +77,7 @@ vi.mock("./agent-scope.js", () => ({
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   prepareProviderRuntimeAuth: (...args: unknown[]) => prepareProviderRuntimeAuthMock(...args),
+  wrapProviderStreamFn: (...args: unknown[]) => wrapProviderStreamFnMock(...args),
 }));
 
 vi.mock("./provider-stream.js", () => ({
@@ -302,6 +304,10 @@ describe("runBtwSideQuestion", () => {
     resolveAgentWorkspaceDirMock.mockReset();
     listAgentEntriesMock.mockReset();
     prepareProviderRuntimeAuthMock.mockReset();
+    wrapProviderStreamFnMock.mockReset();
+    // Default to no-op wrapping; tests that care about the wrapped fn can
+    // override the mock individually.
+    wrapProviderStreamFnMock.mockReturnValue(undefined);
     registerProviderStreamForModelMock.mockReset();
     diagDebugMock.mockReset();
 
@@ -526,6 +532,45 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Fallback answer." });
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies the provider plugin's wrapStreamFn so /btw against Copilot adds Editor-Version headers", async () => {
+    // Regression: before this fix, /btw called the base provider stream fn
+    // (or streamSimple) without invoking wrapProviderStreamFn, so github-
+    // copilot models bypassed buildCopilotIdeHeaders and the Copilot API
+    // returned 400 "missing Editor-Version header for IDE auth".
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "github-copilot",
+      id: "claude-opus-4.7-1m-internal",
+      api: "anthropic-messages",
+      baseUrl: "https://api.individual.githubcopilot.com",
+    });
+    const baseStreamFn = vi.fn();
+    const wrappedStreamFn = vi
+      .fn()
+      .mockReturnValue(makeAsyncEvents([createDoneEvent("Copilot answer.")]));
+    registerProviderStreamForModelMock.mockReturnValue(baseStreamFn);
+    wrapProviderStreamFnMock.mockReturnValue(wrappedStreamFn);
+
+    const result = await runSideQuestion({
+      provider: "github-copilot",
+      model: "claude-opus-4.7-1m-internal",
+    });
+
+    expect(result).toEqual({ text: "Copilot answer." });
+    expect(wrapProviderStreamFnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        context: expect.objectContaining({
+          provider: "github-copilot",
+          modelId: "claude-opus-4.7-1m-internal",
+          streamFn: baseStreamFn,
+        }),
+      }),
+    );
+    expect(wrappedStreamFn).toHaveBeenCalledTimes(1);
+    expect(baseStreamFn).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
   });
 
   it("strips injected empty tools arrays from BTW payloads before sending", async () => {
