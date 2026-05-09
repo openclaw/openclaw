@@ -29,6 +29,7 @@ import {
   normalizeExtraMemoryPaths,
   runWithConcurrency,
   type MemorySource,
+  type MemorySessionTranscriptScope,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -463,14 +464,18 @@ export abstract class MemoryManagerSyncOps {
       if (this.closed) {
         return;
       }
-      const sessionTranscript = update.sessionFile;
       const updateAgentId = update.agentId?.trim();
       if (updateAgentId && updateAgentId !== this.agentId) {
         return;
       }
-      if (!updateAgentId && !this.isSessionTranscriptForAgent(sessionTranscript)) {
+      const sessionId = update.sessionId?.trim();
+      if (!sessionId) {
         return;
       }
+      const sessionTranscript = createSqliteSessionTranscriptRef({
+        agentId: updateAgentId || this.agentId,
+        sessionId,
+      });
       this.scheduleSessionDirty(sessionTranscript);
     });
   }
@@ -586,20 +591,25 @@ export abstract class MemoryManagerSyncOps {
     state.pendingMessages = 0;
   }
 
-  private isSessionTranscriptForAgent(sessionTranscript: string): boolean {
-    if (!sessionTranscript) {
-      return false;
-    }
-    const scope = resolveSessionTranscriptScope(sessionTranscript);
-    return scope?.agentId === this.agentId;
-  }
-
-  private normalizeTargetSessionTranscripts(sessionTranscripts?: string[]): Set<string> | null {
-    if (!sessionTranscripts || sessionTranscripts.length === 0) {
+  private normalizeTargetSessionTranscripts(params?: {
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+    sessionTranscripts?: string[];
+  }): Set<string> | null {
+    if (
+      (!params?.sessionTranscriptScopes || params.sessionTranscriptScopes.length === 0) &&
+      (!params?.sessionTranscripts || params.sessionTranscripts.length === 0)
+    ) {
       return null;
     }
     const normalized = new Set<string>();
-    for (const sessionTranscript of sessionTranscripts) {
+    for (const scope of params?.sessionTranscriptScopes ?? []) {
+      const agentId = scope.agentId.trim();
+      const sessionId = scope.sessionId.trim();
+      if (agentId === this.agentId && sessionId) {
+        normalized.add(createSqliteSessionTranscriptRef({ agentId, sessionId }));
+      }
+    }
+    for (const sessionTranscript of params?.sessionTranscripts ?? []) {
       const trimmed = sessionTranscript.trim();
       if (!trimmed) {
         continue;
@@ -642,7 +652,12 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private shouldSyncSessions(
-    params?: { reason?: string; force?: boolean; sessionTranscripts?: string[] },
+    params?: {
+      reason?: string;
+      force?: boolean;
+      sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+      sessionTranscripts?: string[];
+    },
     needsFullReindex = false,
   ) {
     return shouldSyncSessionsForReindex({
@@ -776,7 +791,9 @@ export abstract class MemoryManagerSyncOps {
 
     const targetSessionTranscripts = params.needsFullReindex
       ? null
-      : this.normalizeTargetSessionTranscripts(params.targetSessionTranscripts);
+      : this.normalizeTargetSessionTranscripts({
+          sessionTranscripts: params.targetSessionTranscripts,
+        });
     const files = targetSessionTranscripts
       ? Array.from(targetSessionTranscripts)
       : await listSessionTranscriptsForAgent(this.agentId);
@@ -921,6 +938,7 @@ export abstract class MemoryManagerSyncOps {
   protected async runSync(params?: {
     reason?: string;
     force?: boolean;
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
@@ -944,9 +962,7 @@ export abstract class MemoryManagerSyncOps {
         maxFileBytes: this.settings.multimodal.maxFileBytes,
       },
     });
-    const targetSessionTranscripts = this.normalizeTargetSessionTranscripts(
-      params?.sessionTranscripts,
-    );
+    const targetSessionTranscripts = this.normalizeTargetSessionTranscripts(params);
     const hasTargetSessionTranscripts = targetSessionTranscripts !== null;
     const targetedSessionSync = await runMemoryTargetedSessionSync({
       hasSessionSource: this.sources.has("sessions"),

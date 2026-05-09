@@ -9,7 +9,10 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import {
+  createSqliteSessionTranscriptRef,
+  extractKeywords,
+} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   readMemoryFile,
   type MemoryEmbeddingProbeResult,
@@ -17,6 +20,7 @@ import {
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySearchResult,
+  type MemorySessionTranscriptScope,
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -618,6 +622,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
@@ -626,10 +631,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     await this.ensureProviderInitialized();
     if (this.syncing) {
-      if (
-        params?.sessionTranscripts?.some((sessionTranscript) => sessionTranscript.trim().length > 0)
-      ) {
-        return this.enqueueTargetedSessionSync(params.sessionTranscripts);
+      const targetedSessionTranscripts = this.resolveQueuedSessionTranscripts(params);
+      if (targetedSessionTranscripts.length > 0) {
+        return this.enqueueTargetedSessionSync(targetedSessionTranscripts);
       }
       return this.syncing;
     }
@@ -666,6 +670,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private async runSyncWithReadonlyRecovery(params?: {
     reason?: string;
     force?: boolean;
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
@@ -733,6 +738,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       readMeta: () => this.readMeta() ?? undefined,
     };
     await runMemorySyncWithReadonlyRecovery(state, params);
+  }
+
+  private resolveQueuedSessionTranscripts(params?: {
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+    sessionTranscripts?: string[];
+  }): string[] {
+    const targets = new Set<string>();
+    for (const scope of params?.sessionTranscriptScopes ?? []) {
+      const agentId = scope.agentId.trim();
+      const sessionId = scope.sessionId.trim();
+      if (agentId && sessionId) {
+        targets.add(createSqliteSessionTranscriptRef({ agentId, sessionId }));
+      }
+    }
+    for (const sessionTranscript of params?.sessionTranscripts ?? []) {
+      const trimmed = sessionTranscript.trim();
+      if (trimmed) {
+        targets.add(trimmed);
+      }
+    }
+    return Array.from(targets);
   }
 
   async readFile(params: {

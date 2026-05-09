@@ -1264,13 +1264,6 @@ async function compactEmbeddedPiSessionDirectOnce(
             }
           }
           const activeSessionId = transcriptRotation.sessionId ?? params.sessionId;
-          const activeTranscriptLocator =
-            activeSessionId === params.sessionId
-              ? transcriptLocator
-              : createSqliteSessionTranscriptLocator({
-                  agentId: sessionAgentId,
-                  sessionId: activeSessionId,
-                });
           const activePostLeafId = transcriptRotation.leafId ?? postCompactionLeafId;
           if (transcriptRotation.rotated) {
             log.info(
@@ -1283,7 +1276,6 @@ async function compactEmbeddedPiSessionDirectOnce(
             agentId: sessionAgentId,
             sessionId: activeSessionId,
             sessionKey: params.sessionKey,
-            transcriptLocator: activeTranscriptLocator,
           });
           if (params.config && params.sessionKey && checkpointSnapshot) {
             try {

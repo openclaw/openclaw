@@ -42,6 +42,7 @@ import {
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySearchResult,
+  type MemorySessionTranscriptScope,
   type MemorySource,
   type MemorySyncProgressUpdate,
   type ResolvedMemoryBackendConfig,
@@ -1293,13 +1294,17 @@ export class QmdMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     if (
+      params?.sessionTranscriptScopes?.some(
+        (scope) => scope.agentId.trim() && scope.sessionId.trim(),
+      ) ||
       params?.sessionTranscripts?.some((sessionTranscript) => sessionTranscript.trim().length > 0)
     ) {
-      log.debug("qmd sync ignoring targeted sessionTranscripts hint; running regular update");
+      log.debug("qmd sync ignoring targeted session transcript hint; running regular update");
     }
     if (params?.progress) {
       params.progress({ completed: 0, total: 1, label: "Updating QMD index…" });

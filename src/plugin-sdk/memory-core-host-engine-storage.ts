@@ -55,6 +55,7 @@ export type {
   MemoryReadResult,
   MemorySearchManager,
   MemorySearchRuntimeDebug,
+  MemorySessionTranscriptScope,
   MemorySyncProgressUpdate,
   ResolvedMemoryBackendConfig,
   ResolvedQmdConfig,

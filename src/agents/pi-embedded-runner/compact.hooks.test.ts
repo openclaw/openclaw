@@ -53,7 +53,7 @@ type SessionHookEvent = {
 };
 type PostCompactionSyncParams = {
   reason: string;
-  sessionTranscripts: string[];
+  sessionTranscriptScopes: Array<{ agentId: string; sessionId: string }>;
 };
 type PostCompactionSync = (params?: unknown) => Promise<void>;
 type Deferred<T> = {
@@ -713,13 +713,15 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
     try {
       await compactTesting.runPostCompactionSideEffects({
+        agentId: "main",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:main:session-1",
-        transcriptLocator: `  ${TEST_TRANSCRIPT_LOCATOR}  `,
       });
 
       expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({
-        transcriptLocator: TEST_TRANSCRIPT_LOCATOR,
+        agentId: "main",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:main:session-1",
       });
     } finally {
@@ -765,7 +767,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       expect(sync).toHaveBeenCalledTimes(1);
       expect(sync).toHaveBeenCalledWith({
         reason: "post-compaction",
-        sessionTranscripts: [TEST_ROTATED_SESSION_FILE],
+        sessionTranscriptScopes: [{ agentId: "main", sessionId: "rotated-session" }],
       });
     } finally {
       cleanup();
@@ -833,14 +835,12 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
     await compactTesting.runPostCompactionSideEffects({
       config: compactionConfig("await"),
+      agentId: "main",
+      sessionId: TEST_SESSION_ID,
       sessionKey: TEST_SESSION_KEY,
-      transcriptLocator: TEST_TRANSCRIPT_LOCATOR,
     });
 
-    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
-      sessionKey: TEST_SESSION_KEY,
-      config: expect.any(Object),
-    });
+    expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
     expect(sync).not.toHaveBeenCalled();
   });
@@ -857,8 +857,9 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
     const resultPromise = compactTesting.runPostCompactionSideEffects({
       config: compactionConfig("await"),
+      agentId: "main",
+      sessionId: TEST_SESSION_ID,
       sessionKey: TEST_SESSION_KEY,
-      transcriptLocator: TEST_TRANSCRIPT_LOCATOR,
     });
 
     void resultPromise.then(() => {
@@ -866,7 +867,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
     await expect(syncStarted.promise).resolves.toEqual({
       reason: "post-compaction",
-      sessionTranscripts: [TEST_TRANSCRIPT_LOCATOR],
+      sessionTranscriptScopes: [{ agentId: "main", sessionId: TEST_SESSION_ID }],
     });
     expect(settled).toBe(false);
     syncRelease.resolve(undefined);
@@ -880,8 +881,9 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
     await compactTesting.runPostCompactionSideEffects({
       config: compactionConfig("off"),
+      agentId: "main",
+      sessionId: TEST_SESSION_ID,
       sessionKey: TEST_SESSION_KEY,
-      transcriptLocator: TEST_TRANSCRIPT_LOCATOR,
     });
 
     expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
@@ -905,8 +907,9 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
     const resultPromise = compactTesting.runPostCompactionSideEffects({
       config: compactionConfig("async"),
+      agentId: "main",
+      sessionId: TEST_SESSION_ID,
       sessionKey: TEST_SESSION_KEY,
-      transcriptLocator: TEST_TRANSCRIPT_LOCATOR,
     });
 
     await managerRequested.promise;
@@ -920,7 +923,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     managerGate.resolve({ manager: { sync } });
     await expect(syncStarted.promise).resolves.toEqual({
       reason: "post-compaction",
-      sessionTranscripts: [TEST_TRANSCRIPT_LOCATOR],
+      sessionTranscriptScopes: [{ agentId: "main", sessionId: TEST_SESSION_ID }],
     });
   });
 
@@ -1228,7 +1231,6 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     try {
       const result = await compactEmbeddedPiSession(
         wrappedCompactionArgs({
-          transcriptLocator: `  ${TEST_TRANSCRIPT_LOCATOR}  `,
           config: compactionConfig("await"),
         }),
       );
@@ -1238,12 +1240,11 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       expect(listener).toHaveBeenCalledWith({
         agentId: "main",
         sessionId: "session-1",
-        transcriptLocator: TEST_TRANSCRIPT_LOCATOR,
         sessionKey: TEST_SESSION_KEY,
       });
       expect(sync).toHaveBeenCalledWith({
         reason: "post-compaction",
-        sessionTranscripts: [TEST_TRANSCRIPT_LOCATOR],
+        sessionTranscriptScopes: [{ agentId: "main", sessionId: TEST_SESSION_ID }],
       });
     } finally {
       cleanup();
