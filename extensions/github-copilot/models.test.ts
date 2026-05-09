@@ -38,7 +38,7 @@ vi.mock("openclaw/plugin-sdk/state-paths", () => ({
 }));
 
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/core";
-import { resolveCopilotForwardCompatModel } from "./models.js";
+import { listCopilotSyntheticCatalogEntries, resolveCopilotForwardCompatModel } from "./models.js";
 
 let deriveCopilotApiBaseUrlFromToken: typeof import("./token.js").deriveCopilotApiBaseUrlFromToken;
 let resolveCopilotApiToken: typeof import("./token.js").resolveCopilotApiToken;
@@ -121,6 +121,27 @@ describe("github-copilot model defaults", () => {
       expect(def.reasoning).toBe(true);
       expect(def.api).toBe("anthropic-messages");
     });
+  });
+});
+
+describe("listCopilotSyntheticCatalogEntries", () => {
+  it("returns synthetic catalog entries for known long-context Copilot variants with image input", () => {
+    const entries = listCopilotSyntheticCatalogEntries();
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+
+    const opus47 = byId.get("claude-opus-4.7-1m-internal");
+    expect(opus47).toBeDefined();
+    expect(opus47?.provider).toBe("github-copilot");
+    expect(opus47?.contextWindow).toBe(1_000_000);
+    expect(opus47?.reasoning).toBe(true);
+    expect(opus47?.input).toEqual(["text", "image"]);
+
+    const opus46 = byId.get("claude-opus-4.6-1m");
+    expect(opus46).toBeDefined();
+    expect(opus46?.provider).toBe("github-copilot");
+    expect(opus46?.contextWindow).toBe(1_000_000);
+    expect(opus46?.reasoning).toBe(true);
+    expect(opus46?.input).toEqual(["text", "image"]);
   });
 });
 

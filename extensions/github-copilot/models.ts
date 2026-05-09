@@ -55,6 +55,35 @@ export function resolveCopilotKnownCapabilities(
   return key ? COPILOT_KNOWN_CAPABILITIES[key] : undefined;
 }
 
+/**
+ * Synthetic catalog entries for the long-context Copilot variants registered in
+ * COPILOT_KNOWN_CAPABILITIES. These ids do not appear in pi-ai's built-in catalog
+ * (they are Copilot-internal long-context variants), so the gateway model
+ * catalog would otherwise treat them as unknown — including for image support
+ * checks in parseMessageWithAttachments. The forward-compat resolver fills this
+ * in for stream/resolve paths, but loadGatewayModelCatalog does not exercise it,
+ * so we publish the same shape here.
+ */
+export function listCopilotSyntheticCatalogEntries(): Array<{
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow: number;
+  reasoning: boolean;
+  input: Array<"text" | "image" | "document">;
+}> {
+  return Object.entries(COPILOT_KNOWN_CAPABILITIES).map(([id, caps]) => ({
+    id,
+    name: id,
+    provider: PROVIDER_ID,
+    contextWindow: caps.contextWindow,
+    reasoning: caps.reasoning,
+    // Mirror buildCopilotModelDefinition / resolveCopilotForwardCompatModel:
+    // every Copilot Claude/GPT variant we synthesize for accepts images.
+    input: ["text", "image"],
+  }));
+}
+
 function isCopilotCodexModelId(modelId: string): boolean {
   return /(?:^|[-_.])codex(?:$|[-_.])/.test(modelId);
 }

@@ -18,7 +18,11 @@ import {
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
-import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
+import {
+  PROVIDER_ID,
+  listCopilotSyntheticCatalogEntries,
+  resolveCopilotForwardCompatModel,
+} from "./models.js";
 import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
@@ -402,6 +406,7 @@ export default definePluginEntry({
         },
       },
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
+      augmentModelCatalog: () => listCopilotSyntheticCatalogEntries(),
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       resolveThinkingProfile: ({ modelId }) => ({
