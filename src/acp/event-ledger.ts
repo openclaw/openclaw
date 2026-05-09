@@ -72,7 +72,7 @@ type LedgerStore = {
   sessions: Record<string, LedgerSession>;
 };
 
-export type AcpEventLedgerMigrationStore = LedgerStore;
+export type AcpEventLedgerSnapshot = LedgerStore;
 
 type LedgerOptions = {
   maxSessions?: number;
@@ -622,14 +622,12 @@ function writeStoreToSqlite(
   }, options);
 }
 
-export function normalizeAcpEventLedgerStoreForMigration(
-  raw: unknown,
-): AcpEventLedgerMigrationStore {
+export function normalizeAcpEventLedgerSnapshot(raw: unknown): AcpEventLedgerSnapshot {
   return normalizeStore(raw);
 }
 
-export function writeAcpEventLedgerStoreToSqliteForMigration(
-  store: AcpEventLedgerMigrationStore,
+export function writeAcpEventLedgerSnapshotToSqlite(
+  store: AcpEventLedgerSnapshot,
   options: OpenClawStateDatabaseOptions & { now?: () => number } = {},
 ): void {
   writeStoreToSqlite(store, {

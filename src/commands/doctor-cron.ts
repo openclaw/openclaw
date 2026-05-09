@@ -4,12 +4,7 @@ import { promisify } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronRunLogPruneOptions } from "../cron/run-log.js";
-import {
-  resolveCronStoreKey,
-  resolveLegacyCronStorePath,
-  loadCronStore,
-  saveCronStore,
-} from "../cron/store.js";
+import { resolveCronStoreKey, loadCronStore, saveCronStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import {
   normalizeOptionalLowercaseString,
@@ -32,6 +27,7 @@ import {
   legacyCronStoreFileExists,
   legacyCronStateFileExists,
   loadLegacyCronStoreForMigration,
+  resolveLegacyCronStorePath,
 } from "./doctor/legacy/cron-store.js";
 
 type CronDoctorOutcome = {

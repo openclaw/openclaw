@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { resolveStatusTtsSnapshot } from "./status-config.js";
-import { writeTtsUserPrefsForMigration } from "./tts-prefs-store.js";
+import { writeTtsUserPrefsSnapshot } from "./tts-prefs-store.js";
 
 let fixtureRoot = "";
 let fixtureId = 0;
@@ -54,7 +54,7 @@ function restoreEnv(key: string, value: string | undefined): void {
 describe("resolveStatusTtsSnapshot", () => {
   it("uses prefs overrides without loading speech providers", async () => {
     await withStatusTempHome(async () => {
-      writeTtsUserPrefsForMigration({
+      writeTtsUserPrefsSnapshot({
         tts: {
           auto: "always",
           provider: "edge",
@@ -283,7 +283,7 @@ describe("resolveStatusTtsSnapshot", () => {
 
   it("uses provider metadata for local provider prefs overrides", async () => {
     await withStatusTempHome(async () => {
-      writeTtsUserPrefsForMigration({
+      writeTtsUserPrefsSnapshot({
         tts: {
           auto: "always",
           provider: "edge",
@@ -326,7 +326,7 @@ describe("resolveStatusTtsSnapshot", () => {
       delete process.env.OPENCLAW_STATE_DIR;
       vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
       try {
-        writeTtsUserPrefsForMigration({
+        writeTtsUserPrefsSnapshot({
           tts: {
             auto: "always",
             provider: "openai",

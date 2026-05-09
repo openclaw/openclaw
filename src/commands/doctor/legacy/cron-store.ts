@@ -1,13 +1,35 @@
 import fs from "node:fs";
+import path from "node:path";
 import {
-  extractCronStateFileForMigration,
-  type CronStateFile,
-  type CronStateFileEntry,
-  writeCronJobRuntimeStateForMigration,
-  writeCronJobsForMigration,
+  extractCronRuntimeStateSnapshot,
+  saveCronStore,
+  type CronRuntimeStateEntry,
+  type CronRuntimeStateSnapshot,
+  writeCronRuntimeStateSnapshot,
 } from "../../../cron/store.js";
 import type { CronStoreFile } from "../../../cron/types.js";
+import { expandHomePrefix } from "../../../infra/home-dir.js";
+import { resolveConfigDir } from "../../../utils.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
+
+function resolveDefaultCronDir(): string {
+  return path.join(resolveConfigDir(), "cron");
+}
+
+function resolveDefaultLegacyCronStorePath(): string {
+  return path.join(resolveDefaultCronDir(), "jobs.json");
+}
+
+export function resolveLegacyCronStorePath(configuredLegacyStorePath?: string): string {
+  if (configuredLegacyStorePath?.trim()) {
+    const raw = configuredLegacyStorePath.trim();
+    if (raw.startsWith("~")) {
+      return path.resolve(expandHomePrefix(raw));
+    }
+    return path.resolve(raw);
+  }
+  return resolveDefaultLegacyCronStorePath();
+}
 
 function resolveStatePath(storePath: string): string {
   if (storePath.endsWith(".json")) {
@@ -20,16 +42,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function normalizeCronStateFile(value: unknown): CronStateFile | null {
+function normalizeCronStateFile(value: unknown): CronRuntimeStateSnapshot | null {
   if (!isRecord(value) || value.version !== 1 || !isRecord(value.jobs)) {
     return null;
   }
-  const jobs: Record<string, CronStateFileEntry> = {};
+  const jobs: Record<string, CronRuntimeStateEntry> = {};
   for (const [jobId, entry] of Object.entries(value.jobs)) {
     if (!isRecord(entry)) {
       continue;
     }
-    const normalized: CronStateFileEntry = {};
+    const normalized: CronRuntimeStateEntry = {};
     if (typeof entry.updatedAtMs === "number" && Number.isFinite(entry.updatedAtMs)) {
       normalized.updatedAtMs = entry.updatedAtMs;
     }
@@ -60,7 +82,7 @@ export function legacyCronStateFileExists(storePath: string): boolean {
   }
 }
 
-async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
+async function loadStateFile(statePath: string): Promise<CronRuntimeStateSnapshot | null> {
   let raw: string;
   try {
     raw = await fs.promises.readFile(statePath, "utf-8");
@@ -125,7 +147,7 @@ export async function importLegacyCronStateFileToSqlite(params: {
   if (!stateFile) {
     return { imported: false, importedJobs: 0 };
   }
-  const importedJobs = writeCronJobRuntimeStateForMigration(params.storeKey, stateFile);
+  const importedJobs = writeCronRuntimeStateSnapshot(params.storeKey, stateFile);
   try {
     await fs.promises.rm(statePath, { force: true });
   } catch {
@@ -150,11 +172,11 @@ export async function importLegacyCronStoreToSqlite(params: {
   if (!store) {
     return { imported: false, importedJobs: 0 };
   }
-  const stateFile =
+  const stateSnapshot =
     (await loadStateFile(resolveStatePath(params.legacyStorePath))) ??
-    extractCronStateFileForMigration(store);
-  writeCronJobsForMigration(params.storeKey, store);
-  writeCronJobRuntimeStateForMigration(params.storeKey, stateFile);
+    extractCronRuntimeStateSnapshot(store);
+  await saveCronStore(params.storeKey, store);
+  writeCronRuntimeStateSnapshot(params.storeKey, stateSnapshot);
   try {
     await fs.promises.rm(params.legacyStorePath, { force: true });
   } catch {

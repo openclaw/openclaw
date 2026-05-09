@@ -1,5 +1,3 @@
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   readOpenClawStateKvJson,
@@ -10,16 +8,6 @@ import {
 export { createAsyncLock } from "./json-files.js";
 
 const PAIRING_STATE_SCOPE_PREFIX = "pairing";
-
-export function resolvePairingPaths(baseDir: string | undefined, subdir: string) {
-  const root = baseDir ?? resolveStateDir();
-  const dir = path.join(root, subdir);
-  return {
-    dir,
-    pendingPath: path.join(dir, "pending.json"),
-    pairedPath: path.join(dir, "paired.json"),
-  };
-}
 
 function sqliteOptionsForBaseDir(baseDir: string | undefined): OpenClawStateDatabaseOptions {
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};

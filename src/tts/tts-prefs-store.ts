@@ -1,7 +1,5 @@
-import path from "node:path";
 import type { TtsAutoMode, TtsProvider } from "../config/types.tts.js";
 import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
-import { resolveConfigDir } from "../utils.js";
 
 const TTS_PREFS_PLUGIN_ID = "speech-core";
 const TTS_PREFS_NAMESPACE = "tts-prefs";
@@ -40,10 +38,6 @@ export function isSqliteTtsPrefsRef(value: string): boolean {
   return value === SQLITE_TTS_PREFS_REF;
 }
 
-export function resolveLegacyDefaultTtsPrefsPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveConfigDir(env), "settings", "tts.json");
-}
-
 export function resolveTtsPrefsRef(
   _prefsPath?: string,
   _env: NodeJS.ProcessEnv = process.env,
@@ -58,7 +52,7 @@ export function readTtsUserPrefs(
   return coercePrefs(openTtsPrefsStore(env).lookup(TTS_PREFS_KEY));
 }
 
-export function writeTtsUserPrefsForMigration(
+export function writeTtsUserPrefsSnapshot(
   prefs: TtsUserPrefs,
   env: NodeJS.ProcessEnv = process.env,
 ): void {

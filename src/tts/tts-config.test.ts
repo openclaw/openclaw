@@ -9,7 +9,7 @@ import {
   resolveEffectiveTtsConfig,
   shouldAttemptTtsPayload,
 } from "./tts-config.js";
-import { writeTtsUserPrefsForMigration } from "./tts-prefs-store.js";
+import { writeTtsUserPrefsSnapshot } from "./tts-prefs-store.js";
 
 describe("shouldAttemptTtsPayload", () => {
   let originalStateDir: string | undefined;
@@ -59,7 +59,7 @@ describe("shouldAttemptTtsPayload", () => {
   });
 
   it("honors session auto state before prefs and config", () => {
-    writeTtsUserPrefsForMigration({ tts: { auto: "off" } });
+    writeTtsUserPrefsSnapshot({ tts: { auto: "off" } });
     const cfg = { messages: { tts: { auto: "off" } } } as OpenClawConfig;
 
     expect(shouldAttemptTtsPayload({ cfg, ttsAuto: "always" })).toBe(true);
@@ -69,10 +69,10 @@ describe("shouldAttemptTtsPayload", () => {
   it("uses local prefs before config auto mode", () => {
     const cfg = { messages: { tts: { auto: "off" } } } as OpenClawConfig;
 
-    writeTtsUserPrefsForMigration({ tts: { enabled: true } });
+    writeTtsUserPrefsSnapshot({ tts: { enabled: true } });
     expect(shouldAttemptTtsPayload({ cfg })).toBe(true);
 
-    writeTtsUserPrefsForMigration({ tts: { auto: "off" } });
+    writeTtsUserPrefsSnapshot({ tts: { auto: "off" } });
     expect(
       shouldAttemptTtsPayload({ cfg: { messages: { tts: { enabled: true } } } as OpenClawConfig }),
     ).toBe(false);
