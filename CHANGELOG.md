@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 - CLI/onboarding: improve setup, onboarding, configure, and channel command wayfinding so terminal flows explain the next useful command instead of relying on terse setup labels.
 - Agents/Codex: remove the configurable Codex dynamic-tools profile so Codex app-server always owns workspace, edit, patch, exec, process, and plan tools while OpenClaw integration tools remain available.
 - Plugin SDK: add bundled-plugin `scheduleSessionTurn` and tag-based unscheduling on top of cron-compatible agent-turn jobs. Replaces part of #73384/#74483. Thanks @100yenadmin.
+- Plugin SDK/media-understanding: add `extractStructuredWithModel(...)` plus the optional provider-side `extractStructured(...)` seam so trusted plugins can run bounded image-first structured extraction with optional supplemental text context through provider-owned runtimes such as Codex.
 
 ### Fixes
 
