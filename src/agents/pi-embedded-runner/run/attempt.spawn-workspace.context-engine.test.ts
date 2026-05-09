@@ -1233,8 +1233,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       flushPendingToolResultsAfterIdle: flushMock,
       session: { agent: {}, dispose: disposeMock },
       sessionManager: hoisted.sessionManager,
-      releaseWsSession: hoisted.releaseWsSessionMock,
-      sessionId: embeddedSessionId,
       bundleLspRuntime: undefined,
       sessionLock: { release: releaseMock },
     });
@@ -1242,9 +1240,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(flushMock).toHaveBeenCalledTimes(1);
     expect(disposeMock).toHaveBeenCalledTimes(1);
     expect(releaseMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
-      allowPool: false,
-    });
   });
 });
 

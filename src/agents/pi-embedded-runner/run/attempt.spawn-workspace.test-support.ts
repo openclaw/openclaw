@@ -70,7 +70,6 @@ type AttemptSpawnWorkspaceHoisted = {
   installToolResultContextGuardMock: UnknownMock;
   installContextEngineLoopHookMock: UnknownMock;
   flushPendingToolResultsAfterIdleMock: AsyncUnknownMock;
-  releaseWsSessionMock: UnknownMock;
   resolveBootstrapFilesForRunMock: Mock<(...args: unknown[]) => Promise<WorkspaceBootstrapFile[]>>;
   resolveBootstrapContextForRunMock: Mock<() => Promise<BootstrapContext>>;
   isWorkspaceBootstrapPendingMock: Mock<(workspaceDir: string) => Promise<boolean>>;
@@ -134,7 +133,6 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const installContextEngineLoopHookMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
-  const releaseWsSessionMock = vi.fn(() => {});
   const subscribeEmbeddedPiSessionMock = vi.fn<SubscribeEmbeddedPiSessionFn>(() =>
     createSubscriptionMock(),
   );
@@ -205,7 +203,6 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     installToolResultContextGuardMock,
     installContextEngineLoopHookMock,
     flushPendingToolResultsAfterIdleMock,
-    releaseWsSessionMock,
     resolveBootstrapFilesForRunMock,
     resolveBootstrapContextForRunMock,
     isWorkspaceBootstrapPendingMock,
@@ -506,12 +503,6 @@ vi.mock("../extra-params.js", async () => {
     resolveAgentTransportOverride: () => undefined,
   };
 });
-
-vi.mock("../../openai-ws-stream.js", () => ({
-  createOpenAIWebSocketStreamFn: vi.fn(),
-  releaseWsSession: (...args: unknown[]) =>
-    (hoisted.releaseWsSessionMock as (...args: unknown[]) => unknown)(...args),
-}));
 
 vi.mock("../../anthropic-payload-log.js", () => ({
   createAnthropicPayloadLogger: () => undefined,
@@ -885,7 +876,6 @@ export function resetEmbeddedAttemptHarness(
   hoisted.installToolResultContextGuardMock.mockReset().mockReturnValue(() => {});
   hoisted.installContextEngineLoopHookMock.mockReset().mockReturnValue(() => {});
   hoisted.flushPendingToolResultsAfterIdleMock.mockReset().mockResolvedValue(undefined);
-  hoisted.releaseWsSessionMock.mockReset().mockReturnValue(undefined);
   hoisted.resolveBootstrapContextForRunMock.mockReset().mockResolvedValue({
     bootstrapFiles: [],
     contextFiles: [],
