@@ -32,8 +32,16 @@ vi.mock("./commands-subagents-control.runtime.js", () => ({
   listControlledSubagentRuns: listControlledSubagentRunsMock,
 }));
 
-const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-  allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
+  const values: string[] = [];
+  for (const entry of allowFrom) {
+    const value = String(entry).trim();
+    if (value) {
+      values.push(value);
+    }
+  }
+  return values;
+};
 
 let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
@@ -150,7 +158,7 @@ describe("subagents command dispatch", () => {
   it("maps prefixes and args to subagent actions", () => {
     const listTokens = ["list"];
     expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens: listTokens })).toBe("list");
-    expect(listTokens).toEqual([]);
+    expect(listTokens).toStrictEqual([]);
 
     const killTokens = ["1"];
     expect(resolveSubagentsAction({ handledPrefix: COMMAND_KILL, restTokens: killTokens })).toBe(

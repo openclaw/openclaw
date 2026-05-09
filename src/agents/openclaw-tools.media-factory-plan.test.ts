@@ -471,14 +471,11 @@ describe("optional media tool factory planning", () => {
     ];
     installSnapshot(config, plugins);
 
-    expect(
-      resolveOptionalMediaToolFactoryPlan({
-        config,
-        authStore: createAuthStore(["openai-codex"]),
-      }),
-    ).toMatchObject({
-      imageGenerate: true,
+    const plan = resolveOptionalMediaToolFactoryPlan({
+      config,
+      authStore: createAuthStore(["openai-codex"]),
     });
+    expect(plan.imageGenerate).toBe(true);
     installSnapshot(config, plugins, undefined, process.cwd());
     expect(
       (
@@ -538,16 +535,13 @@ describe("optional media tool factory planning", () => {
       }),
     ]);
 
-    expect(
-      resolveOptionalMediaToolFactoryPlan({
-        config,
-        authStore: createAuthStore(),
-      }),
-    ).toMatchObject({
-      imageGenerate: true,
-      videoGenerate: true,
-      musicGenerate: true,
+    const plan = resolveOptionalMediaToolFactoryPlan({
+      config,
+      authStore: createAuthStore(),
     });
+    expect(plan.imageGenerate).toBe(true);
+    expect(plan.videoGenerate).toBe(true);
+    expect(plan.musicGenerate).toBe(true);
   });
 
   it("does not expose manifest-backed generation providers when plugins are globally disabled", async () => {
@@ -608,15 +602,16 @@ describe("optional media tool factory planning", () => {
       musicGenerate: false,
       pdf: false,
     });
-    expect(
-      (
-        await createOpenClawToolsForTest({
-          config,
-          authProfileStore: createAuthStore(),
-          pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
-        })
-      ).map((tool) => tool.name),
-    ).not.toEqual(expect.arrayContaining(["image_generate", "video_generate", "music_generate"]));
+    const toolNames = (
+      await createOpenClawToolsForTest({
+        config,
+        authProfileStore: createAuthStore(),
+        pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
+      })
+    ).map((tool) => tool.name);
+    expect(toolNames).not.toContain("image_generate");
+    expect(toolNames).not.toContain("video_generate");
+    expect(toolNames).not.toContain("music_generate");
   });
 
   it("does not count unresolved SecretRef config signals as configured", async () => {
@@ -684,16 +679,17 @@ describe("optional media tool factory planning", () => {
       musicGenerate: false,
       pdf: false,
     });
-    expect(
-      (
-        await createOpenClawToolsForTest({
-          config,
-          workspaceDir,
-          authProfileStore: createAuthStore(),
-          pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
-        })
-      ).map((tool) => tool.name),
-    ).not.toEqual(expect.arrayContaining(["image_generate", "video_generate", "music_generate"]));
+    const toolNames = (
+      await createOpenClawToolsForTest({
+        config,
+        workspaceDir,
+        authProfileStore: createAuthStore(),
+        pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
+      })
+    ).map((tool) => tool.name);
+    expect(toolNames).not.toContain("image_generate");
+    expect(toolNames).not.toContain("video_generate");
+    expect(toolNames).not.toContain("music_generate");
   });
 
   it("counts configured non-env SecretRef config signals without resolving secrets", () => {
@@ -751,16 +747,13 @@ describe("optional media tool factory planning", () => {
       }),
     ]);
 
-    expect(
-      resolveOptionalMediaToolFactoryPlan({
-        config,
-        authStore: createAuthStore(),
-      }),
-    ).toMatchObject({
-      imageGenerate: true,
-      videoGenerate: true,
-      musicGenerate: true,
+    const plan = resolveOptionalMediaToolFactoryPlan({
+      config,
+      authStore: createAuthStore(),
     });
+    expect(plan.imageGenerate).toBe(true);
+    expect(plan.videoGenerate).toBe(true);
+    expect(plan.musicGenerate).toBe(true);
   });
 
   it("does not register the image tool without cheap vision availability evidence", async () => {
@@ -871,14 +864,11 @@ describe("optional media tool factory planning", () => {
       }),
     ]);
 
-    expect(
-      resolveOptionalMediaToolFactoryPlan({
-        config,
-        authStore: createAuthStore(["openai-codex"]),
-      }),
-    ).toMatchObject({
-      imageGenerate: false,
+    const plan = resolveOptionalMediaToolFactoryPlan({
+      config,
+      authStore: createAuthStore(["openai-codex"]),
     });
+    expect(plan.imageGenerate).toBe(false);
   });
 
   it("ignores external manifest capability providers excluded by plugin policy", () => {

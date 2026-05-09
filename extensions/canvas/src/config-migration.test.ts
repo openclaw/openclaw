@@ -12,7 +12,6 @@ describe("migrateLegacyCanvasHostConfig", () => {
       },
     } as OpenClawConfig);
 
-    expect(result).toBeDefined();
     if (!result) {
       throw new Error("expected Canvas config migration result");
     }
@@ -55,7 +54,6 @@ describe("migrateLegacyCanvasHostConfig", () => {
       },
     } as OpenClawConfig);
 
-    expect(result).toBeDefined();
     if (!result) {
       throw new Error("expected Canvas config migration result");
     }

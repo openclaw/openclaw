@@ -42,7 +42,6 @@ function requireGatewayAuth(
   snapshot: Awaited<ReturnType<typeof import("./runtime.js").prepareSecretsRuntimeSnapshot>>,
 ) {
   const auth = snapshot.config.gateway?.auth;
-  expect(auth).toBeDefined();
   if (!auth) {
     throw new Error("expected gateway auth config");
   }

@@ -47,8 +47,7 @@ afterEach(() => {
 });
 
 function getFirstGuardedFetchCall() {
-  const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-  expect(call).toBeTruthy();
+  const [call] = fetchWithSsrFGuardMock.mock.calls[0] ?? [];
   if (!call) {
     throw new Error("Expected fetchWithSsrFGuard to be called");
   }
@@ -321,12 +320,9 @@ describe("fetchWithTimeoutGuarded", () => {
 
     await fetchWithTimeoutGuarded("https://example.com", {}, undefined, fetch);
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com",
-        timeoutMs: 60_000,
-      }),
-    );
+    const call = getFirstGuardedFetchCall();
+    expect(call.url).toBe("https://example.com");
+    expect(call.timeoutMs).toBe(60_000);
   });
 
   it("sanitizes auditContext before passing it to the SSRF guard", async () => {
@@ -340,12 +336,9 @@ describe("fetchWithTimeoutGuarded", () => {
       auditContext: "provider-http\r\nfal\timage\u001btest",
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        auditContext: "provider-http fal image test",
-        timeoutMs: 5000,
-      }),
-    );
+    const call = getFirstGuardedFetchCall();
+    expect(call.auditContext).toBe("provider-http fal image test");
+    expect(call.timeoutMs).toBe(5000);
   });
 
   it("passes configured explicit proxy policy through the SSRF guard", async () => {
@@ -366,14 +359,32 @@ describe("fetchWithTimeoutGuarded", () => {
       },
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dispatcherPolicy: {
-          mode: "explicit-proxy",
-          proxyUrl: "http://169.254.169.254:8080",
-        },
-      }),
-    );
+    expect(getFirstGuardedFetchCall().dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "http://169.254.169.254:8080",
+    });
+  });
+
+  it("merges full SSRF policy into JSON request guards", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await postJsonRequest({
+      url: "https://api.example.com/v1/test",
+      headers: new Headers(),
+      body: { ok: true },
+      fetchFn: fetch,
+      allowPrivateNetwork: true,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    expect(getFirstGuardedFetchCall().policy).toEqual({
+      allowPrivateNetwork: true,
+      allowRfc2544BenchmarkRange: true,
+    });
   });
 
   it("forwards explicit pinDns overrides to JSON requests", async () => {
@@ -391,11 +402,7 @@ describe("fetchWithTimeoutGuarded", () => {
       pinDns: false,
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pinDns: false,
-      }),
-    );
+    expect(getFirstGuardedFetchCall().pinDns).toBe(false);
   });
 
   it("forwards explicit pinDns overrides to transcription requests", async () => {
@@ -413,11 +420,7 @@ describe("fetchWithTimeoutGuarded", () => {
       pinDns: false,
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pinDns: false,
-      }),
-    );
+    expect(getFirstGuardedFetchCall().pinDns).toBe(false);
   });
 
   it("does not set a guarded fetch mode when no HTTP proxy env is configured", async () => {
@@ -449,11 +452,7 @@ describe("fetchWithTimeoutGuarded", () => {
       fetchFn: fetch,
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "trusted_env_proxy",
-      }),
-    );
+    expect(getFirstGuardedFetchCall().mode).toBe("trusted_env_proxy");
   });
 
   it("respects an explicit mode from the caller when HTTP proxy env is configured", async () => {
@@ -468,11 +467,7 @@ describe("fetchWithTimeoutGuarded", () => {
       mode: "strict",
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "strict",
-      }),
-    );
+    expect(getFirstGuardedFetchCall().mode).toBe("strict");
   });
 
   it("auto-upgrades transcription requests to trusted env proxy when proxy env is configured", async () => {
@@ -490,11 +485,7 @@ describe("fetchWithTimeoutGuarded", () => {
       fetchFn: fetch,
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "trusted_env_proxy",
-      }),
-    );
+    expect(getFirstGuardedFetchCall().mode).toBe("trusted_env_proxy");
   });
 
   it("forwards an explicit mode override through postJsonRequest even when proxy env is configured", async () => {
@@ -513,11 +504,7 @@ describe("fetchWithTimeoutGuarded", () => {
       mode: "strict",
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "strict",
-      }),
-    );
+    expect(getFirstGuardedFetchCall().mode).toBe("strict");
   });
 
   it("forwards an explicit mode override through postTranscriptionRequest even when proxy env is configured", async () => {
@@ -536,11 +523,7 @@ describe("fetchWithTimeoutGuarded", () => {
       mode: "strict",
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "strict",
-      }),
-    );
+    expect(getFirstGuardedFetchCall().mode).toBe("strict");
   });
 
   it("does not auto-upgrade when only ALL_PROXY is configured (HTTP(S) proxy gate)", async () => {

@@ -41,6 +41,7 @@ import {
   sanitizeModelHeaders,
 } from "./model.inline-provider.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
+import { resolveBundledStaticCatalogModel } from "./model.static-catalog.js";
 
 type ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins?: (
@@ -1060,6 +1061,7 @@ export async function resolveModelAsync(
   options?: {
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
+    allowBundledStaticCatalogFallback?: boolean;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
@@ -1157,6 +1159,24 @@ export async function resolveModelAsync(
     // gateway boot. Retry once before surfacing a user-visible "Unknown model"
     // that disappears on the next message.
     model = await resolveDynamicAttempt();
+  }
+  if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
+    const staticCatalogModel = resolveBundledStaticCatalogModel({
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
+      cfg,
+      workspaceDir,
+    });
+    if (staticCatalogModel) {
+      model = normalizeResolvedModel({
+        provider: normalizedRef.provider,
+        cfg,
+        agentDir: resolvedAgentDir,
+        workspaceDir,
+        model: staticCatalogModel,
+        runtimeHooks,
+      });
+    }
   }
   if (model) {
     return { model, authStorage, modelRegistry };

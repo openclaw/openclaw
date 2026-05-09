@@ -101,7 +101,6 @@ type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
 
 function requireDecisionAttachment(result: CapabilityResult, index: number) {
   const attachment = result.decision.attachments[index];
-  expect(attachment).toBeDefined();
   if (!attachment) {
     throw new Error(`expected media-understanding decision attachment ${index}`);
   }
@@ -110,7 +109,6 @@ function requireDecisionAttachment(result: CapabilityResult, index: number) {
 
 function requireCapabilityOutput(result: CapabilityResult, index: number) {
   const output = result.outputs[index];
-  expect(output).toBeDefined();
   if (!output) {
     throw new Error(`expected media-understanding output ${index}`);
   }
@@ -161,7 +159,6 @@ describe("runCapability image skip", () => {
       const attachment = requireDecisionAttachment(result, 0);
       expect(attachment.attachmentIndex).toBe(0);
       const attempt = attachment.attempts[0];
-      expect(attempt).toBeDefined();
       if (!attempt) {
         throw new Error("expected media-understanding skipped attempt");
       }
@@ -207,7 +204,9 @@ describe("runCapability image skip", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        expect(result.outputs[0]).toMatchObject({
+        expect(requireCapabilityOutput(result, 0)).toEqual({
+          kind: "image.description",
+          attachmentIndex: 0,
           provider: "openrouter",
           model: "google/gemini-2.5-flash",
           text: "explicit ok",

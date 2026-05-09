@@ -96,16 +96,24 @@ describe("TtsConfigSchema openai speed and instructions", () => {
   });
 
   it("rejects persona rewrite config until runtime behavior exists", () => {
-    expect(() =>
-      TtsConfigSchema.parse({
-        personas: {
-          alfred: {
-            rewrite: {
-              enabled: true,
-            },
+    const result = TtsConfigSchema.safeParse({
+      personas: {
+        alfred: {
+          rewrite: {
+            enabled: true,
           },
         },
-      }),
-    ).toThrow();
+      },
+    });
+
+    expect(result).toMatchObject({ success: false });
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          keys: ["rewrite"],
+          path: ["personas", "alfred"],
+        }),
+      );
+    }
   });
 });

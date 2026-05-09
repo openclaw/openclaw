@@ -26,7 +26,6 @@ function requireFirstMoonshotModel(provider: MoonshotProvider): MoonshotModel {
 }
 
 function requireMoonshotCompat(model: MoonshotModel): NonNullable<MoonshotModel["compat"]> {
-  expect(model.compat).toBeDefined();
   if (!model.compat) {
     throw new Error(`expected Moonshot model ${model.id} compat`);
   }

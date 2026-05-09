@@ -523,8 +523,9 @@ describe("appendNarrativeEntry", () => {
       nowMs: Date.parse("2026-04-11T14:00:00Z"),
       timezone: "UTC",
     });
+    const stableMtime = new Date("2026-04-11T14:00:05Z");
+    await fs.utimes(dreamsPath, stableMtime, stableMtime);
     const before = await fs.stat(dreamsPath);
-    await new Promise((resolve) => setTimeout(resolve, 20));
 
     const result = await dedupeDreamDiaryEntries({ workspaceDir });
     const after = await fs.stat(dreamsPath);

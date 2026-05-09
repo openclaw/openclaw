@@ -122,7 +122,6 @@ describe("Synology Chat TLS verification defaults", () => {
     await settleTimers(invoke());
     const httpsRequest = vi.mocked(https.request);
     const firstCall = httpsRequest.mock.calls[0];
-    expect(firstCall).toBeDefined();
     if (!firstCall) {
       throw new Error("expected Synology Chat HTTPS request");
     }
@@ -159,7 +158,6 @@ describe("sendMessage", () => {
     await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));
     const httpsRequest = vi.mocked(https.request);
     const firstCall = httpsRequest.mock.calls[0];
-    expect(firstCall).toBeDefined();
     if (!firstCall) {
       throw new Error("expected Synology Chat HTTPS request");
     }
@@ -387,7 +385,6 @@ describe("fetchChatUsers", () => {
 
     const httpsGet = vi.mocked(https.get);
     const firstCall = httpsGet.mock.calls[0];
-    expect(firstCall).toBeDefined();
     if (!firstCall) {
       throw new Error("expected Synology Chat HTTPS get");
     }

@@ -38,7 +38,6 @@ type ChannelSecretContractApi = NonNullable<ReturnType<typeof loadChannelSecretC
 function requireChannelSecretContractApi(
   api: ReturnType<typeof loadChannelSecretContractApi>,
 ): ChannelSecretContractApi {
-  expect(api).toBeDefined();
   if (!api) {
     throw new Error("expected channel secret contract API");
   }

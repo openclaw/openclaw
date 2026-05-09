@@ -69,12 +69,19 @@ function expectRouteRegistryState(params: { setup: () => void; assert: () => voi
 }
 
 async function waitForCleanupSignal(signal: Promise<void>, label: string): Promise<void> {
-  await Promise.race([
-    signal,
-    new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 500);
-    }),
-  ]);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      signal,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 500);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 describe("plugin runtime route registry", () => {

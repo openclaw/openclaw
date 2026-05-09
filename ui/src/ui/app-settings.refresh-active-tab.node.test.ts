@@ -14,6 +14,22 @@ function createDeferred<T = void>() {
   return { promise, resolve };
 }
 
+async function raceWithNextMacrotask(promise: Promise<unknown>): Promise<"resolved" | "pending"> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), 0);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 const mocks = vi.hoisted(() => ({
   refreshChatMock: vi.fn(async () => {}),
   scheduleChatScrollMock: vi.fn(),
@@ -131,6 +147,34 @@ function createHost() {
   };
 }
 
+type BufferedPerformanceEvent = {
+  event?: string;
+  payload?: Record<string, unknown>;
+};
+
+function expectBufferedPerformanceEvent(
+  host: { eventLogBuffer: unknown[] },
+  event: string,
+  expectedPayload: Record<string, unknown>,
+) {
+  const entry = host.eventLogBuffer.find((value): value is BufferedPerformanceEvent => {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    const candidate = value as BufferedPerformanceEvent;
+    if (candidate.event !== event || !candidate.payload || typeof candidate.payload !== "object") {
+      return false;
+    }
+    return Object.entries(expectedPayload).every(([key, expected]) => {
+      return candidate.payload?.[key] === expected;
+    });
+  });
+  expect(entry).toBeDefined();
+  expect(entry?.payload).toMatchObject(expectedPayload);
+  expect(entry?.payload?.durationMs).toBeTypeOf("number");
+  return entry?.payload;
+}
+
 describe("refreshActiveTab", () => {
   beforeEach(() => {
     for (const fn of Object.values(mocks)) {
@@ -214,18 +258,10 @@ describe("refreshActiveTab", () => {
 
     expect(host.requestUpdate).toHaveBeenCalled();
     await vi.waitFor(() => {
-      expect(host.eventLogBuffer).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            event: "control-ui.tab.visible",
-            payload: expect.objectContaining({
-              previousTab: "chat",
-              tab: "sessions",
-              durationMs: expect.any(Number),
-            }),
-          }),
-        ]),
-      );
+      expectBufferedPerformanceEvent(host, "control-ui.tab.visible", {
+        previousTab: "chat",
+        tab: "sessions",
+      });
     });
 
     sessions.resolve();
@@ -237,10 +273,7 @@ describe("refreshActiveTab", () => {
     mocks.loadUsageMock.mockReturnValueOnce(new Promise<void>(() => undefined));
 
     const refresh = refreshActiveTab(host as never);
-    const outcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const outcome = await raceWithNextMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
     expect(mocks.loadChannelsMock).toHaveBeenCalled();
@@ -255,10 +288,7 @@ describe("refreshActiveTab", () => {
     mocks.loadConfigSchemaMock.mockReturnValueOnce(schema.promise);
 
     const refresh = refreshActiveTab(host as never);
-    const outcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const outcome = await raceWithNextMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
     expect(mocks.loadConfigSchemaMock).toHaveBeenCalledOnce();
@@ -285,10 +315,7 @@ describe("refreshActiveTab", () => {
     });
 
     const refresh = refreshActiveTab(host as never);
-    const outcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const outcome = await raceWithNextMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
     expect(mocks.loadChannelsMock.mock.calls.map(([, probe]) => probe)).toEqual([false, true]);
@@ -314,18 +341,10 @@ describe("refreshActiveTab", () => {
     usage.resolve();
 
     await vi.waitFor(() => {
-      expect(host.eventLogBuffer).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            event: "control-ui.overview.secondary",
-            payload: expect.objectContaining({
-              phase: "end",
-              status: "error",
-              durationMs: expect.any(Number),
-            }),
-          }),
-        ]),
-      );
+      expectBufferedPerformanceEvent(host, "control-ui.overview.secondary", {
+        phase: "end",
+        status: "error",
+      });
     });
   });
 
@@ -335,10 +354,7 @@ describe("refreshActiveTab", () => {
     mocks.loadCronRunsMock.mockReturnValueOnce(new Promise<"ok">(() => undefined));
 
     const refresh = refreshActiveTab(host as never);
-    const outcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const outcome = await raceWithNextMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
@@ -355,18 +371,10 @@ describe("refreshActiveTab", () => {
     await expect(refreshActiveTab(host as never)).resolves.toBeUndefined();
     await Promise.resolve();
 
-    expect(host.eventLogBuffer).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "control-ui.cron.runs",
-          payload: expect.objectContaining({
-            phase: "end",
-            status: "error",
-            durationMs: expect.any(Number),
-          }),
-        }),
-      ]),
-    );
+    expectBufferedPerformanceEvent(host, "control-ui.cron.runs", {
+      phase: "end",
+      status: "error",
+    });
   });
 
   it("contains rejected cron runs refreshes without failing the primary cron tab refresh", async () => {
@@ -377,18 +385,10 @@ describe("refreshActiveTab", () => {
     await expect(refreshActiveTab(host as never)).resolves.toBeUndefined();
     await Promise.resolve();
 
-    expect(host.eventLogBuffer).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "control-ui.cron.runs",
-          payload: expect.objectContaining({
-            phase: "end",
-            status: "error",
-            durationMs: expect.any(Number),
-          }),
-        }),
-      ]),
-    );
+    expectBufferedPerformanceEvent(host, "control-ui.cron.runs", {
+      phase: "end",
+      status: "error",
+    });
   });
 
   it("does not record stale cron run timing after leaving the cron tab", async () => {

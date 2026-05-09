@@ -10,6 +10,20 @@ OpenClaw builds a custom system prompt for every agent run. The prompt is **Open
 
 The prompt is assembled by OpenClaw and injected into each agent run.
 
+Prompt assembly has three layers:
+
+- `buildAgentSystemPrompt` renders the prompt from explicit inputs. It should
+  stay a pure renderer and should not read global config directly.
+- `resolveAgentSystemPromptConfig` resolves config-backed prompt knobs such as
+  owner display, TTS hints, model aliases, memory citation mode, and sub-agent
+  delegation mode for a specific agent.
+- Runtime adapters (embedded, CLI, command/export previews, compaction) gather
+  live facts such as tools, sandbox state, channel capabilities, context files,
+  and provider prompt contributions, then call the configured prompt facade.
+
+This keeps exported/debug prompt surfaces aligned with live runs without
+turning every runtime-specific detail into one monolithic builder.
+
 Provider plugins can contribute cache-aware prompt guidance without replacing
 the full OpenClaw-owned prompt. The provider runtime can:
 
@@ -76,6 +90,13 @@ The Tooling section also includes runtime guidance for long-running work:
   push-based and auto-announces back to the requester
 - do not poll `subagents list` / `sessions_list` in a loop just to wait for
   completion
+
+`agents.defaults.subagents.delegationMode` can strengthen this guidance. The
+default `suggest` mode keeps the baseline nudge. `prefer` adds a dedicated
+**Sub-Agent Delegation** section telling the main agent to act as a responsive
+coordinator and push anything more involved than a direct reply through
+`sessions_spawn`. This is prompt-only; tool policy still controls whether
+`sessions_spawn` is available.
 
 When the experimental `update_plan` tool is enabled, Tooling also tells the
 model to use it only for non-trivial multi-step work, keep exactly one

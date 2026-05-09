@@ -79,7 +79,6 @@ describe("chutes-models", () => {
     expect(def.cost).toEqual(entry.cost);
     expect(def.contextWindow).toBe(entry.contextWindow);
     expect(def.maxTokens).toBe(entry.maxTokens);
-    expect(def.compat).toBeDefined();
     if (!def.compat) {
       throw new Error("expected Chutes model compat");
     }
@@ -124,7 +123,6 @@ describe("chutes-models", () => {
         const secondModel = requireChutesModel(models, 1);
         expect(firstModel.id).toBe("zai-org/GLM-4.7-TEE");
         expect(secondModel.reasoning).toBe(true);
-        expect(secondModel.compat).toBeDefined();
         if (!secondModel.compat) {
           throw new Error("expected Chutes API model compat");
         }

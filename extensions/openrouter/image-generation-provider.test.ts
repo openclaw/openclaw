@@ -35,7 +35,6 @@ function requireOpenRouterPostBody(): {
   messages?: Array<{ content?: unknown }>;
 } {
   const request = postJsonRequestMock.mock.calls[0]?.[0];
-  expect(request).toBeDefined();
   if (!request) {
     throw new Error("expected OpenRouter image generation request");
   }
@@ -49,7 +48,6 @@ function requireGeneratedImage(
   index: number,
 ) {
   const image = result.images[index];
-  expect(image).toBeDefined();
   if (!image) {
     throw new Error(`expected OpenRouter generated image at index ${index}`);
   }
@@ -108,6 +106,7 @@ describe("openrouter image generation provider", () => {
       resolution: "2K",
       count: 2,
       timeoutMs: 12_345,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       cfg: {
         models: {
           providers: {
@@ -133,6 +132,7 @@ describe("openrouter image generation provider", () => {
       expect.objectContaining({
         url: "https://custom.openrouter.test/api/v1/chat/completions",
         timeoutMs: 12_345,
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
         body: expect.objectContaining({
           model: "google/gemini-3.1-flash-image-preview",
           modalities: ["image", "text"],

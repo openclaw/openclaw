@@ -346,7 +346,7 @@ describe("plugins cli install", () => {
       runPluginsCommand(["plugins", "install", "alpha", "--marketplace", "local/repo", "--link"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors.at(-1)).toContain("`--link` is not supported with `--marketplace`.");
+    expect(runtimeErrors.at(-1)).toContain("--link is not supported with --marketplace.");
     expect(installPluginFromMarketplace).not.toHaveBeenCalled();
   });
 
@@ -355,7 +355,7 @@ describe("plugins cli install", () => {
       runPluginsCommand(["plugins", "install", "./plugin", "--link", "--force"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors.at(-1)).toContain("`--force` is not supported with `--link`.");
+    expect(runtimeErrors.at(-1)).toContain("--force is not supported with --link.");
     expect(installPluginFromMarketplace).not.toHaveBeenCalled();
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
@@ -1248,7 +1248,7 @@ describe("plugins cli install", () => {
 
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain("unsupported npm: spec: missing package");
+    expect(runtimeErrors.at(-1)).toContain("Unsupported npm plugin spec: missing package.");
   });
 
   it("installs directly from git when git: prefix is used", async () => {
@@ -1295,7 +1295,7 @@ describe("plugins cli install", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(installPluginFromGitSpec).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain("use `git:<repo>@<ref>`");
+    expect(runtimeErrors.at(-1)).toContain("openclaw plugins install git:<repo>@<ref>");
   });
 
   it("passes dangerous force unsafe install to marketplace installs", async () => {

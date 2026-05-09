@@ -53,7 +53,6 @@ describe("secret target registry fast path", () => {
   it("resolves bundled channel targets by explicit channel id without manifest scans", () => {
     const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
 
-    expect(target).toBeDefined();
     if (!target) {
       throw new Error("expected googlechat service account target");
     }

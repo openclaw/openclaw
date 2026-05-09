@@ -346,7 +346,6 @@ describe("canvas host", () => {
       );
       expect(upgraded).toBe(true);
       const latestServer = TrackingWebSocketServerClass.latestInstance;
-      expect(latestServer).toBeDefined();
       if (!latestServer) {
         throw new Error("expected Canvas host websocket server");
       }

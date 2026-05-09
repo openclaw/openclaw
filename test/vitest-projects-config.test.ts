@@ -33,7 +33,6 @@ import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
-  expect(config.test).toBeDefined();
   if (!config.test) {
     throw new Error("expected vitest test config");
   }
@@ -44,7 +43,6 @@ function requireWebOptimizer(testConfig: {
   deps?: { optimizer?: { web?: { enabled?: boolean } } };
 }) {
   const webOptimizer = testConfig.deps?.optimizer?.web;
-  expect(webOptimizer).toBeDefined();
   if (!webOptimizer) {
     throw new Error("expected vitest web optimizer config");
   }

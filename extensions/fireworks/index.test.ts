@@ -48,7 +48,6 @@ describe("fireworks provider plugin", () => {
     expect(provider.aliases).toEqual(["fireworks-ai"]);
     expect(provider.envVars).toEqual(["FIREWORKS_API_KEY"]);
     expect(provider.auth).toHaveLength(1);
-    expect(resolved).toBeDefined();
     if (!resolved) {
       throw new Error("expected Fireworks api-key auth choice");
     }
@@ -63,7 +62,6 @@ describe("fireworks provider plugin", () => {
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe(FIREWORKS_BASE_URL);
     const models = catalogProvider.models;
-    expect(models).toBeDefined();
     if (!models) {
       throw new Error("expected Fireworks catalog models");
     }

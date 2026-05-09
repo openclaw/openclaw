@@ -230,10 +230,12 @@ function createChatHeaderState(
           currentModel = normalized.slice(slashIndex + 1);
         } else {
           currentModel = normalized;
-          const matchingProviders = catalog
-            .filter((entry) => entry.id === normalized)
-            .map((entry) => entry.provider)
-            .filter(Boolean);
+          const matchingProviders: string[] = [];
+          for (const entry of catalog) {
+            if (entry.id === normalized && entry.provider) {
+              matchingProviders.push(entry.provider);
+            }
+          }
           currentModelProvider =
             matchingProviders.length === 1 ? matchingProviders[0] : currentModelProvider;
         }

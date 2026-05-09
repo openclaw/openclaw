@@ -61,7 +61,6 @@ describe("zalo setup wizard", () => {
 
     expect(result.accountId).toBe("default");
     const zaloConfig = result.cfg.channels?.zalo;
-    expect(zaloConfig).toBeDefined();
     if (!zaloConfig) {
       throw new Error("expected Zalo config");
     }
@@ -123,7 +122,6 @@ describe("zalo setup wizard", () => {
 
     const next = zaloDmPolicy.setPolicy(cfg, "open");
     const zaloConfig = next.channels?.zalo;
-    expect(zaloConfig).toBeDefined();
     if (!zaloConfig) {
       throw new Error("expected Zalo config");
     }
@@ -131,7 +129,6 @@ describe("zalo setup wizard", () => {
     const workAccount = next.channels?.zalo?.accounts?.work as
       | { dmPolicy?: string; allowFrom?: Array<string | number> }
       | undefined;
-    expect(workAccount).toBeDefined();
     if (!workAccount) {
       throw new Error("expected Zalo work account");
     }
@@ -157,7 +154,6 @@ describe("zalo setup wizard", () => {
     );
 
     const zaloConfig = next.channels?.zalo;
-    expect(zaloConfig).toBeDefined();
     if (!zaloConfig) {
       throw new Error("expected Zalo config");
     }
@@ -165,7 +161,6 @@ describe("zalo setup wizard", () => {
     const workAccount = next.channels?.zalo?.accounts?.work as
       | { dmPolicy?: string; allowFrom?: Array<string | number> }
       | undefined;
-    expect(workAccount).toBeDefined();
     if (!workAccount) {
       throw new Error("expected Zalo work account");
     }

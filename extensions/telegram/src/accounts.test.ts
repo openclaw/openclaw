@@ -23,7 +23,7 @@ function warningLines(): string[] {
 }
 
 function expectNoMissingDefaultWarning() {
-  expect(warningLines().filter((line) => line.includes("accounts.default is missing"))).toEqual([]);
+  expect(warningLines().some((line) => line.includes("accounts.default is missing"))).toBe(false);
 }
 
 function resolveAccountWithEnv(

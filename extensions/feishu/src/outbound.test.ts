@@ -76,6 +76,22 @@ import { feishuPlugin } from "./channel.js";
 import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 
+async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), 0);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 type FeishuSendText = NonNullable<typeof feishuOutbound.sendText>;
 type FeishuMessageAdapter = NonNullable<typeof feishuPlugin.message>;
 type FeishuMessageSender = NonNullable<FeishuMessageAdapter["send"]>;
@@ -365,6 +381,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         to: "chat_1",
         text: "hello",
         replyToMessageId: "om_thread_2",
+        replyInThread: true,
         accountId: "main",
       }),
     );
@@ -867,10 +884,7 @@ describe("feishuOutbound comment-thread routing", () => {
       accountId: "main",
     });
 
-    const status = await Promise.race([
-      sendPromise.then(() => "done"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const status = await raceWithNextMacrotask(sendPromise.then(() => "done"));
 
     expect(status).toBe("done");
     expect(deliverCommentThreadTextMock).toHaveBeenCalled();
@@ -945,6 +959,58 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     );
     expect(sendMessageFeishuMock.mock.calls[0][0].replyToMessageId).toBeUndefined();
   });
+
+  it("propagates threadId as replyInThread=true to sendMessageFeishu", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "topic reply",
+      threadId: "om_topic_root",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_topic_root",
+        replyInThread: true,
+      }),
+    );
+  });
+
+  it("propagates threadId as replyInThread=true to sendStructuredCardFeishu when renderMode=card", async () => {
+    await sendText({
+      cfg: cardRenderConfig,
+      to: "chat_1",
+      text: "```code```",
+      threadId: "om_topic_root",
+      accountId: "main",
+    });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_topic_root",
+        replyInThread: true,
+      }),
+    );
+  });
+
+  it("prefers replyToId over threadId for plain text (inline reply, no auto-thread)", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "inline reply",
+      replyToId: "om_inline",
+      threadId: "om_topic_root",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_inline",
+        replyInThread: false,
+      }),
+    );
+  });
 });
 
 describe("feishuOutbound.sendMedia replyToId forwarding", () => {
@@ -965,6 +1031,63 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     expect(sendMediaFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_reply_target",
+        replyInThread: false,
+      }),
+    );
+  });
+
+  it("forwards threadId as replyInThread=true to sendMediaFeishu", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "https://example.com/image.png",
+      threadId: "om_topic_root",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_topic_root",
+        replyInThread: true,
+      }),
+    );
+  });
+
+  it("prefers replyToId over threadId (inline reply) when both are set", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "om_inline",
+      threadId: "om_topic_root",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_inline",
+        replyInThread: false,
+      }),
+    );
+  });
+
+  it("treats whitespace-only replyToId as absent for replyInThread (falls back to threadId)", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "   ",
+      threadId: "om_topic_root",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_topic_root",
+        replyInThread: true,
       }),
     );
   });

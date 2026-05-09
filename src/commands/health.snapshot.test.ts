@@ -95,7 +95,12 @@ function getTelegramChannelConfig(cfg: Record<string, unknown>) {
 function listTelegramAccountIdsForTest(cfg: Record<string, unknown>): string[] {
   const telegram = getTelegramChannelConfig(cfg);
   const accounts = telegram.accounts as Record<string, unknown> | undefined;
-  const ids = Object.keys(accounts ?? {}).filter(Boolean);
+  const ids: string[] = [];
+  for (const accountId of Object.keys(accounts ?? {})) {
+    if (accountId) {
+      ids.push(accountId);
+    }
+  }
   return ids.length > 0 ? ids : ["default"];
 }
 
@@ -299,6 +304,8 @@ function createTelegramHealthPlugin(): HealthTestPlugin {
     config: {
       listAccountIds: (cfg) => listTelegramAccountIdsForTest(cfg as Record<string, unknown>),
       resolveAccount: (cfg, accountId) =>
+        resolveTelegramAccountForTest({ cfg: cfg as Record<string, unknown>, accountId }),
+      inspectAccount: (cfg, accountId) =>
         resolveTelegramAccountForTest({ cfg: cfg as Record<string, unknown>, accountId }),
       isConfigured: (account) => Boolean((account as TelegramHealthAccount).token.trim()),
     },

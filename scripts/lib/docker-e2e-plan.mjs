@@ -331,7 +331,8 @@ function laneCredentialRequirements(poolLane) {
   if (
     poolLane.name === "openwebui" ||
     poolLane.name === "openai-web-search-minimal" ||
-    poolLane.name === "live-codex-npm-plugin"
+    poolLane.name === "live-codex-npm-plugin" ||
+    poolLane.name === "live-plugin-tool"
   ) {
     credentials.push("openai");
   }

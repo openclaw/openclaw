@@ -34,6 +34,7 @@ import type {
 } from "../infra/diagnostic-events.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
+import type { UnifiedModelCatalogEntry, UnifiedModelCatalogKind } from "../model-catalog/types.js";
 import type { MusicGenerationProvider } from "../music-generation/types.js";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -83,26 +84,13 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
-import type {
-  CliBackendAuthEpochMode,
-  CliBackendNormalizeConfigContext,
-  CliBackendPreparedExecution,
-  CliBackendPrepareExecutionContext,
-  CliBackendResolveExecutionArgs,
-  CliBackendResolveExecutionArgsContext,
-  CliBackendThinkingLevel,
-  CliBackendPlugin,
-  CliBundleMcpMode,
-  PluginTextReplacement,
-  PluginTextTransforms,
-} from "./cli-backend.types.js";
+import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingRequestParams,
   PluginConversationBindingRequestResult,
   PluginConversationBindingResolvedEvent,
-  PluginConversationBindingResolutionDecision,
 } from "./conversation-binding.types.js";
 import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import type {
@@ -111,7 +99,6 @@ import type {
   PluginJsonValue,
   PluginNextTurnInjection,
   PluginNextTurnInjectionEnqueueResult,
-  PluginNextTurnInjectionRecord,
   PluginRunContextGetParams,
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
@@ -121,14 +108,8 @@ import type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
-import type {
-  PluginBundleFormat,
-  PluginConfigUiHint,
-  PluginDiagnostic,
-  PluginFormat,
-} from "./manifest-types.js";
+import type { PluginConfigUiHint } from "./manifest-types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
-import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type {
   ProviderApplyConfigDefaultsContext,
@@ -153,7 +134,6 @@ import type {
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   OpenClawPluginHookOptions,
-  OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   OpenClawPluginToolOptions,
 } from "./tool-types.js";
@@ -457,6 +437,31 @@ export type ProviderCatalogResult =
 export type ProviderPluginCatalog = {
   order?: ProviderCatalogOrder;
   run: (ctx: ProviderCatalogContext) => Promise<ProviderCatalogResult>;
+};
+
+export type UnifiedModelCatalogProviderContext = ProviderCatalogContext & {
+  signal?: AbortSignal;
+  includeLive?: boolean;
+  timeoutMs?: number;
+};
+
+export type UnifiedModelCatalogProviderPlugin = {
+  provider: string;
+  kinds: readonly UnifiedModelCatalogKind[];
+  staticCatalog?: (
+    ctx: UnifiedModelCatalogProviderContext,
+  ) =>
+    | readonly UnifiedModelCatalogEntry[]
+    | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
+    | null
+    | undefined;
+  liveCatalog?: (
+    ctx: UnifiedModelCatalogProviderContext,
+  ) =>
+    | readonly UnifiedModelCatalogEntry[]
+    | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
+    | null
+    | undefined;
 };
 
 export type ProviderRuntimeProviderConfig = {
@@ -1217,12 +1222,19 @@ export type ProviderPlugin = {
   envVars?: string[];
   auth: ProviderAuthMethod[];
   /**
-   * Preferred hook for plugin-defined provider catalogs.
+   * Legacy text-provider catalog hook.
+   *
+   * @deprecated New catalog/control-plane surfaces should use
+   * `api.registerModelCatalogProvider`. This hook remains the text runtime
+   * source until the unified loader fully replaces it.
    * Returns provider config/model definitions that merge into models.providers.
    */
   catalog?: ProviderPluginCatalog;
   /**
-   * Offline provider catalog for display-only surfaces.
+   * Legacy offline text-provider catalog hook for display-only surfaces.
+   *
+   * @deprecated New static rows should be registered with
+   * `api.registerModelCatalogProvider`.
    *
    * Unlike `catalog`, this hook must not perform network I/O or require real
    * credentials. Use it for bundled/static rows that can be shown before auth is
@@ -1556,6 +1568,10 @@ export type ProviderPlugin = {
   ) => ProviderBuiltInModelSuppressionResult | null | undefined;
   /**
    * Provider-owned final catalog augmentation.
+   *
+   * @deprecated Use `api.registerModelCatalogProvider` for supplemental catalog
+   * rows. This hook is kept only for existing text-provider runtime
+   * compatibility during the migration window.
    *
    * Return extra rows to append to the final catalog after discovery/config
    * merging. OpenClaw deduplicates by `provider/id`, so plugins only need to
@@ -2506,6 +2522,8 @@ export type OpenClawPluginApi = {
   registerAutoEnableProbe: (probe: PluginSetupAutoEnableProbe) => void;
   /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
+  /** Register provider-owned model catalog rows for text and media generation. */
+  registerModelCatalogProvider: (provider: UnifiedModelCatalogProviderPlugin) => void;
   /** Register a speech synthesis provider (speech capability). */
   registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
   /** Register a realtime transcription provider (streaming STT capability). */
@@ -2585,10 +2603,7 @@ export type OpenClawPluginApi = {
   /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
   setRunContext: (patch: PluginRunContextPatch) => boolean;
   /** Read namespaced plugin data for a run. */
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
-  getRunContext: <T extends PluginJsonValue = PluginJsonValue>(
-    params: PluginRunContextGetParams,
-  ) => T | undefined;
+  getRunContext: (params: PluginRunContextGetParams) => PluginJsonValue | undefined;
   /** Clear one namespace or all namespaces this plugin owns for a run. */
   clearRunContext: (params: { runId: string; namespace?: string }) => void;
   /** Register a plugin-owned session job so reset/delete/disable can clean it deterministically. */

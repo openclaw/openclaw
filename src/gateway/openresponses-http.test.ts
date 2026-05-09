@@ -132,6 +132,16 @@ function parseSseEvents(text: string): SseEvent[] {
   return events;
 }
 
+function collectSseEventTypes(events: readonly SseEvent[]): string[] {
+  const eventTypes: string[] = [];
+  for (const event of events) {
+    if (event.event) {
+      eventTypes.push(event.event);
+    }
+  }
+  return eventTypes;
+}
+
 function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
   const event = events.find((candidate) => candidate.event === eventName);
   if (!event) {
@@ -141,7 +151,7 @@ function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
 }
 
 function parseSseData(event: SseEvent): unknown {
-  return JSON.parse(event.data);
+  return JSON.parse(event.data) as unknown;
 }
 
 function requireSessionKey(value: string | undefined, label: string): string {
@@ -710,7 +720,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const deltaText = await resDelta.text();
       const deltaEvents = parseSseEvents(deltaText);
 
-      const eventTypes = deltaEvents.map((e) => e.event).filter(Boolean);
+      const eventTypes = collectSseEventTypes(deltaEvents);
       expect(eventTypes).toContain("response.created");
       expect(eventTypes).toContain("response.output_item.added");
       expect(eventTypes).toContain("response.in_progress");
@@ -1204,12 +1214,10 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: "delayed hello",
     });
 
-    for (let i = 0; i < 20 && agentCommand.mock.calls.length === 0; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-
-    expect(agentCommand.mock.calls).toHaveLength(1);
-    expect(openResponsesTesting.getResponseSessionIds()).toEqual([]);
+    await vi.waitFor(() => {
+      expect(agentCommand.mock.calls).toHaveLength(1);
+    });
+    expect(openResponsesTesting.getResponseSessionIds()).toStrictEqual([]);
 
     release?.({ payloads: [{ text: "hello" }] });
 

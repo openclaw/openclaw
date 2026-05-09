@@ -85,7 +85,6 @@ type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
 
 function requireCapabilityOutput(result: CapabilityResult, index: number) {
   const output = result.outputs[index];
-  expect(output).toBeDefined();
   if (!output) {
     throw new Error(`expected media-understanding output at index ${index}`);
   }
@@ -144,11 +143,12 @@ describe("runCapability auto audio entries", () => {
       });
     });
 
-    expect(runResult).toBeDefined();
     if (!runResult) {
       throw new Error("expected Codex audio result");
     }
-    expect(requireCapabilityOutput(runResult, 0)).toMatchObject({
+    expect(requireCapabilityOutput(runResult, 0)).toEqual({
+      kind: "audio.transcription",
+      attachmentIndex: 0,
       provider: "openai-codex",
       model: "gpt-4o-transcribe",
       text: "codex audio",

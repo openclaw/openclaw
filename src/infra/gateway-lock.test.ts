@@ -50,10 +50,10 @@ async function acquireForTest(
 }
 
 function expectGatewayLock(lock: Awaited<ReturnType<typeof acquireGatewayLock>>): GatewayLock {
-  expect(lock).toEqual(expect.objectContaining({ release: expect.any(Function) }));
   if (lock === null) {
     throw new Error("Expected gateway lock");
   }
+  expect(typeof lock.release).toBe("function");
   return lock;
 }
 

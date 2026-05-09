@@ -14,7 +14,6 @@ describe("resolve-allowlist-common", () => {
 
   it("resolves and filters guilds by id or name", () => {
     const mainGuild = findDiscordGuildByName(guilds, "Main Guild");
-    expect(mainGuild).toBeDefined();
     if (!mainGuild) {
       throw new Error("expected Main Guild lookup result");
     }

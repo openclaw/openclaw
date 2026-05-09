@@ -35,9 +35,8 @@ function runScript(args: string[], cwd = process.cwd()) {
 }
 
 function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> } }): T {
-  const arg = mock.mock.calls[0]?.[0];
-  expect(arg).toBeDefined();
-  if (!arg) {
+  const [arg] = mock.mock.calls[0] ?? [];
+  if (arg === undefined) {
     throw new Error("expected first mock call argument");
   }
   return arg;
@@ -52,6 +51,11 @@ function findExtensionWithoutTests() {
     throw new Error("Expected at least one extension without tests");
   }
   return extensionId;
+}
+
+function expectPositiveIntegerMetric(value: number) {
+  expect(Number.isInteger(value)).toBe(true);
+  expect(value).toBeGreaterThan(0);
 }
 
 describe("scripts/test-extension.mjs", () => {
@@ -246,7 +250,7 @@ describe("scripts/test-extension.mjs", () => {
 
   it("can fail safe to all extensions when the base revision is unavailable", () => {
     const extensionIds = listChangedExtensionIds({
-      base: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      base: "refs/heads/openclaw-test-missing-base",
       unavailableBaseBehavior: "all",
     });
 
@@ -311,139 +315,107 @@ describe("scripts/test-extension.mjs", () => {
       "zalo",
       "zalouser",
     ]);
-    expect(batch.planGroups).toEqual([
+    const stablePlanGroups = batch.planGroups.map(({ estimatedCost, testFileCount, ...group }) => {
+      expectPositiveIntegerMetric(estimatedCost);
+      expectPositiveIntegerMetric(testFileCount);
+      return group;
+    });
+
+    expect(stablePlanGroups).toEqual([
       {
         config: "test/vitest/vitest.extension-acpx.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["acpx"],
         roots: [bundledPluginRoot("acpx")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-browser.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["browser"],
         roots: [bundledPluginRoot("browser")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-diffs.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["diffs"],
         roots: [bundledPluginRoot("diffs")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-feishu.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["feishu"],
         roots: [bundledPluginRoot("feishu")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-irc.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["irc"],
         roots: [bundledPluginRoot("irc")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-line.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["line"],
         roots: [bundledPluginRoot("line")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-matrix.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["matrix"],
         roots: [bundledPluginRoot("matrix")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-mattermost.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["mattermost"],
         roots: [bundledPluginRoot("mattermost")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-media.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["vydra"],
         roots: [bundledPluginRoot("vydra")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-memory.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["memory-core"],
         roots: [bundledPluginRoot("memory-core")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-misc.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["firecrawl"],
         roots: [bundledPluginRoot("firecrawl")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-msteams.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["msteams"],
         roots: [bundledPluginRoot("msteams")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-provider-openai.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["openai"],
         roots: [bundledPluginRoot("openai")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-qa.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["qa-lab"],
         roots: [bundledPluginRoot("qa-lab")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-slack.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["slack"],
         roots: [bundledPluginRoot("slack")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-telegram.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["telegram"],
         roots: [bundledPluginRoot("telegram")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-voice-call.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["voice-call"],
         roots: [bundledPluginRoot("voice-call")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-whatsapp.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["whatsapp"],
         roots: [bundledPluginRoot("whatsapp")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-zalo.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["zalo", "zalouser"],
         roots: [bundledPluginRoot("zalo"), bundledPluginRoot("zalouser")],
-        testFileCount: expect.any(Number),
       },
     ]);
   });
@@ -537,14 +509,21 @@ describe("scripts/test-extension.mjs", () => {
     await expect(runPromise).resolves.toBe(0);
     expect(runGroup).toHaveBeenCalledTimes(3);
     const firstRunGroupParams = requireFirstMockArg<RunGroupParams>(runGroup);
-    expect(firstRunGroupParams).toMatchObject({
+    expect(firstRunGroupParams).toEqual({
       args: ["--reporter=dot"],
       config: "heavy",
+      env: {
+        OPENCLAW_EXTENSION_BATCH_PARALLEL: "2",
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
+          process.cwd(),
+          "node_modules",
+          ".experimental-vitest-cache",
+          "extension-batch",
+          "0-heavy",
+        ),
+      },
       targets: ["extensions/two"],
     });
-    expect(firstRunGroupParams.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toContain(
-      path.join("node_modules", ".experimental-vitest-cache", "extension-batch", "0-heavy"),
-    );
   });
 
   it("keeps extension batch parallelism bounded by group count", () => {

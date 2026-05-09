@@ -54,7 +54,6 @@ function registerProvider() {
   );
   expect(registerProviderMock).toHaveBeenCalledTimes(1);
   const firstCall = registerProviderMock.mock.calls[0];
-  expect(firstCall).toBeDefined();
   if (!firstCall) {
     throw new Error("expected Microsoft Foundry provider registration");
   }
@@ -75,7 +74,6 @@ function requirePrepareRuntimeAuth(
 }
 
 function requireRuntimeAuthResult(result: { apiKey?: string; baseUrl?: string } | undefined) {
-  expect(result).toBeDefined();
   if (!result) {
     throw new Error("expected Microsoft Foundry runtime auth result");
   }
@@ -361,7 +359,7 @@ describe("microsoft-foundry plugin", () => {
       prepareRuntimeAuth(runtimeContext),
       prepareRuntimeAuth(runtimeContext),
     ]);
-    expect(failed.filter((result) => result.status !== "rejected")).toEqual([]);
+    expect(failed.every((result) => result.status === "rejected")).toBe(true);
     expect(execFileMock).toHaveBeenCalledTimes(1);
 
     const [first, second] = await Promise.all([

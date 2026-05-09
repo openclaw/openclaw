@@ -307,8 +307,8 @@ function getLastCaptureClickListener(calls: readonly unknown[][]) {
 
 function expectLastCaptureClickListener(calls: readonly unknown[][]): unknown {
   const listener = getLastCaptureClickListener(calls);
-  expect(listener).toEqual(expect.any(Function));
-  if (listener === null) {
+  expect(typeof listener).toBe("function");
+  if (typeof listener !== "function") {
     throw new Error("Expected capture click listener");
   }
   return listener;

@@ -127,7 +127,9 @@ describe("Feishu monitor startup preflight", () => {
     try {
       await waitForStartedAccount(started, "beta");
       expect(started).toEqual(["alpha", "beta"]);
-      expect(started.filter((accountId) => accountId === "alpha")).toHaveLength(1);
+      expect(started.reduce((count, accountId) => count + (accountId === "alpha" ? 1 : 0), 0)).toBe(
+        1,
+      );
     } finally {
       releaseStartedBetaProbe();
       abortController.abort();

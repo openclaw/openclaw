@@ -15,7 +15,6 @@ type ValidatedPlanTarget = NonNullable<ReturnType<typeof resolveValidatedPlanTar
 function requireValidatedPlanTarget(
   resolved: ReturnType<typeof resolveValidatedPlanTarget>,
 ): ValidatedPlanTarget {
-  expect(resolved).not.toBeNull();
   if (!resolved) {
     throw new Error("expected validated secrets plan target");
   }

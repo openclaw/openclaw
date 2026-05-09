@@ -15,7 +15,6 @@ function groupMsg(overrides: Partial<QueuedMessage> = {}): QueuedMessage {
 }
 
 function requireMergeMetadata(message: QueuedMessage): NonNullable<QueuedMessage["merge"]> {
-  expect(message.merge).toBeDefined();
   if (!message.merge) {
     throw new Error("expected QQBot merged message metadata");
   }
@@ -71,7 +70,6 @@ describe("engine/gateway/message-queue", () => {
           ],
         }),
       ]);
-      expect(merged.attachments).toBeDefined();
       if (!merged.attachments) {
         throw new Error("expected QQBot merged attachments");
       }
@@ -83,7 +81,6 @@ describe("engine/gateway/message-queue", () => {
         groupMsg({ mentions: [{ member_openid: "X" }, { member_openid: "Y" }] }),
         groupMsg({ mentions: [{ member_openid: "X" }, { member_openid: "Z" }] }),
       ]);
-      expect(merged.mentions).toBeDefined();
       if (!merged.mentions) {
         throw new Error("expected QQBot merged mentions");
       }

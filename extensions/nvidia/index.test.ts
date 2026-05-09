@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
@@ -9,6 +10,9 @@ import plugin from "./index.js";
 type NvidiaManifest = {
   providerAuthChoices?: Array<{ choiceId?: string; method?: string; provider?: string }>;
 };
+type RegisteredModelCatalogProvider = Parameters<
+  ReturnType<typeof createTestPluginApi>["registerModelCatalogProvider"]
+>[0];
 
 function readManifest(): NvidiaManifest {
   return JSON.parse(
@@ -129,7 +133,7 @@ describe("nvidia provider hooks", () => {
       "minimaxai/minimax-m2.5",
       "z-ai/glm5",
     ]);
-    expect(entries?.filter((entry) => entry.provider !== "nvidia")).toEqual([]);
+    expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
   });
 
   it("opts into literal provider-prefix preservation", async () => {
@@ -145,13 +149,22 @@ describe("nvidia provider hooks", () => {
 
   it("registers nvidia provider through the plugin api", () => {
     const registeredProviders: string[] = [];
+    const registeredModelCatalogProviders: RegisteredModelCatalogProvider[] = [];
 
-    plugin.register({
-      registerProvider(provider: { id: string }) {
-        registeredProviders.push(provider.id);
-      },
-    } as any);
+    plugin.register(
+      createTestPluginApi({
+        registerProvider(provider: { id: string }) {
+          registeredProviders.push(provider.id);
+        },
+        registerModelCatalogProvider(provider) {
+          registeredModelCatalogProviders.push(provider);
+        },
+      }),
+    );
 
     expect(registeredProviders).toContain("nvidia");
+    expect(registeredModelCatalogProviders.map((provider) => provider.provider)).toContain(
+      "nvidia",
+    );
   });
 });

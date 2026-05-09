@@ -40,6 +40,13 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
   };
 
+  const expectNoPayloadTextContaining = (
+    payloads: ReturnType<typeof buildPayloads>,
+    needle: string,
+  ) => {
+    expect(payloads.some((payload) => (payload.text ?? "").includes(needle))).toBe(false);
+  };
+
   function expectSinglePayloadSummary(
     payloads: ReturnType<typeof buildPayloads>,
     expected: { text: string; isError?: boolean },
@@ -90,12 +97,8 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("Edit")]),
-    );
-    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("missing")]),
-    );
+    expectNoPayloadTextContaining(payloads, "Edit");
+    expectNoPayloadTextContaining(payloads, "missing");
   });
 
   it("keeps mutating tool warnings when assistant error artifacts are not user-facing", () => {
@@ -131,9 +134,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("request_id")]),
-    );
+    expectNoPayloadTextContaining(payloads, "request_id");
   });
 
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
@@ -187,9 +188,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("request_id")]),
-    );
+    expectNoPayloadTextContaining(payloads, "request_id");
   });
 
   it("does not suppress error-shaped JSON when the assistant did not error", () => {

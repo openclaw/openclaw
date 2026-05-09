@@ -180,13 +180,11 @@ describe("runCapability skips tiny audio files", () => {
         expect(result.decision.outcome).toBe("failed");
         expect(result.decision.attachments).toHaveLength(1);
         const attachment = result.decision.attachments[0];
-        expect(attachment).toBeDefined();
         if (!attachment) {
           throw new Error("expected failed audio decision attachment");
         }
         expect(attachment.attempts).toHaveLength(1);
         const attempt = attachment.attempts[0];
-        expect(attempt).toBeDefined();
         if (!attempt) {
           throw new Error("expected failed audio decision attempt");
         }

@@ -2562,9 +2562,13 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
 
-    const blockTexts = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls
-      .map((call) => ((call[0] as ReplyPayload).text ?? "").trim())
-      .filter(Boolean);
+    const blockTexts: string[] = [];
+    for (const call of (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls) {
+      const text = ((call[0] as ReplyPayload).text ?? "").trim();
+      if (text.length > 0) {
+        blockTexts.push(text);
+      }
+    }
     expect(blockTexts).toEqual(["What do you want to work on?"]);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "What do you want to work on?" }),

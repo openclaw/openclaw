@@ -142,7 +142,6 @@ describe("fetchDiscord", () => {
     });
 
     expect(result).toEqual({ id: "42" });
-    expect(request).toBeDefined();
     if (!request) {
       throw new Error("expected Discord request init");
     }

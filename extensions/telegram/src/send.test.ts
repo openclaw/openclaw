@@ -18,6 +18,7 @@ installTelegramSendTestHooks();
 
 const {
   botApi,
+  botConfigUseSpy,
   botCtorSpy,
   imageMetadata,
   loadConfig,
@@ -525,6 +526,14 @@ describe("sendMessageTelegram", () => {
     );
   });
 
+  it("installs the shared grammY throttler on send clients", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "hi", { cfg: TELEGRAM_TEST_CFG, token: "tok" });
+
+    expect(botConfigUseSpy).toHaveBeenCalledWith(expect.any(Function));
+  });
+
   it("falls back to plain text when Telegram rejects HTML and preserves send params", async () => {
     const parseErr = new Error(
       "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 9",
@@ -884,10 +893,8 @@ describe("sendMessageTelegram", () => {
       caption: undefined,
     });
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(sendMessage.mock.calls.filter((call) => call[2]?.parse_mode !== "HTML")).toEqual([]);
-    expect(sendMessage.mock.calls.filter((call) => String(call[1] ?? "").length > 4000)).toEqual(
-      [],
-    );
+    expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === "HTML")).toBe(true);
+    expect(sendMessage.mock.calls.every((call) => String(call[1] ?? "").length <= 4000)).toBe(true);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toContain("<b>");
     expect(res.messageId).toBe("74");
   });
@@ -1644,7 +1651,6 @@ describe("sendMessageTelegram", () => {
   it("retries sends without message_thread_id on thread-not-found", async () => {
     const cases = [
       { name: "forum", chatId: "-100123", text: "hello forum", messageId: 58 },
-      { name: "private", chatId: "123456789", text: "hello private", messageId: 59 },
     ] as const;
     const threadErr = new Error("400: Bad Request: message thread not found");
 
@@ -1686,6 +1692,29 @@ describe("sendMessageTelegram", () => {
       );
       expect(res.messageId, testCase.name).toBe(String(testCase.messageId));
     }
+  });
+
+  it("does not retry private DM topic sends without the topic id", async () => {
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram("123456789", "hello private", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        messageThreadId: 271,
+      }),
+    ).rejects.toThrow("message thread not found");
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith("123456789", "hello private", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
   });
 
   it("does not retry on non-retriable thread/chat errors", async () => {
@@ -2004,7 +2033,7 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledTimes(4);
     const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
     expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.filter((call) => String(call?.[1] ?? "").includes("<"))).toEqual([]);
+    expect(plainFallbackCalls.some((call) => String(call?.[1] ?? "").includes("<"))).toBe(false);
     expect(res.messageId).toBe("91");
   });
 
@@ -2035,7 +2064,7 @@ describe("sendMessageTelegram", () => {
     expect(String(sendMessage.mock.calls[0]?.[1] ?? "")).toMatch(/^&/);
     const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
     expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.filter((call) => String(call?.[1] ?? "").length === 0)).toEqual([]);
+    expect(plainFallbackCalls.every((call) => String(call?.[1] ?? "").length > 0)).toBe(true);
     expect(res.messageId).toBe("93");
   });
 
@@ -2059,7 +2088,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(3);
-    expect(sendMessage.mock.calls.filter((call) => call[2]?.parse_mode !== undefined)).toEqual([]);
+    expect(sendMessage.mock.calls.some((call) => call[2]?.parse_mode !== undefined)).toBe(false);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toBe(plainText);
     expect(res.messageId).toBe("96");
   });

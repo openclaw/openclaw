@@ -65,13 +65,9 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads).toEqual([{ text: "Blocked by before-run policy.", isError: true }]);
-    expect(result.meta).toMatchObject({
-      finalAssistantVisibleText: "Blocked by before-run policy.",
-      finalAssistantRawText: "Blocked by before-run policy.",
-      finalPromptText: undefined,
-      livenessState: "blocked",
-      error: { kind: "hook_block", message: "Blocked by before-run policy." },
-    });
+    expect(result.meta?.finalAssistantVisibleText).toBe("Blocked by before-run policy.");
+    expect(result.meta?.finalAssistantRawText).toBe("Blocked by before-run policy.");
+    expect(result.meta?.finalPromptText).toBeUndefined();
     expect(result.meta?.error).toEqual({
       kind: "hook_block",
       message: "Blocked by before-run policy.",

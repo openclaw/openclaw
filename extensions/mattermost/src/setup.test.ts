@@ -392,7 +392,6 @@ describe("mattermost setup", () => {
     );
     expect(textMessages).toEqual(["Enter Mattermost bot token", "Enter Mattermost base URL"]);
     const mattermostConfig = result.cfg.channels?.mattermost;
-    expect(mattermostConfig).toBeDefined();
     if (!mattermostConfig) {
       throw new Error("expected Mattermost config");
     }

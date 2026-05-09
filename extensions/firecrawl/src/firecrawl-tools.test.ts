@@ -83,7 +83,6 @@ describe("firecrawl tools", () => {
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webSearch.apiKey");
     const pluginEntry = applied.plugins?.entries?.firecrawl;
-    expect(pluginEntry).toBeDefined();
     if (!pluginEntry) {
       throw new Error("expected Firecrawl plugin entry");
     }
@@ -354,7 +353,6 @@ describe("firecrawl tools", () => {
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
     const pluginEntry = applied.plugins?.entries?.firecrawl;
-    expect(pluginEntry).toBeDefined();
     if (!pluginEntry) {
       throw new Error("expected Firecrawl fetch plugin entry");
     }
@@ -415,19 +413,16 @@ describe("firecrawl tools", () => {
       categories: ["research"],
       scrapeResults: true,
     });
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          query: "web search",
-          count: 6,
-          timeoutSeconds: 12,
-          sources: ["web", "news"],
-          categories: ["research"],
-          scrapeResults: true,
-        },
-      },
+    const details = result.details as { ok?: boolean; params?: unknown };
+    expect(details.ok).toBe(true);
+    expect(details.params).toEqual({
+      cfg: { env: "test" },
+      query: "web search",
+      count: 6,
+      timeoutSeconds: 12,
+      sources: ["web", "news"],
+      categories: ["research"],
+      scrapeResults: true,
     });
   });
 
@@ -457,21 +452,18 @@ describe("firecrawl tools", () => {
       storeInCache: false,
       timeoutSeconds: 22,
     });
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          url: "https://docs.openclaw.ai",
-          extractMode: "markdown",
-          maxChars: 1500,
-          onlyMainContent: false,
-          maxAgeMs: 5000,
-          proxy: "stealth",
-          storeInCache: false,
-          timeoutSeconds: 22,
-        },
-      },
+    const details = result.details as { ok?: boolean; params?: unknown };
+    expect(details.ok).toBe(true);
+    expect(details.params).toEqual({
+      cfg: { env: "test" },
+      url: "https://docs.openclaw.ai",
+      extractMode: "markdown",
+      maxChars: 1500,
+      onlyMainContent: false,
+      maxAgeMs: 5000,
+      proxy: "stealth",
+      storeInCache: false,
+      timeoutSeconds: 22,
     });
   });
 
@@ -734,7 +726,7 @@ describe("firecrawl tools", () => {
     );
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ success: true });
+    expect(result.success).toBe(true);
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {

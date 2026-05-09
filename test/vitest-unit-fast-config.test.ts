@@ -14,11 +14,38 @@ import {
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
-  expect(config.test).toBeDefined();
   if (!config.test) {
     throw new Error("expected unit-fast vitest test config");
   }
   return config.test as NonNullable<T["test"]>;
+}
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+type UnitFastAnalysisEntry = ReturnType<typeof collectUnitFastTestFileAnalysis>[number];
+
+function collectUnroutedForcedFiles(
+  analysis: readonly UnitFastAnalysisEntry[],
+  forcedFiles: ReadonlySet<string>,
+): Array<{ file: string; forced: boolean; unitFast: boolean }> {
+  const unrouted: Array<{ file: string; forced: boolean; unitFast: boolean }> = [];
+  for (const entry of analysis) {
+    if (!forcedFiles.has(entry.file)) {
+      continue;
+    }
+    if (!entry.forced || !entry.unitFast) {
+      unrouted.push({ file: entry.file, forced: entry.forced, unitFast: entry.unitFast });
+    }
+  }
+  return unrouted;
 }
 
 describe("unit-fast vitest lane", () => {
@@ -28,7 +55,7 @@ describe("unit-fast vitest lane", () => {
 
     expect(testConfig.isolate).toBe(false);
     expect(testConfig.runner).toBeUndefined();
-    expect(testConfig.setupFiles).toEqual([]);
+    expect(testConfig.setupFiles).toStrictEqual([]);
     expect(testConfig.include).toContain("src/agents/pi-tools.deferred-followup-guidance.test.ts");
     expect(testConfig.include).toContain("src/acp/control-plane/runtime-cache.test.ts");
     expect(testConfig.include).toContain("src/acp/runtime/registry.test.ts");
@@ -101,18 +128,17 @@ describe("unit-fast vitest lane", () => {
 
   it("routes audited stateful-looking tests through the fast lane", () => {
     const analysis = collectUnitFastTestFileAnalysis();
-    const forcedAnalysis = analysis.filter((entry) => forcedUnitFastTestFiles.includes(entry.file));
+    const forcedFileSet = new Set(forcedUnitFastTestFiles);
+    const forcedAnalysisCount = countMatching(analysis, (entry) => forcedFileSet.has(entry.file));
     const unitFastTestFiles = getUnitFastTestFiles();
 
-    expect(forcedAnalysis).toHaveLength(forcedUnitFastTestFiles.length);
+    expect(forcedAnalysisCount).toBe(forcedUnitFastTestFiles.length);
     for (const file of forcedUnitFastTestFiles) {
       expect(unitFastTestFiles).toContain(file);
       expect(isUnitFastTestFile(file)).toBe(true);
     }
-    const unroutedForcedFiles = forcedAnalysis
-      .filter((entry) => !entry.forced || !entry.unitFast)
-      .map((entry) => ({ file: entry.file, forced: entry.forced, unitFast: entry.unitFast }));
-    expect(unroutedForcedFiles).toEqual([]);
+    const unroutedForcedFiles = collectUnroutedForcedFiles(analysis, forcedFileSet);
+    expect(unroutedForcedFiles).toStrictEqual([]);
   });
 
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {
@@ -123,7 +149,7 @@ describe("unit-fast vitest lane", () => {
 
     expect(currentCandidates.length).toBeGreaterThanOrEqual(unitFastTestFiles.length);
     expect(broadCandidates.length).toBeGreaterThan(currentCandidates.length);
-    expect(broadAnalysis.filter((entry) => entry.unitFast).length).toBeGreaterThan(
+    expect(countMatching(broadAnalysis, (entry) => entry.unitFast)).toBeGreaterThan(
       unitFastTestFiles.length,
     );
   });

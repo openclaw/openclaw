@@ -81,6 +81,14 @@ When debugging real providers/models (requires real creds):
     `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=1 pnpm test:docker:live-codex-harness`.
     This exits after the sub-agent probe unless
     `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY=0` is set.
+- Codex on-demand install smoke: `pnpm test:docker:codex-on-demand`
+  - Installs the packaged OpenClaw tarball in Docker, runs OpenAI API-key
+    onboarding, and verifies the Codex plugin plus `@openai/codex` dependency
+    were downloaded into the managed npm root on demand.
+- Live plugin tool dependency smoke: `pnpm test:docker:live-plugin-tool`
+  - Packs a fixture plugin with a real `slugify` dependency, installs it through
+    `npm-pack:`, verifies the dependency under the managed npm root, then asks a
+    live OpenAI model to call the plugin tool and return the hidden slug.
 - Crestodian rescue command smoke: `pnpm test:live:crestodian-rescue-channel`
   - Opt-in belt-and-suspenders check for the message-channel rescue command
     surface. It exercises `/crestodian status`, queues a persistent model

@@ -85,6 +85,14 @@ function getRuntimeLogs() {
   return runtimeLogMock.mock.calls.map((call: unknown[]) => String(call[0]));
 }
 
+function getRuntimeLog(index: number): string {
+  const call = runtimeLogMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected runtime log call ${index}`);
+  }
+  return String(call[0]);
+}
+
 function getJoinedRuntimeLogs() {
   return getRuntimeLogs().join("\n");
 }
@@ -780,6 +788,10 @@ vi.mock("./status-runtime-shared.ts", () => ({
   ),
 }));
 
+import {
+  resolveStatusRuntimeSnapshot,
+  resolveStatusUsageSummary,
+} from "./status-runtime-shared.ts";
 import { resolvePairingRecoveryContext, statusCommand } from "./status.command.js";
 
 const runtime = {
@@ -967,7 +979,7 @@ describe("statusCommand", () => {
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
+    const payload = JSON.parse(getRuntimeLog(0));
     expect(payload.linkChannel).toBeUndefined();
     expect(payload.memory).toBeNull();
     expect(payload.memoryPlugin.enabled).toBe(true);
@@ -1001,7 +1013,7 @@ describe("statusCommand", () => {
     runtimeLogMock.mockClear();
     await statusCommand({ json: true, all: true }, runtime as never);
 
-    const allPayload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
+    const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
     expect(allPayload.securityAudit.summary.warn).toBe(1);
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
@@ -1010,6 +1022,37 @@ describe("statusCommand", () => {
         includeChannelSecurity: true,
       }),
     );
+  });
+
+  it("scopes usage resolution to the scanned config", async () => {
+    const snapshotMock = resolveStatusRuntimeSnapshot as Mock;
+    const usageMock = resolveStatusUsageSummary as Mock;
+    snapshotMock.mockClear();
+    usageMock.mockClear();
+
+    await statusCommand({ usage: true, timeoutMs: 1234 }, runtime as never);
+
+    const params = snapshotMock.mock.calls.at(-1)?.[0] as
+      | {
+          config: unknown;
+          timeoutMs?: number;
+          usage?: boolean;
+          resolveUsage?: (input: { config: unknown; timeoutMs?: number }) => Promise<unknown>;
+        }
+      | undefined;
+    expect(params).toBeDefined();
+    expect(params).toMatchObject({ usage: true, timeoutMs: 1234 });
+    if (!params?.resolveUsage) {
+      throw new Error("missing status usage resolver");
+    }
+    await params.resolveUsage({
+      timeoutMs: 1234,
+      config: params.config,
+    });
+    expect(usageMock).toHaveBeenCalledWith({
+      timeoutMs: 1234,
+      config: params?.config,
+    });
   });
 
   it("keeps default text status off the security audit path", async () => {
@@ -1241,7 +1284,9 @@ describe("statusCommand", () => {
 
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
-    expect(payload.gateway.error ?? payload.gateway.authWarning).toEqual(expect.any(String));
+    const gatewayAuthMessage = payload.gateway.error ?? payload.gateway.authWarning;
+    expect(typeof gatewayAuthMessage).toBe("string");
+    expect(gatewayAuthMessage.trim().length).toBeGreaterThan(0);
     if (Array.isArray(payload.secretDiagnostics) && payload.secretDiagnostics.length > 0) {
       expect(
         payload.secretDiagnostics.some((entry: string) => entry.includes("gateway.auth.token")),

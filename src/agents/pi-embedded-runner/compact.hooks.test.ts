@@ -249,7 +249,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     compactTesting.prepareCompactionSessionAgent({
       session: session as never,
       providerStreamFn: vi.fn(),
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal: new AbortController().signal,
       effectiveModel: { provider: "openai", id: "fake", api: "responses", input: [] } as never,

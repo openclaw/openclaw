@@ -47,7 +47,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function expectRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toEqual(expect.any(Object));
+  expect(value, label).not.toBeNull();
+  expect(typeof value, label).toBe("object");
   expect(Array.isArray(value), label).toBe(false);
   return value as Record<string, unknown>;
 }
@@ -58,7 +59,7 @@ function readString(value: unknown): string | null {
 
 function expectNonEmptyString(value: unknown, label: string): string {
   const text = readString(value);
-  expect(text, label).toEqual(expect.any(String));
+  expect(text, label).not.toBeNull();
   return text as string;
 }
 
@@ -616,6 +617,6 @@ describeLive("android node capability integration (preconditioned)", () => {
         "summary:",
         summary,
       ].join("\n"),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

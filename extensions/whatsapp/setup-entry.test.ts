@@ -4,6 +4,10 @@ vi.mock("@whiskeysockets/baileys", () => {
   throw new Error("setup plugin load must not load Baileys");
 });
 
+vi.mock("./src/setup-finalize.js", () => {
+  throw new Error("setup status load must not load finalize");
+});
+
 describe("whatsapp setup entry", () => {
   it("loads the setup plugin without installing or importing runtime dependencies", async () => {
     const { default: setupEntry } = await import("./setup-entry.js");
@@ -27,7 +31,7 @@ describe("whatsapp setup entry", () => {
         oauthDir: "/tmp/openclaw-whatsapp-empty",
         stateDir: "/tmp/openclaw-state",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(setupEntry.loadLegacySessionSurface?.()).toEqual({
       canonicalizeLegacySessionKey: expect.any(Function),
       isLegacyGroupSessionKey: expect.any(Function),

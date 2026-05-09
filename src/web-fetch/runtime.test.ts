@@ -78,7 +78,6 @@ type ResolvedWebFetchDefinition = NonNullable<
 function requireResolvedWebFetch(
   resolved: ReturnType<Awaited<typeof import("./runtime.js")>["resolveWebFetchDefinition"]>,
 ): ResolvedWebFetchDefinition {
-  expect(resolved).toBeDefined();
   if (!resolved) {
     throw new Error("expected resolved web fetch definition");
   }
