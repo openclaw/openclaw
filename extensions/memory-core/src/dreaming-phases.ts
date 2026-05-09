@@ -5,7 +5,6 @@ import path from "node:path";
 import {
   buildSessionTranscriptEntry,
   listSessionTranscriptsForAgent,
-  parseUsageCountedSessionIdFromFileName,
   sessionPathForTranscript,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -597,9 +596,7 @@ function hashSessionMessageId(value: string): string {
 }
 
 function buildSessionScopeKey(agentId: string, absolutePath: string): string {
-  const fileName = path.basename(absolutePath);
-  const logicalSessionId = parseUsageCountedSessionIdFromFileName(fileName) ?? fileName;
-  return `${agentId}:${logicalSessionId}`;
+  return `${agentId}:${path.basename(absolutePath)}`;
 }
 
 function mergeTrackedMessageHashes(existing: string[], additions: string[]): string[] {

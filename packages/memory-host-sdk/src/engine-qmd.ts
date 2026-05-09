@@ -12,10 +12,6 @@ export {
   type SessionTranscriptEntry,
   type SessionTranscriptDeltaStats,
 } from "./host/session-transcripts.js";
-export {
-  isUsageCountedSessionTranscriptFileName,
-  parseUsageCountedSessionIdFromFileName,
-} from "./host/openclaw-runtime-session.js";
 export { parseQmdQueryJson, type QmdQueryResult } from "./host/qmd-query-parser.js";
 export {
   deriveQmdScopeChannel,
