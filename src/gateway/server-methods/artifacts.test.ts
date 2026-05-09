@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import { artifactsHandlers, collectArtifactsFromMessages } from "./artifacts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -56,10 +55,6 @@ describe("artifacts RPC handlers", () => {
     hoisted.loadSessionEntry.mockReturnValue({
       entry: {
         sessionId: "sess-main",
-        sessionFile: createSqliteSessionTranscriptLocator({
-          agentId: "main",
-          sessionId: "sess-main",
-        }),
       },
     });
     mockedMessages([
@@ -80,12 +75,10 @@ describe("artifacts RPC handlers", () => {
   });
 
   function mockedMessages(messages: unknown[]) {
-    hoisted.visitSessionMessagesAsync.mockImplementation(
-      async (_sessionId, _sessionFile, visit) => {
-        messages.forEach((message, index) => visit(message, index + 1));
-        return messages.length;
-      },
-    );
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      messages.forEach((message, index) => visit(message, index + 1));
+      return messages.length;
+    });
   }
 
   it("lists stable transcript artifact summaries by sessionKey", async () => {

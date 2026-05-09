@@ -14,7 +14,6 @@ import {
   listSessionEntries,
   upsertSessionEntry,
 } from "../../config/sessions/store.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
@@ -306,6 +305,10 @@ function registerCurrentConversationBindingAdapterForTest(params: {
   });
 }
 
+function dbTranscriptReference(agentId: string, sessionId: string): string {
+  return `agent-db:${agentId}:transcript_events:${sessionId}`;
+}
+
 beforeEach(() => {
   channelSummaryMocks.buildChannelSummary.mockReset().mockResolvedValue([]);
   browserMaintenanceMocks.closeTrackedBrowserTabsForSessions.mockReset().mockResolvedValue(0);
@@ -323,12 +326,8 @@ beforeEach(() => {
       if (!parentEntry.sessionId) {
         return null;
       }
-      const parentTranscriptLocator = createSqliteSessionTranscriptLocator({
-        agentId,
-        sessionId: parentEntry.sessionId,
-      });
+      const parentTranscriptReference = dbTranscriptReference(agentId, parentEntry.sessionId);
       const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
-      const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId, sessionId });
       replaceSqliteSessionTranscriptEvents({
         agentId,
         sessionId,
@@ -339,11 +338,11 @@ beforeEach(() => {
             id: sessionId,
             timestamp: new Date().toISOString(),
             cwd: process.cwd(),
-            parentSession: parentTranscriptLocator,
+            parentSession: parentTranscriptReference,
           },
         ],
       });
-      return { sessionId, transcriptLocator };
+      return { sessionId };
     });
 });
 afterEach(async () => {
@@ -351,15 +350,12 @@ afterEach(async () => {
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
 describe("initSessionState thread forking", () => {
-  it("forks a new session from the parent transcript locator", async () => {
+  it("forks a new session from the parent database transcript", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-");
 
     const parentSessionId = "parent-session";
-    const parentTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: parentSessionId,
-    });
+    const parentTranscriptReference = dbTranscriptReference("main", parentSessionId);
     const header = {
       type: "session",
       version: 3,
@@ -427,7 +423,7 @@ describe("initSessionState thread forking", () => {
     const parsedHeader = headerEvent.event as {
       parentSession?: string;
     };
-    expect(parsedHeader.parentSession).toBe(parentTranscriptLocator);
+    expect(parsedHeader.parentSession).toBe(parentTranscriptReference);
     warn.mockRestore();
   });
 
@@ -436,10 +432,6 @@ describe("initSessionState thread forking", () => {
     const root = await makeCaseDir("openclaw-thread-session-existing-");
 
     const parentSessionId = "parent-session";
-    const parentTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: parentSessionId,
-    });
     const header = {
       type: "session",
       version: 3,
@@ -581,10 +573,6 @@ describe("initSessionState thread forking", () => {
     const root = await makeCaseDir("openclaw-thread-session-overflow-estimated-");
 
     const parentSessionId = "parent-overflow-estimated";
-    const parentTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: parentSessionId,
-    });
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: parentSessionId,

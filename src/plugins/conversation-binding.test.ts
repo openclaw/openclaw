@@ -616,7 +616,7 @@ describe("plugin conversation binding approvals", () => {
     const data = {
       kind: "codex-app-server-session",
       version: 1,
-      sessionFile: "/tmp/openclaw/session.jsonl",
+      sessionId: "codex-session",
       workspaceDir: "/workspace/openclaw",
     };
     const binding = await requestResolvedBinding(

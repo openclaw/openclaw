@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -480,16 +479,12 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
   });
 
-  it("drops a stale transcript path when a stale session rotates ids", async () => {
+  it("rotates a stale session id without carrying legacy transcript paths", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     dateOnlyFakeClockActive = true;
     vi.setSystemTime(new Date("2026-05-07T12:00:00.000Z"));
     const staleEntry = {
       sessionId: "old-session-id",
-      sessionFile: createSqliteSessionTranscriptLocator({
-        agentId: "main",
-        sessionId: "old-session-id",
-      }),
       updatedAt: 0,
       sessionStartedAt: 0,
     };

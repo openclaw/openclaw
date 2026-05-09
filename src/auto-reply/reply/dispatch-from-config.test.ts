@@ -3287,7 +3287,6 @@ describe("dispatchReplyFromConfig", () => {
         data: {
           kind: "codex-app-server-session",
           version: 1,
-          sessionFile: "/tmp/session.jsonl",
           workspaceDir: "/workspace/openclaw",
         },
       },
@@ -3332,7 +3331,6 @@ describe("dispatchReplyFromConfig", () => {
         pluginBinding: expect.objectContaining({
           data: expect.objectContaining({
             kind: "codex-app-server-session",
-            sessionFile: "/tmp/session.jsonl",
           }),
         }),
       }),

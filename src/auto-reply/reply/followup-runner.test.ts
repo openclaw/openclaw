@@ -4,7 +4,6 @@ import path from "node:path";
 import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
@@ -727,15 +726,7 @@ describe("createFollowupRunner compaction", () => {
     expect(sessionStore.main).not.toHaveProperty("transcriptLocator");
   });
 
-  it("refreshes queued followup runs to the rotated transcript", async () => {
-    const initialTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "agent",
-      sessionId: "session",
-    });
-    const rotatedTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "agent",
-      sessionId: "session-rotated",
-    });
+  it("refreshes queued followup runs to the rotated session id", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),

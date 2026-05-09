@@ -1,12 +1,6 @@
 import { vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import type { FollowupRun } from "./queue.js";
 import type { TypingController } from "./typing.js";
-
-const MOCK_FOLLOWUP_SESSION_FILE = createSqliteSessionTranscriptLocator({
-  agentId: "agent",
-  sessionId: "session",
-});
 
 export function createMockTypingController(
   overrides: Partial<TypingController> = {},

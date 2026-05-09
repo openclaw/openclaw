@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -164,14 +163,12 @@ async function makeTmpDir(): Promise<string> {
 async function seedSqliteRewriteSession(): Promise<{
   agentId: string;
   sessionId: string;
-  transcriptLocator: string;
   toolResultEntryId: string;
 }> {
   const dir = await makeTmpDir();
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   const agentId = "main";
   const sessionId = "rewrite-test";
-  const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId, sessionId });
   const header: SessionHeader = {
     type: "session",
     id: sessionId,
@@ -222,7 +219,7 @@ async function seedSqliteRewriteSession(): Promise<{
     sessionId,
     events: [header, ...entries],
   });
-  return { agentId, sessionId, transcriptLocator, toolResultEntryId: "tool-result-1" };
+  return { agentId, sessionId, toolResultEntryId: "tool-result-1" };
 }
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {
@@ -355,8 +352,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 
 describe("rewriteTranscriptEntriesInSqliteTranscript", () => {
   it("emits transcript updates when the active SQLite branch changes without opening a manager", async () => {
-    const { agentId, sessionId, transcriptLocator, toolResultEntryId } =
-      await seedSqliteRewriteSession();
+    const { agentId, sessionId, toolResultEntryId } = await seedSqliteRewriteSession();
 
     const openSpy = vi.spyOn(SessionManager, "openForSession").mockImplementation(() => {
       throw new Error(
@@ -385,7 +381,6 @@ describe("rewriteTranscriptEntriesInSqliteTranscript", () => {
       expect(listener).toHaveBeenCalledWith({
         agentId,
         sessionId,
-        transcriptLocator,
         sessionKey: "agent:main:test",
       });
 

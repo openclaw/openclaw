@@ -16,7 +16,6 @@ function makeRun(config: OpenClawConfig): FollowupRun["run"] {
     model: "gpt-4.1",
     agentDir: "/tmp/agent",
     sessionKey: "agent:test:session",
-    sessionFile: "/tmp/session.json",
     workspaceDir: "/tmp/workspace",
     skillsSnapshot: [],
     ownerNumbers: ["+15550001"],

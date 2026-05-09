@@ -1,6 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import {
   applyExtraParamsToAgentMock,
   contextEngineCompactMock,
@@ -35,10 +34,6 @@ let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.j
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
-const TEST_ROTATED_SESSION_FILE = createSqliteSessionTranscriptLocator({
-  agentId: "main",
-  sessionId: "rotated-session",
-});
 const TEST_WORKSPACE_DIR = "/tmp/openclaw-compact-hooks-workspace";
 const TEST_CUSTOM_INSTRUCTIONS = "focus on decisions";
 type SessionHookEvent = {
@@ -1191,7 +1186,6 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
   it("passes the rotated session id to engine-owned after_compaction hooks", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     const rotatedSessionId = "rotated-session";
-    const rotatedTranscriptLocator = TEST_ROTATED_SESSION_FILE;
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
       compacted: true,
@@ -1202,7 +1196,6 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
         tokensBefore: 120,
         tokensAfter: 50,
         sessionId: rotatedSessionId,
-        transcriptLocator: rotatedTranscriptLocator,
       },
     } as never);
 

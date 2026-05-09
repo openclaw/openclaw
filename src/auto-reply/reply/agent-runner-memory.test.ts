@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import { appendSqliteSessionTranscriptEvent } from "../../config/sessions/transcript-store.sqlite.js";
 import {
   clearMemoryPluginState,
@@ -40,11 +39,6 @@ function createReplyOperation() {
     setPhase: vi.fn(),
     updateSessionId: vi.fn(),
   } as never;
-}
-
-function resolveMainTranscriptPath(rootDir: string, sessionId: string): string {
-  void rootDir;
-  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
 }
 
 describe("runMemoryFlushIfNeeded", () => {
@@ -324,7 +318,6 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("passes runtime policy session key to preflight compaction sandbox resolution", async () => {
-    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -374,8 +367,6 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("updates the active preflight run after transcript rotation", async () => {
-    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
-    const successorFile = resolveMainTranscriptPath(rootDir, "session-rotated");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -442,7 +433,6 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("includes recent output tokens when deciding preflight compaction", async () => {
-    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -491,8 +481,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
   });
 
-  it("uses the active run transcriptLocator when the session entry has no transcript path", async () => {
-    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
+  it("uses the active run session id when the session entry only has canonical state", async () => {
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -543,7 +532,6 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("keeps preflight compaction conservative for content appended after latest usage", async () => {
-    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -605,7 +593,6 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("combines latest usage with post-usage tail pressure for preflight compaction", async () => {
-    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -667,7 +654,6 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("does not count bytes from a large latest usage record as post-usage tail pressure", async () => {
-    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -723,7 +709,6 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("does not treat raw transcript metadata bytes as token pressure", async () => {
-    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",
@@ -863,7 +848,6 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("keeps the active transcript byte threshold inactive unless transcript rotation is enabled", async () => {
-    const transcriptLocator = resolveMainTranscriptPath(rootDir, "session");
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",

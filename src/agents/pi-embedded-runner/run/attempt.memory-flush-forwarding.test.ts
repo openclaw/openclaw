@@ -13,7 +13,6 @@ function createAttemptParams(workspaceDir: string) {
   return {
     sessionId: "session-memory-flush",
     sessionKey: "agent:main",
-    sessionFile: path.join(workspaceDir, "session.json"),
     workspaceDir,
     prompt: "flush durable notes",
     timeoutMs: 30_000,
