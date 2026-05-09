@@ -9,6 +9,7 @@ export type AcpTurnEventGate = {
 
 export type AcpTurnStreamOutcome = {
   sawOutput: boolean;
+  sawToolCall: boolean;
   sawTerminalEvent: boolean;
 };
 
@@ -23,6 +24,7 @@ export async function consumeAcpTurnStream(params: {
 }): Promise<AcpTurnStreamOutcome> {
   let streamError: AcpRuntimeError | null = null;
   let sawOutput = false;
+  let sawToolCall = false;
   let sawTerminalEvent = false;
 
   for await (const event of params.runtime.runTurn(params.turn)) {
@@ -38,6 +40,9 @@ export async function consumeAcpTurnStream(params: {
       );
     } else if (event.type === "text_delta" || event.type === "tool_call") {
       sawOutput = true;
+      if (event.type === "tool_call") {
+        sawToolCall = true;
+      }
       await params.onOutputEvent?.(event);
     }
     await params.onEvent?.(event);
@@ -49,6 +54,7 @@ export async function consumeAcpTurnStream(params: {
 
   return {
     sawOutput,
+    sawToolCall,
     sawTerminalEvent,
   };
 }

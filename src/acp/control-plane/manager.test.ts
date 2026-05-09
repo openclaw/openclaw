@@ -402,6 +402,79 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
+  it("fails parented ACP turns that finish after only progress text", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runTurn.mockImplementation(async function* () {
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "Vou localizar o fluxo de inbound do WhatsApp até a detecção/autorização de comandos...",
+        };
+        yield { type: "done" as const };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "WhatsApp flow",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-1",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      await expect(
+        manager.runTurn({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:child-1",
+          text: "Investigate the inbound WhatsApp command authorization flow",
+          mode: "prompt",
+          requestId: "direct-parented-progress-only-run",
+        }),
+      ).rejects.toMatchObject({
+        code: "ACP_TURN_FAILED",
+        message: "ACP turn ended after only progress text, with no tool activity or final result.",
+      });
+      await flushMicrotasks();
+
+      expect(findTaskByRunId("direct-parented-progress-only-run")).toMatchObject({
+        runtime: "acp",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child-1",
+        label: "WhatsApp flow",
+        task: "Investigate the inbound WhatsApp command authorization flow",
+        status: "failed",
+        error: "ACP turn ended after only progress text, with no tool activity or final result.",
+        progressSummary:
+          "Vou localizar o fluxo de inbound do WhatsApp até a detecção/autorização de comandos...",
+      });
+    });
+  }, 300_000);
+
   it("preserves token-streamed ACP progress boundaries in parented task summaries", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();

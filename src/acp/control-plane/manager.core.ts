@@ -148,6 +148,26 @@ function resolveBackgroundTaskTerminalResult(progressSummary: string): {
   return {};
 }
 
+function isLikelyBackgroundTaskProgressAnnouncement(progressSummary: string): boolean {
+  const normalized = normalizeText(progressSummary)?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.length > ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH) {
+    return false;
+  }
+  if (
+    /^(?:i(?:'|’)?ll|i will|i(?:'|’)?m going to|i am going to|vou|voy a|je vais)\b/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  return /^(?:let me|starting|checking|looking|mapping|locating|investigating|analyzing|reviewing|scanning|searching|working on)\b/i.test(
+    normalized,
+  );
+}
+
 type BackgroundTaskContext = {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
@@ -852,11 +872,18 @@ export class AcpSessionManager {
                 "ACP turn ended without a terminal done event.",
               );
             }
-            this.recordTurnCompletion({
-              startedAt: turnStartedAt,
-            });
             if (taskContext) {
               const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
+              if (
+                !turnOutcome.sawToolCall &&
+                !terminalResult.terminalOutcome &&
+                isLikelyBackgroundTaskProgressAnnouncement(taskProgressSummary)
+              ) {
+                throw new AcpRuntimeError(
+                  "ACP_TURN_FAILED",
+                  "ACP turn ended after only progress text, with no tool activity or final result.",
+                );
+              }
               this.markBackgroundTaskTerminal(taskContext.runId, {
                 sessionKey,
                 status: "succeeded",
@@ -868,6 +895,9 @@ export class AcpSessionManager {
                 terminalOutcome: terminalResult.terminalOutcome,
               });
             }
+            this.recordTurnCompletion({
+              startedAt: turnStartedAt,
+            });
             await this.setSessionState({
               cfg: input.cfg,
               sessionKey,
