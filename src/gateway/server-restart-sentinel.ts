@@ -432,6 +432,7 @@ function buildQueuedRestartContinuation(params: {
       text: params.continuation.text,
       ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
       idempotencyKey,
+      maxRetries: RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
     };
   }
   return {
@@ -439,6 +440,7 @@ function buildQueuedRestartContinuation(params: {
     sessionKey: params.sessionKey,
     message: params.continuation.message,
     messageId: idempotencyKey,
+    maxRetries: RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
     ...(params.route ? { route: params.route } : {}),
     ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
     idempotencyKey,
@@ -613,7 +615,6 @@ async function loadRestartSentinelStartupTask(params: {
     await removeRestartSentinelFile(sentinelPath);
     const routedAgentTurnContinuation =
       payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
-    // The routed continuation is the wake; a parallel heartbeat wake can steal the session.
     if (!routedAgentTurnContinuation) {
       enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
     }

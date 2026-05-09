@@ -89,13 +89,26 @@ const mocks = vi.hoisted(() => {
         if (!state.queuedSessionDelivery) {
           return;
         }
-        const entry = {
+        const entry: Record<string, unknown> & {
+          id: string;
+          enqueuedAt: number;
+          retryCount: number;
+        } = {
           id: "session-delivery-1",
           enqueuedAt: 1,
           retryCount: 0,
           ...state.queuedSessionDelivery,
         };
-        if (!params.selectEntry(entry, Date.now()).match) {
+        const decision = params.selectEntry(entry, Date.now());
+        if (!decision.match) {
+          return;
+        }
+        const maxRetries = typeof entry["maxRetries"] === "number" ? entry["maxRetries"] : 5;
+        if (entry.retryCount >= maxRetries) {
+          state.queuedSessionDelivery = null;
+          params.log.warn(
+            `${params.logLabel}: entry ${entry.id} exceeded max retries and was moved to failed/`,
+          );
           return;
         }
         try {
