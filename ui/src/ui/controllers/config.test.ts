@@ -400,7 +400,7 @@ describe("resetConfigPendingChanges", () => {
     resetConfigPendingChanges(state);
 
     expect(state.configFormDirty).toBe(false);
-    expect(state.configForm).toEqual({});
+    expect(state.configForm).toStrictEqual({});
     expect(state.configRaw).toBe("");
   });
 });
