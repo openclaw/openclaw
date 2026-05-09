@@ -1,14 +1,11 @@
 /**
- * Cross-kind utilities. The substrate exposes per-kind verbs only;
- * `inferKind` is a convention helper for callers who want to map
- * filename → kind so they can pick the right `parseXxx` / `setXxx` /
- * `resolveXxx` function.
+ * Cross-kind utilities. `inferKind` is a convention helper for callers
+ * who want to map filename to the parser they should use before calling
+ * the universal verbs (`resolveOcPath`, `findOcPaths`, `setOcPath`).
  *
- * Earlier drafts had `resolveOcPath` / `setOcPath` / `appendOcPath`
- * universal dispatchers with tagged-union AST inputs. They were dropped
- * — the kind tag bled through every consumer (lint runner, doctor
- * fixers, tests) since those code paths still needed to know the kind
- * to use the result. Per-kind verbs are honest about input/output.
+ * Encoding remains per-kind (`parseMd`, `parseJsonc`, `parseJsonl`),
+ * while addressing and mutation dispatch are universal once callers
+ * have an AST carrying its `kind` discriminator.
  *
  * @module @openclaw/oc-path/dispatch
  */

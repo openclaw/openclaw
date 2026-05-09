@@ -188,7 +188,12 @@ export function appendJsonlOcPath(ast: JsonlAst, value: JsoncValue): JsonlAst {
     value,
     raw: "",
   };
-  const next: JsonlAst = { kind: "jsonl", raw: "", lines: [...ast.lines, newLine] };
+  const next: JsonlAst = {
+    kind: "jsonl",
+    raw: "",
+    lines: [...ast.lines, newLine],
+    ...(ast.lineEnding !== undefined ? { lineEnding: ast.lineEnding } : {}),
+  };
   const rendered = emitJsonl(next, { mode: "render" });
   return { ...next, raw: rendered };
 }
