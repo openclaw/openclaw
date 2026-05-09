@@ -68,6 +68,10 @@ patching:
      raw boundary helper for raw SQL.
    - For finite public query presets, use a preset-to-row type map plus a union
      boundary type instead of `Record<string, ...>`.
+   - After touching Kysely/native SQLite code, run `pnpm lint:kysely`. The AST
+     guard rejects raw identifier helpers, unreviewed typed `sql<T>` snippets,
+     `db.dynamic`, explicit sync-helper row generics for builders, and new raw
+     `node:sqlite` runtime access outside owner allowlists.
 4. Keep raw SQL deliberate:
    - Good: pragmas, virtual tables, FTS, SQLite JSON functions, migrations,
      `sqlite_master`, compact repeated expressions.
@@ -84,6 +88,9 @@ patching:
    - Native `node:sqlite` returns BLOB columns as `Uint8Array`; convert with
      `Buffer.from(...)` only at API boundaries that need Buffer helpers.
    - Keep JSON/text/timestamp parsing at module boundaries.
+   - Keep persisted enum-like strings as `string` in row types, then parse them
+     through closed validator helpers such as `parseTaskStatus(value)`. Do not
+     cast corrupt persisted data into exported unions.
 6. Decide migration need from shipped state:
    - Unshipped schema/type cleanup: no SQLite migration.
    - Shipped canonical schema change: add the appropriate migration or
@@ -107,6 +114,9 @@ generator or SQL source and regenerate.
 
 - Use `getNodeSqliteKysely(db)` and sync helpers from `src/infra/kysely-sync.ts`
   for `DatabaseSync` stores.
+- New direct `db.prepare(...)` / `db.exec(...)` runtime access should be rare.
+  Prefer Kysely or add an explicit `scripts/check-kysely-guardrails.mjs`
+  allowlist entry with a clear owner reason.
 - Keep sync helper result types derived from `CompiledQuery<Row>` / Kysely
   builders. Explicit helper generics are for raw SQL or external boundaries,
   not for widening a typed builder result into a generic record.
@@ -161,6 +171,15 @@ Avoid helpers that:
 - Take generic `string` table/column/order names.
 - Return heavily generic query builders that are harder to type than the query
   they hide.
+
+## Performance
+
+- Benchmark prepare/compile overhead before adding statement caches or compiled
+  query caches. Include the real public store method work: SQLite execution,
+  JSON/BLOB conversion, and result mapping.
+- Keep caches local, close/dispose them with the owning store, and test invalid
+  or stale behavior. Clear builders are the default until numbers prove a hot
+  path.
 
 ## Avoid
 

@@ -173,8 +173,9 @@ Rules:
   `eb.lit`, expression callbacks, and `eb.ref` substitutions before raw SQL for
   scalar expressions and constant selections.
 - Run `pnpm lint:kysely` after touching Kysely-backed stores. It rejects raw
-  identifier helpers, unreviewed typed raw SQL, `db.dynamic`, and sync-helper
-  row generics at builder call sites.
+  identifier helpers, unreviewed typed raw SQL, `db.dynamic`, sync-helper row
+  generics at builder call sites, and new direct `node:sqlite` runtime access
+  outside explicit owner allowlists.
 
 ## Helper Extraction
 
@@ -288,6 +289,53 @@ Minimum coverage for the native adapter:
 
 For store-level tests, assert behavior through public store methods first and
 query internals only when the storage invariant itself is the contract.
+
+## Persisted Strings
+
+Do not cast persisted text columns directly into exported unions:
+
+```ts
+// Bad: a corrupt row now has a typed but invalid status.
+status: row.status as TaskStatus;
+```
+
+Use a closed parser at the storage boundary:
+
+```ts
+const TASK_STATUSES = new Set<TaskStatus>(["queued", "running", "succeeded"]);
+
+export function parseTaskStatus(value: unknown): TaskStatus {
+  if (typeof value === "string" && TASK_STATUSES.has(value as TaskStatus)) {
+    return value as TaskStatus;
+  }
+  throw new Error(`Invalid persisted task status: ${JSON.stringify(value)}`);
+}
+```
+
+Rules:
+
+- Generated DB row types may say `string` for enum-like SQLite columns. That is
+  correct; SQLite does not enforce TypeScript unions.
+- Parse runtime/preset/status/kind/direction/mode columns into closed unions at
+  the module boundary.
+- Throw on corrupt values instead of silently widening to a default unless the
+  store owns a documented legacy fallback.
+- Keep compatibility rewrites in migrations or doctor/fix paths when the shape
+  has shipped. If it has not shipped, clean the schema/code and skip migrations.
+
+## Benchmark Before Caching
+
+Kysely builder construction and compilation are usually small next to SQLite IO.
+Before adding statement/query caches:
+
+- benchmark the hot path with a real `DatabaseSync` and representative rows
+- compare builder+compile+execute against any proposed prepared/compiled reuse
+- include JSON/BLOB parsing if that is part of the public store method
+- keep caches local to a measured bottleneck, with invalidation/close behavior
+  tested
+
+Prefer clearer Kysely builders until measurement proves prepare/compile overhead
+is material.
 
 ## Upstream References
 
