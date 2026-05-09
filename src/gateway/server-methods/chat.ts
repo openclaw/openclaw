@@ -2276,7 +2276,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               emitSessionTranscriptUpdate({
                 agentId,
                 sessionId: resolvedSessionId,
-                transcriptLocator: transcriptLocator,
                 sessionKey,
                 message: buildChatSendTranscriptMessage({
                   message: parsedMessage,

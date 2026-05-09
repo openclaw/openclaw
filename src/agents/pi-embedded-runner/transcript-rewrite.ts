@@ -1,4 +1,3 @@
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteRequest,
@@ -376,10 +375,6 @@ export async function rewriteTranscriptEntriesInSqliteTranscript(params: {
       emitSessionTranscriptUpdate({
         agentId: params.agentId,
         sessionId: params.sessionId,
-        transcriptLocator: createSqliteSessionTranscriptLocator({
-          agentId: params.agentId,
-          sessionId: params.sessionId,
-        }),
         sessionKey: params.sessionKey,
       });
       log.info(

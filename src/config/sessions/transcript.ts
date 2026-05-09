@@ -7,8 +7,7 @@ import {
 } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
-import { createSqliteSessionTranscriptLocator } from "./paths.js";
-import { resolveAndPersistSessionTranscriptIdentity } from "./session-locator.js";
+import { resolveAndPersistSessionTranscriptScope } from "./session-locator.js";
 import { getSessionEntry, normalizeSessionRowKey } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
@@ -96,25 +95,25 @@ export async function resolveSessionTranscriptTarget(params: {
   sessionStore?: Record<string, SessionEntry>;
   agentId: string;
   threadId?: string | number;
-}): Promise<{ transcriptLocator: string; sessionEntry: SessionEntry | undefined }> {
+}): Promise<{ agentId: string; sessionId: string; sessionEntry: SessionEntry | undefined }> {
   let sessionEntry = params.sessionEntry;
 
   const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
-  const resolvedTranscript = await resolveAndPersistSessionTranscriptIdentity({
+  const resolvedTranscript = await resolveAndPersistSessionTranscriptScope({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry,
     agentId: params.agentId,
     topicId: params.threadId ?? threadIdFromSessionKey,
   });
-  const transcriptLocator = resolvedTranscript.transcriptLocator;
   sessionEntry = resolvedTranscript.sessionEntry;
   if (params.sessionStore) {
     params.sessionStore[params.sessionKey] = sessionEntry;
   }
 
   return {
-    transcriptLocator,
+    agentId: resolvedTranscript.agentId,
+    sessionId: resolvedTranscript.sessionId,
     sessionEntry,
   };
 }
@@ -227,15 +226,13 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
 
-  let transcriptLocator: string;
   try {
-    const resolvedTranscript = await resolveAndPersistSessionTranscriptIdentity({
+    await resolveAndPersistSessionTranscriptScope({
       sessionId: entry.sessionId,
       sessionKey: normalizedKey,
       sessionEntry: entry,
       agentId,
     });
-    transcriptLocator = resolvedTranscript.transcriptLocator;
   } catch (err) {
     return {
       ok: false,
@@ -274,7 +271,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       emitSessionTranscriptUpdate({
         agentId,
         sessionId: entry.sessionId,
-        transcriptLocator: transcriptLocator,
         sessionKey,
         message,
         messageId,
@@ -284,7 +280,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       emitSessionTranscriptUpdate({
         agentId,
         sessionId: entry.sessionId,
-        transcriptLocator: transcriptLocator,
         sessionKey,
       });
       break;

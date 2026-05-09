@@ -1,15 +1,14 @@
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { createSqliteSessionTranscriptLocator } from "./paths.js";
 import { getSessionEntry, upsertSessionEntry } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
-export async function resolveAndPersistSessionTranscriptIdentity(params: {
+export async function resolveAndPersistSessionTranscriptScope(params: {
   sessionId: string;
   sessionKey: string;
   sessionEntry?: SessionEntry;
   agentId?: string;
   topicId?: string | number;
-}): Promise<{ transcriptLocator: string; sessionEntry: SessionEntry }> {
+}): Promise<{ agentId: string; sessionId: string; sessionEntry: SessionEntry }> {
   const { sessionId, sessionKey } = params;
   const now = Date.now();
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
@@ -22,11 +21,6 @@ export async function resolveAndPersistSessionTranscriptIdentity(params: {
       updatedAt: now,
       sessionStartedAt: now,
     };
-  const transcriptLocator = createSqliteSessionTranscriptLocator({
-    agentId,
-    sessionId,
-    topicId: params.topicId,
-  });
   const persistedEntry: SessionEntry = {
     ...baseEntry,
     sessionId,
@@ -44,7 +38,7 @@ export async function resolveAndPersistSessionTranscriptIdentity(params: {
       sessionKey,
       entry: entryWithoutDerivedLocator,
     });
-    return { transcriptLocator, sessionEntry: entryWithoutDerivedLocator };
+    return { agentId, sessionId, sessionEntry: entryWithoutDerivedLocator };
   }
-  return { transcriptLocator, sessionEntry: entryWithoutDerivedLocator };
+  return { agentId, sessionId, sessionEntry: entryWithoutDerivedLocator };
 }

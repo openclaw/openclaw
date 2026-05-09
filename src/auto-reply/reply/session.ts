@@ -9,7 +9,6 @@ import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -20,7 +19,7 @@ import {
   type SessionFreshness,
 } from "../../config/sessions/reset.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { resolveAndPersistSessionTranscriptIdentity } from "../../config/sessions/session-locator.js";
+import { resolveAndPersistSessionTranscriptScope } from "../../config/sessions/session-locator.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -714,7 +713,7 @@ export async function initSessionState(params: {
   const threadIdFromSessionKey = parseSessionThreadInfoFast(
     sessionCtxForState.SessionKey ?? sessionKey,
   ).threadId;
-  const resolvedTranscript = await resolveAndPersistSessionTranscriptIdentity({
+  const resolvedTranscript = await resolveAndPersistSessionTranscriptScope({
     sessionId: sessionEntry.sessionId,
     sessionKey,
     sessionEntry,

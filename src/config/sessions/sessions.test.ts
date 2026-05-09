@@ -12,7 +12,7 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
-import { resolveAndPersistSessionTranscriptIdentity } from "./session-locator.js";
+import { resolveAndPersistSessionTranscriptScope } from "./session-locator.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -473,7 +473,7 @@ describe("SQLite session store patch retries", () => {
   });
 });
 
-describe("resolveAndPersistSessionTranscriptIdentity", () => {
+describe("resolveAndPersistSessionTranscriptScope", () => {
   const fixture = useTempSessionsFixture("session-locator-test-");
 
   function readFixtureSessionEntries(): Record<string, SessionEntry> {
@@ -488,7 +488,7 @@ describe("resolveAndPersistSessionTranscriptIdentity", () => {
     }
   }
 
-  it("derives topic transcript handles without persisting them on session rows", async () => {
+  it("resolves topic transcript scope without persisting handles on session rows", async () => {
     const sessionId = "topic-session-id";
     const sessionKey = "agent:main:telegram:group:123:topic:456";
     const store = {
@@ -499,13 +499,8 @@ describe("resolveAndPersistSessionTranscriptIdentity", () => {
     };
     seedFixtureSessionEntries(store);
     const sessionStore = readFixtureSessionEntries();
-    const expectedTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId,
-      topicId: 456,
-    });
 
-    const result = await resolveAndPersistSessionTranscriptIdentity({
+    const result = await resolveAndPersistSessionTranscriptScope({
       sessionId,
       sessionKey,
       sessionEntry: sessionStore[sessionKey],
@@ -513,30 +508,26 @@ describe("resolveAndPersistSessionTranscriptIdentity", () => {
       topicId: 456,
     });
 
-    expect(result.transcriptLocator).toBe(expectedTranscriptLocator);
+    expect(result).toMatchObject({ agentId: "main", sessionId });
 
     const saved = readFixtureSessionEntries();
     expect(saved[sessionKey]).not.toHaveProperty("transcriptLocator");
   });
 
-  it("creates a SQLite handle without persisting it when session is not yet present", async () => {
+  it("creates SQLite scope without persisting a locator when session is not yet present", async () => {
     const sessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
-    const expectedTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId,
-    });
 
-    const result = await resolveAndPersistSessionTranscriptIdentity({
+    const result = await resolveAndPersistSessionTranscriptScope({
       sessionId,
       sessionKey,
       agentId: "main",
     });
 
-    expect(result.transcriptLocator).toBe(expectedTranscriptLocator);
+    expect(result).toMatchObject({ agentId: "main", sessionId });
     expect(result.sessionEntry.sessionId).toBe(sessionId);
     const saved = readFixtureSessionEntries();
-    expect(saved[sessionKey]).not.toHaveProperty("transcriptLocator");
+    expect(saved[sessionKey]).toBeUndefined();
   });
 
   it("strips legacy transcript locators from active session rows", async () => {
@@ -550,7 +541,7 @@ describe("resolveAndPersistSessionTranscriptIdentity", () => {
     });
     const sessionStore = readFixtureSessionEntries();
 
-    const result = await resolveAndPersistSessionTranscriptIdentity({
+    const result = await resolveAndPersistSessionTranscriptScope({
       sessionId,
       sessionKey,
       sessionEntry: sessionStore[sessionKey],
@@ -561,18 +552,10 @@ describe("resolveAndPersistSessionTranscriptIdentity", () => {
     expect(readFixtureSessionEntries()[sessionKey]).not.toHaveProperty("transcriptLocator");
   });
 
-  it("rotates to a new SQLite locator when sessionId changes on the same session key", async () => {
+  it("rotates SQLite scope when sessionId changes on the same session key", async () => {
     const previousSessionId = "old-session-id";
     const nextSessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
-    const previousTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: previousSessionId,
-    });
-    const expectedNextTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: nextSessionId,
-    });
     const store = {
       [sessionKey]: {
         sessionId: previousSessionId,
@@ -582,15 +565,14 @@ describe("resolveAndPersistSessionTranscriptIdentity", () => {
     seedFixtureSessionEntries(store);
     const sessionStore = readFixtureSessionEntries();
 
-    const result = await resolveAndPersistSessionTranscriptIdentity({
+    const result = await resolveAndPersistSessionTranscriptScope({
       sessionId: nextSessionId,
       sessionKey,
       sessionEntry: sessionStore[sessionKey],
       agentId: "main",
     });
 
-    expect(result.transcriptLocator).toBe(expectedNextTranscriptLocator);
-    expect(result.transcriptLocator).not.toBe(previousTranscriptLocator);
+    expect(result).toMatchObject({ agentId: "main", sessionId: nextSessionId });
     expect(result.sessionEntry).not.toHaveProperty("transcriptLocator");
 
     const saved = readFixtureSessionEntries();

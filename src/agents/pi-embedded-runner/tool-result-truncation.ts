@@ -659,7 +659,6 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     emitSessionTranscriptUpdate({
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-      transcriptLocator: params.transcriptLocator,
       sessionKey: params.sessionKey,
     });
   }
@@ -730,7 +729,6 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
     emitSessionTranscriptUpdate({
       agentId: params.agentId,
       sessionId: params.sessionId,
-      transcriptLocator: params.transcriptLocator,
       sessionKey: params.sessionKey,
     });
   }
