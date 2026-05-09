@@ -103,11 +103,16 @@ Exceptions:
 
 When asked for `X` issues or PRs to triage, `X` means qualified candidates, not sampled threads.
 
-Triage is read/prove/patch-local by default. Do not commit unless the requester writes
-`commit` in the current instruction for the exact diff being handled. Do not
-treat earlier messages, inferred intent, "next", sweep momentum, or bundled
-publish language as commit permission. If the requester asks for follow-up work without
-saying `commit`, keep the files dirty after local fixes and proof.
+Issue triage is review/prove/patch-local by default:
+
+1. Review the issue body, comments, related threads, current code, and adjacent tests.
+2. Fix only issues that are easy, high-confidence, and narrowly owned by the implicated path.
+3. Add focused regression proof when practical.
+4. Stop with the dirty diff, touched files, and test/gate output for Peter's manual review.
+5. After Peter approves shipping, make one commit per accepted fix, with its own changelog entry when user-facing.
+6. Pull/rebase, push, then comment and close only the issues that were fixed or explicitly triaged closed.
+
+Do not batch unrelated issue fixes into one commit. Do not publish, comment, close, or label during the review/prove phase.
 
 Missing changelog is not a PR review finding or merge blocker. If landing/fixing a user-visible change, add/update changelog automatically when practical; never ask or block solely on it.
 
