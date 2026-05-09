@@ -1,6 +1,10 @@
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type {
+  ContextEngine,
+  ContextEngineRuntimeContext,
+  ContextEngineTranscriptScope,
+} from "../../context-engine/types.js";
 import type { AgentMessage } from "../agent-core-contract.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import { runContextEngineMaintenance } from "../pi-embedded-runner/context-engine-maintenance.js";
@@ -19,6 +23,7 @@ export async function bootstrapHarnessContextEngine(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  transcriptScope?: ContextEngineTranscriptScope;
   transcriptLocator: string;
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
@@ -37,6 +42,7 @@ export async function bootstrapHarnessContextEngine(params: {
       await params.contextEngine.bootstrap({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        transcriptScope: params.transcriptScope,
         transcriptLocator: params.transcriptLocator,
       });
     }
@@ -44,6 +50,7 @@ export async function bootstrapHarnessContextEngine(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      transcriptScope: params.transcriptScope,
       transcriptLocator: params.transcriptLocator,
       reason: "bootstrap",
       sessionManager: params.sessionManager,
@@ -95,6 +102,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
   yieldAborted: boolean;
   sessionIdUsed: string;
   sessionKey?: string;
+  transcriptScope?: ContextEngineTranscriptScope;
   transcriptLocator: string;
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
@@ -120,6 +128,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
       await params.contextEngine.afterTurn({
         sessionId: params.sessionIdUsed,
         sessionKey: params.sessionKey,
+        transcriptScope: params.transcriptScope,
         transcriptLocator: params.transcriptLocator,
         messages: conversationSnapshot.messages,
         prePromptMessageCount: conversationSnapshot.prePromptMessageCount,
@@ -173,6 +182,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionIdUsed,
       sessionKey: params.sessionKey,
+      transcriptScope: params.transcriptScope,
       transcriptLocator: params.transcriptLocator,
       reason: "turn",
       sessionManager: params.sessionManager,
@@ -225,6 +235,7 @@ export async function runHarnessContextEngineMaintenance(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  transcriptScope?: ContextEngineTranscriptScope;
   transcriptLocator: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: unknown;
@@ -236,6 +247,7 @@ export async function runHarnessContextEngineMaintenance(params: {
     contextEngine: params.contextEngine,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    transcriptScope: params.transcriptScope,
     transcriptLocator: params.transcriptLocator,
     reason: params.reason,
     sessionManager: params.sessionManager as Parameters<

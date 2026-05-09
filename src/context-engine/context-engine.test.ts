@@ -184,9 +184,12 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
     };
   }
 
-  private rejectSessionKey(params: { sessionKey?: string }): void {
+  private rejectLegacyCompatKeys(params: { sessionKey?: string; transcriptScope?: unknown }): void {
     if (Object.prototype.hasOwnProperty.call(params, "sessionKey")) {
       throw new Error("Unrecognized key(s) in object: 'sessionKey'");
+    }
+    if (Object.prototype.hasOwnProperty.call(params, "transcriptScope")) {
+      throw new Error("Unrecognized key(s) in object: 'transcriptScope'");
     }
   }
 
@@ -197,7 +200,7 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
     isHeartbeat?: boolean;
   }): Promise<IngestResult> {
     this.ingestCalls.push({ ...params });
-    this.rejectSessionKey(params);
+    this.rejectLegacyCompatKeys(params);
     this.ingestedMessages.push(params.message);
     return { ingested: true };
   }
@@ -212,7 +215,7 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
     prompt?: string;
   }): Promise<AssembleResult> {
     this.assembleCalls.push({ ...params });
-    this.rejectSessionKey(params);
+    this.rejectLegacyCompatKeys(params);
     return {
       messages: params.messages,
       estimatedTokens: 7,
@@ -222,6 +225,7 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
   async compact(params: {
     sessionId: string;
     sessionKey?: string;
+    transcriptScope?: unknown;
     transcriptLocator: string;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
@@ -229,7 +233,7 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
     runtimeContext?: Record<string, unknown>;
   }): Promise<CompactResult> {
     this.compactCalls.push({ ...params });
-    this.rejectSessionKey(params);
+    this.rejectLegacyCompatKeys(params);
     return {
       ok: true,
       compacted: true,
@@ -243,11 +247,12 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
   async maintain(params: {
     sessionId: string;
     sessionKey?: string;
+    transcriptScope?: unknown;
     transcriptLocator: string;
     runtimeContext?: Record<string, unknown>;
   }): Promise<ContextEngineMaintenanceResult> {
     this.maintainCalls.push({ ...params });
-    this.rejectSessionKey(params);
+    this.rejectLegacyCompatKeys(params);
     return {
       changed: false,
       bytesFreed: 0,
@@ -595,6 +600,7 @@ describe("Legacy sessionKey compatibility", () => {
     const compacted = await engine.compact({
       sessionId: "s1",
       sessionKey: "agent:main:test",
+      transcriptScope: { agentId: "main", sessionId: "s1" },
       transcriptLocator: "/tmp/session.json",
     });
 
@@ -603,8 +609,11 @@ describe("Legacy sessionKey compatibility", () => {
     expect(strictEngine.assembleCalls).toHaveLength(2);
     expect(strictEngine.assembleCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
     expect(strictEngine.assembleCalls[1]).not.toHaveProperty("sessionKey");
-    expect(strictEngine.compactCalls).toHaveLength(1);
+    expect(strictEngine.compactCalls).toHaveLength(2);
     expect(strictEngine.compactCalls[0]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.compactCalls[0]).toHaveProperty("transcriptScope");
+    expect(strictEngine.compactCalls[1]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.compactCalls[1]).not.toHaveProperty("transcriptScope");
   });
 
   it("retries strict ingest once and ingests each message only once", async () => {
@@ -644,12 +653,16 @@ describe("Legacy sessionKey compatibility", () => {
     await engine.maintain?.({
       sessionId: "s1",
       sessionKey: "agent:main:test",
+      transcriptScope: { agentId: "main", sessionId: "s1" },
       transcriptLocator: "/tmp/session.json",
     });
 
-    expect(strictEngine.maintainCalls).toHaveLength(2);
+    expect(strictEngine.maintainCalls).toHaveLength(3);
     expect(strictEngine.maintainCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
     expect(strictEngine.maintainCalls[1]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.maintainCalls[1]).toHaveProperty("transcriptScope");
+    expect(strictEngine.maintainCalls[2]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.maintainCalls[2]).not.toHaveProperty("transcriptScope");
   });
 
   it("does not retry non-compat runtime errors", async () => {
