@@ -165,6 +165,7 @@ import {
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { appendModelIdentitySystemPrompt } from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   buildEmptyExplicitToolAllowlistError,
@@ -2716,6 +2717,14 @@ export async function runEmbeddedAttempt(
               `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
             );
           }
+        }
+        const modelAwareSystemPrompt = appendModelIdentitySystemPrompt({
+          systemPrompt: systemPromptText,
+          model: runtimeInfo.model,
+        });
+        if (modelAwareSystemPrompt !== systemPromptText) {
+          applySystemPromptOverrideToSession(activeSession, modelAwareSystemPrompt);
+          systemPromptText = modelAwareSystemPrompt;
         }
 
         if (cacheObservabilityEnabled) {
