@@ -55,6 +55,32 @@ describe("isVolatileBackupPath", () => {
     expect(isVolatileBackupPath(`${stateDir}/logs/../notes.jsonl`, plan)).toBe(false);
   });
 
+  it("treats delivery-queue json files under stateDir as volatile", () => {
+    expect(
+      isVolatileBackupPath(
+        `${stateDir}/delivery-queue/3fac5e46-42dc-4230-a725-51c203830b4f.json`,
+        plan,
+      ),
+    ).toBe(true);
+  });
+
+  it("treats nested delivery-queue json files under stateDir as volatile", () => {
+    expect(
+      isVolatileBackupPath(
+        `${stateDir}/delivery-queue/subdir/3fac5e46-42dc-4230-a725-51c203830b4f.json`,
+        plan,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat non-json delivery-queue files as volatile", () => {
+    expect(isVolatileBackupPath(`${stateDir}/delivery-queue/README.md`, plan)).toBe(false);
+  });
+
+  it("does not treat delivery-queue json outside stateDir as volatile", () => {
+    expect(isVolatileBackupPath(`/tmp/delivery-queue/file.json`, plan)).toBe(false);
+  });
+
   it("normalizes Windows-style separators before anchor checks", () => {
     const winStateDir = "C:\\openclaw\\state";
     const winPlan = { stateDirs: [winStateDir] };
