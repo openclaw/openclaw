@@ -57,7 +57,8 @@ export function createDeepSeekTextFilter(): DeepSeekTextFilter {
         return output;
       }
 
-      const emitLength = buffer.length - Math.min(buffer.length, MAX_OPEN_TOKEN_LEN - 1);
+      const keep = longestDsmlOpenPrefixSuffixLength(buffer);
+      const emitLength = buffer.length - keep;
       if (emitLength <= 0) {
         return output;
       }
@@ -88,4 +89,15 @@ function findEarliestToken(text: string, tokens: readonly string[]) {
     }
   }
   return best;
+}
+
+function longestDsmlOpenPrefixSuffixLength(text: string) {
+  const maxLength = Math.min(text.length, MAX_OPEN_TOKEN_LEN - 1);
+  for (let length = maxLength; length > 0; length--) {
+    const suffix = text.slice(text.length - length);
+    if (DSML_OPEN_TOKENS.some((token) => token.startsWith(suffix))) {
+      return length;
+    }
+  }
+  return 0;
 }
