@@ -210,22 +210,15 @@ function loadSessionRowsForTarget(target: ReturnType<typeof resolveGatewaySessio
   entry?: SessionEntry;
   storeKey?: string;
 } {
-  const matches = target.storeKeys
-    .map((storeKey) => {
-      const entry = getSessionEntry({
-        agentId: target.agentId,
-        sessionKey: storeKey,
-      });
-      return entry ? { storeKey, entry } : undefined;
-    })
-    .filter((match): match is { storeKey: string; entry: SessionEntry } => Boolean(match))
-    .toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0));
-  const store = Object.fromEntries(matches.map((match) => [match.storeKey, match.entry] as const));
-  const freshest = matches[0];
+  const entry = getSessionEntry({
+    agentId: target.agentId,
+    sessionKey: target.canonicalKey,
+  });
+  const store = entry ? { [target.canonicalKey]: entry } : {};
   return {
     store,
-    entry: freshest?.entry,
-    storeKey: freshest?.storeKey,
+    entry,
+    storeKey: entry ? target.canonicalKey : undefined,
   };
 }
 
@@ -1843,7 +1836,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       emitSessionUnboundLifecycleEvent,
     } = await loadSessionsRuntimeModule();
 
-    const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
+    const { entry, canonicalKey } = loadSessionEntry(key);
     if (rejectPluginRuntimeDeleteMismatch({ client, key: canonicalKey ?? key, entry, respond })) {
       return;
     }
@@ -1852,8 +1845,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       key,
       target,
       entry,
-      legacyKey,
-      canonicalKey,
       reason: "session-delete",
     });
     if (mutationCleanupError) {
@@ -1861,7 +1852,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const sessionId = entry?.sessionId;
-    const deleteKey = legacyKey ?? canonicalKey ?? target.canonicalKey;
+    const deleteKey = canonicalKey ?? target.canonicalKey;
     const deleted = entry
       ? deleteSessionEntry({
           agentId: target.agentId,

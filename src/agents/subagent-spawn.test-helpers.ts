@@ -246,7 +246,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
       agentId: "main",
       databasePath: "/tmp/subagent-spawn-model-session.sqlite",
       canonicalKey: targetParams.key,
-      storeKeys: [targetParams.key],
     }),
     normalizeDeliveryContext: identityDeliveryContext,
     resolveAgentConfig: params.resolveAgentConfig ?? (() => undefined),

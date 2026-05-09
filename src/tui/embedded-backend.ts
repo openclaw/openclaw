@@ -282,12 +282,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
         entry,
       ]),
     ) as Record<string, SessionEntry>;
-    const freshest = target.storeKeys
-      .map((storeKey) => getSessionEntry({ agentId: target.agentId, sessionKey: storeKey }))
-      .filter((entry): entry is SessionEntry => Boolean(entry))
-      .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
-    if (freshest) {
-      store[target.canonicalKey] = freshest;
+    const current = getSessionEntry({ agentId: target.agentId, sessionKey: target.canonicalKey });
+    if (current) {
+      store[target.canonicalKey] = current;
     }
     const applied = await applySessionsPatchToStore({
       cfg,

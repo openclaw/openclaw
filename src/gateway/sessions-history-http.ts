@@ -135,15 +135,10 @@ export async function handleSessionHistoryHttpRequest(
   const { cfg } = authResult;
 
   const target = resolveGatewaySessionDatabaseTarget({ cfg, key: sessionKey });
-  const entry = target.storeKeys
-    .map((candidate) =>
-      getSessionEntry({
-        agentId: target.agentId,
-        sessionKey: candidate,
-      }),
-    )
-    .filter((candidate) => candidate?.sessionId)
-    .toSorted((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))[0];
+  const entry = getSessionEntry({
+    agentId: target.agentId,
+    sessionKey: target.canonicalKey,
+  });
   if (!entry?.sessionId) {
     sendJson(res, 404, {
       ok: false,

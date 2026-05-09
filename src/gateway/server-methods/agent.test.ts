@@ -2588,7 +2588,7 @@ describe("gateway agent handler", () => {
     expect(capturedEntry.cliSessionIds).toBeUndefined();
     expect(capturedEntry.claudeCliSessionId).toBeUndefined();
   });
-  it("leaves legacy main alias cleanup to doctor when writing a canonical session entry", async () => {
+  it("leaves noncanonical main row cleanup to doctor when writing a canonical session entry", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {
         session: { mainKey: "work" },
@@ -2600,7 +2600,6 @@ describe("gateway agent handler", () => {
       },
       canonicalKey: "agent:main:work",
       agentId: "main",
-      legacyKey: "agent:main:MAIN",
     });
 
     let capturedStore: Record<string, unknown> | undefined;

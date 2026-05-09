@@ -59,7 +59,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
     hoisted.resolveGatewaySessionDatabaseTargetMock.mockReturnValue({
       agentId: "main",
       canonicalKey,
-      storeKeys: [canonicalKey, legacyKey],
       databasePath,
     });
     hoisted.listSessionEntriesMock.mockImplementation(() =>
@@ -121,7 +120,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
     const deletedAgentKey = "agent:deleted-agent:main";
     hoisted.resolveGatewaySessionDatabaseTargetMock.mockReturnValue({
       canonicalKey: deletedAgentKey,
-      storeKeys: [deletedAgentKey],
       databasePath,
     });
     hoisted.sessionRowsMock.mockReturnValue({
@@ -148,7 +146,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
     const staleMainKey = "agent:main:guildchat:direct:u1";
     hoisted.resolveGatewaySessionDatabaseTargetMock.mockReturnValue({
       canonicalKey: staleMainKey,
-      storeKeys: [staleMainKey],
       databasePath,
     });
     hoisted.sessionRowsMock.mockReturnValue({
