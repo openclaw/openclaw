@@ -575,7 +575,7 @@ describe("processEvent (functional)", () => {
       throw new Error("expected retryable error call to remain active");
     }
     expect(call.state).toBe("active");
-    expect(Array.from(ctx.processedEventIds)).toEqual([]);
-    expect(call.processedEventIds).toEqual([]);
+    expect(Array.from(ctx.processedEventIds)).toStrictEqual([]);
+    expect(call.processedEventIds).toStrictEqual([]);
   });
 });

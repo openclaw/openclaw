@@ -405,7 +405,7 @@ describe("MediaStreamHandler security hardening", () => {
 
       expect(closed.code).toBe(1008);
       expect(closed.reason).toBe("Start timeout");
-      expect(shouldAcceptStreamCalls).toEqual([]);
+      expect(shouldAcceptStreamCalls).toStrictEqual([]);
     } finally {
       await server.close();
     }
@@ -912,7 +912,7 @@ describe("MediaStreamHandler security hardening", () => {
       const closed = await waitForClose(ws);
 
       expect(closed.code).toBe(1009);
-      expect(shouldAcceptStreamCalls).toEqual([]);
+      expect(shouldAcceptStreamCalls).toStrictEqual([]);
     } finally {
       await server.close();
     }
