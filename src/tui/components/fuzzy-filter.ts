@@ -114,7 +114,7 @@ export function fuzzyFilterLower<T extends { searchTextLower?: string }>(
       results.push({ item, score: totalScore });
     }
   }
-  results.sort((a, b) => a.score - b.score);
+  results.splice(0, results.length, ...results.toSorted((a, b) => a.score - b.score));
   return results.map((r) => r.item);
 }
 

@@ -416,7 +416,11 @@ export const registerTelegramHandlers = ({
 
   const processMediaGroup = async (entry: MediaGroupEntry) => {
     try {
-      entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
+      entry.messages.splice(
+        0,
+        entry.messages.length,
+        ...entry.messages.toSorted((a, b) => a.msg.message_id - b.msg.message_id),
+      );
 
       const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
       const primaryEntry = captionMsg ?? entry.messages[0];
@@ -462,7 +466,11 @@ export const registerTelegramHandlers = ({
 
   const flushTextFragments = async (entry: TextFragmentEntry) => {
     try {
-      entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
+      entry.messages.splice(
+        0,
+        entry.messages.length,
+        ...entry.messages.toSorted((a, b) => a.msg.message_id - b.msg.message_id),
+      );
 
       const first = entry.messages[0];
       const last = entry.messages.at(-1);

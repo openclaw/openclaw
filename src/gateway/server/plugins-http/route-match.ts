@@ -39,8 +39,16 @@ export function findMatchingPluginHttpRoutes(
       exactMatches.push(route);
     }
   }
-  exactMatches.sort((a, b) => b.path.length - a.path.length);
-  prefixMatches.sort((a, b) => b.path.length - a.path.length);
+  exactMatches.splice(
+    0,
+    exactMatches.length,
+    ...exactMatches.toSorted((a, b) => b.path.length - a.path.length),
+  );
+  prefixMatches.splice(
+    0,
+    prefixMatches.length,
+    ...prefixMatches.toSorted((a, b) => b.path.length - a.path.length),
+  );
   return [...exactMatches, ...prefixMatches];
 }
 

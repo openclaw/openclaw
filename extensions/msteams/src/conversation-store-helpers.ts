@@ -94,10 +94,14 @@ export function findPreferredDmConversationByUserId(
 
   // When multiple candidates exist, prefer the most recently seen one.
   if (candidates.length > 1) {
-    candidates.sort(
-      (a, b) =>
-        (parseStoredConversationTimestamp(b.reference.lastSeenAt) ?? 0) -
-        (parseStoredConversationTimestamp(a.reference.lastSeenAt) ?? 0),
+    candidates.splice(
+      0,
+      candidates.length,
+      ...candidates.toSorted(
+        (a, b) =>
+          (parseStoredConversationTimestamp(b.reference.lastSeenAt) ?? 0) -
+          (parseStoredConversationTimestamp(a.reference.lastSeenAt) ?? 0),
+      ),
     );
   }
 

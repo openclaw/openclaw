@@ -187,31 +187,39 @@ function sortByLeastRecentlyLeasedThenId(
     lastLeasedAtMs: number;
   }>,
 ) {
-  rows.sort((left, right) => {
-    if (left.lastLeasedAtMs !== right.lastLeasedAtMs) {
-      return left.lastLeasedAtMs - right.lastLeasedAtMs;
-    }
-    const leftId = String(left._id);
-    const rightId = String(right._id);
-    return leftId.localeCompare(rightId);
-  });
+  rows.splice(
+    0,
+    rows.length,
+    ...rows.toSorted((left, right) => {
+      if (left.lastLeasedAtMs !== right.lastLeasedAtMs) {
+        return left.lastLeasedAtMs - right.lastLeasedAtMs;
+      }
+      const leftId = String(left._id);
+      const rightId = String(right._id);
+      return leftId.localeCompare(rightId);
+    }),
+  );
 }
 
 function sortCredentialRowsForList(rows: CredentialSetRecord[]) {
   const statusRank: Record<CredentialStatus, number> = { active: 0, disabled: 1 };
-  rows.sort((left, right) => {
-    const kindCompare = left.kind.localeCompare(right.kind);
-    if (kindCompare !== 0) {
-      return kindCompare;
-    }
-    if (left.status !== right.status) {
-      return statusRank[left.status] - statusRank[right.status];
-    }
-    if (left.updatedAtMs !== right.updatedAtMs) {
-      return right.updatedAtMs - left.updatedAtMs;
-    }
-    return String(left._id).localeCompare(String(right._id));
-  });
+  rows.splice(
+    0,
+    rows.length,
+    ...rows.toSorted((left, right) => {
+      const kindCompare = left.kind.localeCompare(right.kind);
+      if (kindCompare !== 0) {
+        return kindCompare;
+      }
+      if (left.status !== right.status) {
+        return statusRank[left.status] - statusRank[right.status];
+      }
+      if (left.updatedAtMs !== right.updatedAtMs) {
+        return right.updatedAtMs - left.updatedAtMs;
+      }
+      return String(left._id).localeCompare(String(right._id));
+    }),
+  );
 }
 
 function normalizeActorId(value: string | undefined) {

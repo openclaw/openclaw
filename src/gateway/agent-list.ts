@@ -42,7 +42,7 @@ function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   }
 
   const sorted = Array.from(ids).filter(Boolean);
-  sorted.sort((a, b) => a.localeCompare(b));
+  sorted.splice(0, sorted.length, ...sorted.toSorted((a, b) => a.localeCompare(b)));
   return sorted.includes(defaultId)
     ? [defaultId, ...sorted.filter((id) => id !== defaultId)]
     : sorted;

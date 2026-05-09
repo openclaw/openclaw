@@ -93,7 +93,7 @@ export function groupPluginDiscoveryProvidersByOrder(
   }
 
   for (const order of DISCOVERY_ORDER) {
-    grouped[order].sort((a, b) => a.label.localeCompare(b.label));
+    grouped[order] = grouped[order].toSorted((a, b) => a.label.localeCompare(b.label));
   }
 
   return grouped;

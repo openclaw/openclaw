@@ -278,7 +278,11 @@ function replaceMarkers(content: string): string {
   if (replacements.length === 0) {
     return content;
   }
-  replacements.sort((a, b) => a.start - b.start);
+  replacements.splice(
+    0,
+    replacements.length,
+    ...replacements.toSorted((a, b) => a.start - b.start),
+  );
 
   let cursor = 0;
   let output = "";

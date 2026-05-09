@@ -80,7 +80,11 @@ function selectNextRateLimitReset(
     (window) => window.usedPercent !== undefined && window.usedPercent >= 100,
   );
   const candidates = exhaustedWindows.length > 0 ? exhaustedWindows : futureWindows;
-  candidates.sort((left, right) => left.resetsAtMs - right.resetsAtMs);
+  candidates.splice(
+    0,
+    candidates.length,
+    ...candidates.toSorted((left, right) => left.resetsAtMs - right.resetsAtMs),
+  );
   return candidates[0];
 }
 

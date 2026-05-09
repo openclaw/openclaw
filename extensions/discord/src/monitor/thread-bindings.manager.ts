@@ -163,7 +163,11 @@ export function createThreadBindingManager(params: {
         expirationCandidates.push({ reason: "max-age-expired", at: maxAgeExpiresAt });
       }
       if (expirationCandidates.length > 0) {
-        expirationCandidates.sort((a, b) => a.at - b.at);
+        expirationCandidates.splice(
+          0,
+          expirationCandidates.length,
+          ...expirationCandidates.toSorted((a, b) => a.at - b.at),
+        );
         const reason = expirationCandidates[0]?.reason ?? "idle-expired";
         manager.unbindThread({
           threadId: binding.threadId,

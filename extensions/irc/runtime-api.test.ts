@@ -7,8 +7,8 @@ describe("irc bundled api seams", () => {
       `const channel = await import("./extensions/irc/channel-plugin-api.ts");
 const runtime = await import("./extensions/irc/runtime-api.ts");
 process.stdout.write(JSON.stringify({
-  channel: { keys: Object.keys(channel).sort(), id: channel.ircPlugin.id },
-  runtime: { keys: Object.keys(runtime).sort(), type: typeof runtime.setIrcRuntime },
+  channel: { keys: Object.keys(channel).toSorted(), id: channel.ircPlugin.id },
+  runtime: { keys: Object.keys(runtime).toSorted(), type: typeof runtime.setIrcRuntime },
 }));`,
     );
 

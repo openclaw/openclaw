@@ -208,7 +208,7 @@ export async function recoverPendingSessionDeliveries(opts: {
     return createEmptyRecoverySummary();
   }
 
-  pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
+  pending.splice(0, pending.length, ...pending.toSorted((a, b) => a.enqueuedAt - b.enqueuedAt));
   const summary = createEmptyRecoverySummary();
   const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
 

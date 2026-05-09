@@ -1161,7 +1161,7 @@ function readBoundedOwnKeys(
     }
     keys.push(key);
   }
-  keys.sort();
+  keys.splice(0, keys.length, ...keys.toSorted());
   return { keys, truncated };
 }
 

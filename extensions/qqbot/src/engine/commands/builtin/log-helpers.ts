@@ -199,7 +199,7 @@ function collectRecentLogFiles(logDirs: string[]): LogCandidate[] {
     }
   }
 
-  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  candidates.splice(0, candidates.length, ...candidates.toSorted((a, b) => b.mtimeMs - a.mtimeMs));
   return candidates;
 }
 

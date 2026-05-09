@@ -127,7 +127,7 @@ function buildLabelSummaryRows(
     }
     summaries.set(label, summary);
   }
-  return Array.from(summaries.values()).sort(compareLabelSummaryRows);
+  return Array.from(summaries.values()).toSorted(compareLabelSummaryRows);
 }
 
 function renderLabelSummary(params: {

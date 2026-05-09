@@ -587,14 +587,18 @@ export function filterFindingsBySeverity(advisoriesByPackage, minSeverity) {
     }
   }
 
-  findings.sort((left, right) => {
-    const severityDelta =
-      (SEVERITY_RANK[right.severity] ?? -1) - (SEVERITY_RANK[left.severity] ?? -1);
-    if (severityDelta !== 0) {
-      return severityDelta;
-    }
-    return left.packageName.localeCompare(right.packageName);
-  });
+  findings.splice(
+    0,
+    findings.length,
+    ...findings.toSorted((left, right) => {
+      const severityDelta =
+        (SEVERITY_RANK[right.severity] ?? -1) - (SEVERITY_RANK[left.severity] ?? -1);
+      if (severityDelta !== 0) {
+        return severityDelta;
+      }
+      return left.packageName.localeCompare(right.packageName);
+    }),
+  );
 
   return findings;
 }

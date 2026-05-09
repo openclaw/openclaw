@@ -83,7 +83,7 @@ function collectUserInputHistory(
     candidates.push({ text, ts: timestamp });
   }
 
-  candidates.sort((a, b) => b.ts - a.ts);
+  candidates.splice(0, candidates.length, ...candidates.toSorted((a, b) => b.ts - a.ts));
   const items: string[] = [];
   const seen = new Set<string>();
   for (const candidate of candidates) {

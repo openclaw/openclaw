@@ -28,7 +28,7 @@ function pushUnique(values: string[], next: string | null | undefined) {
 }
 
 function sortUnique(values: string[]) {
-  values.sort((left, right) => left.localeCompare(right));
+  values.splice(0, values.length, ...values.toSorted((left, right) => left.localeCompare(right)));
 }
 
 function clampScore(value: number): number {

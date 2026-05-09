@@ -260,17 +260,21 @@ function searchChunksByEmbedding(params: {
     if (topResults.length < params.limit) {
       topResults.push(result);
       if (topResults.length === params.limit) {
-        topResults.sort((a, b) => b.score - a.score);
+        topResults.splice(
+          0,
+          topResults.length,
+          ...topResults.toSorted((a, b) => b.score - a.score),
+        );
       }
       continue;
     }
     const lowest = topResults.at(-1);
     if (lowest && result.score > lowest.score) {
       topResults[topResults.length - 1] = result;
-      topResults.sort((a, b) => b.score - a.score);
+      topResults.splice(0, topResults.length, ...topResults.toSorted((a, b) => b.score - a.score));
     }
   }
-  topResults.sort((a, b) => b.score - a.score);
+  topResults.splice(0, topResults.length, ...topResults.toSorted((a, b) => b.score - a.score));
   return topResults;
 }
 

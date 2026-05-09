@@ -164,7 +164,11 @@ async function listTreeEntries(root: string, maxEntries: number): Promise<string
   const rootHandle = await fsRoot(root);
   async function visit(relativeDir: string): Promise<boolean> {
     const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
+    entries.splice(
+      0,
+      entries.length,
+      ...entries.toSorted((left, right) => left.name.localeCompare(right.name)),
+    );
     for (const entry of entries) {
       const rel = path.posix.join(relativeDir === "." ? "" : relativeDir, entry.name);
       results.push(rel);

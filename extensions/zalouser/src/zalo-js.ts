@@ -350,7 +350,7 @@ function extractOwnMentionSpans(
   if (spans.length <= 1) {
     return spans;
   }
-  spans.sort((a, b) => a.start - b.start);
+  spans.splice(0, spans.length, ...spans.toSorted((a, b) => a.start - b.start));
   const merged: MentionSpan[] = [];
   for (const span of spans) {
     const last = merged[merged.length - 1];

@@ -239,11 +239,15 @@ function pruneToLimit(polls: Record<string, MSTeamsPoll>) {
   if (entries.length <= MAX_POLLS) {
     return polls;
   }
-  entries.sort((a, b) => {
-    const aTs = parseTimestamp(a[1].updatedAt ?? a[1].createdAt) ?? 0;
-    const bTs = parseTimestamp(b[1].updatedAt ?? b[1].createdAt) ?? 0;
-    return aTs - bTs;
-  });
+  entries.splice(
+    0,
+    entries.length,
+    ...entries.toSorted((a, b) => {
+      const aTs = parseTimestamp(a[1].updatedAt ?? a[1].createdAt) ?? 0;
+      const bTs = parseTimestamp(b[1].updatedAt ?? b[1].createdAt) ?? 0;
+      return aTs - bTs;
+    }),
+  );
   const keep = entries.slice(entries.length - MAX_POLLS);
   return Object.fromEntries(keep);
 }

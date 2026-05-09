@@ -74,12 +74,16 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
     }
   }
   for (const spans of startsAt.values()) {
-    spans.sort((a, b) => {
-      if (a.end !== b.end) {
-        return b.end - a.end;
-      }
-      return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
-    });
+    spans.splice(
+      0,
+      spans.length,
+      ...spans.toSorted((a, b) => {
+        if (a.end !== b.end) {
+          return b.end - a.end;
+        }
+        return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
+      }),
+    );
   }
 
   const linkStarts = new Map<number, RenderLink[]>();
@@ -163,18 +167,22 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
     }
 
     if (openingItems.length > 0) {
-      openingItems.sort((a, b) => {
-        if (a.end !== b.end) {
-          return b.end - a.end;
-        }
-        if (a.kind !== b.kind) {
-          return a.kind === "link" ? -1 : 1;
-        }
-        if (a.kind === "style" && b.kind === "style") {
-          return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
-        }
-        return a.index - b.index;
-      });
+      openingItems.splice(
+        0,
+        openingItems.length,
+        ...openingItems.toSorted((a, b) => {
+          if (a.end !== b.end) {
+            return b.end - a.end;
+          }
+          if (a.kind !== b.kind) {
+            return a.kind === "link" ? -1 : 1;
+          }
+          if (a.kind === "style" && b.kind === "style") {
+            return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
+          }
+          return a.index - b.index;
+        }),
+      );
 
       // Open outer spans first (larger end) so LIFO closes stay valid for same-start overlaps.
       for (const item of openingItems) {

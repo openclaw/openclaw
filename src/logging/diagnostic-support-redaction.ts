@@ -130,7 +130,7 @@ function limitedSupportObjectEntries(record: Record<string, unknown>): {
     }
     entries.push({ key, value: record[key] });
   }
-  entries.sort((a, b) => a.key.localeCompare(b.key));
+  entries.splice(0, entries.length, ...entries.toSorted((a, b) => a.key.localeCompare(b.key)));
   return { count, entries };
 }
 

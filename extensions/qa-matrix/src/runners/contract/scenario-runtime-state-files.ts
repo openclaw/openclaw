@@ -147,7 +147,11 @@ async function resolveBestMatrixStateFile(params: {
       }),
     })),
   );
-  scored.sort((a, b) => b.score - a.score || a.pathname.localeCompare(b.pathname));
+  scored.splice(
+    0,
+    scored.length,
+    ...scored.toSorted((a, b) => b.score - a.score || a.pathname.localeCompare(b.pathname)),
+  );
   return scored[0]?.pathname ?? null;
 }
 

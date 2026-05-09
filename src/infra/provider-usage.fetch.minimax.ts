@@ -271,7 +271,11 @@ function collectUsageCandidates(root: Record<string, unknown>): Record<string, u
     }
   }
 
-  candidates.sort((a, b) => b.score - a.score || a.depth - b.depth);
+  candidates.splice(
+    0,
+    candidates.length,
+    ...candidates.toSorted((a, b) => b.score - a.score || a.depth - b.depth),
+  );
   return candidates.map((candidate) => candidate.record);
 }
 

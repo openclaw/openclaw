@@ -22,7 +22,7 @@ export function findCodeRegions(text: string): CodeRegion[] {
     }
   }
 
-  regions.sort((a, b) => a.start - b.start);
+  regions.splice(0, regions.length, ...regions.toSorted((a, b) => a.start - b.start));
   return regions;
 }
 

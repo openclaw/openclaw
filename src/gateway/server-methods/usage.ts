@@ -951,7 +951,11 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
 
     // Sort by most recent first
-    mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
+    mergedEntries.splice(
+      0,
+      mergedEntries.length,
+      ...mergedEntries.toSorted((a, b) => b.updatedAt - a.updatedAt),
+    );
 
     // Apply limit
     const limitedEntries = mergedEntries.slice(0, limit);

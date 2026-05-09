@@ -119,17 +119,21 @@ function resolveExecApprovalsAgents(
   if (agents.length === 0) {
     agents.push({ id: "main", isDefault: true });
   }
-  agents.sort((a, b) => {
-    if (a.isDefault && !b.isDefault) {
-      return -1;
-    }
-    if (!a.isDefault && b.isDefault) {
-      return 1;
-    }
-    const aLabel = a.name?.trim() ? a.name : a.id;
-    const bLabel = b.name?.trim() ? b.name : b.id;
-    return aLabel.localeCompare(bLabel);
-  });
+  agents.splice(
+    0,
+    agents.length,
+    ...agents.toSorted((a, b) => {
+      if (a.isDefault && !b.isDefault) {
+        return -1;
+      }
+      if (!a.isDefault && b.isDefault) {
+        return 1;
+      }
+      const aLabel = a.name?.trim() ? a.name : a.id;
+      const bLabel = b.name?.trim() ? b.name : b.id;
+      return aLabel.localeCompare(bLabel);
+    }),
+  );
   return agents;
 }
 

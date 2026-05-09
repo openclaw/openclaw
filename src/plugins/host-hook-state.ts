@@ -374,7 +374,11 @@ export async function drainPluginNextTurnInjections(params: {
       );
       drained.push(...liveEntries);
     }
-    drained.sort((left, right) => left.createdAt - right.createdAt);
+    drained.splice(
+      0,
+      drained.length,
+      ...drained.toSorted((left, right) => left.createdAt - right.createdAt),
+    );
     // A drain is the consume boundary for this session queue. Inactive plugin
     // records are stale owner state and are discarded with expired records.
     delete entry.pluginNextTurnInjections;

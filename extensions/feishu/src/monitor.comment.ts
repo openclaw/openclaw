@@ -888,16 +888,20 @@ async function fetchDriveCommentContext(params: {
       }),
     ),
   );
-  resolvedReplies.sort((left, right) =>
-    compareCommentTimelineEntries(
-      {
-        createTime: left.createTime,
-        stableId: left.replyId,
-      },
-      {
-        createTime: right.createTime,
-        stableId: right.replyId,
-      },
+  resolvedReplies.splice(
+    0,
+    resolvedReplies.length,
+    ...resolvedReplies.toSorted((left, right) =>
+      compareCommentTimelineEntries(
+        {
+          createTime: left.createTime,
+          stableId: left.replyId,
+        },
+        {
+          createTime: right.createTime,
+          stableId: right.replyId,
+        },
+      ),
     ),
   );
   const rootReplyContext =

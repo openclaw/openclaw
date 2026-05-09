@@ -60,6 +60,6 @@ export function resolveNodeTargets(
     });
   }
 
-  list.sort((a, b) => a.label.localeCompare(b.label));
+  list.splice(0, list.length, ...list.toSorted((a, b) => a.label.localeCompare(b.label)));
   return list;
 }

@@ -257,13 +257,17 @@ export function resolveAgentIdsByWorkspacePath(
     matches.push({ id, workspaceDir, order: index });
   }
 
-  matches.sort((left, right) => {
-    const workspaceLengthDelta = right.workspaceDir.length - left.workspaceDir.length;
-    if (workspaceLengthDelta !== 0) {
-      return workspaceLengthDelta;
-    }
-    return left.order - right.order;
-  });
+  matches.splice(
+    0,
+    matches.length,
+    ...matches.toSorted((left, right) => {
+      const workspaceLengthDelta = right.workspaceDir.length - left.workspaceDir.length;
+      if (workspaceLengthDelta !== 0) {
+        return workspaceLengthDelta;
+      }
+      return left.order - right.order;
+    }),
+  );
 
   return matches.map((entry) => entry.id);
 }

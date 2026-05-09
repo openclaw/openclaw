@@ -306,7 +306,7 @@ class MemoryDB {
       createdAt: row.createdAt as number,
     }));
     if (options.orderByCreatedAt) {
-      entries.sort((a, b) => b.createdAt - a.createdAt);
+      entries.splice(0, entries.length, ...entries.toSorted((a, b) => b.createdAt - a.createdAt));
     }
 
     return limit === undefined ? entries : entries.slice(0, limit);
@@ -952,7 +952,7 @@ export default definePluginEntry({
             if (opts.orderBy) {
               const [col, dir] = opts.orderBy.split(":");
               const direction = dir?.toLowerCase() === "desc" ? -1 : 1;
-              rows.sort((a, b) => {
+              rows = rows.toSorted((a, b) => {
                 if (a[col] < b[col]) {
                   return -1 * direction;
                 }

@@ -28,11 +28,15 @@ function pruneToLimit(conversations: Record<string, StoredConversationReference>
     return conversations;
   }
 
-  entries.sort((a, b) => {
-    const aTs = parseStoredConversationTimestamp(a[1].lastSeenAt) ?? 0;
-    const bTs = parseStoredConversationTimestamp(b[1].lastSeenAt) ?? 0;
-    return aTs - bTs;
-  });
+  entries.splice(
+    0,
+    entries.length,
+    ...entries.toSorted((a, b) => {
+      const aTs = parseStoredConversationTimestamp(a[1].lastSeenAt) ?? 0;
+      const bTs = parseStoredConversationTimestamp(b[1].lastSeenAt) ?? 0;
+      return aTs - bTs;
+    }),
+  );
 
   const keep = entries.slice(entries.length - MAX_CONVERSATIONS);
   return Object.fromEntries(keep);

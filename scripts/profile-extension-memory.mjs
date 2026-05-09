@@ -294,7 +294,7 @@ async function main() {
       Array.from({ length: Math.min(options.concurrency, selectedEntries.length) }, () => worker()),
     );
 
-    results.sort((a, b) => a.dir.localeCompare(b.dir));
+    results.splice(0, results.length, ...results.toSorted((a, b) => a.dir.localeCompare(b.dir)));
     const top = results
       .filter((entry) => entry.status === "ok" && typeof entry.deltaFromBaselineMb === "number")
       .toSorted((a, b) => (b.deltaFromBaselineMb ?? 0) - (a.deltaFromBaselineMb ?? 0))

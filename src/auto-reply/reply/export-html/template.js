@@ -102,8 +102,12 @@
 
     // Sort children by timestamp
     function sortChildren(node) {
-      node.children.sort(
-        (a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime(),
+      node.children.splice(
+        0,
+        node.children.length,
+        ...node.children.toSorted(
+          (a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime(),
+        ),
       );
       node.children.forEach(sortChildren);
     }

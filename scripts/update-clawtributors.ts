@@ -283,12 +283,16 @@ for (const [login, loc] of linesByLogin.entries()) {
 const entries = Array.from(entriesByKey.values());
 const visibleEntries = await filterVisibleEntries(entries, hiddenReadmeLogins);
 
-visibleEntries.sort((a, b) => {
-  if (b.score !== a.score) {
-    return b.score - a.score;
-  }
-  return a.display.localeCompare(b.display);
-});
+visibleEntries.splice(
+  0,
+  visibleEntries.length,
+  ...visibleEntries.toSorted((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    return a.display.localeCompare(b.display);
+  }),
+);
 
 const markdownLines: string[] = [];
 for (let i = 0; i < visibleEntries.length; i += PER_LINE) {

@@ -74,8 +74,9 @@ const TAG_ALIASES: Record<string, (typeof VALID_TAGS)[number]> = {
   send: "qqmedia",
 };
 
-const ALL_TAG_NAMES = [...VALID_TAGS, ...Object.keys(TAG_ALIASES)];
-ALL_TAG_NAMES.sort((a, b) => b.length - a.length);
+const ALL_TAG_NAMES = [...VALID_TAGS, ...Object.keys(TAG_ALIASES)].toSorted(
+  (a, b) => b.length - a.length,
+);
 
 const TAG_NAME_PATTERN = ALL_TAG_NAMES.join("|");
 

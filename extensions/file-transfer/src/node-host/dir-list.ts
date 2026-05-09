@@ -161,7 +161,11 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
     };
   }
 
-  listedEntries.sort((a, b) => a.name.localeCompare(b.name));
+  listedEntries.splice(
+    0,
+    listedEntries.length,
+    ...listedEntries.toSorted((a, b) => a.name.localeCompare(b.name)),
+  );
 
   const total = listedEntries.length;
   const page = listedEntries.slice(offset, offset + maxEntries);

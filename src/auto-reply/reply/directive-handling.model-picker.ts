@@ -76,15 +76,19 @@ export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): Model
   }
 
   // Sort by provider preference first, then by model name
-  out.sort((a, b) => {
-    const providerOrder = compareProvidersForPicker(a.provider, b.provider);
-    if (providerOrder !== 0) {
-      return providerOrder;
-    }
-    return normalizeLowercaseStringOrEmpty(a.model).localeCompare(
-      normalizeLowercaseStringOrEmpty(b.model),
-    );
-  });
+  out.splice(
+    0,
+    out.length,
+    ...out.toSorted((a, b) => {
+      const providerOrder = compareProvidersForPicker(a.provider, b.provider);
+      if (providerOrder !== 0) {
+        return providerOrder;
+      }
+      return normalizeLowercaseStringOrEmpty(a.model).localeCompare(
+        normalizeLowercaseStringOrEmpty(b.model),
+      );
+    }),
+  );
 
   return out;
 }

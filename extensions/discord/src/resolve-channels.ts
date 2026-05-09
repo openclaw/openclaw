@@ -146,7 +146,7 @@ function preferActiveMatch(candidates: DiscordChannelSummary[]): DiscordChannelS
     const score = (archived ? 0 : 2) + (isThread ? 0 : 1);
     return { channel, score };
   });
-  scored.sort((a, b) => b.score - a.score);
+  scored.splice(0, scored.length, ...scored.toSorted((a, b) => b.score - a.score));
   return scored[0]?.channel ?? candidates[0];
 }
 

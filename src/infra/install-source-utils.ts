@@ -255,7 +255,11 @@ async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> 
       mtimeMs: (await fs.stat(path.join(cwd, entry.name))).mtimeMs,
     })),
   );
-  sortedByMtime.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  sortedByMtime.splice(
+    0,
+    sortedByMtime.length,
+    ...sortedByMtime.toSorted((a, b) => b.mtimeMs - a.mtimeMs),
+  );
   return sortedByMtime[0]?.name;
 }
 

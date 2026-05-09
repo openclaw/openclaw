@@ -133,7 +133,7 @@ function collectExtensionDependencyDeclarations(repoRoot) {
   }
 
   for (const values of declarations.values()) {
-    values.sort((left, right) => left.localeCompare(right));
+    values.splice(0, values.length, ...values.toSorted((left, right) => left.localeCompare(right)));
   }
 
   return declarations;
@@ -181,7 +181,7 @@ function collectInternalizedBundledExtensionRuntimeDependencies(repoRoot, rootPa
   }
 
   for (const values of dependencies.values()) {
-    values.sort((left, right) => left.localeCompare(right));
+    values.splice(0, values.length, ...values.toSorted((left, right) => left.localeCompare(right)));
   }
 
   return dependencies;

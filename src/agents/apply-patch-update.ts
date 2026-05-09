@@ -82,7 +82,7 @@ function computeReplacements(
     lineIndex = found + pattern.length;
   }
 
-  replacements.sort((a, b) => a[0] - b[0]);
+  replacements.splice(0, replacements.length, ...replacements.toSorted((a, b) => a[0] - b[0]));
   return replacements;
 }
 

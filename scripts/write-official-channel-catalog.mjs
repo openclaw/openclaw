@@ -94,11 +94,15 @@ export function buildOfficialChannelCatalog(params = {}) {
     }
   }
 
-  entries.sort((left, right) => {
-    const leftId = trimString(left.openclaw?.channel?.id) || left.name;
-    const rightId = trimString(right.openclaw?.channel?.id) || right.name;
-    return leftId.localeCompare(rightId);
-  });
+  entries.splice(
+    0,
+    entries.length,
+    ...entries.toSorted((left, right) => {
+      const leftId = trimString(left.openclaw?.channel?.id) || left.name;
+      const rightId = trimString(right.openclaw?.channel?.id) || right.name;
+      return leftId.localeCompare(rightId);
+    }),
+  );
 
   return { entries };
 }

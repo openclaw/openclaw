@@ -124,7 +124,7 @@ export class SearchableSelectList implements Component {
       });
     }
 
-    scoredItems.sort(this.compareByScore);
+    scoredItems.splice(0, scoredItems.length, ...scoredItems.toSorted(this.compareByScore));
     const fuzzyMatches = fuzzyFilterLower(fuzzyCandidates, q);
     return [...scoredItems.map((s) => s.item), ...fuzzyMatches.map((entry) => entry.item)];
   }

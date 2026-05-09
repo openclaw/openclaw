@@ -30,7 +30,7 @@ function scanDirectoryFiles(dirPath: string): { filePath: string; size: number }
     }
   };
   walk(dirPath);
-  files.sort((a, b) => b.size - a.size);
+  files.splice(0, files.length, ...files.toSorted((a, b) => b.size - a.size));
   return files;
 }
 

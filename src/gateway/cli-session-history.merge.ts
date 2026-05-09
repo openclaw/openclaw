@@ -131,6 +131,6 @@ export function mergeImportedChatHistoryMessages(params: {
     merged.push({ message: imported, order: nextOrder });
     nextOrder += 1;
   }
-  merged.sort(compareHistoryMessages);
+  merged.splice(0, merged.length, ...merged.toSorted(compareHistoryMessages));
   return merged.map((entry) => entry.message);
 }

@@ -47,7 +47,7 @@ export function collectTelegramUnmentionedGroupIds(
       unresolvedGroups += 1;
     }
   }
-  groupIds.sort((a, b) => a.localeCompare(b));
+  groupIds.splice(0, groupIds.length, ...groupIds.toSorted((a, b) => a.localeCompare(b)));
   return { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups };
 }
 

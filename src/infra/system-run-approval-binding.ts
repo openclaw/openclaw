@@ -81,7 +81,7 @@ function normalizeSystemRunEnvEntries(env: unknown): NormalizedSystemRunEnvEntry
     }
     entries.push([key, rawValue]);
   }
-  entries.sort((a, b) => a[0].localeCompare(b[0]));
+  entries.splice(0, entries.length, ...entries.toSorted((a, b) => a[0].localeCompare(b[0])));
   return entries;
 }
 

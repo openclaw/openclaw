@@ -131,7 +131,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   // Sort tools deterministically by name so the tools block in API requests is stable across
   // turns (defensive — listTools() order is usually stable but not guaranteed).
   // Cannot fix name collisions: collision suffixes above are order-dependent.
-  tools.sort((a, b) => a.name.localeCompare(b.name));
+  tools.splice(0, tools.length, ...tools.toSorted((a, b) => a.name.localeCompare(b.name)));
 
   return {
     tools,

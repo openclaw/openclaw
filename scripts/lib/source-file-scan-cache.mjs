@@ -18,7 +18,7 @@ async function walkFiles(params, rootDir) {
     }
     throw error;
   }
-  entries.sort((left, right) => left.name.localeCompare(right.name));
+  entries = entries.toSorted((left, right) => left.name.localeCompare(right.name));
   for (const entry of entries) {
     const entryPath = path.join(rootDir, entry.name);
     if (entry.isDirectory()) {

@@ -93,7 +93,7 @@ function pruneToLimit(
     return uploads;
   }
   // Oldest createdAt first; drop the oldest until we fit.
-  entries.sort((a, b) => a[1].createdAt - b[1].createdAt);
+  entries.splice(0, entries.length, ...entries.toSorted((a, b) => a[1].createdAt - b[1].createdAt));
   const keep = entries.slice(entries.length - MAX_PENDING_UPLOADS);
   return Object.fromEntries(keep);
 }

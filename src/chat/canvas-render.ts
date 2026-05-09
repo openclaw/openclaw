@@ -220,7 +220,7 @@ export function extractCanvasShortcodes(text: string | undefined): {
   if (matches.length === 0) {
     return { text, previews: [] };
   }
-  matches.sort((a, b) => a.start - b.start);
+  matches.splice(0, matches.length, ...matches.toSorted((a, b) => a.start - b.start));
   const previews: CanvasPreview[] = [];
   let cursor = 0;
   let stripped = "";

@@ -63,7 +63,7 @@ function resolveCompactHomePrefixes(): string[] {
     .filter((home): home is string => !!home);
   return [...resolvedHomes, ...realHomes]
     .filter((home, index, all) => all.indexOf(home) === index)
-    .sort((a, b) => b.length - a.length);
+    .toSorted((a, b) => b.length - a.length);
 }
 
 function compactSkillPaths(skills: Skill[]): Skill[] {
@@ -479,7 +479,7 @@ function loadGeneratedPluginSkillRecords(params: {
   if (loadedSkills.length > maxSkillsLoadedPerSource) {
     return loadedSkills
       .slice()
-      .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
+      .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
       .slice(0, maxSkillsLoadedPerSource);
   }
   return loadedSkills;
@@ -702,7 +702,7 @@ function loadSkillEntries(
     if (loadedSkills.length > maxSkillsLoadedPerSource) {
       return loadedSkills
         .slice()
-        .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
+        .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
         .slice(0, maxSkillsLoadedPerSource);
     }
 
@@ -787,7 +787,7 @@ function loadSkillEntries(
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values())
-    .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
+    .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
     .map((record) => {
       const skill = record.skill;
       const frontmatter =
@@ -979,7 +979,7 @@ function resolveWorkspaceSkillPromptState(
   // resolvedSkills keeps canonical paths for snapshot / runtime consumers.
   const promptSkills = compactSkillPaths(resolvedSkills)
     .slice()
-    .sort((a, b) => a.name.localeCompare(b.name, "en"));
+    .toSorted((a, b) => a.name.localeCompare(b.name, "en"));
   const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
