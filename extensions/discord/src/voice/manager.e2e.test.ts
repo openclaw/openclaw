@@ -603,7 +603,7 @@ describe("DiscordVoiceManager", () => {
     expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 20_000);
     expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 20_000);
     expect(connection.destroy).toHaveBeenCalledTimes(1);
-    expect(manager.status()).toEqual([]);
+    expect(manager.status()).toStrictEqual([]);
   });
 
   it("uses the default reconnect grace before destroying disconnected sessions", async () => {
@@ -624,7 +624,7 @@ describe("DiscordVoiceManager", () => {
     expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 15_000);
     expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 15_000);
     expect(connection.destroy).toHaveBeenCalledTimes(1);
-    expect(manager.status()).toEqual([]);
+    expect(manager.status()).toStrictEqual([]);
   });
 
   it("closes realtime sessions when disconnected recovery destroys the connection", async () => {
@@ -651,7 +651,7 @@ describe("DiscordVoiceManager", () => {
 
     expect(realtimeSessionMock.close).toHaveBeenCalledTimes(1);
     expect(connection.destroy).toHaveBeenCalledTimes(1);
-    expect(manager.status()).toEqual([]);
+    expect(manager.status()).toStrictEqual([]);
   });
 
   it("closes realtime sessions when Discord destroys the connection", async () => {
@@ -674,7 +674,7 @@ describe("DiscordVoiceManager", () => {
 
     expect(realtimeSessionMock.close).toHaveBeenCalledTimes(1);
     expect(connection.destroy).not.toHaveBeenCalled();
-    expect(manager.status()).toEqual([]);
+    expect(manager.status()).toStrictEqual([]);
   });
 
   it("starts Discord realtime voice in talk-buffer mode", async () => {
@@ -727,7 +727,7 @@ describe("DiscordVoiceManager", () => {
         }
       | undefined;
     expect(bridgeParams?.autoRespondToAudio).toBe(false);
-    expect(bridgeParams?.tools).toEqual([]);
+    expect(bridgeParams?.tools).toStrictEqual([]);
 
     bridgeParams?.onTranscript?.("user", "what did I ask?", true);
     await new Promise((resolve) => setTimeout(resolve, 20));
