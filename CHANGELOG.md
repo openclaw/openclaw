@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Agents/process: tell agents to inspect background sessions with `process log` before sending interactive input and to use `waitingForInput`/`stdinWritable` hints from `log`/`poll`.
 - CLI/onboarding: improve setup, onboarding, configure, and channel command wayfinding so terminal flows explain the next useful command instead of relying on terse setup labels.
 - Agents/Codex: remove the configurable Codex dynamic-tools profile so Codex app-server always owns workspace, edit, patch, exec, process, and plan tools while OpenClaw integration tools remain available.
+- Plugin SDK: add bundled-plugin `scheduleSessionTurn` and tag-based unscheduling on top of cron-compatible agent-turn jobs. Replaces part of #73384/#74483. Thanks @100yenadmin.
 
 ### Fixes
 

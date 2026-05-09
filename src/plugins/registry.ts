@@ -2686,7 +2686,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 });
               },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
-<<<<<<< HEAD
               registerSessionAction: (action) => registerSessionAction(record, action),
               sendSessionAttachment: async (attachment) => {
                 if (registryParams.activateGlobalSideEffects === false) {
