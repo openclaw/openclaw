@@ -229,14 +229,24 @@ export function createInboundDebouncer<T, TActivity = never>(
     const debounceMs = resolveDebounceMs(item);
     const canDebounce = debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
 
-    if (key && params.buildActivity) {
+    // The activity hook is fired AFTER the buffer is created/updated so that
+    // a plugin's `ctx.cancel()` or `ctx.extend()` call can find the live buffer
+    // and act on it. If we fired before, cancel() on the first event for a key
+    // would be a silent no-op since the buffer wouldn't exist yet.
+    const fireActivityHook = async () => {
+      if (!key || !params.buildActivity) {
+        return;
+      }
       const activity = params.buildActivity(item, key);
       if (activity !== null && activity !== undefined) {
         await emitActivity(activity, key);
       }
-    }
+    };
 
     if (!canDebounce || !key) {
+      // Non-debounced path: hook fires for observation only; cancel/extend
+      // have no buffer to act on and are no-ops by design here.
+      await fireActivityHook();
       if (key) {
         if (buffers.has(key)) {
           // Reserve the keyed immediate slot before forcing the pending buffer
@@ -271,11 +281,14 @@ export function createInboundDebouncer<T, TActivity = never>(
       existing.debounceMs = debounceMs;
       existing.fireAt = Math.max(existing.fireAt, Date.now() + debounceMs);
       scheduleFlush(key, existing);
+      // Buffer reflects this item; hook can extend/cancel it.
+      await fireActivityHook();
       return;
     }
     if (!canTrackKey(key)) {
       // When the debounce map is saturated, fall back to immediate keyed work
       // instead of buffering, but still preserve same-key ordering.
+      await fireActivityHook();
       await enqueueKeyTask(key, async () => {
         await runFlush([item]);
       });
@@ -300,6 +313,10 @@ export function createInboundDebouncer<T, TActivity = never>(
     };
     buffers.set(key, buffer);
     scheduleFlush(key, buffer);
+    // Fire the hook now that the buffer is registered; if a plugin calls
+    // `ctx.cancel()` here, `cancelKey` finds the live buffer and clears items
+    // so the reserved task no-ops on flush.
+    await fireActivityHook();
   };
 
   return { enqueue, flushKey, extendKey, cancelKey, emitActivity };
