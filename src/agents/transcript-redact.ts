@@ -12,6 +12,36 @@ function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
   });
 }
 
+function redactTranscriptStructuredValue(value: unknown, cfg?: OpenClawConfig): unknown {
+  if (typeof value === "string") {
+    return redactTranscriptText(value, cfg);
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const redacted = value.map((item) => {
+      const next = redactTranscriptStructuredValue(item, cfg);
+      changed ||= next !== item;
+      return next;
+    });
+    return changed ? redacted : value;
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const source = value as Record<string, unknown>;
+  let next: Record<string, unknown> | null = null;
+  for (const [key, item] of Object.entries(source)) {
+    const redacted = redactTranscriptStructuredValue(item, cfg);
+    if (redacted === item) {
+      continue;
+    }
+    next ??= { ...source };
+    next[key] = redacted;
+  }
+  return next ?? value;
+}
+
 function redactTranscriptContentBlock(block: unknown, cfg?: OpenClawConfig): unknown {
   if (!block || typeof block !== "object" || Array.isArray(block)) {
     return block;
@@ -35,6 +65,13 @@ function redactTranscriptContentBlock(block: unknown, cfg?: OpenClawConfig): unk
   }
   if (typeof source.partialJson === "string") {
     assign("partialJson", source.partialJson);
+  }
+  if (source.type === "toolCall" && "arguments" in source) {
+    const redactedArguments = redactTranscriptStructuredValue(source.arguments, cfg);
+    if (redactedArguments !== source.arguments) {
+      next ??= { ...source };
+      next.arguments = redactedArguments;
+    }
   }
   return next ?? block;
 }

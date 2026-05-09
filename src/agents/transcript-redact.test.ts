@@ -60,6 +60,33 @@ describe("redactTranscriptMessage", () => {
     expect(block.partialJson).not.toContain("sk-abcdef1234567890xyz");
   });
 
+  it("redacts nested strings in assistant tool-call arguments", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "shell",
+          arguments: {
+            command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
+            env: { nested: ["token sk-abcdef1234567890xyz"] },
+            count: 1,
+          },
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = (msgContent(result) as Array<{ arguments: unknown }>)[0];
+    const serializedArguments = JSON.stringify(block.arguments);
+    expect(serializedArguments).not.toContain("sk-abcdef1234567890xyz");
+    expect(serializedArguments).toContain("openclaw health");
+    expect(block.arguments).not.toBe(
+      (msgContent(msg) as Array<{ arguments: unknown }>)[0].arguments,
+    );
+  });
+
   it("redacts string-form content", () => {
     const msg = {
       role: "user",

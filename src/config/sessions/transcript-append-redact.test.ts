@@ -76,6 +76,42 @@ describe("appendSessionTranscriptMessage - redaction", () => {
     const raw = fs.readFileSync(sessionFile, "utf-8");
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
   });
+
+  it("masks secrets in assistant tool-call arguments before writing to disk", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "redact-tool-call-args",
+      fixture.sessionsDir(),
+    );
+    const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "shell",
+            arguments: {
+              command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
+              env: { nested: ["token sk-abcdef1234567890xyz"] },
+            },
+          },
+        ],
+      },
+      config,
+    });
+
+    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(raw).not.toContain("sk-abcdef1234567890xyz");
+    expect(raw).toContain("openclaw health");
+
+    const [msg] = readMessages(sessionFile) as Array<{
+      content: Array<{ arguments: unknown }>;
+    }>;
+    expect(JSON.stringify(msg.content[0].arguments)).not.toContain("sk-abcdef1234567890xyz");
+  });
 });
 
 describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
