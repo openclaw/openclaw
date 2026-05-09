@@ -59,6 +59,27 @@ async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
   );
 }
 
+function readRawCodexAppServerBinding(key: string): unknown {
+  return createPluginStateSyncKeyedStore<unknown>(CODEX_APP_SERVER_BINDING_PLUGIN_ID, {
+    namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+    maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+  }).lookup(key);
+}
+
+async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(
+    path.join(codexHome, "auth.json"),
+    `${JSON.stringify({
+      tokens: {
+        access_token: "cli-access-token",
+        refresh_token: "cli-refresh-token",
+        account_id: "account-cli",
+      },
+    })}\n`,
+  );
+}
+
 describe("codex app-server session binding", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
