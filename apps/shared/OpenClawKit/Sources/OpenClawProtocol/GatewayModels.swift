@@ -2480,13 +2480,13 @@ public struct TasksCancelResult: Codable, Sendable {
     public let found: Bool
     public let cancelled: Bool
     public let reason: String?
-    public let task: [String: AnyCodable]?
+    public let task: TaskSummary?
 
     public init(
         found: Bool,
         cancelled: Bool,
         reason: String?,
-        task: [String: AnyCodable]?)
+        task: TaskSummary?)
     {
         self.found = found
         self.cancelled = cancelled

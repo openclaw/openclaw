@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTaskRecord, resetTaskRegistryForTests } from "../../tasks/runtime-internal.js";
+import {
+  createTaskRecord,
+  markTaskTerminalById,
+  recordTaskProgressByRunId,
+  resetTaskRegistryForTests,
+} from "../../tasks/runtime-internal.js";
 import { tasksHandlers } from "./tasks.js";
 import type { RespondFn } from "./types.js";
 
@@ -129,6 +134,55 @@ describe("tasks gateway handlers", () => {
         title: "Done task",
       },
     });
+  });
+
+  it("sanitizes task text before exposing SDK summaries", async () => {
+    const task = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "run-sanitized",
+      label:
+        "Compile artifact\nOpenClaw runtime context (internal): Keep internal details private.",
+      task: "Compile artifact",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    recordTaskProgressByRunId({
+      runId: "run-sanitized",
+      progressSummary:
+        "Bundling output\nOpenClaw runtime context (internal): Keep internal details private.",
+    });
+    markTaskTerminalById({
+      taskId: task.taskId,
+      status: "failed",
+      endedAt: Date.now(),
+      terminalSummary:
+        "Failed after build\nOpenClaw runtime context (internal): Keep internal details private.",
+      error: "Tool failed\nOpenClaw runtime context (internal): Keep internal details private.",
+    });
+
+    const { calls, respond } = captureRespond();
+    await tasksHandlers["tasks.get"]({
+      req: { type: "req", id: "req-sanitized", method: "tasks.get" },
+      params: { taskId: task.taskId },
+      respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(calls[0]?.[0]).toBe(true);
+    expect(calls[0]?.[1]).toMatchObject({
+      task: {
+        id: task.taskId,
+        title: "Compile artifact",
+        terminalSummary: "Failed after build",
+        error: "Tool failed",
+      },
+    });
+    expect(JSON.stringify(calls[0]?.[1])).not.toContain("OpenClaw runtime context");
   });
 
   it("cancels running task records and returns the updated task", async () => {

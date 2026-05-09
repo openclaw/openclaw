@@ -260,7 +260,7 @@ await oc.approvals.respond("approval-id", { decision: "approve" });
 Task helpers use the durable task ledger that also backs `openclaw tasks`:
 
 ```typescript
-const tasks = await oc.tasks.list({ status: "running", sessionKey: "main" });
+const tasks = await oc.tasks.list({ status: "running", sessionKey: "agent:main:main" });
 const task = await oc.tasks.get(tasks.tasks[0].id);
 await oc.tasks.cancel(task.task.id, { reason: "user stopped task" });
 ```

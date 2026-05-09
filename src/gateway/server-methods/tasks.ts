@@ -4,6 +4,11 @@ import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js"
 import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
+  TASK_STATUS_DETAIL_MAX_CHARS,
+  formatTaskStatusTitle,
+  sanitizeTaskStatusText,
+} from "../../tasks/task-status.js";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -43,14 +48,28 @@ function taskUpdatedAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
 }
 
+function sanitizeOptionalTaskText(
+  value: unknown,
+  opts?: { errorContext?: boolean },
+): string | undefined {
+  const sanitized = sanitizeTaskStatusText(value, {
+    errorContext: opts?.errorContext,
+    maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
+  });
+  return sanitized || undefined;
+}
+
 function mapTaskSummary(task: TaskRecord): TaskSummary {
+  const progressSummary = sanitizeOptionalTaskText(task.progressSummary);
+  const terminalSummary = sanitizeOptionalTaskText(task.terminalSummary, { errorContext: true });
+  const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
   return {
     id: task.taskId,
     taskId: task.taskId,
     kind: task.taskKind ?? task.runtime,
     runtime: task.runtime,
     status: TASK_STATUS_TO_LEDGER_STATUS[task.status],
-    title: task.label ?? task.task,
+    title: formatTaskStatusTitle(task),
     ...(task.agentId ? { agentId: task.agentId } : {}),
     sessionKey: task.requesterSessionKey,
     ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
@@ -63,9 +82,9 @@ function mapTaskSummary(task: TaskRecord): TaskSummary {
     updatedAt: taskUpdatedAt(task),
     ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
     ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
-    ...(task.progressSummary ? { progressSummary: task.progressSummary } : {}),
-    ...(task.terminalSummary ? { terminalSummary: task.terminalSummary } : {}),
-    ...(task.error ? { error: task.error } : {}),
+    ...(progressSummary ? { progressSummary } : {}),
+    ...(terminalSummary ? { terminalSummary } : {}),
+    ...(error ? { error } : {}),
   };
 }
 
