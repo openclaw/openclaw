@@ -44,7 +44,7 @@ export function createChannelInboundDebouncer<T, TActivity = never>(
     overrideMs: params.debounceMsOverride,
   });
   const { cfg: _cfg, channel: _channel, debounceMsOverride: _override, ...rest } = params;
-  const debouncer = createInboundDebouncer<T>({
+  const debouncer = createInboundDebouncer<T, TActivity>({
     debounceMs,
     ...rest,
   });
