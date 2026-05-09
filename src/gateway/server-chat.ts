@@ -675,6 +675,32 @@ export function createAgentEventHandler({
             { dropIfSlow: true },
           );
         }
+        // When session_status applies a model override the session store is
+        // updated but no sessions.changed event is emitted, so the Control UI
+        // top bar model display stays stale until a page refresh. Emit
+        // sessions.changed here so subscribers pick up the new model field
+        // without requiring any additional client-side polling.
+        if (
+          toolPhase === "result" &&
+          evt.data?.name === "session_status" &&
+          (evt.data?.result as { details?: { changedModel?: boolean } } | undefined)?.details
+            ?.changedModel === true
+        ) {
+          const sessionSubscribers2 = sessionEventSubscribers.getAll();
+          if (sessionSubscribers2.size > 0) {
+            broadcastToConnIds(
+              "sessions.changed",
+              {
+                sessionKey,
+                reason: "model-override",
+                ts: Date.now(),
+                ...buildSessionEventSnapshot(sessionKey),
+              },
+              sessionSubscribers2,
+              { dropIfSlow: true },
+            );
+          }
+        }
       }
     } else {
       const itemPhase = isItemEvent && typeof evt.data?.phase === "string" ? evt.data.phase : "";
