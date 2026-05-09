@@ -6,6 +6,7 @@ import {
   isStructuredInputTooLargeMemoryEmbeddingError,
   resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingRetryLoop,
+  runMemoryOperationRetryLoop,
 } from "./manager-embedding-policy.js";
 
 function chunk(text: string) {
@@ -124,5 +125,51 @@ describe("memory embedding policy", () => {
     expect(resolveMemoryEmbeddingRetryDelay(500, 0, 8000)).toBe(500);
     expect(resolveMemoryEmbeddingRetryDelay(500, 1, 8000)).toBe(600);
     expect(resolveMemoryEmbeddingRetryDelay(10_000, 1, 8000)).toBe(8000);
+  });
+
+  it("uses configured jitter for retry delays", () => {
+    expect(resolveMemoryEmbeddingRetryDelay(500, 1, 8000, 0)).toBe(500);
+    expect(resolveMemoryEmbeddingRetryDelay(500, 1, 8000, 0.5)).toBe(750);
+  });
+
+  it("uses query retry attempts as total attempts", async () => {
+    const run = vi.fn(async (attemptIndex: number) => {
+      if (attemptIndex === 0) {
+        throw new Error("fetch failed");
+      }
+      return "ok";
+    });
+    const waits: Array<{ delayMs: number; attemptIndex: number }> = [];
+
+    const result = await runMemoryOperationRetryLoop({
+      run,
+      isRetryable: isRetryableMemoryEmbeddingError,
+      waitForRetry: async (delayMs, attemptIndex) => {
+        waits.push({ delayMs, attemptIndex });
+      },
+      attempts: 2,
+      baseDelayMs: 150,
+    });
+
+    expect(result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(waits).toEqual([{ delayMs: 150, attemptIndex: 1 }]);
+  });
+
+  it("does not retry query operations for non-retryable errors", async () => {
+    const run = vi.fn(async () => {
+      throw new Error("missing api key");
+    });
+
+    await expect(
+      runMemoryOperationRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async () => {},
+        attempts: 3,
+        baseDelayMs: 150,
+      }),
+    ).rejects.toThrow(/missing api key/);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

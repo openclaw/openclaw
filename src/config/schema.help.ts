@@ -1119,6 +1119,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum number of memory hits returned from search before downstream reranking and prompt injection. Raise for broader recall, or lower for tighter prompts and faster responses.",
   "agents.defaults.memorySearch.query.minScore":
     "Minimum relevance score threshold for including memory results in final recall output. Increase to reduce weak/noisy matches, or lower when you need more permissive retrieval.",
+  "agents.defaults.memorySearch.query.timeoutMs":
+    "Query-time timeout in milliseconds for builtin memory search embedding work. Set this lower than provider defaults when memory recall must degrade quickly instead of delaying the agent turn.",
+  "agents.defaults.memorySearch.query.cacheTtlMs":
+    "TTL in milliseconds for caching successful recent builtin memory search results. Set 0 to disable; use short TTLs to reduce repeated query work within active sessions while avoiding stale recall after index refreshes.",
+  "agents.defaults.memorySearch.query.retry":
+    "Retry policy for transient builtin memory query failures such as provider timeouts, rate limits, or network resets. Keep attempts low so memory recall degrades gracefully without blocking the main agent turn.",
+  "agents.defaults.memorySearch.query.retry.attempts":
+    "Total query attempts, including the first try, for transient memory provider failures. Use 1 to disable retries; use 2 for one retry before keyword fallback or empty graceful degradation.",
+  "agents.defaults.memorySearch.query.retry.minDelayMs":
+    "Initial retry delay in milliseconds for transient memory query failures. Keep low for interactive sessions, or increase when providers need a small cooldown after rate-limit responses.",
+  "agents.defaults.memorySearch.query.retry.maxDelayMs":
+    "Maximum retry delay in milliseconds for transient memory query failures after exponential backoff and jitter. Keep this bounded so memory search cannot stall session flow.",
+  "agents.defaults.memorySearch.query.retry.jitter":
+    "Random retry-delay jitter fraction from 0 to 1. Use a small value such as 0.2 to avoid synchronized retries while keeping interactive memory search predictable.",
   "agents.defaults.memorySearch.query.hybrid.enabled":
     "Combines BM25 keyword matching with vector similarity for better recall on mixed exact + semantic queries. Keep enabled unless you are isolating ranking behavior for troubleshooting.",
   "agents.defaults.memorySearch.query.hybrid.vectorWeight":

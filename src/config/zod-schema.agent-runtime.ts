@@ -637,6 +637,29 @@ const AgentToolsSchema = z
   })
   .optional();
 
+const MemorySearchQueryRetrySchema = z
+  .object({
+    attempts: z.number().int().positive().max(10).optional(),
+    minDelayMs: z.number().int().nonnegative().max(600_000).optional(),
+    maxDelayMs: z.number().int().nonnegative().max(600_000).optional(),
+    jitter: z.number().min(0).max(1).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.minDelayMs !== undefined &&
+      value.maxDelayMs !== undefined &&
+      value.maxDelayMs < value.minDelayMs
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["maxDelayMs"],
+        message: "memorySearch.query.retry.maxDelayMs must be greater than or equal to minDelayMs.",
+      });
+    }
+  })
+  .optional();
+
 export const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -758,6 +781,9 @@ export const MemorySearchSchema = z
       .object({
         maxResults: z.number().int().positive().optional(),
         minScore: z.number().min(0).max(1).optional(),
+        timeoutMs: z.number().int().positive().max(600_000).optional(),
+        cacheTtlMs: z.number().int().nonnegative().max(3_600_000).optional(),
+        retry: MemorySearchQueryRetrySchema,
         hybrid: z
           .object({
             enabled: z.boolean().optional(),

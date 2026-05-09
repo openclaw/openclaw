@@ -77,6 +77,14 @@ export type ResolvedMemorySearchConfig = {
   query: {
     maxResults: number;
     minScore: number;
+    timeoutMs?: number;
+    cacheTtlMs: number;
+    retry: {
+      attempts: number;
+      minDelayMs: number;
+      maxDelayMs: number;
+      jitter: number;
+    };
     hybrid: {
       enabled: boolean;
       vectorWeight: number;
@@ -107,6 +115,11 @@ const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 const DEFAULT_SESSION_DELTA_MESSAGES = 50;
 const DEFAULT_MAX_RESULTS = 6;
 const DEFAULT_MIN_SCORE = 0.35;
+const DEFAULT_QUERY_CACHE_TTL_MS = 0;
+const DEFAULT_QUERY_RETRY_ATTEMPTS = 1;
+const DEFAULT_QUERY_RETRY_MIN_DELAY_MS = 150;
+const DEFAULT_QUERY_RETRY_MAX_DELAY_MS = 1000;
+const DEFAULT_QUERY_RETRY_JITTER = 0.2;
 const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
@@ -270,6 +283,27 @@ function mergeConfig(
   const query = {
     maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
     minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
+    timeoutMs: overrides?.query?.timeoutMs ?? defaults?.query?.timeoutMs,
+    cacheTtlMs:
+      overrides?.query?.cacheTtlMs ?? defaults?.query?.cacheTtlMs ?? DEFAULT_QUERY_CACHE_TTL_MS,
+    retry: {
+      attempts:
+        overrides?.query?.retry?.attempts ??
+        defaults?.query?.retry?.attempts ??
+        DEFAULT_QUERY_RETRY_ATTEMPTS,
+      minDelayMs:
+        overrides?.query?.retry?.minDelayMs ??
+        defaults?.query?.retry?.minDelayMs ??
+        DEFAULT_QUERY_RETRY_MIN_DELAY_MS,
+      maxDelayMs:
+        overrides?.query?.retry?.maxDelayMs ??
+        defaults?.query?.retry?.maxDelayMs ??
+        DEFAULT_QUERY_RETRY_MAX_DELAY_MS,
+      jitter:
+        overrides?.query?.retry?.jitter ??
+        defaults?.query?.retry?.jitter ??
+        DEFAULT_QUERY_RETRY_JITTER,
+    },
   };
   const hybrid = {
     enabled:
@@ -316,6 +350,13 @@ function mergeConfig(
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
   const minScore = clampNumber(query.minScore, 0, 1);
+  const timeoutMs =
+    typeof query.timeoutMs === "number" && Number.isFinite(query.timeoutMs)
+      ? Math.max(1, Math.floor(query.timeoutMs))
+      : undefined;
+  const cacheTtlMs = clampInt(query.cacheTtlMs, 0, Number.MAX_SAFE_INTEGER);
+  const retryMinDelayMs = clampInt(query.retry.minDelayMs, 0, 600_000);
+  const retryMaxDelayMs = Math.max(retryMinDelayMs, clampInt(query.retry.maxDelayMs, 0, 600_000));
   const vectorWeight = clampNumber(hybrid.vectorWeight, 0, 1);
   const textWeight = clampNumber(hybrid.textWeight, 0, 1);
   const sum = vectorWeight + textWeight;
@@ -363,6 +404,14 @@ function mergeConfig(
     query: {
       ...query,
       minScore,
+      timeoutMs,
+      cacheTtlMs,
+      retry: {
+        attempts: clampInt(query.retry.attempts, 1, 10),
+        minDelayMs: retryMinDelayMs,
+        maxDelayMs: retryMaxDelayMs,
+        jitter: clampNumber(query.retry.jitter, 0, 1),
+      },
       hybrid: {
         enabled: hybrid.enabled,
         vectorWeight: normalizedVectorWeight,

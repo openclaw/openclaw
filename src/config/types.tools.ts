@@ -470,6 +470,21 @@ export type MemorySearchConfig = {
   query?: {
     maxResults?: number;
     minScore?: number;
+    /** Timeout in milliseconds for query-time embedding/search work. */
+    timeoutMs?: number;
+    /** TTL in milliseconds for successful recent query results (0 disables). */
+    cacheTtlMs?: number;
+    /** Retry policy for transient query-time provider failures. */
+    retry?: {
+      /** Total query attempts, including the first try (default: 1). */
+      attempts?: number;
+      /** Initial retry delay in milliseconds. */
+      minDelayMs?: number;
+      /** Maximum retry delay in milliseconds. */
+      maxDelayMs?: number;
+      /** Random delay jitter as a 0-1 fraction. */
+      jitter?: number;
+    };
     hybrid?: {
       /** Enable hybrid BM25 + vector search (default: true). */
       enabled?: boolean;

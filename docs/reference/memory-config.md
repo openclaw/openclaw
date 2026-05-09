@@ -310,6 +310,50 @@ Unset uses the provider default: 600 seconds for local/self-hosted providers suc
 
 ---
 
+## Query reliability
+
+All under `memorySearch.query` for the builtin memory engine:
+
+| Key                | Type     | Default | Description                                                |
+| ------------------ | -------- | ------- | ---------------------------------------------------------- |
+| `timeoutMs`        | `number` | unset   | Override query-time embedding timeout in milliseconds      |
+| `cacheTtlMs`       | `number` | `0`     | Cache successful recent query results for this many ms     |
+| `retry.attempts`   | `number` | `1`     | Total attempts, including the first try                    |
+| `retry.minDelayMs` | `number` | `150`   | Initial delay before retrying a transient provider failure |
+| `retry.maxDelayMs` | `number` | `1000`  | Maximum retry delay after exponential backoff and jitter   |
+| `retry.jitter`     | `number` | `0.2`   | Random retry-delay jitter fraction from 0 to 1             |
+
+`cacheTtlMs: 0` disables the query-result cache. Cached entries are scoped by query text, result limits, source filters, ranking config, provider identity, FTS state, and vector state. OpenClaw clears this cache whenever a sync or index refresh runs, and it avoids serving cached results while memory or session sources are dirty.
+
+Retries only apply to transient query-time provider failures such as timeouts, rate limits, and network resets. Non-retryable setup/auth/configuration failures still surface instead of being hidden. When transient retries are exhausted, builtin memory search falls back to keyword results when FTS is available, or returns no memory results when no safe fallback exists.
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        query: {
+          timeoutMs: 4000,
+          cacheTtlMs: 60000,
+          retry: {
+            attempts: 2,
+            minDelayMs: 150,
+            maxDelayMs: 1000,
+            jitter: 0.2,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+<Note>
+QMD search timeout remains `memory.qmd.limits.timeoutMs`; these query reliability controls apply to the builtin engine.
+</Note>
+
+---
+
 ## Hybrid search config
 
 All under `memorySearch.query.hybrid`:
