@@ -197,7 +197,9 @@ function sanitizeNativeFeishuCardElement(element: unknown): Record<string, unkno
   if (element.tag === "column_set" && Array.isArray(element.columns)) {
     const columns = element.columns
       .map((column) => {
-        if (!isRecord(column)) return undefined;
+        if (!isRecord(column)) {
+          return undefined;
+        }
         const rawElements = Array.isArray(column.elements) ? column.elements : [];
         const buttons = rawElements
           .map((entry) => sanitizeNativeFeishuCardButton(entry))
