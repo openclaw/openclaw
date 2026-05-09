@@ -22,6 +22,12 @@ import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
+const TELEGRAM_INTAKE_DEDUP_WINDOW_MS = 60_000;
+
+type LastTelegramInboundMessage = {
+  body: string;
+  seenAtMs: number;
+};
 
 export function formatTelegramInboundLogLine(params: {
   from: string;
@@ -72,6 +78,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     telegramDeps,
     opts,
   } = deps;
+  const lastInboundByChatTopic = new Map<string, LastTelegramInboundMessage>();
 
   return async (
     primaryCtx: TelegramContext,
@@ -130,6 +137,21 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
     }
+    const dedupKey = buildTelegramDedupKey(primaryCtx, context.chatId);
+    const messageTimestampMs = getTelegramMessageTimestampMs(primaryCtx, ingressReceivedAtMs);
+    if (
+      shouldDropDuplicateTelegramInbound({
+        cache: lastInboundByChatTopic,
+        key: dedupKey,
+        body: context.ctxPayload.RawBody,
+        seenAtMs: messageTimestampMs,
+      })
+    ) {
+      telegramInboundLog.info(
+        `Dropped duplicate inbound message chatId=${context.chatId} topic=${formatTelegramDedupTopic(primaryCtx)} windowMs=${TELEGRAM_INTAKE_DEDUP_WINDOW_MS} bodyChars=${context.ctxPayload.RawBody.length}`,
+      );
+      return;
+    }
     void context.sendTyping().catch((err) => {
       logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
     });
@@ -175,3 +197,56 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     }
   };
 };
+
+function getTelegramMessageTimestampMs(
+  ctx: TelegramContext,
+  fallbackReceivedAtMs: number | undefined,
+): number {
+  const timestampSeconds = (ctx.message as { date?: unknown }).date;
+  if (typeof timestampSeconds === "number" && Number.isFinite(timestampSeconds)) {
+    return timestampSeconds * 1000;
+  }
+  return fallbackReceivedAtMs ?? Date.now();
+}
+
+function buildTelegramDedupKey(ctx: TelegramContext, chatId: number | string): string {
+  return `${chatId}\u0000${formatTelegramDedupTopic(ctx)}`;
+}
+
+function formatTelegramDedupTopic(ctx: TelegramContext): string {
+  const messageThreadId = (ctx.message as { message_thread_id?: unknown }).message_thread_id;
+  if (typeof messageThreadId === "number" || typeof messageThreadId === "string") {
+    return String(messageThreadId);
+  }
+  return "general";
+}
+
+function shouldDropDuplicateTelegramInbound(params: {
+  cache: Map<string, LastTelegramInboundMessage>;
+  key: string;
+  body: string;
+  seenAtMs: number;
+}): boolean {
+  if (params.body.length === 0) {
+    params.cache.delete(params.key);
+    return false;
+  }
+
+  const prior = params.cache.get(params.key);
+  if (prior) {
+    const ageMs = params.seenAtMs - prior.seenAtMs;
+    if (
+      ageMs >= 0 &&
+      ageMs <= TELEGRAM_INTAKE_DEDUP_WINDOW_MS &&
+      prior.body === params.body
+    ) {
+      return true;
+    }
+  }
+
+  params.cache.set(params.key, {
+    body: params.body,
+    seenAtMs: params.seenAtMs,
+  });
+  return false;
+}

@@ -86,6 +86,32 @@ describe("telegram bot message processor", () => {
     );
   }
 
+  async function processMessageWithText(
+    processMessage: ReturnType<typeof createTelegramMessageProcessor>,
+    params: {
+      chatId?: number;
+      threadId?: number;
+      messageId?: number;
+      date?: number;
+      text?: string;
+    },
+  ) {
+    await processMessage(
+      {
+        message: {
+          chat: { id: params.chatId ?? 123, type: "private", title: "chat" },
+          message_id: params.messageId ?? 456,
+          message_thread_id: params.threadId,
+          date: params.date,
+          text: params.text ?? "hello there",
+        },
+      } as unknown as Parameters<typeof processMessage>[0],
+      [],
+      [],
+      {},
+    );
+  }
+
   function createDispatchFailureHarness(
     context: Record<string, unknown>,
     sendMessage: ReturnType<typeof vi.fn>,
@@ -144,6 +170,67 @@ describe("telegram bot message processor", () => {
     await processSampleMessage(processMessage);
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
     expect(telegramInboundInfo).not.toHaveBeenCalled();
+  });
+
+  it("drops byte-identical same-chat same-topic messages within 60 seconds", async () => {
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        ctxPayload: {
+          From: "telegram:123",
+          To: "telegram:123",
+          ChatType: "direct",
+          RawBody: "repeat me",
+        },
+      }),
+    );
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+
+    await processMessageWithText(processMessage, {
+      threadId: 42,
+      messageId: 1,
+      date: 1_000,
+      text: "repeat me",
+    });
+    await processMessageWithText(processMessage, {
+      threadId: 42,
+      messageId: 2,
+      date: 1_050,
+      text: "repeat me",
+    });
+
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(telegramInboundInfo).toHaveBeenCalledWith(
+      expect.stringContaining("Dropped duplicate inbound message chatId=123 topic=42"),
+    );
+  });
+
+  it("does not dedup the same text across different Telegram topics", async () => {
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        ctxPayload: {
+          From: "telegram:123",
+          To: "telegram:123",
+          ChatType: "direct",
+          RawBody: "repeat me",
+        },
+      }),
+    );
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+
+    await processMessageWithText(processMessage, {
+      threadId: 42,
+      messageId: 1,
+      date: 1_000,
+      text: "repeat me",
+    });
+    await processMessageWithText(processMessage, {
+      threadId: 99,
+      messageId: 2,
+      date: 1_050,
+      text: "repeat me",
+    });
+
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(2);
   });
 
   it("formats Telegram inbound summaries without message content", () => {
