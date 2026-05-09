@@ -818,6 +818,43 @@ function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
   return null;
 }
 
+// Predicate semantics for md: blocks (sections) "have" the kv pairs of
+// their items, and items "are" their kv pair. So at the section slot a
+// predicate matches sections that contain an item with kv.key matching
+// pred.key and value satisfying the predicate. At the item slot the
+// item itself must match (kv.key === pred.key and value satisfies the
+// predicate). At the field slot the item's single kv is what's tested.
+// Cross-kind parity with yamlChildMatchesPredicate / jsoncChildMatchesPredicate.
+function mdItemMatchesPredicate(
+  item: { readonly kv?: { readonly key: string; readonly value: string } },
+  pred: PredicateSpec,
+): boolean {
+  if (item.kv === undefined) {
+    return false;
+  }
+  if (item.kv.key.toLowerCase() !== pred.key.toLowerCase()) {
+    return false;
+  }
+  return evaluatePredicate(item.kv.value, pred);
+}
+
+function mdBlockHasMatchingItem(
+  block: {
+    readonly items: readonly {
+      readonly slug: string;
+      readonly kv?: { readonly key: string; readonly value: string };
+    }[];
+  },
+  pred: PredicateSpec,
+): boolean {
+  for (const item of block.items) {
+    if (mdItemMatchesPredicate(item, pred)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // ---------- Markdown walker -----------------------------------------------
 
 function walkMd(
@@ -862,6 +899,46 @@ function walkMd(
       { slot: cur.slot, value: cur.value },
       { slot: next.slot, value: next.value },
     ]);
+    return;
+  }
+
+  // Union `{a,b,c}` at the section slot — fan out into one walk per
+  // alternative. Cross-kind parity with the yaml / jsonc walkers; mirrors
+  // the same shape they dispatch (see find.ts:235-246 for yaml,
+  // find.ts:400-411 for jsonc).
+  if (walked.length === 0 && isUnionSeg(cur.value)) {
+    const alts = parseUnionSeg(cur.value);
+    if (alts === null) {
+      return;
+    }
+    for (const alt of alts) {
+      const altSubs = subs.slice();
+      altSubs[i] = { slot: cur.slot, value: alt };
+      walkMd(ast, altSubs, i, walked, onMatch);
+    }
+    return;
+  }
+
+  // Predicate `[k=v]` at the section slot — emit only sections whose
+  // items contain a kv pair matching the predicate. Cross-kind parity
+  // with the yaml / jsonc walkers (find.ts:250-283 / find.ts:413-444).
+  if (walked.length === 0 && isPredicateSeg(cur.value)) {
+    const pred = parsePredicateSeg(cur.value);
+    if (pred === null) {
+      return;
+    }
+    for (const block of ast.blocks) {
+      if (mdBlockHasMatchingItem(block, pred)) {
+        walkMdInsideBlock(
+          block,
+          ast,
+          subs,
+          i + 1,
+          [{ slot: cur.slot, value: block.slug }],
+          onMatch,
+        );
+      }
+    }
     return;
   }
 
@@ -921,6 +998,50 @@ function walkMdInsideBlock(
     return;
   }
   const cur = subs[i];
+
+  // Union `{a,b,c}` at the item slot — fan out per alternative. Cross-
+  // kind parity with yaml / jsonc walkers.
+  if (isUnionSeg(cur.value)) {
+    const alts = parseUnionSeg(cur.value);
+    if (alts === null) {
+      return;
+    }
+    for (const alt of alts) {
+      const altSubs = subs.slice();
+      altSubs[i] = { slot: cur.slot, value: alt };
+      walkMdInsideBlock(block, ast, altSubs, i, walked, onMatch);
+    }
+    return;
+  }
+
+  // Predicate `[k=v]` at the item slot — match items whose kv pair
+  // satisfies the predicate. Disambiguate duplicate slugs via `#N`
+  // ordinal addressing the same way the wildcard branch does, so each
+  // matched path round-trips through `resolveOcPath` to its own item.
+  if (isPredicateSeg(cur.value)) {
+    const pred = parsePredicateSeg(cur.value);
+    if (pred === null) {
+      return;
+    }
+    const slugCounts = new Map<string, number>();
+    for (const item of block.items) {
+      slugCounts.set(item.slug, (slugCounts.get(item.slug) ?? 0) + 1);
+    }
+    block.items.forEach((item, idx) => {
+      if (mdItemMatchesPredicate(item, pred)) {
+        const seg = (slugCounts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
+        walkMdInsideItem(
+          item,
+          ast,
+          subs,
+          i + 1,
+          [...walked, { slot: cur.slot, value: seg }],
+          onMatch,
+        );
+      }
+    });
+    return;
+  }
 
   // Item slot.
   if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
@@ -1001,6 +1122,37 @@ function walkMdInsideItem(
   if (item.kv === undefined) {
     return;
   }
+
+  // Union `{a,b}` at the field slot — fan out per alternative. Md items
+  // carry a single kv pair so the field-slot union is degenerate (at
+  // most one alt matches), but the dispatch is included for cross-kind
+  // parity with the yaml / jsonc walkers.
+  if (isUnionSeg(cur.value)) {
+    const alts = parseUnionSeg(cur.value);
+    if (alts === null) {
+      return;
+    }
+    for (const alt of alts) {
+      const altSubs = subs.slice();
+      altSubs[i] = { slot: cur.slot, value: alt };
+      walkMdInsideItem(item, _ast, altSubs, i, walked, onMatch);
+    }
+    return;
+  }
+
+  // Predicate `[k=v]` at the field slot — match the kv pair as a unit
+  // (kv.key matches pred.key AND kv.value satisfies the predicate).
+  if (isPredicateSeg(cur.value)) {
+    const pred = parsePredicateSeg(cur.value);
+    if (pred === null) {
+      return;
+    }
+    if (mdItemMatchesPredicate(item, pred)) {
+      onMatch([...walked, { slot: cur.slot, value: item.kv.key }]);
+    }
+    return;
+  }
+
   if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
     onMatch([...walked, { slot: cur.slot, value: item.kv.key }]);
     return;

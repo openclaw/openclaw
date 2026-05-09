@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { setMdOcPath as setOcPath } from "../edit.js";
 import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
+import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
 
 describe("setOcPath — frontmatter", () => {
   it("replaces a frontmatter value", () => {
@@ -77,5 +78,30 @@ describe("setOcPath — item kv field", () => {
     const { ast } = parseMd("## Boundaries\n\n- enabled: true\n");
     const r = setOcPath(ast, parseOcPath("oc://AGENTS.md/boundaries"), "x");
     expect(r).toEqual({ ok: false, reason: "not-writable" });
+  });
+});
+
+describe("setOcPath — sentinel guard (defense-in-depth)", () => {
+  // The JSONC + JSONL paths reject sentinel-bearing values at the
+  // substrate boundary; the md path was deferring entirely to round-trip
+  // echo through emitMd, which acceptPreExistingSentinel:true skips.
+  // Closing the gap keeps F9 (formatter sentinel guard) symmetric across
+  // all three kinds.
+  it("rejects bare sentinel on frontmatter value", () => {
+    const { ast } = parseMd("---\nname: x\n---\n");
+    expect(() =>
+      setOcPath(ast, parseOcPath("oc://AGENTS.md/[frontmatter]/name"), REDACTED_SENTINEL),
+    ).toThrow(OcEmitSentinelError);
+  });
+
+  it("rejects substring-embedded sentinel on item kv", () => {
+    const { ast } = parseMd("## Boundaries\n\n- enabled: true\n");
+    expect(() =>
+      setOcPath(
+        ast,
+        parseOcPath("oc://AGENTS.md/boundaries/enabled/enabled"),
+        `prefix${REDACTED_SENTINEL}suffix`,
+      ),
+    ).toThrow(OcEmitSentinelError);
   });
 });

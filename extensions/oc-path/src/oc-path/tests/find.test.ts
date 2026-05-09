@@ -741,3 +741,106 @@ describe("findOcPaths — quoted segments survive expansion (regression: resolve
     expect(fields).toEqual(["alias", "contextWindow"]);
   });
 });
+
+// ---------- I3: md walker union + predicate parity ------------------------
+
+describe("union segments — md", () => {
+  // Cross-kind parity: yaml/jsonc walkers already dispatch union at every
+  // slot. The md walker previously dispatched only on wildcard / ordinal
+  // / positional / literal — so `oc://X.md/{Boundaries,Limits}/...`
+  // matched zero items where the same shape on yaml/jsonc would match
+  // both. These tests pin the parity addition.
+  const RAW = `## Boundaries
+
+- enabled: true
+- timeout: 5
+
+## Limits
+
+- max-tokens: 4096
+- alias: claude-3
+`;
+
+  it("expands {a,b} at the section slot", () => {
+    const ast = parseMd(RAW).ast;
+    const out = findOcPaths(ast, parseOcPath("oc://X.md/{boundaries,limits}/*/*"));
+    expect(out.length).toBe(4);
+    const sections = out
+      .map((m) => m.path.section)
+      .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
+    expect(sections).toEqual(["boundaries", "boundaries", "limits", "limits"]);
+  });
+
+  it("expands {a,b} at the item slot", () => {
+    const ast = parseMd(RAW).ast;
+    const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/{max-tokens,alias}/*"));
+    expect(out.length).toBe(2);
+    const items = out
+      .map((m) => m.path.item)
+      .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
+    expect(items).toEqual(["alias", "max-tokens"]);
+  });
+
+  it("expands {a,b} at the field slot (degenerate but parity-preserving)", () => {
+    // Md items hold a single kv field, so {alias,nope} matches at most
+    // one alt — the matching one. Mirrors yaml/jsonc dispatch shape.
+    const ast = parseMd(RAW).ast;
+    const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/alias/{alias,nope}"));
+    expect(out.length).toBe(1);
+    expect(out[0]?.path.field).toBe("alias");
+  });
+});
+
+describe("predicate segments — md", () => {
+  const RAW = `## Boundaries
+
+- enabled: true
+- timeout: 5
+
+## Limits
+
+- enabled: false
+- max-tokens: 4096
+`;
+
+  it("matches sections that contain an item satisfying the predicate", () => {
+    // [enabled=true] — only Boundaries has an item kv.key=enabled with
+    // value=true; Limits's enabled=false fails the predicate.
+    const ast = parseMd(RAW).ast;
+    const out = findOcPaths(ast, parseOcPath("oc://X.md/[enabled=true]/*/*"));
+    expect(out.length).toBeGreaterThan(0);
+    for (const m of out) {
+      expect(m.path.section).toBe("boundaries");
+    }
+  });
+
+  it("matches items whose kv pair satisfies the predicate", () => {
+    const ast = parseMd(RAW).ast;
+    const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/[enabled=false]/*"));
+    expect(out.length).toBe(1);
+    expect(out[0]?.path.item).toBe("enabled");
+  });
+
+  it("matches the kv pair at the field slot", () => {
+    // [max-tokens=4096] at the field slot — checks the kv pair as a unit.
+    const ast = parseMd(RAW).ast;
+    const out = findOcPaths(
+      ast,
+      parseOcPath("oc://X.md/limits/max-tokens/[max-tokens=4096]"),
+    );
+    expect(out.length).toBe(1);
+    expect(out[0]?.path.field).toBe("max-tokens");
+  });
+
+  it("returns empty when no section's item matches", () => {
+    const ast = parseMd(RAW).ast;
+    const out = findOcPaths(ast, parseOcPath("oc://X.md/[enabled=maybe]/*/*"));
+    expect(out).toEqual([]);
+  });
+
+  it("returns empty when no item matches the predicate", () => {
+    const ast = parseMd(RAW).ast;
+    const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/[enabled=true]/*"));
+    expect(out).toEqual([]);
+  });
+});
