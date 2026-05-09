@@ -138,11 +138,9 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
-import { shouldUseOpenAIWebSocketTransport } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
-  resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "./stream-resolution.js";
@@ -185,8 +183,6 @@ function createCompactionDiagId(): string {
 function prepareCompactionSessionAgent(params: {
   session: { agent: { streamFn?: unknown } };
   providerStreamFn: unknown;
-  shouldUseWebSocketTransport: boolean;
-  wsApiKey?: string;
   sessionId: string;
   signal: AbortSignal;
   effectiveModel: ProviderRuntimeModel;
@@ -204,8 +200,6 @@ function prepareCompactionSessionAgent(params: {
   params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
     providerStreamFn: params.providerStreamFn as never,
-    shouldUseWebSocketTransport: params.shouldUseWebSocketTransport,
-    wsApiKey: params.wsApiKey,
     sessionId: params.sessionId,
     signal: params.signal,
     model: params.effectiveModel,
@@ -1051,23 +1045,6 @@ async function compactEmbeddedPiSessionDirectOnce(
         agentDir,
         effectiveWorkspace,
       });
-      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
-        provider,
-        modelApi: effectiveModel.api,
-        modelBaseUrl: effectiveModel.baseUrl,
-      });
-      const wsApiKey = shouldUseWebSocketTransport
-        ? await resolveEmbeddedAgentApiKey({
-            provider,
-            resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
-            authStorage,
-          })
-        : undefined;
-      if (shouldUseWebSocketTransport && !wsApiKey) {
-        log.warn(
-          `[ws-stream] no API key for provider=${provider}; keeping compaction HTTP transport`,
-        );
-      }
       while (true) {
         // Rebuild the compaction session on retry so provider wrappers, payload
         // shaping, and the embedded system prompt all reflect the fallback level.
@@ -1095,8 +1072,6 @@ async function compactEmbeddedPiSessionDirectOnce(
           prepareCompactionSessionAgent({
             session,
             providerStreamFn,
-            shouldUseWebSocketTransport,
-            wsApiKey,
             sessionId: params.sessionId,
             signal: runAbortController.signal,
             effectiveModel,

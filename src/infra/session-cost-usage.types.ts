@@ -158,7 +158,7 @@ export type SessionModelUsage = {
 
 export type SessionCostSummary = CostUsageTotals & {
   sessionId?: string;
-  sessionFile?: string;
+  transcriptLocator?: string;
   firstActivity?: number;
   lastActivity?: number;
   durationMs?: number;
@@ -177,7 +177,7 @@ export type SessionCostSummary = CostUsageTotals & {
 
 export type DiscoveredSession = {
   sessionId: string;
-  sessionFile: string;
+  transcriptLocator: string;
   mtime: number;
   firstUserMessage?: string;
 };

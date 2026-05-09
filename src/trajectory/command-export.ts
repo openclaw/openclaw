@@ -121,7 +121,7 @@ export async function exportTrajectoryForCommand(params: {
     }));
   const bundle = await exportTrajectoryBundle({
     outputDir,
-    sessionFile: params.sessionFile,
+    transcriptLocator: params.sessionFile,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
