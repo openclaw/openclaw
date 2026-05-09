@@ -468,7 +468,7 @@ export function createTelegramThreadBindingManager(params: {
   const staleSessionKeys = new Set<string>();
   for (const targetSessionKey of acpSessionKeys) {
     const sessionEntry = readAcpSessionEntry({ sessionKey: targetSessionKey });
-    if (!sessionEntry || sessionEntry.storeReadFailed) {
+    if (!sessionEntry || sessionEntry.readFailed) {
       continue;
     }
     const isStale =

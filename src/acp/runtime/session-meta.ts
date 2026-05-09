@@ -21,7 +21,7 @@ export type AcpSessionStoreEntry = {
   storeSessionKey: string;
   entry?: SessionEntry;
   acp?: SessionAcpMeta;
-  storeReadFailed?: boolean;
+  readFailed?: boolean;
 };
 
 function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey: string): string {
@@ -47,7 +47,7 @@ function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey:
 function readSessionEntryWithAlias(params: { agentId: string; sessionKey: string }): {
   storeSessionKey: string;
   entry?: SessionEntry;
-  storeReadFailed?: boolean;
+  readFailed?: boolean;
 } {
   try {
     const entry = getSessionEntry(params);
@@ -64,7 +64,7 @@ function readSessionEntryWithAlias(params: { agentId: string; sessionKey: string
       entry: store[storeSessionKey],
     };
   } catch {
-    return { storeSessionKey: params.sessionKey, storeReadFailed: true };
+    return { storeSessionKey: params.sessionKey, readFailed: true };
   }
 }
 
@@ -91,12 +91,12 @@ export function readAcpSessionEntry(params: {
   });
   let storeSessionKey = sessionKey;
   let entry: SessionEntry | undefined;
-  let storeReadFailed = false;
+  let readFailed = false;
   if (agentId) {
     const resolved = readSessionEntryWithAlias({ agentId, sessionKey });
     storeSessionKey = resolved.storeSessionKey;
     entry = resolved.entry;
-    storeReadFailed = resolved.storeReadFailed === true;
+    readFailed = resolved.readFailed === true;
   }
   return {
     cfg,
@@ -105,7 +105,7 @@ export function readAcpSessionEntry(params: {
     storeSessionKey,
     entry,
     acp: entry?.acp,
-    storeReadFailed,
+    readFailed,
   };
 }
 
