@@ -1,26 +1,8 @@
 /**
- * `findOcPaths` — universal multi-match verb. Pattern syntax extends
- * `OcPath` with two wildcard tokens:
- *
- *   `*`   — match a single sub-segment (one map key / one array index)
- *   `**`  — match zero or more sub-segments at any depth (recursive)
- *
- * **Why a separate verb**: `resolveOcPath` and `setOcPath` are
- * single-match — they require an exact path because they return one
- * value or write one leaf. A pattern would be ambiguous. `findOcPaths`
- * is the search verb: pass a pattern, get every concrete OcPath that
- * matches plus its `OcMatch` (kind + leaf text / node descriptor).
- *
- * Every returned `OcPathMatch` carries a concrete (wildcard-free)
- * `OcPath`, so callers can pipe results through `setOcPath` or
- * `resolveOcPath` without rebuilding the path. The slot shape of the
- * input pattern is preserved (a `*` in the `item` slot produces a
- * concrete path with the matched value still in `item`).
- *
- * **Use cases driving v0**:
- *   - lint rules iterating `oc://workflow.lobster/steps/* /command`
- *   - jsonl session walks `oc://session/* /eventType`
- *   - md frontmatter sweeps `oc://SOUL.md/[frontmatter]/*`
+ * `findOcPaths` — multi-match verb. `*` matches one sub-segment;
+ * `**` matches zero or more (recursive). Returns concrete OcPaths
+ * preserving the input pattern's slot shape, so each result is
+ * pipeable into `resolveOcPath` / `setOcPath`.
  *
  * @module @openclaw/oc-path/find
  */
@@ -60,44 +42,23 @@ export interface OcPathMatch {
   readonly match: OcMatch;
 }
 
-/**
- * The slot a sub-segment came from in the input pattern. Walker outputs
- * carry slot tags so re-packing into `OcPath` preserves the pattern's
- * shape (a `*` in the `item` slot produces a path with the matched
- * value in `item`, not joined into `section`).
- */
 type Slot = "section" | "item" | "field";
 interface SlotSub {
   readonly slot: Slot;
   readonly value: string;
 }
-
-/** A single tagged sub-segment of the pattern (post dot-split). */
 interface PatternSub {
   readonly slot: Slot;
   readonly value: string;
 }
 
+type OnMatch = (subs: readonly SlotSub[]) => void;
+
 // ---------- Public verb ----------------------------------------------------
 
-/**
- * Match `pattern` against `ast` and return every concrete OcPath that
- * resolves. Empty array when nothing matches.
- *
- * Pattern semantics: same shape as `OcPath`, but any sub-segment may be
- * `*` (single-segment wildcard) or `**` (recursive descent). A pattern
- * with no wildcards is equivalent to a single `resolveOcPath` call,
- * wrapped into the find shape.
- *
- * **Insertion-marker patterns are not supported**: a `+`/`+key`/`+nnn`
- * suffix is meaningless in find context (you don't search for a place
- * to insert). Such patterns return an empty array.
- */
 export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[] {
   const subs = patternSubs(pattern);
   // Fast-path: no expansion needed — pure literals just resolve.
-  // Anything that can yield 0+ matches (wildcard, positional, union,
-  // predicate) flows through the walker.
   const needsExpansion = subs.some(
     (s) =>
       s.value === WILDCARD_SINGLE ||
@@ -110,7 +71,24 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
     const m = resolveOcPath(ast, pattern);
     return m === null ? [] : [{ path: pattern, match: m }];
   }
-  const concretePaths = expand(ast, subs, pattern);
+
+  const concretePaths: OcPath[] = [];
+  const onMatch: OnMatch = (slotSubs) => {
+    concretePaths.push(repackSlotSubs(pattern, slotSubs));
+  };
+  switch (ast.kind) {
+    case "jsonc":
+      if (ast.root !== null) {
+        walkJsonc(ast.root, subs, 0, [], onMatch);
+      }
+      break;
+    case "jsonl":
+      walkJsonl(ast, subs, 0, [], onMatch);
+      break;
+    case "md":
+      walkMd({ kind: "root", ast }, subs, 0, [], onMatch);
+      break;
+  }
 
   const out: OcPathMatch[] = [];
   for (const concrete of concretePaths) {
@@ -127,7 +105,7 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
 function patternSubs(pattern: OcPath): readonly PatternSub[] {
   const out: PatternSub[] = [];
   // Bracket-aware split so dots inside `[k=1.0]` or `{a.b,c}` aren't
-  // treated as sub-segment delimiters (P-012/P-013).
+  // treated as sub-segment delimiters.
   if (pattern.section !== undefined) {
     for (const v of splitRespectingBrackets(pattern.section, ".")) {
       out.push({ slot: "section", value: v });
@@ -151,13 +129,9 @@ function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
   const itemSubs: string[] = [];
   const fieldSubs: string[] = [];
   for (const s of slotSubs) {
-    if (s.slot === "section") {
-      sectionSubs.push(s.value);
-    } else if (s.slot === "item") {
-      itemSubs.push(s.value);
-    } else {
-      fieldSubs.push(s.value);
-    }
+    if (s.slot === "section") sectionSubs.push(s.value);
+    else if (s.slot === "item") itemSubs.push(s.value);
+    else fieldSubs.push(s.value);
   }
   return {
     file: pattern.file,
@@ -168,30 +142,87 @@ function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
   };
 }
 
-// ---------- Per-kind dispatch ---------------------------------------------
+// ---------- Shared dispatch ----------------------------------------------
 
-function expand(ast: OcAst, subs: readonly PatternSub[], pattern: OcPath): readonly OcPath[] {
-  const concretePaths: OcPath[] = [];
-  // Walker enumerates concrete sub-segments by walking the AST against
-  // `subs`, emitting one slot-tagged-sub list per leaf. Each list is
-  // re-packed into an OcPath preserving the pattern's slot shape.
-  const onMatch = (slotSubs: readonly SlotSub[]): void => {
-    concretePaths.push(repackSlotSubs(pattern, slotSubs));
-  };
-  switch (ast.kind) {
-    case "jsonc":
-      if (ast.root !== null) {
-        walkJsonc(ast.root, subs, 0, [], onMatch);
-      }
-      break;
-    case "jsonl":
-      walkJsonl(ast, subs, 0, [], onMatch);
-      break;
-    case "md":
-      walkMd(ast, subs, 0, [], onMatch);
-      break;
+// Per-kind ops the dispatcher uses to drive recursion. Each kind's
+// walker fills these in; the dispatcher handles every segment shape.
+interface WalkOps<T> {
+  enumerate(node: T): Iterable<{ keySub: string; child: T }>;
+  lookup(node: T, key: string): { keySub: string; child: T } | null;
+  positional(node: T, seg: string): { keySub: string; child: T } | null;
+  predicate(node: T, pred: PredicateSpec): Iterable<{ keySub: string; child: T }>;
+  walk(node: T, subs: readonly PatternSub[], i: number, walked: readonly SlotSub[], onMatch: OnMatch): void;
+}
+
+function checkDepth(walked: readonly SlotSub[]): void {
+  if (walked.length > MAX_TRAVERSAL_DEPTH) {
+    throw new OcPathError(
+      `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological pattern`,
+      "",
+      "OC_PATH_DEPTH_EXCEEDED",
+    );
   }
-  return concretePaths;
+}
+
+function dispatchSeg<T>(
+  node: T,
+  ops: WalkOps<T>,
+  subs: readonly PatternSub[],
+  i: number,
+  walked: readonly SlotSub[],
+  onMatch: OnMatch,
+): void {
+  const cur = subs[i];
+
+  if (isUnionSeg(cur.value)) {
+    const alts = parseUnionSeg(cur.value);
+    if (alts === null) return;
+    for (const alt of alts) {
+      const altSubs = subs.slice();
+      altSubs[i] = { slot: cur.slot, value: alt };
+      ops.walk(node, altSubs, i, walked, onMatch);
+    }
+    return;
+  }
+
+  if (isPredicateSeg(cur.value)) {
+    const pred = parsePredicateSeg(cur.value);
+    if (pred === null) return;
+    for (const m of ops.predicate(node, pred)) {
+      ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
+    }
+    return;
+  }
+
+  if (cur.value === WILDCARD_RECURSIVE) {
+    // `**` — descend with `**` consumed (i+1) AND retained (i) so
+    // deeper structures still match. Emit if no subs remain.
+    if (i + 1 >= subs.length) onMatch(walked);
+    for (const m of ops.enumerate(node)) {
+      const nextWalked: readonly SlotSub[] = [...walked, { slot: cur.slot, value: m.keySub }];
+      ops.walk(m.child, subs, i + 1, nextWalked, onMatch);
+      ops.walk(m.child, subs, i, nextWalked, onMatch);
+    }
+    return;
+  }
+
+  if (cur.value === WILDCARD_SINGLE) {
+    for (const m of ops.enumerate(node)) {
+      ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
+    }
+    return;
+  }
+
+  if (isPositionalSeg(cur.value)) {
+    const m = ops.positional(node, cur.value);
+    if (m === null) return;
+    ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
+    return;
+  }
+
+  const m = ops.lookup(node, cur.value);
+  if (m === null) return;
+  ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
 }
 
 // ---------- JSONC walker ---------------------------------------------------
@@ -201,352 +232,64 @@ function walkJsonc(
   subs: readonly PatternSub[],
   i: number,
   walked: readonly SlotSub[],
-  onMatch: (subs: readonly SlotSub[]) => void,
+  onMatch: OnMatch,
 ): void {
-  if (walked.length > MAX_TRAVERSAL_DEPTH) {
-    throw new OcPathError(
-      `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological pattern`,
-      "",
-      "OC_PATH_DEPTH_EXCEEDED",
-    );
-  }
+  checkDepth(walked);
   if (i >= subs.length) {
     onMatch(walked);
     return;
   }
-  let cur = subs[i];
+  dispatchSeg(node, jsoncOps, subs, i, walked, onMatch);
+}
 
-  if (isUnionSeg(cur.value)) {
-    const alts = parseUnionSeg(cur.value);
-    if (alts === null) {
-      return;
+const jsoncOps: WalkOps<JsoncValue> = {
+  *enumerate(node) {
+    if (node.kind === "object") {
+      for (const e of node.entries) yield { keySub: quoteSeg(e.key), child: e.value };
+    } else if (node.kind === "array") {
+      for (let idx = 0; idx < node.items.length; idx++) {
+        yield { keySub: String(idx), child: node.items[idx] };
+      }
     }
-    for (const alt of alts) {
-      const altSubs = subs.slice();
-      altSubs[i] = { slot: cur.slot, value: alt };
-      walkJsonc(node, altSubs, i, walked, onMatch);
+  },
+  lookup(node, key) {
+    if (node.kind === "object") {
+      // Entry keys are unquoted in the AST; strip quotes from a quoted
+      // path key so the walker matches the resolver's behavior.
+      const lookupKey = isQuotedSeg(key) ? unquoteSeg(key) : key;
+      const e = node.entries.find((entry) => entry.key === lookupKey);
+      return e === undefined ? null : { keySub: key, child: e.value };
     }
-    return;
-  }
-
-  if (isPredicateSeg(cur.value)) {
-    const pred = parsePredicateSeg(cur.value);
-    if (pred === null) {
-      return;
+    if (node.kind === "array") {
+      const idx = Number(key);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) return null;
+      return { keySub: key, child: node.items[idx] };
     }
+    return null;
+  },
+  positional(node, seg) {
+    const concrete = positionalForJsoncNode(node, seg);
+    if (concrete === null) return null;
+    return jsoncOps.lookup(node, concrete);
+  },
+  *predicate(node, pred) {
     if (node.kind === "object") {
       for (const e of node.entries) {
         if (jsoncChildMatchesPredicate(e.value, pred)) {
-          walkJsonc(
-            e.value,
-            subs,
-            i + 1,
-            [...walked, { slot: cur.slot, value: quoteSeg(e.key) }],
-            onMatch,
-          );
+          yield { keySub: quoteSeg(e.key), child: e.value };
         }
       }
     } else if (node.kind === "array") {
-      node.items.forEach((child, idx) => {
-        if (jsoncChildMatchesPredicate(child, pred)) {
-          walkJsonc(
-            child,
-            subs,
-            i + 1,
-            [...walked, { slot: cur.slot, value: String(idx) }],
-            onMatch,
-          );
+      for (let idx = 0; idx < node.items.length; idx++) {
+        if (jsoncChildMatchesPredicate(node.items[idx], pred)) {
+          yield { keySub: String(idx), child: node.items[idx] };
         }
-      });
-    }
-    return;
-  }
-
-  if (isPositionalSeg(cur.value)) {
-    const concrete = positionalForJsoncNode(node, cur.value);
-    if (concrete === null) {
-      return;
-    }
-    cur = { slot: cur.slot, value: concrete };
-  }
-
-  if (cur.value === WILDCARD_RECURSIVE) {
-    walkJsonc(node, subs, i + 1, walked, onMatch);
-    if (node.kind === "object") {
-      for (const e of node.entries) {
-        walkJsonc(
-          e.value,
-          subs,
-          i,
-          [...walked, { slot: cur.slot, value: quoteSeg(e.key) }],
-          onMatch,
-        );
-      }
-    } else if (node.kind === "array") {
-      node.items.forEach((child, idx) => {
-        walkJsonc(child, subs, i, [...walked, { slot: cur.slot, value: String(idx) }], onMatch);
-      });
-    }
-    return;
-  }
-
-  if (cur.value === WILDCARD_SINGLE) {
-    if (node.kind === "object") {
-      for (const e of node.entries) {
-        walkJsonc(
-          e.value,
-          subs,
-          i + 1,
-          [...walked, { slot: cur.slot, value: quoteSeg(e.key) }],
-          onMatch,
-        );
-      }
-    } else if (node.kind === "array") {
-      node.items.forEach((child, idx) => {
-        walkJsonc(child, subs, i + 1, [...walked, { slot: cur.slot, value: String(idx) }], onMatch);
-      });
-    }
-    return;
-  }
-
-  if (node.kind === "object") {
-    // `cur.value` may be a quoted segment (e.g. `"a/b"`); AST entry
-    // keys are already unquoted. Strip the quotes before comparing
-    // so the find-expansion walker matches `resolveJsoncOcPath`'s
-    // unquoting behavior — closes the resolve-vs-find asymmetry
-    // flagged on PR #78678.
-    const lookupKey = isQuotedSeg(cur.value) ? unquoteSeg(cur.value) : cur.value;
-    const e = node.entries.find((entry) => entry.key === lookupKey);
-    if (e === undefined) {
-      return;
-    }
-    walkJsonc(e.value, subs, i + 1, [...walked, { slot: cur.slot, value: cur.value }], onMatch);
-    return;
-  }
-  if (node.kind === "array") {
-    const idx = Number(cur.value);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {
-      return;
-    }
-    walkJsonc(
-      node.items[idx],
-      subs,
-      i + 1,
-      [...walked, { slot: cur.slot, value: cur.value }],
-      onMatch,
-    );
-  }
-}
-
-// ---------- JSONL walker ---------------------------------------------------
-
-function walkJsonl(
-  ast: JsonlAst,
-  subs: readonly PatternSub[],
-  i: number,
-  walked: readonly SlotSub[],
-  onMatch: (subs: readonly SlotSub[]) => void,
-): void {
-  // Bound recursion at the line-enumeration layer — without this guard,
-  // a `**` pattern over a 100k-line forensic log dispatches per-line
-  // walkJsonc (which has its own guard) but the JSONL outer driver has
-  // no per-walker depth bound. JSONL session logs are exactly the kind
-  // of file that grows unbounded in production (replay, audit), so
-  // defense-in-depth at the outer layer mirrors the jsonc walker.
-  if (walked.length > MAX_TRAVERSAL_DEPTH) {
-    throw new OcPathError(
-      `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological JSONL pattern`,
-      "",
-      "OC_PATH_DEPTH_EXCEEDED",
-    );
-  }
-  if (i >= subs.length) {
-    onMatch(walked);
-    return;
-  }
-  const cur = subs[i];
-
-  // Line-address slot — `*` enumerates every value line; `**` adds a
-  // 0-segment skip in addition to enumerating; literal matches `Lnnn`
-  // / `$first` / `$last` / `-N` (negative index); union matches each
-  // alternative; predicate filters by per-line top-level field.
-  // The first sub MUST address a line; deeper subs walk inside the
-  // line's JSON value.
-  if (walked.length === 0) {
-    if (cur.value === WILDCARD_RECURSIVE) {
-      // 0-match has no meaning for jsonl (the file root has no leaves);
-      // every remaining match must include a line. So skip the 0-match
-      // expansion and only enumerate.
-      forEachValueLine(ast, (l, addr) => {
-        walkJsonlInsideLine(l, subs, i, [{ slot: cur.slot, value: addr }], onMatch);
-      });
-      return;
-    }
-    if (cur.value === WILDCARD_SINGLE) {
-      forEachValueLine(ast, (l, addr) => {
-        walkJsonlInsideLine(l, subs, i + 1, [{ slot: cur.slot, value: addr }], onMatch);
-      });
-      return;
-    }
-    if (isUnionSeg(cur.value)) {
-      // `{L1,L2}` enumerates each alternative independently — the
-      // jsonc walker handles union uniformly at every slot, so the
-      // jsonl line slot must too. Each alternative goes through the
-      // same single-line resolution as a literal `Lnnn` / `$first` /
-      // `-N` would (so unions of positional tokens, e.g. `{L1,$last}`,
-      // work as expected).
-      const alts = parseUnionSeg(cur.value);
-      if (alts === null) {
-        return;
-      }
-      for (const alt of alts) {
-        const line = pickLine(ast, alt);
-        if (line === null) {
-          continue;
-        }
-        const concreteAddr = line.kind === "value" ? `L${line.line}` : alt;
-        walkJsonlInsideLine(line, subs, i + 1, [{ slot: cur.slot, value: concreteAddr }], onMatch);
-      }
-      return;
-    }
-    if (isPredicateSeg(cur.value)) {
-      // `[event=foo]` filters value lines by the predicate's key/op
-      // applied to the top-level field of each line's parsed JSON.
-      // Parsing is structural (no recursion into nested children) —
-      // a predicate inside a line's body uses the same syntax inside
-      // the JSONC walker's predicate path.
-      const pred = parsePredicateSeg(cur.value);
-      if (pred === null) {
-        return;
-      }
-      forEachValueLine(ast, (l, addr) => {
-        if (l.kind !== "value") {
-          return;
-        }
-        const actual = topLevelLeafText(l.value, pred.key);
-        if (!evaluatePredicate(actual, pred)) {
-          return;
-        }
-        walkJsonlInsideLine(l, subs, i + 1, [{ slot: cur.slot, value: addr }], onMatch);
-      });
-      return;
-    }
-    // Positional / Lnnn / literal — pickLine handles all single-line
-    // addressing tokens. The emitted concrete address is `Lnnn` (the
-    // canonical line-address form) regardless of how it was looked up.
-    const line = pickLine(ast, cur.value);
-    if (line === null) {
-      return;
-    }
-    const concreteAddr = line.kind === "value" ? `L${line.line}` : cur.value;
-    walkJsonlInsideLine(line, subs, i + 1, [{ slot: cur.slot, value: concreteAddr }], onMatch);
-    return;
-  }
-}
-
-/**
- * Stringify the top-level field's leaf value for predicate evaluation
- * at the jsonl line slot. Only string/number/boolean/null leaves
- * compare; nested objects/arrays return `null` (predicate doesn't
- * match a non-leaf sibling).
- */
-function topLevelLeafText(value: JsoncValue, key: string): string | null {
-  if (value.kind !== "object") {
-    return null;
-  }
-  const entry = value.entries.find((e) => e.key === key);
-  if (entry === undefined) {
-    return null;
-  }
-  const v = entry.value;
-  if (v.kind === "string") {
-    return v.value;
-  }
-  if (v.kind === "number" || v.kind === "boolean") {
-    return String(v.value);
-  }
-  if (v.kind === "null") {
-    return null;
-  }
-  return null;
-}
-
-function walkJsonlInsideLine(
-  line: JsonlLine,
-  subs: readonly PatternSub[],
-  i: number,
-  walked: readonly SlotSub[],
-  onMatch: (subs: readonly SlotSub[]) => void,
-): void {
-  // Mirror the outer guard so a hostile pattern that bypasses the
-  // top-of-walkJsonl path (e.g., reached via direct call from a future
-  // helper) still lands on the depth bound. walkJsonc inside has its
-  // own bound, but the slot-sub list extends across both layers — the
-  // depth check must consider the full `walked` history.
-  if (walked.length > MAX_TRAVERSAL_DEPTH) {
-    throw new OcPathError(
-      `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological JSONL pattern`,
-      "",
-      "OC_PATH_DEPTH_EXCEEDED",
-    );
-  }
-  if (i >= subs.length) {
-    onMatch(walked);
-    return;
-  }
-  if (line.kind !== "value") {
-    return;
-  }
-  walkJsonc(line.value, subs, i, walked, onMatch);
-}
-
-function forEachValueLine(ast: JsonlAst, visit: (line: JsonlLine, addr: string) => void): void {
-  for (const l of ast.lines) {
-    if (l.kind === "value") {
-      visit(l, `L${l.line}`);
-    }
-  }
-}
-
-function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
-  if (addr === "$last") {
-    for (let i = ast.lines.length - 1; i >= 0; i--) {
-      const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        return l;
       }
     }
-    return null;
-  }
-  if (addr === "$first") {
-    for (const l of ast.lines) {
-      if (l.kind === "value") {
-        return l;
-      }
-    }
-    return null;
-  }
-  if (/^-\d+$/.test(addr)) {
-    const valueLines = ast.lines.filter(
-      (l): l is Extract<JsonlLine, { kind: "value" }> => l.kind === "value",
-    );
-    const n = valueLines.length + Number(addr);
-    return n >= 0 && n < valueLines.length ? valueLines[n] : null;
-  }
-  const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) {
-    return null;
-  }
-  const target = Number(m[1]);
-  for (const l of ast.lines) {
-    if (l.line === target) {
-      return l;
-    }
-  }
-  return null;
-}
+  },
+  walk: walkJsonc,
+};
 
-// Helpers shared by the walkers above.
 function positionalForJsoncNode(node: JsoncValue, seg: string): string | null {
   if (node.kind === "object") {
     const keys = node.entries.map((e) => e.key);
@@ -558,82 +301,142 @@ function positionalForJsoncNode(node: JsoncValue, seg: string): string | null {
   return null;
 }
 
-// Predicate-evaluation helpers: look up `node[key]` and compare its
-// string-coerced leaf value via `evaluatePredicate`. Used by
-// `[key<op>value]` filtering in find walkers.
-function jsoncChildMatchesPredicate(node: JsoncValue, pred: PredicateSpec): boolean {
-  return evaluatePredicate(jsoncChildFieldText(node, pred.key), pred);
+// ---------- JSONL walker ---------------------------------------------------
+
+// First slot is a line address; subsequent slots descend into the
+// line's jsonc value via jsonlOps.walk's holder unwrap.
+function walkJsonl(
+  ast: JsonlAst,
+  subs: readonly PatternSub[],
+  i: number,
+  walked: readonly SlotSub[],
+  onMatch: OnMatch,
+): void {
+  checkDepth(walked);
+  if (i >= subs.length) {
+    onMatch(walked);
+    return;
+  }
+  if (walked.length === 0) {
+    dispatchSeg(ast, jsonlOps, subs, i, walked, onMatch);
+  }
 }
 
-function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
-  if (node.kind !== "object") {
+const jsonlOps: WalkOps<JsonlAst> = {
+  *enumerate(ast) {
+    for (const l of ast.lines) {
+      if (l.kind === "value") yield { keySub: `L${l.line}`, child: lineHolder(ast, l) };
+    }
+  },
+  lookup(ast, key) {
+    const line = pickLine(ast, key);
+    if (line === null) return null;
+    const concreteAddr = line.kind === "value" ? `L${line.line}` : key;
+    return { keySub: concreteAddr, child: lineHolder(ast, line) };
+  },
+  positional(ast, seg) {
+    return jsonlOps.lookup(ast, seg);
+  },
+  *predicate(ast, pred) {
+    for (const l of ast.lines) {
+      if (l.kind !== "value") continue;
+      const actual = topLevelLeafText(l.value, pred.key);
+      if (evaluatePredicate(actual, pred)) {
+        yield { keySub: `L${l.line}`, child: lineHolder(ast, l) };
+      }
+    }
+  },
+  // After the line slot is consumed, descend into the line's jsonc
+  // value via the holder's WeakMap-tagged line. Otherwise this is a
+  // top-level walkJsonl entry — go through line-slot dispatch.
+  walk(child, subs, i, walked, onMatch) {
+    const line = unwrapHolder(child);
+    if (line === null) {
+      walkJsonl(child, subs, i, walked, onMatch);
+      return;
+    }
+    if (i >= subs.length) {
+      onMatch(walked);
+      return;
+    }
+    if (line.kind !== "value") return;
+    walkJsonc(line.value, subs, i, walked, onMatch);
+  },
+};
+
+// JsonlAst-typed wrapper around a single line so jsonlOps.walk can
+// distinguish "top-level ast (descend the line slot)" from "we
+// already picked a line, walk inside it." A WeakMap keeps the wrapping
+// structural (no JsonlAst surface change).
+const lineByHolder = new WeakMap<object, JsonlLine>();
+function lineHolder(ast: JsonlAst, line: JsonlLine): JsonlAst {
+  // Synthesize a tagged JsonlAst that carries the chosen line. The
+  // outer structure is preserved (kind, raw, lines) so type checks
+  // remain happy; the WeakMap holds the per-line tag.
+  const holder: JsonlAst = { kind: "jsonl", raw: ast.raw, lines: ast.lines };
+  lineByHolder.set(holder, line);
+  return holder;
+}
+function unwrapHolder(holder: JsonlAst): JsonlLine | null {
+  return lineByHolder.get(holder) ?? null;
+}
+
+function topLevelLeafText(value: JsoncValue, key: string): string | null {
+  if (value.kind !== "object") return null;
+  const entry = value.entries.find((e) => e.key === key);
+  if (entry === undefined) return null;
+  const v = entry.value;
+  if (v.kind === "string") return v.value;
+  if (v.kind === "number" || v.kind === "boolean") return String(v.value);
+  return null;
+}
+
+function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
+  if (addr === "$last") {
+    for (let i = ast.lines.length - 1; i >= 0; i--) {
+      const l = ast.lines[i];
+      if (l !== undefined && l.kind === "value") return l;
+    }
     return null;
   }
-  const e = node.entries.find((entry) => entry.key === key);
-  if (e === undefined) {
+  if (addr === "$first") {
+    for (const l of ast.lines) {
+      if (l.kind === "value") return l;
+    }
     return null;
   }
-  const v = e.value;
-  if (v.kind === "string") {
-    return v.value;
+  if (/^-\d+$/.test(addr)) {
+    const valueLines = ast.lines.filter(
+      (l): l is Extract<JsonlLine, { kind: "value" }> => l.kind === "value",
+    );
+    const n = valueLines.length + Number(addr);
+    return n >= 0 && n < valueLines.length ? valueLines[n] : null;
   }
-  if (v.kind === "number") {
-    return String(v.value);
-  }
-  if (v.kind === "boolean") {
-    return String(v.value);
-  }
-  if (v.kind === "null") {
-    return "null";
+  const m = /^L(\d+)$/.exec(addr);
+  if (m === null || m[1] === undefined) return null;
+  const target = Number(m[1]);
+  for (const l of ast.lines) {
+    if (l.line === target) return l;
   }
   return null;
 }
 
-// Predicate semantics for md: blocks (sections) "have" the kv pairs of
-// their items, and items "are" their kv pair. So at the section slot a
-// predicate matches sections that contain an item with kv.key matching
-// pred.key and value satisfying the predicate. At the item slot the
-// item itself must match (kv.key === pred.key and value satisfies the
-// predicate). At the field slot the item's single kv is what's tested.
-// Cross-kind parity with jsoncChildMatchesPredicate.
-function mdItemMatchesPredicate(
-  item: { readonly kv?: { readonly key: string; readonly value: string } },
-  pred: PredicateSpec,
-): boolean {
-  if (item.kv === undefined) {
-    return false;
-  }
-  if (item.kv.key.toLowerCase() !== pred.key.toLowerCase()) {
-    return false;
-  }
-  return evaluatePredicate(item.kv.value, pred);
-}
-
-function mdBlockHasMatchingItem(
-  block: {
-    readonly items: readonly {
-      readonly slug: string;
-      readonly kv?: { readonly key: string; readonly value: string };
-    }[];
-  },
-  pred: PredicateSpec,
-): boolean {
-  for (const item of block.items) {
-    if (mdItemMatchesPredicate(item, pred)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // ---------- Markdown walker -----------------------------------------------
 
+type MdItem = MdAst["blocks"][number]["items"][number];
+type MdBlock = MdAst["blocks"][number];
+
+type MdLevel =
+  | { readonly kind: "root"; readonly ast: MdAst }
+  | { readonly kind: "block"; readonly block: MdBlock; readonly ast: MdAst }
+  | { readonly kind: "item"; readonly item: MdItem; readonly ast: MdAst };
+
 function walkMd(
-  ast: MdAst,
+  level: MdLevel,
   subs: readonly PatternSub[],
   i: number,
   walked: readonly SlotSub[],
-  onMatch: (subs: readonly SlotSub[]) => void,
+  onMatch: OnMatch,
 ): void {
   if (i >= subs.length) {
     onMatch(walked);
@@ -641,16 +444,15 @@ function walkMd(
   }
   const cur = subs[i];
 
-  // Frontmatter addressing: literal `[frontmatter]` in section slot.
-  if (walked.length === 0 && cur.value === "[frontmatter]") {
-    // Next sub addresses a frontmatter key.
+  // Frontmatter sentinel short-circuits regular dispatch.
+  if (level.kind === "root" && walked.length === 0 && cur.value === "[frontmatter]") {
     const next = subs[i + 1];
     if (next === undefined) {
       onMatch([{ slot: cur.slot, value: cur.value }]);
       return;
     }
     if (next.value === WILDCARD_SINGLE || next.value === WILDCARD_RECURSIVE) {
-      for (const fm of ast.frontmatter) {
+      for (const fm of level.ast.frontmatter) {
         onMatch([
           { slot: cur.slot, value: cur.value },
           { slot: next.slot, value: fm.key },
@@ -658,14 +460,9 @@ function walkMd(
       }
       return;
     }
-    // Same quote-aware lookup as the JSONC walker — frontmatter
-    // entry keys are unquoted in the AST, so a quoted-segment path
-    // segment must be unquoted before comparing.
     const fmKey = isQuotedSeg(next.value) ? unquoteSeg(next.value) : next.value;
-    const entry = ast.frontmatter.find((e) => e.key === fmKey);
-    if (entry === undefined) {
-      return;
-    }
+    const entry = level.ast.frontmatter.find((e) => e.key === fmKey);
+    if (entry === undefined) return;
     onMatch([
       { slot: cur.slot, value: cur.value },
       { slot: next.slot, value: next.value },
@@ -673,262 +470,151 @@ function walkMd(
     return;
   }
 
-  // Union `{a,b,c}` at the section slot — fan out into one walk per
-  // alternative. Cross-kind parity with the jsonc walker; mirrors
-  // the same dispatch shape (see find.ts ~219 for jsonc).
-  if (walked.length === 0 && isUnionSeg(cur.value)) {
-    const alts = parseUnionSeg(cur.value);
-    if (alts === null) {
-      return;
-    }
-    for (const alt of alts) {
-      const altSubs = subs.slice();
-      altSubs[i] = { slot: cur.slot, value: alt };
-      walkMd(ast, altSubs, i, walked, onMatch);
-    }
+  // Item-level field slot is terminal — descending would loop.
+  if (level.kind === "item") {
+    walkMdItemField(level.item, cur, walked, onMatch);
     return;
   }
 
-  // Predicate `[k=v]` at the section slot — emit only sections whose
-  // items contain a kv pair matching the predicate. Cross-kind parity
-  // with the jsonc walker (find.ts ~232).
-  if (walked.length === 0 && isPredicateSeg(cur.value)) {
+  dispatchSeg(level, mdOps, subs, i, walked, onMatch);
+}
+
+function walkMdItemField(
+  item: MdItem,
+  cur: PatternSub,
+  walked: readonly SlotSub[],
+  onMatch: OnMatch,
+): void {
+  if (item.kv === undefined) return;
+  const key = item.kv.key;
+  const emit = (value: string): void => {
+    onMatch([...walked, { slot: cur.slot, value }]);
+  };
+  if (isUnionSeg(cur.value)) {
+    const alts = parseUnionSeg(cur.value);
+    if (alts === null) return;
+    for (const alt of alts) {
+      if (alt.toLowerCase() === key.toLowerCase()) emit(key);
+    }
+    return;
+  }
+  if (isPredicateSeg(cur.value)) {
     const pred = parsePredicateSeg(cur.value);
-    if (pred === null) {
+    if (pred !== null && mdItemMatchesPredicate(item, pred)) emit(key);
+    return;
+  }
+  if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
+    emit(key);
+    return;
+  }
+  if (key.toLowerCase() === cur.value.toLowerCase()) emit(cur.value);
+}
+
+function blockSlugCounts(items: readonly MdItem[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.slug, (counts.get(item.slug) ?? 0) + 1);
+  return counts;
+}
+
+// `mdOps` only handles root / block levels. Item-level dispatch is
+// terminal and runs inline in `walkMd` (see `walkMdItemField`).
+const mdOps: WalkOps<MdLevel> = {
+  *enumerate(level) {
+    if (level.kind === "root") {
+      for (const block of level.ast.blocks) {
+        yield { keySub: block.slug, child: { kind: "block", block, ast: level.ast } };
+      }
       return;
     }
-    for (const block of ast.blocks) {
-      if (mdBlockHasMatchingItem(block, pred)) {
-        walkMdInsideBlock(
-          block,
-          ast,
-          subs,
-          i + 1,
-          [{ slot: cur.slot, value: block.slug }],
-          onMatch,
-        );
+    if (level.kind === "block") {
+      // Disambiguate duplicate slugs via `#N` ordinal so each emitted
+      // path round-trips through resolveOcPath to its own item.
+      const counts = blockSlugCounts(level.block.items);
+      for (let idx = 0; idx < level.block.items.length; idx++) {
+        const item = level.block.items[idx];
+        const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
+        yield { keySub: seg, child: { kind: "item", item, ast: level.ast } };
       }
     }
-    return;
-  }
-
-  // Section slot first.
-  if (walked.length === 0) {
-    if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
-      for (const block of ast.blocks) {
-        walkMdInsideBlock(
-          block,
-          ast,
-          subs,
-          i + 1,
-          [{ slot: cur.slot, value: block.slug }],
-          onMatch,
-        );
-        // `**` retain-i branch: in addition to descending with `**`
-        // consumed (i + 1), also descend with `**` still active (i)
-        // so the next sub can match deeper. Without this, md `**`
-        // semantics diverged from jsonc — `oc://X.md/**/value`
-        // only matched the immediate-block layer and silently missed
-        // deeper hierarchies (cross-kind asymmetry — same lint rule
-        // worked on jsonc but produced 0 matches on md).
-        if (cur.value === WILDCARD_RECURSIVE) {
-          walkMdInsideBlock(block, ast, subs, i, [{ slot: cur.slot, value: block.slug }], onMatch);
+  },
+  lookup(level, key) {
+    if (level.kind === "root") {
+      const target = key.toLowerCase();
+      const block = level.ast.blocks.find((b) => b.slug === target);
+      return block === undefined ? null : { keySub: key, child: { kind: "block", block, ast: level.ast } };
+    }
+    if (level.kind === "block") {
+      // Ordinal `#N` short-circuits slug lookup.
+      if (isOrdinalSeg(key)) {
+        const n = parseOrdinalSeg(key);
+        if (n === null || n < 0 || n >= level.block.items.length) return null;
+        return { keySub: key, child: { kind: "item", item: level.block.items[n], ast: level.ast } };
+      }
+      const target = key.toLowerCase();
+      const item = level.block.items.find((it) => it.slug === target);
+      return item === undefined ? null : { keySub: key, child: { kind: "item", item, ast: level.ast } };
+    }
+    return null;
+  },
+  positional(level, seg) {
+    if (level.kind !== "block") return null;
+    const concrete = resolvePositionalSeg(seg, {
+      indexable: true,
+      size: level.block.items.length,
+    });
+    if (concrete === null) return null;
+    // Preserve the positional token in keySub so the resolver
+    // re-evaluates positionally on round-trip.
+    const item = level.block.items[Number(concrete)];
+    return { keySub: seg, child: { kind: "item", item, ast: level.ast } };
+  },
+  *predicate(level, pred) {
+    if (level.kind === "root") {
+      for (const block of level.ast.blocks) {
+        if (mdBlockHasMatchingItem(block, pred)) {
+          yield { keySub: block.slug, child: { kind: "block", block, ast: level.ast } };
         }
       }
-      // `**` 0-match: emit at root if any.
-      if (cur.value === WILDCARD_RECURSIVE && i + 1 >= subs.length) {
-        onMatch([]);
+      return;
+    }
+    if (level.kind === "block") {
+      const counts = blockSlugCounts(level.block.items);
+      for (let idx = 0; idx < level.block.items.length; idx++) {
+        const item = level.block.items[idx];
+        if (mdItemMatchesPredicate(item, pred)) {
+          const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
+          yield { keySub: seg, child: { kind: "item", item, ast: level.ast } };
+        }
       }
-      return;
     }
-    const targetSlug = cur.value.toLowerCase();
-    const block = ast.blocks.find((b) => b.slug === targetSlug);
-    if (block === undefined) {
-      return;
-    }
-    walkMdInsideBlock(block, ast, subs, i + 1, [{ slot: cur.slot, value: cur.value }], onMatch);
-  }
-}
-
-function walkMdInsideBlock(
-  block: {
-    readonly items: readonly {
-      readonly slug: string;
-      readonly kv?: { readonly key: string; readonly value: string };
-    }[];
   },
-  ast: MdAst,
-  subs: readonly PatternSub[],
-  i: number,
-  walked: readonly SlotSub[],
-  onMatch: (subs: readonly SlotSub[]) => void,
-): void {
-  if (i >= subs.length) {
-    onMatch(walked);
-    return;
-  }
-  const cur = subs[i];
+  walk: walkMd,
+};
 
-  // Union `{a,b,c}` at the item slot — fan out per alternative. Cross-
-  // kind parity with the jsonc walker.
-  if (isUnionSeg(cur.value)) {
-    const alts = parseUnionSeg(cur.value);
-    if (alts === null) {
-      return;
-    }
-    for (const alt of alts) {
-      const altSubs = subs.slice();
-      altSubs[i] = { slot: cur.slot, value: alt };
-      walkMdInsideBlock(block, ast, altSubs, i, walked, onMatch);
-    }
-    return;
-  }
-
-  // Predicate `[k=v]` at the item slot — match items whose kv pair
-  // satisfies the predicate. Disambiguate duplicate slugs via `#N`
-  // ordinal addressing the same way the wildcard branch does, so each
-  // matched path round-trips through `resolveOcPath` to its own item.
-  if (isPredicateSeg(cur.value)) {
-    const pred = parsePredicateSeg(cur.value);
-    if (pred === null) {
-      return;
-    }
-    const slugCounts = new Map<string, number>();
-    for (const item of block.items) {
-      slugCounts.set(item.slug, (slugCounts.get(item.slug) ?? 0) + 1);
-    }
-    block.items.forEach((item, idx) => {
-      if (mdItemMatchesPredicate(item, pred)) {
-        const seg = (slugCounts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
-        walkMdInsideItem(
-          item,
-          ast,
-          subs,
-          i + 1,
-          [...walked, { slot: cur.slot, value: seg }],
-          onMatch,
-        );
-      }
-    });
-    return;
-  }
-
-  // Item slot.
-  if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
-    // Disambiguate duplicate slugs via `#N` ordinal addressing so each
-    // matched path round-trips through `resolveOcPath` to its own item.
-    const slugCounts = new Map<string, number>();
-    for (const item of block.items) {
-      slugCounts.set(item.slug, (slugCounts.get(item.slug) ?? 0) + 1);
-    }
-    block.items.forEach((item, idx) => {
-      const seg = (slugCounts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
-      walkMdInsideItem(
-        item,
-        ast,
-        subs,
-        i + 1,
-        [...walked, { slot: cur.slot, value: seg }],
-        onMatch,
-      );
-    });
-    if (cur.value === WILDCARD_RECURSIVE && i + 1 >= subs.length) {
-      onMatch(walked);
-    }
-    return;
-  }
-  // Ordinal `#N` and positional `$first`/`$last`/`-N` short-circuit the
-  // slug lookup — the resolver handles them, so the find walker just
-  // descends into the appropriate item.
-  let item:
-    | { readonly slug: string; readonly kv?: { readonly key: string; readonly value: string } }
-    | undefined;
-  if (isOrdinalSeg(cur.value)) {
-    const n = parseOrdinalSeg(cur.value);
-    if (n === null || n < 0 || n >= block.items.length) {
-      return;
-    }
-    item = block.items[n];
-  } else if (isPositionalSeg(cur.value)) {
-    const concrete = resolvePositionalSeg(cur.value, {
-      indexable: true,
-      size: block.items.length,
-    });
-    if (concrete === null) {
-      return;
-    }
-    item = block.items[Number(concrete)];
-  } else {
-    const targetItemSlug = cur.value.toLowerCase();
-    item = block.items.find((it) => it.slug === targetItemSlug);
-  }
-  if (item === undefined) {
-    return;
-  }
-  walkMdInsideItem(
-    item,
-    ast,
-    subs,
-    i + 1,
-    [...walked, { slot: cur.slot, value: cur.value }],
-    onMatch,
-  );
+function mdItemMatchesPredicate(item: MdItem, pred: PredicateSpec): boolean {
+  if (item.kv === undefined) return false;
+  if (item.kv.key.toLowerCase() !== pred.key.toLowerCase()) return false;
+  return evaluatePredicate(item.kv.value, pred);
 }
 
-function walkMdInsideItem(
-  item: { readonly kv?: { readonly key: string; readonly value: string } },
-  _ast: MdAst,
-  subs: readonly PatternSub[],
-  i: number,
-  walked: readonly SlotSub[],
-  onMatch: (subs: readonly SlotSub[]) => void,
-): void {
-  if (i >= subs.length) {
-    onMatch(walked);
-    return;
+function mdBlockHasMatchingItem(block: MdBlock, pred: PredicateSpec): boolean {
+  for (const item of block.items) {
+    if (mdItemMatchesPredicate(item, pred)) return true;
   }
-  const cur = subs[i];
-  // Field slot — addresses kv.key (case-insensitive).
-  if (item.kv === undefined) {
-    return;
-  }
+  return false;
+}
 
-  // Union `{a,b}` at the field slot — fan out per alternative. Md items
-  // carry a single kv pair so the field-slot union is degenerate (at
-  // most one alt matches), but the dispatch is included for cross-kind
-  // parity with the jsonc walker.
-  if (isUnionSeg(cur.value)) {
-    const alts = parseUnionSeg(cur.value);
-    if (alts === null) {
-      return;
-    }
-    for (const alt of alts) {
-      const altSubs = subs.slice();
-      altSubs[i] = { slot: cur.slot, value: alt };
-      walkMdInsideItem(item, _ast, altSubs, i, walked, onMatch);
-    }
-    return;
-  }
+function jsoncChildMatchesPredicate(node: JsoncValue, pred: PredicateSpec): boolean {
+  return evaluatePredicate(jsoncChildFieldText(node, pred.key), pred);
+}
 
-  // Predicate `[k=v]` at the field slot — match the kv pair as a unit
-  // (kv.key matches pred.key AND kv.value satisfies the predicate).
-  if (isPredicateSeg(cur.value)) {
-    const pred = parsePredicateSeg(cur.value);
-    if (pred === null) {
-      return;
-    }
-    if (mdItemMatchesPredicate(item, pred)) {
-      onMatch([...walked, { slot: cur.slot, value: item.kv.key }]);
-    }
-    return;
-  }
-
-  if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
-    onMatch([...walked, { slot: cur.slot, value: item.kv.key }]);
-    return;
-  }
-  if (item.kv.key.toLowerCase() !== cur.value.toLowerCase()) {
-    return;
-  }
-  onMatch([...walked, { slot: cur.slot, value: cur.value }]);
+function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
+  if (node.kind !== "object") return null;
+  const e = node.entries.find((entry) => entry.key === key);
+  if (e === undefined) return null;
+  const v = e.value;
+  if (v.kind === "string") return v.value;
+  if (v.kind === "number" || v.kind === "boolean") return String(v.value);
+  if (v.kind === "null") return "null";
+  return null;
 }

@@ -1,25 +1,9 @@
 /**
- * `openclaw path` — shell-level access to the OcPath substrate verbs.
- * Self-hosters and editor extensions use it to inspect and surgically
- * edit workspace files without scripting against the SDK directly.
+ * `openclaw path` — shell access to the OcPath substrate verbs.
  *
- * Subcommands:
- *   - `resolve <oc-path>`     — print the match at the path
- *   - `set <oc-path> <value>` — write a leaf at the path; supports `--dry-run`
- *   - `find <pattern>`        — enumerate matches for a wildcard/predicate path
- *   - `validate <oc-path>`    — parse-only; print structure
- *   - `emit <file>`           — read + parseXxx + emitXxx; verifies byte-fidelity
- *
- * Output is TTY-aware: defaults to human-readable when stdout is a TTY,
- * switches to JSON otherwise (so pipes don't get formatting noise).
- * `--json` and `--human` flags override the auto-detection.
- *
- * Boundaries this CLI does NOT cross (v0):
- *   - Doesn't know about LKG. `set` writes raw bytes through the
- *     substrate emit; if the file is LKG-tracked, the next observe
- *     call decides whether to promote / recover.
- *   - Doesn't know about lint rules or doctor fixers — that's a
- *     different surface.
+ * Subcommands: `resolve` / `set` / `find` / `validate` / `emit`.
+ * TTY-aware output: human when interactive, JSON when piped; `--json`
+ * / `--human` override.
  */
 
 import { promises as fs } from "node:fs";
@@ -44,7 +28,6 @@ import {
   type OcAst,
   type OcMatch,
   type OcPath,
-  type SetResult,
 } from "./oc-path/index.js";
 
 export type OutputRuntimeEnv = {
@@ -77,26 +60,16 @@ const defaultRuntime: OutputRuntimeEnv = {
   },
 };
 
-/**
- * Output-boundary sentinel scrub. Replaces every occurrence of the
- * redaction sentinel with `[REDACTED]` before writing to the output
- * stream. Defense-in-depth — even if a future code path surfaces raw
- * file content carrying the sentinel, the CLI must not echo it.
- */
+// Defense-in-depth: replace the redaction sentinel with `[REDACTED]`
+// before writing, even if upstream emits it.
 export function scrubSentinel(s: string): string {
-  if (!s.includes(REDACTED_SENTINEL)) {
-    return s;
-  }
+  if (!s.includes(REDACTED_SENTINEL)) return s;
   return s.split(REDACTED_SENTINEL).join(SCRUB_PLACEHOLDER);
 }
 
 function detectMode(options: PathCommandOptions): OutputMode {
-  if (options.json === true) {
-    return "json";
-  }
-  if (options.human === true) {
-    return "human";
-  }
+  if (options.json === true) return "json";
+  if (options.human === true) return "human";
   return process.stdout.isTTY ? "human" : "json";
 }
 
@@ -127,24 +100,70 @@ function emitError(
   runtime.error(`${code}: ${scrubbed}`);
 }
 
+/** Bail with usage error if a required arg is missing. */
+function requireArg<T>(
+  value: T | undefined,
+  usage: string,
+  runtime: OutputRuntimeEnv,
+  mode: OutputMode,
+): value is T extends undefined ? never : T {
+  if (value === undefined) {
+    emitError(runtime, mode, usage);
+    runtime.exit(2);
+    return false;
+  }
+  return true;
+}
+
+/** Parse an oc-path string; emit structured error and return null on failure. */
+function tryParse(
+  pathStr: string,
+  runtime: OutputRuntimeEnv,
+  mode: OutputMode,
+): OcPath | null {
+  try {
+    return parseOcPath(pathStr);
+  } catch (err) {
+    if (err instanceof OcPathError) {
+      emitError(runtime, mode, `parse failed: ${err.message}`, err.code);
+      runtime.exit(2);
+      return null;
+    }
+    throw err;
+  }
+}
+
+// Catch OcEmitSentinelError so it goes through the structured error
+// path; otherwise commander prints `String(err)` raw and bypasses the
+// `--json` scrubbed-error boundary.
+function catchSentinel<T>(
+  label: string,
+  runtime: OutputRuntimeEnv,
+  mode: OutputMode,
+  fn: () => T,
+): T | null {
+  try {
+    return fn();
+  } catch (err) {
+    if (err instanceof OcEmitSentinelError) {
+      emitError(runtime, mode, `${label} refused: ${err.message}`, "OC_EMIT_SENTINEL");
+      runtime.exit(1);
+      return null;
+    }
+    throw err;
+  }
+}
+
 async function loadAst(absPath: string, fileName: string): Promise<OcAst> {
   const raw = await fs.readFile(absPath, "utf-8");
   const kind = inferKind(fileName);
-  if (kind === "jsonc") {
-    return parseJsonc(raw).ast;
-  }
-  if (kind === "jsonl") {
-    return parseJsonl(raw).ast;
-  }
+  if (kind === "jsonc") return parseJsonc(raw).ast;
+  if (kind === "jsonl") return parseJsonl(raw).ast;
   return parseMd(raw).ast;
 }
 
 function emitForKind(ast: OcAst, fileName?: string): string {
-  // Plumb fileName through so OcEmitSentinelError messages carry the
-  // file context (`oc://gateway.jsonc/[raw]`) instead of the
-  // empty-slot fallback (`oc:///[raw]`). Test S-12 in the wave-21
-  // sentinel suite asserts the OcPath context appears in the error;
-  // without this plumbing, CLI emits had it stripped.
+  // Plumb fileName so sentinel errors carry file context.
   const opts = fileName !== undefined ? { fileNameForGuard: fileName } : {};
   switch (ast.kind) {
     case "jsonc":
@@ -154,29 +173,25 @@ function emitForKind(ast: OcAst, fileName?: string): string {
     case "md":
       return emitMd(ast, opts);
   }
-  throw new Error(`unreachable: emitForKind kind`);
 }
 
 function resolveFsPath(path: OcPath, options: PathCommandOptions): string {
-  const cwd = options.cwd ?? process.cwd();
-  if (options.file !== undefined) {
-    return resolvePath(options.file);
-  }
-  return resolvePath(cwd, path.file);
+  if (options.file !== undefined) return resolvePath(options.file);
+  return resolvePath(options.cwd ?? process.cwd(), path.file);
 }
 
 function formatMatchHuman(match: OcMatch): string {
   if (match.kind === "leaf") {
     return `leaf @ L${match.line}: ${JSON.stringify(match.valueText)} (${match.leafType})`;
   }
-  if (match.kind === "node") {
-    return `node @ L${match.line} [${match.descriptor}]`;
-  }
+  if (match.kind === "node") return `node @ L${match.line} [${match.descriptor}]`;
   if (match.kind === "insertion-point") {
     return `insertion-point @ L${match.line} [${match.container}]`;
   }
   return `root @ L${match.line}`;
 }
+
+// ---------- Commands -----------------------------------------------------
 
 export async function pathResolveCommand(
   pathStr: string | undefined,
@@ -184,32 +199,16 @@ export async function pathResolveCommand(
   runtime: OutputRuntimeEnv,
 ): Promise<void> {
   const mode = detectMode(options);
-  if (pathStr === undefined) {
-    emitError(runtime, mode, "resolve: missing <oc-path> argument");
-    runtime.exit(2);
-    return;
-  }
-  let ocPath: OcPath;
-  try {
-    ocPath = parseOcPath(pathStr);
-  } catch (err) {
-    if (err instanceof OcPathError) {
-      emitError(runtime, mode, `parse failed: ${err.message}`, err.code);
-      runtime.exit(2);
-      return;
-    }
-    throw err;
-  }
-  const fsPath = resolveFsPath(ocPath, options);
-  const ast = await loadAst(fsPath, ocPath.file);
-  let match;
+  if (!requireArg(pathStr, "resolve: missing <oc-path> argument", runtime, mode)) return;
+  const ocPath = tryParse(pathStr, runtime, mode);
+  if (ocPath === null) return;
+  const ast = await loadAst(resolveFsPath(ocPath, options), ocPath.file);
+  let match: OcMatch | null;
   try {
     match = resolveOcPath(ast, ocPath);
   } catch (err) {
     if (err instanceof OcPathError) {
-      // resolveOcPath now throws on wildcard patterns (the pattern
-      // belongs in `find`, not `resolve`). Surface the structured code
-      // so the CLI message points the caller at the right verb.
+      // resolveOcPath throws on wildcard patterns — point at find.
       emitError(runtime, mode, `resolve refused: ${err.message}`, err.code);
       runtime.exit(2);
       return;
@@ -221,7 +220,7 @@ export async function pathResolveCommand(
     runtime.exit(1);
     return;
   }
-  emit(runtime, mode, { resolved: true, ocPath: pathStr, match }, () => formatMatchHuman(match));
+  emit(runtime, mode, { resolved: true, ocPath: pathStr, match }, () => formatMatchHuman(match!));
 }
 
 export async function pathSetCommand(
@@ -231,41 +230,15 @@ export async function pathSetCommand(
   runtime: OutputRuntimeEnv,
 ): Promise<void> {
   const mode = detectMode(options);
-  if (pathStr === undefined || value === undefined) {
-    emitError(runtime, mode, "set: requires <oc-path> <value>");
-    runtime.exit(2);
-    return;
-  }
-  let ocPath: OcPath;
-  try {
-    ocPath = parseOcPath(pathStr);
-  } catch (err) {
-    if (err instanceof OcPathError) {
-      emitError(runtime, mode, `parse failed: ${err.message}`, err.code);
-      runtime.exit(2);
-      return;
-    }
-    throw err;
-  }
+  if (!requireArg(pathStr, "set: requires <oc-path> <value>", runtime, mode)) return;
+  if (!requireArg(value, "set: requires <oc-path> <value>", runtime, mode)) return;
+  const ocPath = tryParse(pathStr, runtime, mode);
+  if (ocPath === null) return;
   const fsPath = resolveFsPath(ocPath, options);
   const ast = await loadAst(fsPath, ocPath.file);
-  // `setOcPath` invokes the per-kind editor which calls back into
-  // emit during rebuildRaw; the redaction-sentinel guard fires there
-  // and throws `OcEmitSentinelError` for sentinel-bearing values.
-  // Catch the throw here so it goes through the structured CLI error
-  // path instead of escaping to commander's runCommandWithRuntime
-  // (which would print raw String(err) and bypass --json scrubbing).
-  let result: SetResult;
-  try {
-    result = setOcPath(ast, ocPath, value);
-  } catch (err) {
-    if (err instanceof OcEmitSentinelError) {
-      emitError(runtime, mode, `set refused: ${err.message}`, "OC_EMIT_SENTINEL");
-      runtime.exit(1);
-      return;
-    }
-    throw err;
-  }
+
+  const result = catchSentinel("set", runtime, mode, () => setOcPath(ast, ocPath, value));
+  if (result === null) return;
   if (!result.ok) {
     const detail = "detail" in result ? result.detail : undefined;
     emit(
@@ -277,25 +250,12 @@ export async function pathSetCommand(
     runtime.exit(1);
     return;
   }
-  // `setOcPath` accepted the value into the AST, but the per-kind
-  // emit can still refuse to serialize it — most notably when the
-  // value contains the redaction sentinel (defense-in-depth: the
-  // substrate's emit guard fires there). The throw must NOT escape
-  // to commander's runCommandWithRuntime, which would print
-  // `String(err)` raw and bypass the CLI's JSON/human scrubbed-error
-  // boundary. Catch and route through `emitError` like every other
-  // refusal path.
-  let newBytes: string;
-  try {
-    newBytes = emitForKind(result.ast, ocPath.file);
-  } catch (err) {
-    if (err instanceof OcEmitSentinelError) {
-      emitError(runtime, mode, `emit refused: ${err.message}`, "OC_EMIT_SENTINEL");
-      runtime.exit(1);
-      return;
-    }
-    throw err;
-  }
+  // Per-kind emit can still refuse the sentinel even after set succeeds.
+  const newBytes = catchSentinel("emit", runtime, mode, () =>
+    emitForKind(result.ast, ocPath.file),
+  );
+  if (newBytes === null) return;
+
   if (options.dryRun === true) {
     emit(
       runtime,
@@ -320,27 +280,10 @@ export async function pathFindCommand(
   runtime: OutputRuntimeEnv,
 ): Promise<void> {
   const mode = detectMode(options);
-  if (patternStr === undefined) {
-    emitError(runtime, mode, "find: missing <pattern> argument");
-    runtime.exit(2);
-    return;
-  }
-  let pattern: OcPath;
-  try {
-    pattern = parseOcPath(patternStr);
-  } catch (err) {
-    if (err instanceof OcPathError) {
-      emitError(runtime, mode, `parse failed: ${err.message}`, err.code);
-      runtime.exit(2);
-      return;
-    }
-    throw err;
-  }
-  // The CLI resolves `pattern.file` to a single literal filesystem path.
-  // Wildcards in the file slot (e.g. `oc://*.jsonc/...`) would silently
-  // ENOENT during `fs.readFile`. The substrate's `findOcPaths` walks
-  // *inside* an AST — multi-file globbing is out of scope for v0. Surface
-  // a clear error so users don't get a confusing missing-file failure.
+  if (!requireArg(patternStr, "find: missing <pattern> argument", runtime, mode)) return;
+  const pattern = tryParse(patternStr, runtime, mode);
+  if (pattern === null) return;
+  // File-slot wildcards would silently ENOENT during readFile; reject.
   if (/[*?]/.test(pattern.file)) {
     emitError(
       runtime,
@@ -352,8 +295,7 @@ export async function pathFindCommand(
     runtime.exit(2);
     return;
   }
-  const fsPath = resolveFsPath(pattern, options);
-  const ast = await loadAst(fsPath, pattern.file);
+  const ast = await loadAst(resolveFsPath(pattern, options), pattern.file);
   const matches = findOcPaths(ast, pattern);
   emit(
     runtime,
@@ -361,15 +303,10 @@ export async function pathFindCommand(
     {
       pattern: patternStr,
       count: matches.length,
-      matches: matches.map((m) => ({
-        path: formatOcPath(m.path),
-        match: m.match,
-      })),
+      matches: matches.map((m) => ({ path: formatOcPath(m.path), match: m.match })),
     },
     () => {
-      if (matches.length === 0) {
-        return `0 matches for ${patternStr}`;
-      }
+      if (matches.length === 0) return `0 matches for ${patternStr}`;
       const plural = matches.length === 1 ? "" : "es";
       const lines = [`${matches.length} match${plural} for ${patternStr}:`];
       for (const m of matches) {
@@ -378,9 +315,7 @@ export async function pathFindCommand(
       return lines.join("\n");
     },
   );
-  if (matches.length === 0) {
-    runtime.exit(1);
-  }
+  if (matches.length === 0) runtime.exit(1);
 }
 
 export function pathValidateCommand(
@@ -389,11 +324,7 @@ export function pathValidateCommand(
   runtime: OutputRuntimeEnv,
 ): void {
   const mode = detectMode(options);
-  if (pathStr === undefined) {
-    emitError(runtime, mode, "validate: missing <oc-path> argument");
-    runtime.exit(2);
-    return;
-  }
+  if (!requireArg(pathStr, "validate: missing <oc-path> argument", runtime, mode)) return;
   try {
     const ocPath = parseOcPath(pathStr);
     emit(
@@ -413,22 +344,13 @@ export function pathValidateCommand(
       },
       () => {
         const lines = [`valid: ${pathStr}`, `  file:    ${ocPath.file}`];
-        if (ocPath.section !== undefined) {
-          lines.push(`  section: ${ocPath.section}`);
-        }
-        if (ocPath.item !== undefined) {
-          lines.push(`  item:    ${ocPath.item}`);
-        }
-        if (ocPath.field !== undefined) {
-          lines.push(`  field:   ${ocPath.field}`);
-        }
-        if (ocPath.session !== undefined) {
-          lines.push(`  session: ${ocPath.session}`);
-        }
+        if (ocPath.section !== undefined) lines.push(`  section: ${ocPath.section}`);
+        if (ocPath.item !== undefined) lines.push(`  item:    ${ocPath.item}`);
+        if (ocPath.field !== undefined) lines.push(`  field:   ${ocPath.field}`);
+        if (ocPath.session !== undefined) lines.push(`  session: ${ocPath.session}`);
         return lines.join("\n");
       },
     );
-    return;
   } catch (err) {
     if (err instanceof OcPathError) {
       emit(
@@ -450,34 +372,15 @@ export async function pathEmitCommand(
   runtime: OutputRuntimeEnv,
 ): Promise<void> {
   const mode = detectMode(options);
-  if (fileArg === undefined) {
-    emitError(runtime, mode, "emit: missing <file> argument");
-    runtime.exit(2);
-    return;
-  }
-  // Resolve the file slot through the same `--cwd`/`--file` rules the
-  // sibling subcommands use: `--file` (when set) is the absolute path
-  // override; otherwise resolve `fileArg` against `--cwd` (defaulting
-  // to `process.cwd()`). Without this, the flags are accepted by
-  // commander but ignored by the handler — exactly the bug-shape
-  // ClawSweeper flagged for the doc/option mismatch.
+  if (!requireArg(fileArg, "emit: missing <file> argument", runtime, mode)) return;
   const fsPath =
     options.file !== undefined
       ? resolvePath(options.file)
       : resolvePath(options.cwd ?? process.cwd(), fileArg);
   const fileName = fsPath.split(/[\\/]/).pop() ?? fileArg;
   const ast = await loadAst(fsPath, fileName);
-  let bytes: string;
-  try {
-    bytes = emitForKind(ast, fileName);
-  } catch (err) {
-    if (err instanceof OcEmitSentinelError) {
-      emitError(runtime, mode, `emit refused: ${err.message}`, "OC_EMIT_SENTINEL");
-      runtime.exit(1);
-      return;
-    }
-    throw err;
-  }
+  const bytes = catchSentinel("emit", runtime, mode, () => emitForKind(ast, fileName));
+  if (bytes === null) return;
   if (mode === "json") {
     runtime.writeStdout(scrubSentinel(JSON.stringify({ ok: true, kind: ast.kind, bytes })));
     return;
@@ -485,22 +388,14 @@ export async function pathEmitCommand(
   runtime.writeStdout(bytes);
 }
 
-interface RawPathOptions {
-  json?: boolean;
-  human?: boolean;
-  cwd?: string;
-  file?: string;
-  dryRun?: boolean;
-}
+// ---------- Commander wiring ---------------------------------------------
 
-function normalize(opts: RawPathOptions): PathCommandOptions {
-  return {
-    json: opts.json,
-    human: opts.human,
-    cwd: opts.cwd,
-    file: opts.file,
-    dryRun: opts.dryRun,
-  };
+function withCommonOpts(cmd: Command): Command {
+  return cmd
+    .option("--json", "Force JSON output")
+    .option("--human", "Force human output")
+    .option("--cwd <dir>", "Resolve file slot against this directory")
+    .option("--file <file>", "Override the file slot's resolved path");
 }
 
 export function registerPathCli(program: Command): void {
@@ -509,43 +404,34 @@ export function registerPathCli(program: Command): void {
     .description("Inspect and edit workspace files via the oc:// addressing scheme")
     .addHelpText("after", "\nDocs: https://docs.openclaw.ai/cli/path\n");
 
-  path
-    .command("resolve")
-    .description("Print the match at an oc:// path")
-    .argument("<oc-path>", "oc:// path to resolve")
-    .option("--json", "Force JSON output")
-    .option("--human", "Force human output")
-    .option("--cwd <dir>", "Resolve file slot against this directory")
-    .option("--file <file>", "Override the file slot's resolved path")
-    .action(async (pathStr: string, opts: RawPathOptions) => {
-      await pathResolveCommand(pathStr, normalize(opts), defaultRuntime);
-    });
+  withCommonOpts(
+    path
+      .command("resolve")
+      .description("Print the match at an oc:// path")
+      .argument("<oc-path>", "oc:// path to resolve"),
+  ).action(async (pathStr: string, opts: PathCommandOptions) => {
+    await pathResolveCommand(pathStr, opts, defaultRuntime);
+  });
 
-  path
-    .command("find")
-    .description("Enumerate matches for a wildcard / predicate oc:// pattern")
-    .argument("<pattern>", "oc:// pattern")
-    .option("--json", "Force JSON output")
-    .option("--human", "Force human output")
-    .option("--cwd <dir>", "Resolve file slot against this directory")
-    .option("--file <file>", "Override the file slot's resolved path")
-    .action(async (patternStr: string, opts: RawPathOptions) => {
-      await pathFindCommand(patternStr, normalize(opts), defaultRuntime);
-    });
+  withCommonOpts(
+    path
+      .command("find")
+      .description("Enumerate matches for a wildcard / predicate oc:// pattern")
+      .argument("<pattern>", "oc:// pattern"),
+  ).action(async (patternStr: string, opts: PathCommandOptions) => {
+    await pathFindCommand(patternStr, opts, defaultRuntime);
+  });
 
-  path
-    .command("set")
-    .description("Write a leaf value at an oc:// path")
-    .argument("<oc-path>", "oc:// path to write")
-    .argument("<value>", "string value to write")
-    .option("--dry-run", "Print bytes without writing")
-    .option("--json", "Force JSON output")
-    .option("--human", "Force human output")
-    .option("--cwd <dir>", "Resolve file slot against this directory")
-    .option("--file <file>", "Override the file slot's resolved path")
-    .action(async (pathStr: string, value: string, opts: RawPathOptions) => {
-      await pathSetCommand(pathStr, value, normalize(opts), defaultRuntime);
-    });
+  withCommonOpts(
+    path
+      .command("set")
+      .description("Write a leaf value at an oc:// path")
+      .argument("<oc-path>", "oc:// path to write")
+      .argument("<value>", "string value to write")
+      .option("--dry-run", "Print bytes without writing"),
+  ).action(async (pathStr: string, value: string, opts: PathCommandOptions) => {
+    await pathSetCommand(pathStr, value, opts, defaultRuntime);
+  });
 
   path
     .command("validate")
@@ -553,19 +439,16 @@ export function registerPathCli(program: Command): void {
     .argument("<oc-path>", "oc:// path to validate")
     .option("--json", "Force JSON output")
     .option("--human", "Force human output")
-    .action((pathStr: string, opts: RawPathOptions) => {
-      pathValidateCommand(pathStr, normalize(opts), defaultRuntime);
+    .action((pathStr: string, opts: PathCommandOptions) => {
+      pathValidateCommand(pathStr, opts, defaultRuntime);
     });
 
-  path
-    .command("emit")
-    .description("Round-trip a file through parse + emit")
-    .argument("<file>", "Path to a workspace file")
-    .option("--cwd <dir>", "Resolve <file> against this directory")
-    .option("--file <file>", "Override the file's resolved path")
-    .option("--json", "Force JSON output")
-    .option("--human", "Force human output")
-    .action(async (fileArg: string, opts: RawPathOptions) => {
-      await pathEmitCommand(fileArg, normalize(opts), defaultRuntime);
-    });
+  withCommonOpts(
+    path
+      .command("emit")
+      .description("Round-trip a file through parse + emit")
+      .argument("<file>", "Path to a workspace file"),
+  ).action(async (fileArg: string, opts: PathCommandOptions) => {
+    await pathEmitCommand(fileArg, opts, defaultRuntime);
+  });
 }

@@ -1,15 +1,3 @@
-/**
- * Wave 21 — sentinel guard across all 3 kinds.
- *
- * Substrate guarantee: emit refuses to write a CALLER-INJECTED
- * `__OPENCLAW_REDACTED__` literal. Round-trip mode trusts parsed bytes
- * (a workspace file legitimately containing the sentinel — in a code
- * block, in a pasted error log — would otherwise become a workspace-
- * wide emit DoS). Render mode walks every leaf, so a caller-injected
- * sentinel via `setOcPath` always fails. Callers that want strict
- * pre-existing-byte detection (e.g., LKG fingerprint verification)
- * opt in via `acceptPreExistingSentinel: false`.
- */
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
 import { setJsoncOcPath } from "../../jsonc/edit.js";
@@ -21,8 +9,8 @@ import { parseOcPath } from "../../oc-path.js";
 import { parseMd } from "../../parse.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../../sentinel.js";
 
-describe("wave-21 sentinel guard cross-kind", () => {
-  it("S-01 jsonc round-trip echoes safely when raw contains pre-existing sentinel", () => {
+describe("sentinel guard cross-kind", () => {
+  it("jsonc round-trip echoes safely when raw contains pre-existing sentinel", () => {
     // Pre-existing sentinel bytes are trusted — see emit-policy comment
     // in jsonc/emit.ts. The strict mode below is the opt-in path for
     // callers who want LKG-style fingerprint verification.
@@ -34,21 +22,21 @@ describe("wave-21 sentinel guard cross-kind", () => {
     expect(() => emitJsonc(ast, { acceptPreExistingSentinel: false })).toThrow(OcEmitSentinelError);
   });
 
-  it("S-02 jsonl round-trip echoes safely; strict mode rejects", () => {
+  it("jsonl round-trip echoes safely; strict mode rejects", () => {
     const raw = `{"x":"${REDACTED_SENTINEL}"}\n`;
     const ast = parseJsonl(raw).ast;
     expect(emitJsonl(ast)).toBe(raw);
     expect(() => emitJsonl(ast, { acceptPreExistingSentinel: false })).toThrow(OcEmitSentinelError);
   });
 
-  it("S-03 md round-trip echoes safely; strict mode rejects", () => {
+  it("md round-trip echoes safely; strict mode rejects", () => {
     const raw = `## Body\n\n- ${REDACTED_SENTINEL}\n`;
     const ast = parseMd(raw).ast;
     expect(emitMd(ast)).toBe(raw);
     expect(() => emitMd(ast, { acceptPreExistingSentinel: false })).toThrow(OcEmitSentinelError);
   });
 
-  it("S-04 jsonc render mode walks every leaf for sentinel", () => {
+  it("jsonc render mode walks every leaf for sentinel", () => {
     const ast = parseJsonc('{ "x": "ok" }').ast;
     const tampered = {
       ...ast,
@@ -66,7 +54,7 @@ describe("wave-21 sentinel guard cross-kind", () => {
     expect(() => emitJsonc(tampered, { mode: "render" })).toThrow(OcEmitSentinelError);
   });
 
-  it("S-05 jsonl render mode walks every value-line leaf", () => {
+  it("jsonl render mode walks every value-line leaf", () => {
     const ast = parseJsonl('{"a":"ok"}\n').ast;
     const tampered = {
       ...ast,
@@ -91,7 +79,7 @@ describe("wave-21 sentinel guard cross-kind", () => {
     expect(() => emitJsonl(tampered, { mode: "render" })).toThrow(OcEmitSentinelError);
   });
 
-  it("S-06 setJsoncOcPath itself throws when the new value contains the sentinel", () => {
+  it("setJsoncOcPath itself throws when the new value contains the sentinel", () => {
     // The substrate guard fires at write-time: setJsoncOcPath rebuilds
     // raw via render mode emit, which scans every leaf. Defense-in-depth
     // — even if a caller forgets to call emit afterward, the sentinel
@@ -105,7 +93,7 @@ describe("wave-21 sentinel guard cross-kind", () => {
     ).toThrow(OcEmitSentinelError);
   });
 
-  it("S-07 sentinel embedded in deep nesting — render mode catches the leaf", () => {
+  it("sentinel embedded in deep nesting — render mode catches the leaf", () => {
     // Round-trip echoes the pre-existing bytes (the workspace contract:
     // a parsed file containing the sentinel as data is not "writing" it
     // on emit). Render mode walks every leaf and rejects this caller-
@@ -116,33 +104,33 @@ describe("wave-21 sentinel guard cross-kind", () => {
     expect(() => emitJsonc(ast, { mode: "render" })).toThrow(OcEmitSentinelError);
   });
 
-  it("S-08 sentinel inside an array element triggers guard in render mode", () => {
+  it("sentinel inside an array element triggers guard in render mode", () => {
     const raw = JSON.stringify({ arr: ["ok", REDACTED_SENTINEL, "ok"] });
     const ast = parseJsonc(raw).ast;
     expect(() => emitJsonc(ast, { mode: "render" })).toThrow(OcEmitSentinelError);
   });
 
-  it("S-09 sentinel as object key in raw — strict mode catches it", () => {
+  it("sentinel as object key in raw — strict mode catches it", () => {
     const raw = `{ "${REDACTED_SENTINEL}": 1 }`;
     const ast = parseJsonc(raw).ast;
     expect(emitJsonc(ast)).toBe(raw); // default-mode echo
     expect(() => emitJsonc(ast, { acceptPreExistingSentinel: false })).toThrow(OcEmitSentinelError);
   });
 
-  it("S-10 sentinel in jsonl malformed line — strict mode catches it", () => {
+  it("sentinel in jsonl malformed line — strict mode catches it", () => {
     const raw = `${REDACTED_SENTINEL}\n`;
     const ast = parseJsonl(raw).ast;
     expect(emitJsonl(ast)).toBe(raw); // round-trip echoes verbatim
     expect(() => emitJsonl(ast, { acceptPreExistingSentinel: false })).toThrow(OcEmitSentinelError);
   });
 
-  it("S-11 partial sentinel substring does NOT trigger guard", () => {
+  it("partial sentinel substring does NOT trigger guard", () => {
     const raw = '{ "x": "OPENCLAW_REDACTED" }';
     const ast = parseJsonc(raw).ast;
     expect(() => emitJsonc(ast)).not.toThrow();
   });
 
-  it("S-12 sentinel guard error message includes the OcPath context (render mode)", () => {
+  it("sentinel guard error message includes the OcPath context (render mode)", () => {
     // Render mode is the path that actually rejects caller-injected
     // sentinel — round-trip just echoes, so the error context surfaces
     // when render walks the offending leaf and constructs the path.

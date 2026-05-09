@@ -1,11 +1,3 @@
-/**
- * Wave 10 — round-trip property tests.
- *
- * Substrate guarantee: `emitMd(parse(raw)) === raw` for all inputs the
- * parser accepts. This wave exercises that property over a generated
- * corpus of synthetic markdown shapes and verifies parser idempotence
- * (`parse(emitMd(parse(raw))) === parse(raw)` modulo `raw`).
- */
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
 import { parseMd } from "../../parse.js";
@@ -14,8 +6,8 @@ function roundTrip(raw: string): string {
   return emitMd(parseMd(raw).ast);
 }
 
-describe("wave-10 roundtrip-property", () => {
-  it("RT-01 byte-fidelity over 100 generated shapes", () => {
+describe("roundtrip-property", () => {
+  it("byte-fidelity over 100 generated shapes", () => {
     const inputs = generateCorpus(100);
     for (const raw of inputs) {
       try {
@@ -30,7 +22,7 @@ describe("wave-10 roundtrip-property", () => {
     }
   });
 
-  it("RT-02 parser idempotence (parse → emit → parse → identical AST shape)", () => {
+  it("parser idempotence (parse → emit → parse → identical AST shape)", () => {
     const inputs = generateCorpus(50);
     for (const raw of inputs) {
       const a = parseMd(raw).ast;
@@ -42,7 +34,7 @@ describe("wave-10 roundtrip-property", () => {
     }
   });
 
-  it("RT-03 stable output for identical input", () => {
+  it("stable output for identical input", () => {
     const raw = `---\nname: x\n---\n\n## A\n- a\n## B\n- b: c\n`;
     const out1 = roundTrip(raw);
     const out2 = roundTrip(raw);
@@ -51,7 +43,7 @@ describe("wave-10 roundtrip-property", () => {
     expect(out2).toBe(out3);
   });
 
-  it("RT-04 ordering deterministic (no Object.keys / Set ordering surprises)", () => {
+  it("ordering deterministic (no Object.keys / Set ordering surprises)", () => {
     const raw = `---\nb: 2\na: 1\nc: 3\n---\n## Z\n- z\n## A\n- a\n`;
     const a1 = parseMd(raw).ast;
     const a2 = parseMd(raw).ast;
@@ -59,38 +51,37 @@ describe("wave-10 roundtrip-property", () => {
     expect(a1.blocks.map((b) => b.heading)).toEqual(a2.blocks.map((b) => b.heading));
   });
 
-  it("RT-05 round-trip preserves comment-like lines (no comment recognition at substrate)", () => {
+  it("round-trip preserves comment-like lines (no comment recognition at substrate)", () => {
     const raw = `## H\n\n<!-- a comment -->\n- bullet\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("RT-06 round-trip preserves indented blocks (substrate doesn't reflow)", () => {
+  it("round-trip preserves indented blocks (substrate doesn't reflow)", () => {
     const raw = `## H\n\n    indented code-ish block\n      more indented\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("RT-07 round-trip preserves blockquotes", () => {
+  it("round-trip preserves blockquotes", () => {
     const raw = `## H\n\n> quoted line 1\n> quoted line 2\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("RT-08 round-trip preserves images / links", () => {
+  it("round-trip preserves images / links", () => {
     const raw = `## H\n\n![alt](path/to/img.png)\n[link](http://example.com)\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("RT-09 round-trip preserves HTML", () => {
+  it("round-trip preserves HTML", () => {
     const raw = `## H\n\n<details><summary>x</summary>body</details>\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("RT-10 round-trip preserves consecutive headings with no body between", () => {
+  it("round-trip preserves consecutive headings with no body between", () => {
     const raw = `## A\n## B\n## C\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 });
 
-// ---------- corpus generator -------------------------------------------------
 
 function generateCorpus(count: number): string[] {
   const corpus: string[] = [];

@@ -1,11 +1,3 @@
-/**
- * Wave 8 — OcPath resolver edges.
- *
- * Substrate guarantee: `resolveOcPath(ast, ocPath)` returns the matched
- * node or `null`. Slug matching is case-insensitive. Field on non-kv
- * item returns `null` (not a guess). Frontmatter via the `[frontmatter]`
- * sentinel section.
- */
 import { describe, expect, it } from "vitest";
 import { parseMd } from "../../parse.js";
 import { resolveMdOcPath as resolveOcPath } from "../../resolve.js";
@@ -34,30 +26,30 @@ Preamble prose.
 - item one
 `;
 
-describe("wave-08 oc-path-resolver-edges", () => {
+describe("oc-path-resolver-edges", () => {
   const { ast } = parseMd(SAMPLE);
 
-  it("R-01 root resolves to AST", () => {
+  it("root resolves to AST", () => {
     const m = resolveOcPath(ast, { file: "X.md" });
     expect(m?.kind).toBe("root");
   });
 
-  it("R-02 block by exact slug", () => {
+  it("block by exact slug", () => {
     const m = resolveOcPath(ast, { file: "X.md", section: "boundaries" });
     expect(m?.kind).toBe("block");
   });
 
-  it("R-03 block by case-mismatched slug (Boundaries → boundaries)", () => {
+  it("block by case-mismatched slug (Boundaries → boundaries)", () => {
     const m = resolveOcPath(ast, { file: "X.md", section: "Boundaries" });
     expect(m?.kind).toBe("block");
   });
 
-  it("R-04 block by uppercased slug", () => {
+  it("block by uppercased slug", () => {
     const m = resolveOcPath(ast, { file: "X.md", section: "BOUNDARIES" });
     expect(m?.kind).toBe("block");
   });
 
-  it("R-05 multi-word section by slug", () => {
+  it("multi-word section by slug", () => {
     const m = resolveOcPath(ast, { file: "X.md", section: "multi-word-section" });
     expect(m?.kind).toBe("block");
     if (m?.kind === "block") {
@@ -65,7 +57,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     }
   });
 
-  it("R-06 multi-word section by exact heading text (case-folded)", () => {
+  it("multi-word section by exact heading text (case-folded)", () => {
     const m = resolveOcPath(ast, { file: "X.md", section: "Multi-Word Section" });
     // The OcPath section is matched case-insensitively against block.slug.
     // Block.slug for "Multi-Word Section" is "multi-word-section", and
@@ -75,12 +67,12 @@ describe("wave-08 oc-path-resolver-edges", () => {
     expect(m).toBeNull();
   });
 
-  it("R-07 unknown section returns null", () => {
+  it("unknown section returns null", () => {
     const m = resolveOcPath(ast, { file: "X.md", section: "unknown" });
     expect(m).toBeNull();
   });
 
-  it("R-08 item by slug under known section", () => {
+  it("item by slug under known section", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
       section: "tools",
@@ -101,7 +93,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     }
   });
 
-  it("R-10 item slug for plain bullet uses text", () => {
+  it("item slug for plain bullet uses text", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
       section: "boundaries",
@@ -110,7 +102,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     expect(m?.kind).toBe("item");
   });
 
-  it("R-11 item slug case-insensitive", () => {
+  it("item slug case-insensitive", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
       section: "tools",
@@ -119,7 +111,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     expect(m?.kind).toBe("item");
   });
 
-  it("R-12 item with spaces in key (slugified)", () => {
+  it("item with spaces in key (slugified)", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
       section: "tools",
@@ -131,7 +123,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     }
   });
 
-  it("R-13 unknown item returns null", () => {
+  it("unknown item returns null", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
       section: "tools",
@@ -140,7 +132,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     expect(m).toBeNull();
   });
 
-  it("R-14 item-field matches kv.key (case-insensitive)", () => {
+  it("item-field matches kv.key (case-insensitive)", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
       section: "tools",
@@ -150,7 +142,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     expect(m?.kind).toBe("item-field");
   });
 
-  it("R-15 field on plain (non-kv) item returns null", () => {
+  it("field on plain (non-kv) item returns null", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
       section: "boundaries",
@@ -160,7 +152,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     expect(m).toBeNull();
   });
 
-  it("R-16 field that does not match kv.key returns null", () => {
+  it("field that does not match kv.key returns null", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
       section: "tools",
@@ -170,7 +162,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     expect(m).toBeNull();
   });
 
-  it("R-17 frontmatter via [frontmatter] sentinel section", () => {
+  it("frontmatter via [frontmatter] sentinel section", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
       section: "[frontmatter]",
@@ -182,7 +174,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     }
   });
 
-  it("R-18 frontmatter unknown key returns null", () => {
+  it("frontmatter unknown key returns null", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
       section: "[frontmatter]",
@@ -191,7 +183,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     expect(m).toBeNull();
   });
 
-  it("R-19 frontmatter without field returns null", () => {
+  it("frontmatter without field returns null", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
       section: "[frontmatter]",
@@ -199,7 +191,7 @@ describe("wave-08 oc-path-resolver-edges", () => {
     expect(m).toBeNull();
   });
 
-  it("R-20 multiple frontmatter keys with same name — first match wins", () => {
+  it("multiple frontmatter keys with same name — first match wins", () => {
     // Build an AST manually to test
     const dupeAst = {
       kind: "md" as const,
@@ -222,20 +214,20 @@ describe("wave-08 oc-path-resolver-edges", () => {
     }
   });
 
-  it("R-21 empty AST resolves root only", () => {
+  it("empty AST resolves root only", () => {
     const empty = { kind: "md" as const, raw: "", frontmatter: [], preamble: "", blocks: [] };
     expect(resolveOcPath(empty, { file: "X.md" })?.kind).toBe("root");
     expect(resolveOcPath(empty, { file: "X.md", section: "any" })).toBeNull();
   });
 
-  it("R-22 resolver does not mutate the AST", () => {
+  it("resolver does not mutate the AST", () => {
     const before = JSON.stringify(ast);
     resolveOcPath(ast, { file: "X.md", section: "tools", item: "gh", field: "gh" });
     const after = JSON.stringify(ast);
     expect(after).toBe(before);
   });
 
-  it("R-23 file segment is informational — resolver doesn't check it", () => {
+  it("file segment is informational — resolver doesn't check it", () => {
     // The file name in OcPath is metadata; resolver assumes the AST
     // matches. Callers verify file mapping before passing the AST.
     const m1 = resolveOcPath(ast, { file: "SOUL.md", section: "tools" });

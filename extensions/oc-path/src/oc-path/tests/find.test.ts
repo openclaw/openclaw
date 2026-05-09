@@ -1,12 +1,3 @@
-/**
- * `findOcPaths` — multi-match search verb test surface.
- *
- * Tests cover: `*` single-segment expansion across the supported kinds;
- * `**` recursive descent for jsonc; the wildcard guard on
- * `resolveOcPath` / `setOcPath`; the slot-shape preservation invariant
- * (a `*` in the `item` slot produces concrete paths whose `item` field
- * carries the matched value).
- */
 import { describe, expect, it } from "vitest";
 import { findOcPaths } from "../find.js";
 import { parseJsonc } from "../jsonc/parse.js";
@@ -14,8 +5,6 @@ import { parseJsonl } from "../jsonl/parse.js";
 import { formatOcPath, hasWildcard, OcPathError, parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { resolveOcPath, setOcPath } from "../universal.js";
-
-// ---------- hasWildcard ----------------------------------------------------
 
 describe("hasWildcard", () => {
   it("detects single-segment * in any slot", () => {
@@ -45,17 +34,10 @@ describe("hasWildcard", () => {
   });
 });
 
-// ---------- Wildcard guard on resolveOcPath / setOcPath -------------------
-
 describe("wildcard guard", () => {
   const ast = parseJsonc('{"steps":[{"id":"a","command":"foo"}]}').ast;
 
-  it("resolveOcPath throws OcPathError for wildcard pattern (F16)", () => {
-    // Previously returned `null` — indistinguishable from "path doesn't
-    // resolve". Now throws with `OC_PATH_WILDCARD_IN_RESOLVE` so the
-    // CLI / consumers can surface "use findOcPaths" rather than "not
-    // found". setOcPath uses a discriminated `wildcard-not-allowed`
-    // reason; this is the resolve-side analogue.
+  it("resolveOcPath throws OcPathError for wildcard pattern", () => {
     expect(() => resolveOcPath(ast, parseOcPath("oc://wf/steps/*/command"))).toThrow(
       /findOcPaths/,
     );
@@ -85,8 +67,6 @@ describe("wildcard guard", () => {
   });
 });
 
-// ---------- findOcPaths — fast-path (no wildcards) -------------------------
-
 describe("findOcPaths — non-wildcard fast-path", () => {
   it("wraps resolveOcPath result for plain path", () => {
     const ast = parseJsonc('{"name":"x"}').ast;
@@ -102,7 +82,6 @@ describe("findOcPaths — non-wildcard fast-path", () => {
   });
 });
 
-// ---------- findOcPaths — JSONC --------------------------------------------
 
 describe("findOcPaths — JSONC kind", () => {
   const jsonc = parseJsonc(
@@ -137,7 +116,6 @@ describe("findOcPaths — JSONC kind", () => {
   });
 });
 
-// ---------- findOcPaths — JSONL --------------------------------------------
 
 describe("findOcPaths — JSONL kind", () => {
   const jsonl = parseJsonl(
@@ -160,9 +138,6 @@ describe("findOcPaths — JSONL kind", () => {
     }
   });
 
-  // F8 — line-slot union and predicate. Without these, the jsonc
-  // walker handled them but JSONL fell through to `pickLine(addr)`
-  // which returns null for union/predicate shapes → silent zero matches.
   it("union {L1,L2} at line slot enumerates each alternative", () => {
     const out = findOcPaths(jsonl, parseOcPath("oc://session/{L1,L3}/event"));
     expect(out).toHaveLength(2);
@@ -191,7 +166,6 @@ describe("findOcPaths — JSONL kind", () => {
   });
 });
 
-// ---------- Positional primitives ($first / $last / -N) -------------------
 
 describe("positional primitives — jsonc", () => {
   const jsonc = parseJsonc('{"items":[10,20,30]}').ast;
@@ -222,7 +196,6 @@ describe("positional primitives — jsonc", () => {
   });
 
   it("hasWildcard returns false for positional patterns", () => {
-    // Positional ≠ wildcard — they resolve deterministically.
     expect(hasWildcard(parseOcPath("oc://X/$last/id"))).toBe(false);
     expect(hasWildcard(parseOcPath("oc://X/-1/id"))).toBe(false);
   });
@@ -253,12 +226,8 @@ describe("positional primitives — jsonl", () => {
   });
 });
 
-// ---------- Segment unions {a,b,c} -----------------------------------------
 
 describe("quoted segments (v1.0)", () => {
-  // Evidence: openclaw#69004 — model alias `anthropic/claude-opus-4-7`.
-  // Slash inside the key has no other syntax that doesn't conflict with
-  // path-level slash split.
   const jsonc = parseJsonc(
     '{"agents":{"defaults":{"models":{' +
       '"anthropic/claude-opus-4-7":{"alias":"opus47","contextWindow":1000000},' +
@@ -301,7 +270,6 @@ describe("quoted segments (v1.0)", () => {
   });
 
   it("quoted segment with embedded escape sequences", () => {
-    // Key literally contains a backslash and a quote.
     const ast = parseJsonc('{"keys":{"a\\\\b":"v1","c\\"d":"v2"}}').ast;
     const m1 = resolveOcPath(ast, parseOcPath('oc://X/keys/"a\\\\b"'));
     expect(m1?.kind).toBe("leaf");
@@ -313,7 +281,6 @@ describe("quoted segments (v1.0)", () => {
   it("findOcPaths — wildcard returns paths with quoted keys when needed", () => {
     const out = findOcPaths(jsonc, parseOcPath("oc://config/agents.defaults.models/*/alias"));
     expect(out).toHaveLength(3);
-    // The two slash-bearing keys round-trip via quotes; `plain` stays bare.
     const items = out.map((m) => m.path.item);
     expect(items.some((s) => s === "plain")).toBe(true);
     expect(items.some((s) => s === '"anthropic/claude-opus-4-7"')).toBe(true);
@@ -338,8 +305,6 @@ describe("quoted segments (v1.0)", () => {
 });
 
 describe("value predicates — numeric operators (v1.1)", () => {
-  // Evidence: openclaw#54383 — compaction fails when maxTokens > model output cap.
-  // Doctor lint rule: flag any model with maxTokens > 128000 (Anthropic per-request output cap).
   const jsonc = parseJsonc(
     '{"models":{"providers":{"anthropic":{"models":[' +
       '{"id":"claude-sonnet-4-6","contextWindow":1000000,"maxTokens":128000},' +
@@ -348,7 +313,6 @@ describe("value predicates — numeric operators (v1.1)", () => {
       "]}}}}",
   ).ast;
 
-  // Slot layout: section=`models.providers.anthropic.models`, item=predicate, field=`id`.
   const PREFIX = "oc://config/models.providers.anthropic.models";
 
   it("> finds models exceeding the per-request output cap", () => {
@@ -380,7 +344,6 @@ describe("value predicates — numeric operators (v1.1)", () => {
   });
 
   it("numeric operator rejects non-numeric leaves silently", () => {
-    // String leaf, numeric op — predicate doesn't match (no false positive).
     const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[id>5]/id`));
     expect(out).toHaveLength(0);
   });
@@ -404,10 +367,9 @@ describe("value predicates — jsonc", () => {
   });
 });
 
-// ---------- Ordinal addressing (#N) for distinct duplicate slugs ----------
 
 describe("ordinal addressing — md", () => {
-  // Two items with the same slug after slugify (`foo: a` and `foo: b`).
+  // Two items share slug `foo` after slugify.
   const md = parseMd("## Tools\n\n- foo: a\n- foo: b\n- bar: c\n").ast;
 
   it("#0 picks the first item by document order", () => {
@@ -432,7 +394,6 @@ describe("ordinal addressing — md", () => {
 
   it("findOcPaths disambiguates duplicate-slug items via #N", () => {
     const out = findOcPaths(md, parseOcPath("oc://AGENTS.md/tools/*/foo"));
-    // 2 items have key `foo` (and matching slug); 1 has `bar` (no match).
     expect(out).toHaveLength(2);
     const items = out.map((m) => m.path.item);
     expect(items).toEqual(["#0", "#1"]);
@@ -444,12 +405,10 @@ describe("ordinal addressing — md", () => {
     const md2 = parseMd("## Tools\n\n- foo: a\n- bar: b\n").ast;
     const out = findOcPaths(md2, parseOcPath("oc://AGENTS.md/tools/*"));
     const items = out.map((m) => m.path.item);
-    // Both unique → both stay as slugs.
     expect(items.toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))).toEqual(["bar", "foo"]);
   });
 });
 
-// ---------- findOcPaths — Markdown -----------------------------------------
 
 describe("findOcPaths — Markdown kind", () => {
   const md = parseMd(
@@ -468,7 +427,6 @@ describe("findOcPaths — Markdown kind", () => {
   });
 
   it("* in field slot enumerates each item kv key", () => {
-    // Item slug is the kv-key slug ('send_email' → 'send-email').
     const out = findOcPaths(md, parseOcPath("oc://SKILL.md/Tools/send-email/*"));
     expect(out).toHaveLength(1);
     expect(out[0].match.kind).toBe("leaf");
@@ -478,26 +436,15 @@ describe("findOcPaths — Markdown kind", () => {
   });
 
   it("* in item slot + matching field returns each item whose kv key matches", () => {
-    // The kv key on `- send_email: enabled` is `send_email`. Pattern
-    // field='send_email' matches that one item; the other two items
-    // (search, read_email) have different kv keys.
     const out = findOcPaths(md, parseOcPath("oc://SKILL.md/Tools/*/send_email"));
     expect(out).toHaveLength(1);
     expect(out[0].path.item).toBe("send-email");
   });
 
-  it("** at section slot matches items at every depth (F14 — cross-kind symmetry)", () => {
-    // Without the retain-i branch on `**`, walkMd only descended one
-    // level (i + 1, consumed `**`) — the jsonc walker also retains
-    // `**` to keep matching deeper. Lint rules expecting universal
-    // `**` behavior across kinds (sweep all sections for `risk:`)
-    // would silently get 0 md matches on a multi-block file.
-    //
-    // Pattern `**/send-email` — `**` matches the `tools` block, then
-    // `send-email` (kebab slug) matches the item under it. Without the
-    // retain-i branch, the walker descends with `**` consumed at the
-    // section layer and then can't satisfy the item slot since the
-    // walker is now inside the wrong block looking for an item slug.
+  it("** at section slot matches items at every depth (cross-kind symmetry)", () => {
+    // The retain-i branch on `**` keeps the wildcard active across
+    // descent — without it, multi-block md files match only the
+    // immediate-block layer.
     const multiBlock = parseMd(
       "## Boundaries\n\n" +
         "- never: rm -rf\n\n" +
@@ -506,22 +453,14 @@ describe("findOcPaths — Markdown kind", () => {
         "- search: enabled\n",
     ).ast;
     const out = findOcPaths(multiBlock, parseOcPath("oc://SOUL.md/**/send-email"));
-    // The `send-email` item is under the `tools` block. Pin that we
-    // get at least one match (the substrate's md `**` should reach it).
     expect(out.length).toBeGreaterThanOrEqual(1);
     const items = out.map((m) => m.path.item).filter((v): v is string => v !== undefined);
     expect(items).toContain("send-email");
   });
 });
 
-describe("findOcPaths — quoted segments survive expansion (regression: resolve↔find symmetry)", () => {
+describe("findOcPaths — quoted segments survive expansion", () => {
   it("finds keys with slashes when the path quotes them and a sibling wildcards", () => {
-    // Closes ClawSweeper P2 on PR #78678: when a pattern needs
-    // expansion (e.g. trailing union or wildcard), the JSONC walker
-    // bypassed `resolveJsoncOcPath` and compared object keys to the
-    // raw `cur.value` directly. Patterns with quoted literals
-    // returned no matches even though resolve worked. This test
-    // exercises a quoted middle segment + a trailing union.
     const raw = `{
   "agents": {
     "defaults": {
@@ -542,7 +481,6 @@ describe("findOcPaths — quoted segments survive expansion (regression: resolve
         'oc://config.jsonc/agents.defaults.models/"github-copilot/claude-opus-4-7"/{alias,contextWindow}',
       ),
     );
-    // Both alternatives in the union should match.
     expect(out.length).toBe(2);
     const fields = out
       .map((m) => m.path.field)
@@ -551,14 +489,8 @@ describe("findOcPaths — quoted segments survive expansion (regression: resolve
   });
 });
 
-// ---------- I3: md walker union + predicate parity ------------------------
 
 describe("union segments — md", () => {
-  // Cross-kind parity: the jsonc walker already dispatches union at every
-  // slot. The md walker previously dispatched only on wildcard / ordinal
-  // / positional / literal — so `oc://X.md/{Boundaries,Limits}/...`
-  // matched zero items where the same shape on jsonc would match both.
-  // These tests pin the parity addition.
   const RAW = `## Boundaries
 
 - enabled: true
@@ -590,9 +522,7 @@ describe("union segments — md", () => {
     expect(items).toEqual(["alias", "max-tokens"]);
   });
 
-  it("expands {a,b} at the field slot (degenerate but parity-preserving)", () => {
-    // Md items hold a single kv field, so {alias,nope} matches at most
-    // one alt — the matching one. Mirrors the jsonc dispatch shape.
+  it("expands {a,b} at the field slot — md items have one kv, so at most one alt", () => {
     const ast = parseMd(RAW).ast;
     const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/alias/{alias,nope}"));
     expect(out.length).toBe(1);
@@ -613,8 +543,6 @@ describe("predicate segments — md", () => {
 `;
 
   it("matches sections that contain an item satisfying the predicate", () => {
-    // [enabled=true] — only Boundaries has an item kv.key=enabled with
-    // value=true; Limits's enabled=false fails the predicate.
     const ast = parseMd(RAW).ast;
     const out = findOcPaths(ast, parseOcPath("oc://X.md/[enabled=true]/*/*"));
     expect(out.length).toBeGreaterThan(0);
@@ -631,7 +559,6 @@ describe("predicate segments — md", () => {
   });
 
   it("matches the kv pair at the field slot", () => {
-    // [max-tokens=4096] at the field slot — checks the kv pair as a unit.
     const ast = parseMd(RAW).ast;
     const out = findOcPaths(
       ast,

@@ -1,28 +1,14 @@
 /**
- * Universal `setOcPath` and `resolveOcPath` — the public verbs.
+ * Universal `setOcPath` / `resolveOcPath` / `detectInsertion`.
+ * Addressing is universal; encoding is per-kind. Callers pass any AST
+ * + path + value; the substrate dispatches on `ast.kind` and coerces
+ * the value based on the AST shape at the resolution point.
  *
- * **Strategic frame**: addressing is universal. Encoding is per-kind.
- * The OcPath syntax encodes WHAT to do (set leaf vs. insert vs. address
- * a structural node); the AST kind encodes HOW the substrate carries it
- * out. Callers pass any AST + a path + a string value; the substrate
- * dispatches via `ast.kind` and coerces the value based on the path's
- * syntax and the AST shape at the resolution point.
- *
- * **Path syntax vocabulary** (v0):
- *
- *   oc://FILE/section/item/field          → leaf address (set/replace value)
- *   oc://FILE/section/+                   → end-insertion at section
- *   oc://FILE/section/+key                → keyed insertion (object key add)
- *   oc://FILE/section/+0                  → indexed insertion (array splice)
- *   oc://FILE/+                           → file-root insertion (jsonl line append, md new section)
- *
- * **Coercion at leaves** is driven by the AST type at the resolution point:
- *   - md leaf  → value used verbatim (md is text-native)
- *   - jsonc/jsonl leaf, existing string → value verbatim
- *   - jsonc/jsonl leaf, existing number → parseFloat (parse-error if NaN)
- *   - jsonc/jsonl leaf, existing boolean → 'true'/'false' literal
- *   - jsonc/jsonl leaf, existing null → only `value === 'null'`
- *   - insertion → `JSON.parse(value)` for jsonc/jsonl; raw text for md
+ *   oc://FILE/section/item/field   → leaf address
+ *   oc://FILE/section/+            → end-insertion
+ *   oc://FILE/section/+key         → keyed insertion
+ *   oc://FILE/section/+0           → indexed insertion
+ *   oc://FILE/+                    → file-root insertion
  *
  * @module @openclaw/oc-path/universal
  */
@@ -54,26 +40,9 @@ import { resolveMdOcPath } from "./resolve.js";
 export type OcAst = MdAst | JsoncAst | JsonlAst;
 
 /**
- * Universal resolve result. Same shape regardless of AST kind so
- * consumers branch only on `match.kind`.
- *
- * `leaf` carries the value as a string — the canonical leaf form on
- * the wire, suitable for direct comparison or display. Numeric/bool
- * leaves are stringified deterministically (`String(42)` → `'42'`,
- * `String(true)` → `'true'`).
- *
- * `node` describes which kind of structural node the path resolved to
- * (md-block, jsonc-object, jsonl-line, etc.) — the descriptor lets
- * tooling format / drill in without re-parsing the kind tag.
- *
- * `insertion-point` is returned when the path's terminal segment is
- * an insertion marker (`+`, `+key`, `+nnn`) and the parent is a valid
- * container.
- *
- * **`line`** is the 1-based source line of the matched node, or `1`
- * for the root / synthetic constructions where no source line exists.
- * Lint rules use it directly for diagnostic positioning instead of
- * walking the kind-specific AST a second time.
+ * Universal resolve result — same shape across AST kinds. `leaf` values
+ * are string-coerced (numbers/bools stringified deterministically).
+ * `line` is 1-based; root/synthetic nodes use `1`.
  */
 export type OcMatch =
   | { readonly kind: "root"; readonly ast: OcAst; readonly line: number }
@@ -119,13 +88,9 @@ export type SetResult =
       readonly detail?: string;
     };
 
-// ---------- Insertion-syntax detection -------------------------------------
-
 /**
- * Inspect the path for an insertion marker on the deepest segment.
- * A segment of `+`, `+<key>`, or `+<index>` indicates insertion at the
- * parent. Returns the parent path (with insertion segment stripped) +
- * the marker; or `null` for a plain (non-insertion) path.
+ * Insertion marker on the deepest path segment: `+`, `+<key>`, or
+ * `+<index>`. Returns parent path + marker; null for plain paths.
  */
 export interface InsertionInfo {
   readonly parentPath: OcPath;
@@ -133,37 +98,23 @@ export interface InsertionInfo {
 }
 
 export function detectInsertion(path: OcPath): InsertionInfo | null {
-  // Find the deepest defined segment.
   const segments: Array<{ slot: "section" | "item" | "field"; value: string }> = [];
-  if (path.section !== undefined) {
-    segments.push({ slot: "section", value: path.section });
-  }
-  if (path.item !== undefined) {
-    segments.push({ slot: "item", value: path.item });
-  }
-  if (path.field !== undefined) {
-    segments.push({ slot: "field", value: path.field });
-  }
-  if (segments.length === 0) {
-    return null;
-  }
+  if (path.section !== undefined) segments.push({ slot: "section", value: path.section });
+  if (path.item !== undefined) segments.push({ slot: "item", value: path.item });
+  if (path.field !== undefined) segments.push({ slot: "field", value: path.field });
+  if (segments.length === 0) return null;
 
   const last = segments[segments.length - 1];
-  if (!last.value.startsWith("+")) {
-    return null;
-  }
+  if (!last.value.startsWith("+")) return null;
 
   const rest = last.value.slice(1);
-  let marker: InsertionInfo["marker"];
-  if (rest.length === 0) {
-    marker = "+";
-  } else if (/^\d+$/.test(rest)) {
-    marker = { kind: "indexed", index: Number(rest) };
-  } else {
-    marker = { kind: "keyed", key: rest };
-  }
+  const marker: InsertionInfo["marker"] =
+    rest.length === 0
+      ? "+"
+      : /^\d+$/.test(rest)
+        ? { kind: "indexed", index: Number(rest) }
+        : { kind: "keyed", key: rest };
 
-  // Strip the deepest segment from the path.
   const parentPath: OcPath = {
     file: path.file,
     ...(last.slot !== "section" && path.section !== undefined ? { section: path.section } : {}),
@@ -174,22 +125,10 @@ export function detectInsertion(path: OcPath): InsertionInfo | null {
   return { parentPath, marker };
 }
 
-// ---------- Universal resolve ----------------------------------------------
-
-/**
- * Resolve an `OcPath` against any AST. Returns a kind-agnostic match
- * shape or `null` when the path doesn't resolve.
- *
- * Insertion-marker paths return `{kind: 'insertion-point', container}`
- * if the parent is a valid container; otherwise `null`.
- */
+/** Resolve an `OcPath` against any AST. Throws on wildcard patterns. */
 export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
-  // Wildcard guard: `resolveOcPath` is the single-match verb. Wildcards
-  // belong to `findOcPaths` (multi-match). Throw with a structured code
-  // (consistent with `setOcPath`'s `wildcard-not-allowed` discriminator)
-  // — silent `null` here is indistinguishable from "path doesn't
-  // resolve", so consumers couldn't tell whether they should switch to
-  // findOcPaths or accept the address as missing.
+  // Single-match verb: wildcards belong to findOcPaths. Throw with a
+  // structured code so consumers can route to the right verb.
   if (hasWildcard(path)) {
     throw new OcPathError(
       `resolveOcPath received a wildcard pattern; use findOcPaths instead: ${formatOcPath(path)}`,
@@ -198,9 +137,7 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
     );
   }
   const insertion = detectInsertion(path);
-  if (insertion !== null) {
-    return resolveInsertion(ast, insertion);
-  }
+  if (insertion !== null) return resolveInsertion(ast, insertion);
 
   switch (ast.kind) {
     case "md":
@@ -210,14 +147,11 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
     case "jsonl":
       return resolveJsonlToUniversal(ast, path);
   }
-  return null;
 }
 
 function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
   const m = resolveMdOcPath(ast, path);
-  if (m === null) {
-    return null;
-  }
+  if (m === null) return null;
   switch (m.kind) {
     case "root":
       return { kind: "root", ast, line: 1 };
@@ -230,21 +164,13 @@ function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
     case "item-field":
       return { kind: "leaf", valueText: m.value, leafType: "string", line: m.node.line };
   }
-  return null;
 }
 
 function resolveJsoncToUniversal(ast: JsoncAst, path: OcPath): OcMatch | null {
   const m = resolveJsoncOcPath(ast, path);
-  if (m === null) {
-    return null;
-  }
-  if (m.kind === "root") {
-    return { kind: "root", ast, line: 1 };
-  }
-  if (m.kind === "object-entry") {
-    return jsoncValueToMatch(m.node.value, m.node.line);
-  }
-  // m.kind === 'value' — array element or root: line lives on the value itself.
+  if (m === null) return null;
+  if (m.kind === "root") return { kind: "root", ast, line: 1 };
+  if (m.kind === "object-entry") return jsoncValueToMatch(m.node.value, m.node.line);
   return jsoncValueToMatch(m.node, m.node.line ?? 1);
 }
 
@@ -263,33 +189,20 @@ function jsoncValueToMatch(value: JsoncValue, line: number): OcMatch {
     case "null":
       return { kind: "leaf", valueText: "null", leafType: "null", line };
   }
-  throw new Error(`unreachable: jsoncValueToMatch kind`);
 }
 
 function resolveJsonlToUniversal(ast: JsonlAst, path: OcPath): OcMatch | null {
   const m = resolveJsonlOcPath(ast, path);
-  if (m === null) {
-    return null;
-  }
-  if (m.kind === "root") {
-    return { kind: "root", ast, line: 1 };
-  }
-  if (m.kind === "line") {
-    return { kind: "node", descriptor: "jsonl-line", line: m.node.line };
-  }
-  // Inside-line jsonc parser starts numbering at 1 for each jsonl
-  // line, so `m.node.line` would always be 1 for any jsonl-resolved
-  // match. Use `m.line` (the JsonlLine's file-level line) — by
-  // construction every inside-line node sits on the same file line.
-  if (m.kind === "object-entry") {
-    return jsoncValueToMatch(m.node.value, m.line);
-  }
+  if (m === null) return null;
+  if (m.kind === "root") return { kind: "root", ast, line: 1 };
+  if (m.kind === "line") return { kind: "node", descriptor: "jsonl-line", line: m.node.line };
+  // Inside-line jsonc nodes always have line=1; use the JsonlLine's
+  // file-level line instead since every inside-line node sits there.
+  if (m.kind === "object-entry") return jsoncValueToMatch(m.node.value, m.line);
   return jsoncValueToMatch(m.node, m.line);
 }
 
 function resolveInsertion(ast: OcAst, info: InsertionInfo): OcMatch | null {
-  // For an insertion to be valid the parent must resolve to a container
-  // we know how to extend. Inspect the parent.
   switch (ast.kind) {
     case "md":
       return resolveMdInsertion(ast, info);
@@ -298,25 +211,17 @@ function resolveInsertion(ast: OcAst, info: InsertionInfo): OcMatch | null {
     case "jsonl":
       return resolveJsonlInsertion(ast, info);
   }
-  return null;
 }
 
 function resolveMdInsertion(ast: MdAst, info: InsertionInfo): OcMatch | null {
   const p = info.parentPath;
-  // oc://FILE/+ → file-root insertion (new section)
-  if (p.section === undefined) {
-    return { kind: "insertion-point", container: "md-file", line: 1 };
-  }
-  // oc://FILE/[frontmatter]/+key → frontmatter add
+  if (p.section === undefined) return { kind: "insertion-point", container: "md-file", line: 1 };
   if (p.section === "[frontmatter]") {
     return { kind: "insertion-point", container: "md-frontmatter", line: 1 };
   }
-  // oc://FILE/section/+ → append item to section
   if (p.item === undefined && p.field === undefined) {
     const m = resolveMdOcPath(ast, p);
-    if (m === null || m.kind !== "block") {
-      return null;
-    }
+    if (m === null || m.kind !== "block") return null;
     return { kind: "insertion-point", container: "md-section", line: m.node.line };
   }
   return null;
@@ -349,35 +254,20 @@ function resolveJsoncInsertion(ast: JsoncAst, info: InsertionInfo): OcMatch | nu
 }
 
 function resolveJsonlInsertion(ast: JsonlAst, info: InsertionInfo): OcMatch | null {
-  // jsonl insertion only makes sense at the file level: `oc://FILE/+`.
-  if (info.parentPath.section !== undefined) {
-    return null;
-  }
-  // The only insertion point for jsonl is "after the last line" — the
-  // line surfaced is `lastLine + 1` so consumers can render correctly.
+  // jsonl insertion only makes sense at file level (`oc://FILE/+`).
+  // Surfaced line is lastLine+1 so consumers render correctly.
+  if (info.parentPath.section !== undefined) return null;
   const lastLine = ast.lines.length > 0 ? ast.lines[ast.lines.length - 1].line : 0;
   return { kind: "insertion-point", container: "jsonl-file", line: lastLine + 1 };
 }
 
-// ---------- Universal set --------------------------------------------------
-
 /**
- * Replace or insert at `path` with `value` (always a string).
- * Substrate dispatches via `ast.kind` and coerces value at leaves
- * based on the existing AST shape at the path location.
- *
- * For insertion-marker paths (`+`, `+key`, `+nnn`) the value is parsed
- * as kind-appropriate content (JSON for jsonc/jsonl; plain text for md).
- *
- * Returns a structured result; never throws on parser-tolerated input.
- * Sentinel-guard violations DO throw `OcEmitSentinelError` (defense in
- * depth — refuse to write redacted content even when caller "asked").
+ * Replace or insert at `path`. Coerces value at leaves based on the
+ * existing AST shape; for insertion paths value is parsed as
+ * kind-appropriate content (JSON for jsonc/jsonl; raw text for md).
+ * Sentinel-guard violations throw `OcEmitSentinelError`.
  */
 export function setOcPath(ast: OcAst, path: OcPath, value: string): SetResult {
-  // Wildcard guard: `setOcPath` writes a single concrete leaf. A pattern
-  // would be ambiguous (which match wins?) so we reject early. Callers
-  // who want multi-set should `findOcPaths(...)` then `setOcPath` per
-  // resolved path — the explicit loop is the right shape.
   if (hasWildcard(path)) {
     return {
       ok: false,
@@ -387,109 +277,72 @@ export function setOcPath(ast: OcAst, path: OcPath, value: string): SetResult {
   }
   const insertion = detectInsertion(path);
   if (insertion !== null) {
-    return setInsertion(ast, insertion, value);
+    switch (ast.kind) {
+      case "md":
+        return setMdInsertion(ast, insertion, value);
+      case "jsonc":
+        return setJsoncInsertion(ast, insertion, value);
+      case "jsonl":
+        return setJsonlInsertion(ast, insertion, value);
+    }
   }
-
   switch (ast.kind) {
-    case "md":
-      return setMdLeaf(ast, path, value);
+    case "md": {
+      const r = setMdOcPath(ast, path, value);
+      return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
+    }
     case "jsonc":
-      return setJsoncLeaf(ast, path, value);
+      return setStructuredLeaf(ast, path, value, resolveJsoncOcPath, setJsoncOcPath);
     case "jsonl":
-      return setJsonlLeaf(ast, path, value);
+      return setStructuredLeaf(ast, path, value, resolveJsonlOcPath, setJsonlOcPath, () => {
+        // jsonl line replacement: value must be JSON for the whole line.
+        const parsed = tryParseJson(value);
+        if (parsed === undefined) {
+          return { ok: false, reason: "parse-error", detail: "line replacement requires JSON value" };
+        }
+        const r = setJsonlOcPath(ast, path, jsonToJsoncValue(parsed));
+        return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
+      });
   }
-  throw new Error(`unreachable: setOcPath kind`);
 }
 
-function setMdLeaf(ast: MdAst, path: OcPath, value: string): SetResult {
-  const r = setMdOcPath(ast, path, value);
-  if (r.ok) {
-    return { ok: true, ast: r.ast };
-  }
-  return { ok: false, reason: r.reason };
-}
-
-function setJsoncLeaf(ast: JsoncAst, path: OcPath, value: string): SetResult {
-  // Inspect the existing leaf to determine target type for coercion.
-  const existing = resolveJsoncOcPath(ast, path);
-  if (existing === null) {
-    return { ok: false, reason: "unresolved" };
-  }
+// Resolve → reject root/line → coerce by existing leaf type → set →
+// wrap. The optional `onLine` handles jsonl's whole-line replacement.
+function setStructuredLeaf<A extends OcAst, M extends StructuredLeafMatch>(
+  ast: A,
+  path: OcPath,
+  value: string,
+  resolve: (a: A, p: OcPath) => M | null,
+  set: (a: A, p: OcPath, c: JsoncValue) => SetOpResult<A>,
+  onLine?: () => SetResult,
+): SetResult {
+  const existing = resolve(ast, path);
+  if (existing === null) return { ok: false, reason: "unresolved" };
   if (existing.kind === "root") {
-    return {
-      ok: false,
-      reason: "not-writable",
-      detail: "root replacement is not supported via setOcPath",
-    };
-  }
-  const leafValue = existing.kind === "object-entry" ? existing.node.value : existing.node;
-  const coerced = coerceJsoncLeaf(value, leafValue);
-  if (coerced === null) {
-    return {
-      ok: false,
-      reason: "parse-error",
-      detail: `cannot coerce "${value}" to ${leafValue.kind}`,
-    };
-  }
-  const r = setJsoncOcPath(ast, path, coerced);
-  if (r.ok) {
-    return { ok: true, ast: r.ast };
-  }
-  return { ok: false, reason: r.reason };
-}
-
-function setJsonlLeaf(ast: JsonlAst, path: OcPath, value: string): SetResult {
-  const existing = resolveJsonlOcPath(ast, path);
-  if (existing === null) {
-    return { ok: false, reason: "unresolved" };
-  }
-  if (existing.kind === "root") {
-    return {
-      ok: false,
-      reason: "not-writable",
-      detail: "root replacement is not supported via setOcPath",
-    };
+    return { ok: false, reason: "not-writable", detail: "root replacement is not supported via setOcPath" };
   }
   if (existing.kind === "line") {
-    // Replacing a whole line — value should be JSON.
-    const parsed = tryParseJson(value);
-    if (parsed === undefined) {
-      return { ok: false, reason: "parse-error", detail: `line replacement requires JSON value` };
-    }
-    const r = setJsonlOcPath(ast, path, jsonToJsoncValue(parsed));
-    if (r.ok) {
-      return { ok: true, ast: r.ast };
-    }
-    return { ok: false, reason: r.reason };
+    return onLine !== undefined ? onLine() : { ok: false, reason: "not-writable" };
   }
-  // Field on a line — leaf coercion.
   const leafValue = existing.kind === "object-entry" ? existing.node.value : existing.node;
   const coerced = coerceJsoncLeaf(value, leafValue);
   if (coerced === null) {
-    return {
-      ok: false,
-      reason: "parse-error",
-      detail: `cannot coerce "${value}" to ${leafValue.kind}`,
-    };
+    return { ok: false, reason: "parse-error", detail: `cannot coerce "${value}" to ${leafValue.kind}` };
   }
-  const r = setJsonlOcPath(ast, path, coerced);
-  if (r.ok) {
-    return { ok: true, ast: r.ast };
-  }
-  return { ok: false, reason: r.reason };
+  const r = set(ast, path, coerced);
+  return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
 }
 
-function setInsertion(ast: OcAst, info: InsertionInfo, value: string): SetResult {
-  switch (ast.kind) {
-    case "md":
-      return setMdInsertion(ast, info, value);
-    case "jsonc":
-      return setJsoncInsertion(ast, info, value);
-    case "jsonl":
-      return setJsonlInsertion(ast, info, value);
-  }
-  throw new Error(`unreachable: setInsertion kind`);
-}
+type StructuredLeafMatch =
+  | { readonly kind: "root" }
+  | { readonly kind: "line" }
+  | { readonly kind: "object-entry"; readonly node: { readonly value: JsoncValue } }
+  | { readonly kind: "value"; readonly node: JsoncValue };
+
+type SetFailureReason = Extract<SetResult, { ok: false }>["reason"];
+type SetOpResult<A> =
+  | { readonly ok: true; readonly ast: A }
+  | { readonly ok: false; readonly reason: Exclude<SetFailureReason, "wildcard-not-allowed"> };
 
 function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResult {
   const p = info.parentPath;
@@ -508,8 +361,6 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
           line: 0,
           bodyText: "",
           items: [],
-          tables: [],
-          codeBlocks: [],
         },
       ],
     };
@@ -589,18 +440,15 @@ function setJsoncInsertion(ast: JsoncAst, info: InsertionInfo, value: string): S
   }
 
   if (containerMatch.container === "jsonc-array") {
-    // index `+0` valid; bare `+` appends; `+key` rejected.
+    // `+0` indexed; bare `+` appends; `+key` rejected for arrays.
     if (typeof info.marker === "object" && info.marker.kind === "keyed") {
       return { ok: false, reason: "type-mismatch", detail: "cannot insert by key into array" };
     }
     return mutateJsoncContainer(ast, info.parentPath, (container) => {
-      if (container.kind !== "array") {
-        return null;
-      }
+      if (container.kind !== "array") return null;
       const items = container.items.slice();
-      if (info.marker === "+") {
-        items.push(newJsoncValue);
-      } else if (typeof info.marker === "object" && info.marker.kind === "indexed") {
+      if (info.marker === "+") items.push(newJsoncValue);
+      else if (typeof info.marker === "object" && info.marker.kind === "indexed") {
         const idx = Math.min(info.marker.index, items.length);
         items.splice(idx, 0, newJsoncValue);
       }
@@ -612,18 +460,13 @@ function setJsoncInsertion(ast: JsoncAst, info: InsertionInfo, value: string): S
     });
   }
 
-  // jsonc-object
   if (typeof info.marker !== "object" || info.marker.kind !== "keyed") {
     return { ok: false, reason: "type-mismatch", detail: "jsonc object insertion requires +key" };
   }
   const key = info.marker.key;
   return mutateJsoncContainer(ast, info.parentPath, (container) => {
-    if (container.kind !== "object") {
-      return null;
-    }
-    if (container.entries.some((e) => e.key === key)) {
-      return null;
-    } // duplicate
+    if (container.kind !== "object") return null;
+    if (container.entries.some((e) => e.key === key)) return null; // duplicate
     const newEntry: JsoncEntry = { key, value: newJsoncValue, line: 0 };
     return {
       kind: "object",
@@ -648,32 +491,24 @@ function setJsonlInsertion(ast: JsonlAst, info: InsertionInfo, value: string): S
   return { ok: true, ast: appendJsonlLine(ast, jsonToJsoncValue(parsed)) };
 }
 
-// ---------- Internal helpers -----------------------------------------------
-
+// Preserve the existing source line on coerced replacements — same
+// semantic node, only the bytes change.
 function coerceJsoncLeaf(valueText: string, existing: JsoncValue): JsoncValue | null {
-  // Preserve the existing source line on coerced replacements — the
-  // semantic node is the same; only its bytes change.
   const lineExt = existing.line !== undefined ? { line: existing.line } : {};
-  if (existing.kind === "string") {
-    return { kind: "string", value: valueText, ...lineExt };
-  }
+  if (existing.kind === "string") return { kind: "string", value: valueText, ...lineExt };
   if (existing.kind === "number") {
     const n = Number(valueText);
     return Number.isFinite(n) ? { kind: "number", value: n, ...lineExt } : null;
   }
   if (existing.kind === "boolean") {
-    if (valueText === "true") {
-      return { kind: "boolean", value: true, ...lineExt };
-    }
-    if (valueText === "false") {
-      return { kind: "boolean", value: false, ...lineExt };
-    }
+    if (valueText === "true") return { kind: "boolean", value: true, ...lineExt };
+    if (valueText === "false") return { kind: "boolean", value: false, ...lineExt };
     return null;
   }
   if (existing.kind === "null") {
     return valueText === "null" ? { kind: "null", ...lineExt } : null;
   }
-  // Object/array leaf — caller should use insertion or full-replace path.
+  // Object/array — caller should use insertion or full-replace.
   return null;
 }
 
@@ -686,21 +521,11 @@ function tryParseJson(value: string): unknown {
 }
 
 function jsonToJsoncValue(v: unknown): JsoncValue {
-  // Synthetic values omit `line` (optional in the type) — the parser
-  // alone is the source of truth for line metadata. Insertions /
-  // mutations get the parent's line for surfacing in lint findings.
-  if (v === null) {
-    return { kind: "null" };
-  }
-  if (typeof v === "string") {
-    return { kind: "string", value: v };
-  }
-  if (typeof v === "number") {
-    return { kind: "number", value: v };
-  }
-  if (typeof v === "boolean") {
-    return { kind: "boolean", value: v };
-  }
+  // Synthetic values omit `line` — only the parser sets line metadata.
+  if (v === null) return { kind: "null" };
+  if (typeof v === "string") return { kind: "string", value: v };
+  if (typeof v === "number") return { kind: "number", value: v };
+  if (typeof v === "boolean") return { kind: "boolean", value: v };
   if (Array.isArray(v)) {
     return { kind: "array", items: v.map(jsonToJsoncValue) };
   }
@@ -715,7 +540,7 @@ function jsonToJsoncValue(v: unknown): JsoncValue {
       })),
     };
   }
-  // Unsupported (undefined / function / symbol). JSON.parse never produces these.
+  // JSON.parse never produces undefined / function / symbol.
   throw new Error(`unsupported JSON value type: ${typeof v}`);
 }
 
@@ -724,15 +549,9 @@ function mutateJsoncContainer(
   parentPath: OcPath,
   mutate: (container: JsoncValue) => JsoncValue | null,
 ): SetResult {
-  if (ast.root === null) {
-    return { ok: false, reason: "no-root" };
-  }
+  if (ast.root === null) return { ok: false, reason: "no-root" };
 
-  // Quote-aware split so JSONC insertion under a key containing
-  // `/`, `.`, or other special chars works through the parent path.
-  // `resolveJsoncOcPath` validates with quote-aware splitting; the
-  // mutation walker MUST use the same predicate or insertion validity
-  // can be reported and then fail as unresolved.
+  // Quote-aware split so insertion under a key with `/`/`.`/etc. works.
   const segments: string[] = [];
   if (parentPath.section !== undefined) {
     segments.push(...splitRespectingBrackets(parentPath.section, "."));
@@ -746,9 +565,7 @@ function mutateJsoncContainer(
 
   const newRoot =
     segments.length === 0 ? mutate(ast.root) : mutateAt(ast.root, segments, 0, mutate);
-  if (newRoot === null) {
-    return { ok: false, reason: "unresolved" };
-  }
+  if (newRoot === null) return { ok: false, reason: "unresolved" };
 
   const next: JsoncAst = { kind: "jsonc", raw: "", root: newRoot };
   return { ok: true, ast: { ...next, raw: emitJsonc(next, { mode: "render" }) } };
@@ -761,26 +578,17 @@ function mutateAt(
   mutate: (container: JsoncValue) => JsoncValue | null,
 ): JsoncValue | null {
   const seg = segments[i];
-  if (seg === undefined) {
-    return mutate(current);
-  }
-  if (seg.length === 0) {
-    return null;
-  }
+  if (seg === undefined) return mutate(current);
+  if (seg.length === 0) return null;
 
   if (current.kind === "object") {
-    // Match `setJsoncOcPath`'s lookup: AST entry keys are unquoted,
-    // so strip quoting from the path segment before comparing.
+    // AST keys are unquoted; strip quotes from the path segment.
     const lookupKey = isQuotedSeg(seg) ? unquoteSeg(seg) : seg;
     const idx = current.entries.findIndex((e) => e.key === lookupKey);
-    if (idx === -1) {
-      return null;
-    }
+    if (idx === -1) return null;
     const child = current.entries[idx];
     const replaced = mutateAt(child.value, segments, i + 1, mutate);
-    if (replaced === null) {
-      return null;
-    }
+    if (replaced === null) return null;
     const newEntries = current.entries.slice();
     newEntries[idx] = { ...child, value: replaced };
     return {
@@ -791,14 +599,10 @@ function mutateAt(
   }
   if (current.kind === "array") {
     const idx = Number(seg);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {
-      return null;
-    }
+    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) return null;
     const child = current.items[idx];
     const replaced = mutateAt(child, segments, i + 1, mutate);
-    if (replaced === null) {
-      return null;
-    }
+    if (replaced === null) return null;
     const newItems = current.items.slice();
     newItems[idx] = replaced;
     return {
@@ -820,33 +624,21 @@ function rebuildMdRaw(ast: MdAst): MdAst {
     parts.push("---");
   }
   if (ast.preamble.length > 0) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
+    if (parts.length > 0) parts.push("");
     parts.push(ast.preamble);
   }
   for (const block of ast.blocks) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
+    if (parts.length > 0) parts.push("");
     parts.push(`## ${block.heading}`);
-    if (block.bodyText.length > 0) {
-      parts.push(block.bodyText);
-    }
+    if (block.bodyText.length > 0) parts.push(block.bodyText);
   }
-  // Suppress unused — emitJsonl is imported for symmetry but only emitJsonc
-  // is used in the jsonc mutation helper.
   void emitJsonl;
   return { ...ast, raw: parts.join("\n") };
 }
 
 function formatFrontmatterValue(value: string): string {
-  if (value.length === 0) {
-    return '""';
-  }
-  if (/[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) {
-    return JSON.stringify(value);
-  }
+  if (value.length === 0) return '""';
+  if (/[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) return JSON.stringify(value);
   return value;
 }
 

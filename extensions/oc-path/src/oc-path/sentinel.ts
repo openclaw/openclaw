@@ -1,39 +1,17 @@
 /**
- * Substrate-level redaction-sentinel guard.
- *
- * Closes the `__OPENCLAW_REDACTED__` corruption class by rejecting the
- * literal string at the emit boundary. Per-call-site reject rules
- * (added piecemeal in [#62281](https://github.com/openclaw/openclaw/issues/62281),
- * [#44357](https://github.com/openclaw/openclaw/issues/44357),
- * [#13495](https://github.com/openclaw/openclaw/issues/13495), and others)
- * caught the symptom; this guard removes the substrate that produced
- * the symptom in the first place.
- *
- * Throwing at emit (not at the consumer) means every code path through
- * the substrate is covered, including future call sites we haven't
- * audited.
+ * Redaction-sentinel guard. Throws at emit boundaries so every write
+ * path is covered, not just audited consumers.
  *
  * @module @openclaw/oc-path/sentinel
  */
 
-/**
- * The literal string that marks redacted secrets in OpenClaw's runtime
- * representation. Writing it to disk is always a bug — the consumer
- * was supposed to drop the redacted view, not pass it through to the
- * writer.
- */
+/** Literal marking a redacted secret. Writing it to disk is always a bug. */
 export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 
 /**
- * Thrown when emit detects a `"__OPENCLAW_REDACTED__"` literal in any
- * emitted bytes. Callers should treat this as a fatal write error;
- * recovering by stripping the sentinel would silently corrupt the
- * file. Fail-closed.
- *
- * `path` is the OcPath-shaped pointer to where the sentinel was
- * detected (e.g., `oc://config/plugins.entries.foo.token`). For
- * non-config emits, it's the closest meaningful address (frontmatter
- * key, section/item slug, etc.) or just the file name.
+ * Thrown when emit detects the sentinel in output bytes. Fail-closed:
+ * stripping would silently corrupt the file. `path` is the closest
+ * OcPath-shaped pointer to the violation.
  */
 export class OcEmitSentinelError extends Error {
   readonly code = "OC_EMIT_SENTINEL";
@@ -46,16 +24,8 @@ export class OcEmitSentinelError extends Error {
   }
 }
 
-/**
- * Throw `OcEmitSentinelError` if `value` contains the redaction
- * sentinel anywhere. Substring match (not equality) — a hostile caller
- * embedding `prefix__OPENCLAW_REDACTED__suffix` in a leaf must be
- * rejected just as forcefully as the bare sentinel; the substring form
- * still leaks the marker bytes to disk where downstream scanners flag
- * the file as corrupted.
- *
- * No-op for any non-string input. Used by every leaf-write boundary.
- */
+// Substring match (not equality) — `prefix__OPENCLAW_REDACTED__suffix`
+// still leaks the marker. No-op on non-string input.
 export function guardSentinel(value: unknown, ocPath: string): void {
   if (typeof value === "string" && value.includes(REDACTED_SENTINEL)) {
     throw new OcEmitSentinelError(ocPath);

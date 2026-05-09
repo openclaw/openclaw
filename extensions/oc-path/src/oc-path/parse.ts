@@ -1,27 +1,12 @@
 /**
- * Generic markdown-flavored parser for the workspace files.
+ * Markdown parser for workspace files: frontmatter + preamble + H2
+ * blocks (with bullet items as the only addressable structural child).
+ * Tokenization via markdown-it; frontmatter handled here.
  *
- * Produces a `MdAst` addressing index over `raw` bytes: frontmatter
- * (if present), preamble (prose before first H2), and an H2-block tree
- * with items extracted for OcPath resolution.
+ * Grammar opinions (indented `##`, empty `## `, ordered lists, nested
+ * sub-bullets) live in lint rules, not the parser.
  *
- * Tokenization is delegated to markdown-it; this module owns the
- * frontmatter detector (markdown-it does not handle YAML frontmatter
- * natively) and the token-stream walker that buckets headings and
- * bullets into the addressable AST shape. Tables and fenced code
- * blocks are NOT first-class AST children — substrate addressing
- * doesn't go inside them, and tokenizer-level structure (which
- * markdown-it already gets right) is sufficient to ensure `##` and
- * `-` inside them aren't misparsed as headings or items.
- *
- * **Grammar opinions live in lint rules, not the parser.** Indented
- * `## foo`, empty `## `, ordered (`1.`) lists, and nested sub-bullets
- * are all recognized as headings / items here; downstream lint rules
- * (`OC_HEADING_INDENTED`, `OC_HEADING_EMPTY`, etc.) decide whether
- * those shapes are OK in a particular file.
- *
- * **Byte-fidelity contract**: `raw` is preserved on the AST root so
- * `emitMd(parse(raw)) === raw` for every input the parser accepts.
+ * Byte-fidelity: `emitMd(parse(raw)) === raw`.
  *
  * @module @openclaw/oc-path/parse
  */
@@ -124,10 +109,7 @@ function walkBlocks(
   bodyLines: readonly string[],
   bodyFileLine: number,
 ): { preamble: string; blocks: AstBlock[] } {
-  // Match atx-style `##` only — setext h2 (`Heading\n---`) carries
-  // `markup: "-"` on the heading_open token, so the `markup === "##"`
-  // filter picks atx exclusively. Authors who want setext can still
-  // write it; substrate just doesn't address it as a section.
+  // Match atx `##` only; setext h2 has `markup: "-"`.
   const h2: { tokenIdx: number; lineIdx: number; text: string }[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
@@ -147,9 +129,8 @@ function walkBlocks(
   for (let h = 0; h < h2.length; h++) {
     const start = h2[h].lineIdx;
     const end = h + 1 < h2.length ? h2[h + 1].lineIdx : bodyLines.length;
-    // Slice tokens by INDEX so descendant tokens with no `map` (table
-    // cells, list markers, inline content) ride along with their
-    // mapped parent. heading_open / inline / heading_close = 3 tokens.
+    // Slice by INDEX so unmapped descendants (cells, markers, inline)
+    // ride along with their parent. h2 = open + inline + close = 3.
     const tokenStart = h2[h].tokenIdx + 3;
     const tokenEnd = h + 1 < h2.length ? h2[h + 1].tokenIdx : tokens.length;
     const blockTokens = tokens.slice(tokenStart, tokenEnd);
@@ -167,16 +148,13 @@ function walkBlocks(
 
 // ---------- Item extraction ----------------------------------------------
 
+// Every list_item_open becomes an item (bullets, numbered, nested
+// sub-bullets); lint rules flag depth / duplicate-slug collisions.
 function extractItems(tokens: readonly Token[], bodyFileLine: number): AstItem[] {
-  // Every `list_item_open` becomes an item — bullets, numbered lists,
-  // nested sub-bullets all included. Lint rules can flag depth or
-  // duplicate-slug collisions; the parser stays opinion-free.
   const items: AstItem[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
-    if (t.type !== "list_item_open" || t.map === null) {
-      continue;
-    }
+    if (t.type !== "list_item_open" || t.map === null) continue;
     // First inline at the item's own depth is the item text.
     let nestedDepth = 0;
     let text = "";

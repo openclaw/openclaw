@@ -1,16 +1,6 @@
 /**
- * Mutate a `JsonlAst` at an OcPath. Returns a new AST with the line
- * (or sub-field of a line) replaced.
- *
- * Edit shapes:
- *
- *   oc://session-events/L42                    → replace line 42's whole value
- *   oc://session-events/L42/field              → replace field on line 42
- *   oc://session-events/L42/field.sub          → dotted descent
- *   oc://session-events/$last/...              → resolves to most recent value
- *
- * Append (no existing line) is NOT a `set` — use `appendJsonlLine` for
- * that. `setJsonlOcPath` only edits existing addresses.
+ * Mutate a `JsonlAst` at an OcPath. Append uses `appendJsonlOcPath`;
+ * `setJsonlOcPath` only edits existing addresses.
  *
  * @module @openclaw/oc-path/jsonl/edit
  */
@@ -46,8 +36,7 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
     return { ok: false, reason: "unresolved" };
   }
 
-  // No item/field — replace the whole line value. Requires the line to
-  // already be a value line (we don't synthesize lines from blanks).
+  // No item/field — replace the whole line. Requires an existing value line.
   if (path.item === undefined && path.field === undefined) {
     if (target.kind !== "value") {
       return { ok: false, reason: "not-a-value-line" };
@@ -65,10 +54,7 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
     return { ok: false, reason: "not-a-value-line" };
   }
 
-  // Bracket/brace/quote-aware split — preserves quoted segments
-  // verbatim so the edit path matches `resolveJsonlOcPath`'s
-  // unquoting behavior. Plain `.split('.')` would shred a quoted key
-  // and silently desync read-vs-write.
+  // Quote-aware split keeps edit symmetric with resolveJsonlOcPath.
   const segments: string[] = [];
   if (path.item !== undefined) {
     segments.push(...splitRespectingBrackets(path.item, "."));
@@ -97,45 +83,29 @@ function replaceAt(
   newValue: JsoncValue,
 ): JsoncValue | null {
   const seg = segments[i];
-  if (seg === undefined) {
-    return newValue;
-  }
-  if (seg.length === 0) {
-    return null;
-  }
+  if (seg === undefined) return newValue;
+  if (seg.length === 0) return null;
 
   if (current.kind === "object") {
-    // Resolve positional tokens ($first / $last) against the entries'
-    // ordered key list before any literal-key comparison. Keeps the
-    // jsonl edit path symmetric with resolveJsonlOcPath, which already
-    // honors positional tokens during read.
-    let segNorm: string = seg;
+    // Positional tokens resolve against the entries' ordered key list;
+    // quoted segments are unquoted before literal-key comparison.
+    let segNorm = seg;
     if (isPositionalSeg(seg)) {
       const resolved = resolvePositionalSeg(seg, {
         indexable: false,
         size: current.entries.length,
         keys: current.entries.map((e) => e.key),
       });
-      if (resolved === null) {
-        return null;
-      }
+      if (resolved === null) return null;
       segNorm = resolved;
     }
-    // Quoted segments carry the raw bytes verbatim; AST entry keys
-    // are unquoted. Strip the surrounding quotes before comparing.
     const lookupKey = isQuotedSeg(segNorm) ? unquoteSeg(segNorm) : segNorm;
     const idx = current.entries.findIndex((e) => e.key === lookupKey);
-    if (idx === -1) {
-      return null;
-    }
+    if (idx === -1) return null;
     const child = current.entries[idx];
-    if (child === undefined) {
-      return null;
-    }
+    if (child === undefined) return null;
     const replacedChild = replaceAt(child.value, segments, i + 1, newValue);
-    if (replacedChild === null) {
-      return null;
-    }
+    if (replacedChild === null) return null;
     const newEntry: JsoncEntry = { ...child, value: replacedChild };
     const newEntries = current.entries.slice();
     newEntries[idx] = newEntry;
@@ -147,32 +117,21 @@ function replaceAt(
   }
 
   if (current.kind === "array") {
-    // Resolve positional tokens ($first / $last / -N) against the
-    // array's size before the numeric coercion below; without this
-    // `Number('$last')` is NaN and the path silently unresolves.
-    let segNorm: string = seg;
+    let segNorm = seg;
     if (isPositionalSeg(seg)) {
       const resolved = resolvePositionalSeg(seg, {
         indexable: true,
         size: current.items.length,
       });
-      if (resolved === null) {
-        return null;
-      }
+      if (resolved === null) return null;
       segNorm = resolved;
     }
     const idx = Number(segNorm);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {
-      return null;
-    }
+    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) return null;
     const child = current.items[idx];
-    if (child === undefined) {
-      return null;
-    }
+    if (child === undefined) return null;
     const replacedChild = replaceAt(child, segments, i + 1, newValue);
-    if (replacedChild === null) {
-      return null;
-    }
+    if (replacedChild === null) return null;
     const newItems = current.items.slice();
     newItems[idx] = replacedChild;
     return {
@@ -185,48 +144,31 @@ function replaceAt(
   return null;
 }
 
+// Mirrors the line-address grammar in resolveJsonlOcPath / find.ts.
+// `-N` walks value lines only so blank/malformed lines don't shift.
 function pickLineIndex(ast: JsonlAst, addr: string): number {
-  // Mirrors the line-address grammar handled by resolveJsonlOcPath's
-  // pickLine and find.ts's pickLine — the four shapes a JSONL line can
-  // be addressed by. Without `$first` and `-N` here, a path that
-  // resolves cleanly under those tokens would silently unresolve on
-  // the edit path (resolve↔write asymmetry).
-  if (addr === "$last") {
-    for (let i = ast.lines.length - 1; i >= 0; i--) {
-      const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        return i;
-      }
+  const valueIndices = (): number[] => {
+    const out: number[] = [];
+    for (let i = 0; i < ast.lines.length; i++) {
+      if (ast.lines[i]?.kind === "value") out.push(i);
     }
-    return -1;
+    return out;
+  };
+  if (addr === "$last") {
+    const v = valueIndices();
+    return v[v.length - 1] ?? -1;
   }
   if (addr === "$first") {
-    for (let i = 0; i < ast.lines.length; i++) {
-      const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        return i;
-      }
-    }
-    return -1;
+    const v = valueIndices();
+    return v[0] ?? -1;
   }
   if (/^-\d+$/.test(addr)) {
-    // -N selects the Nth-from-last value line. Walk only value lines
-    // so blank/malformed lines don't shift the count (consistent with
-    // resolve.ts's pickLine).
-    const valueIndices: number[] = [];
-    for (let i = 0; i < ast.lines.length; i++) {
-      const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        valueIndices.push(i);
-      }
-    }
-    const n = valueIndices.length + Number(addr);
-    return n >= 0 && n < valueIndices.length ? (valueIndices[n] ?? -1) : -1;
+    const v = valueIndices();
+    const n = v.length + Number(addr);
+    return n >= 0 && n < v.length ? (v[n] ?? -1) : -1;
   }
   const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) {
-    return -1;
-  }
+  if (m === null || m[1] === undefined) return -1;
   const target = Number(m[1]);
   return ast.lines.findIndex((l) => l.line === target);
 }
@@ -253,12 +195,7 @@ function finalize(
   return { ok: true, ast: { ...next, raw: rendered } };
 }
 
-/**
- * Append a new value as the next line. Useful for session checkpointing
- * (each event is a new line). Returns a new AST. The `path` parameter
- * is accepted for OcPath-naming consistency but jsonl append addresses
- * the file as a whole (line numbers are assigned by the substrate).
- */
+/** Append a value as the next line. Line numbers are substrate-assigned. */
 export function appendJsonlOcPath(ast: JsonlAst, value: JsoncValue): JsonlAst {
   const nextLineNo = ast.lines.length === 0 ? 1 : (ast.lines[ast.lines.length - 1]?.line ?? 0) + 1;
   const newLine: JsonlLine = {

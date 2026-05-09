@@ -1,10 +1,3 @@
-/**
- * Wave 13 — cross-cutting integration.
- *
- * Pipelines: parse + resolve + emit working together. Slug stability
- * across re-parses. OcPath round-trip via the AST (slugs in OcPath
- * must round-trip back to the resolved node).
- */
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
 import { formatOcPath, parseOcPath } from "../../oc-path.js";
@@ -29,15 +22,15 @@ Preamble.
 - curl: HTTP client
 `;
 
-describe("wave-13 cross-cutting", () => {
-  it("CC-01 parse → resolve → emit pipeline (block)", () => {
+describe("cross-cutting", () => {
+  it("parse → resolve → emit pipeline (block)", () => {
     const { ast } = parseMd(SAMPLE);
     const m = resolveOcPath(ast, { file: "AGENTS.md", section: "boundaries" });
     expect(m?.kind).toBe("block");
     expect(emitMd(ast)).toBe(SAMPLE);
   });
 
-  it("CC-02 OcPath round-trip via AST: parse + resolve + format", () => {
+  it("OcPath round-trip via AST: parse + resolve + format", () => {
     const { ast } = parseMd(SAMPLE);
     for (const block of ast.blocks) {
       const path = parseOcPath(`oc://AGENTS.md/${block.slug}`);
@@ -48,7 +41,7 @@ describe("wave-13 cross-cutting", () => {
     }
   });
 
-  it("CC-03 every item in every block is OcPath-addressable", () => {
+  it("every item in every block is OcPath-addressable", () => {
     const { ast } = parseMd(SAMPLE);
     for (const block of ast.blocks) {
       for (const item of block.items) {
@@ -59,7 +52,7 @@ describe("wave-13 cross-cutting", () => {
     }
   });
 
-  it("CC-04 every kv item field is OcPath-addressable", () => {
+  it("every kv item field is OcPath-addressable", () => {
     const { ast } = parseMd(SAMPLE);
     for (const block of ast.blocks) {
       for (const item of block.items) {
@@ -73,7 +66,7 @@ describe("wave-13 cross-cutting", () => {
     }
   });
 
-  it("CC-05 every frontmatter entry is OcPath-addressable", () => {
+  it("every frontmatter entry is OcPath-addressable", () => {
     const { ast } = parseMd(SAMPLE);
     for (const fm of ast.frontmatter) {
       const path = parseOcPath(`oc://AGENTS.md/[frontmatter]/${fm.key}`);
@@ -82,7 +75,7 @@ describe("wave-13 cross-cutting", () => {
     }
   });
 
-  it("CC-06 slugs are stable across re-parses (deterministic)", () => {
+  it("slugs are stable across re-parses (deterministic)", () => {
     const a1 = parseMd(SAMPLE).ast;
     const a2 = parseMd(SAMPLE).ast;
     expect(a1.blocks.map((b) => b.slug)).toEqual(a2.blocks.map((b) => b.slug));
@@ -91,7 +84,7 @@ describe("wave-13 cross-cutting", () => {
     );
   });
 
-  it("CC-07 modifying raw + re-parse produces consistent AST shape", () => {
+  it("modifying raw + re-parse produces consistent AST shape", () => {
     const a1 = parseMd(SAMPLE).ast;
     const modified = SAMPLE.replace("GitHub CLI", "GitHub command-line interface");
     const a2 = parseMd(modified).ast;
@@ -105,20 +98,20 @@ describe("wave-13 cross-cutting", () => {
     expect(ghItem?.kv?.value).toBe("GitHub command-line interface");
   });
 
-  it("CC-08 unknown OcPath returns null without affecting subsequent valid resolves", () => {
+  it("unknown OcPath returns null without affecting subsequent valid resolves", () => {
     const { ast } = parseMd(SAMPLE);
     expect(resolveOcPath(ast, { file: "X.md", section: "nonexistent" })).toBeNull();
     expect(resolveOcPath(ast, { file: "X.md", section: "tools" })?.kind).toBe("block");
   });
 
-  it("CC-09 resolve does not depend on file segment matching", () => {
+  it("resolve does not depend on file segment matching", () => {
     const { ast } = parseMd(SAMPLE);
     const a = resolveOcPath(ast, { file: "A.md", section: "tools" });
     const b = resolveOcPath(ast, { file: "B.md", section: "tools" });
     expect(a?.kind).toBe(b?.kind);
   });
 
-  it("CC-10 round-trip across all 9 valid OcPath shapes", () => {
+  it("round-trip across all 9 valid OcPath shapes", () => {
     const { ast } = parseMd(SAMPLE);
     const cases = [
       { file: "X.md" },
