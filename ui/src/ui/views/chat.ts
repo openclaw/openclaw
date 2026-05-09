@@ -927,7 +927,7 @@ export function renderChat(props: ChatProps) {
   const placeholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
-      : `Message ${props.assistantName || "agent"} (Enter to send)`
+      : t("chat.welcome.messagePlaceholder", { name: props.assistantName || "agent" })
     : "Connect to the gateway to start chatting...";
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
@@ -1411,8 +1411,8 @@ export function renderChat(props: ChatProps) {
               @click=${() => {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
-              title="Attach file"
-              aria-label="Attach file"
+              title=${t("chat.welcome.attachFile")}
+              aria-label=${t("chat.welcome.attachFile")}
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
@@ -1425,8 +1425,12 @@ export function renderChat(props: ChatProps) {
                       ? "agent-chat__input-btn--talk"
                       : ""}"
                     @click=${props.onToggleRealtimeTalk}
-                    title=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
-                    aria-label=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    title=${props.realtimeTalkActive
+                      ? t("chat.welcome.stopTalk")
+                      : t("chat.welcome.startTalk")}
+                    aria-label=${props.realtimeTalkActive
+                      ? t("chat.welcome.stopTalk")
+                      : t("chat.welcome.startTalk")}
                     ?disabled=${!props.connected}
                   >
                     ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
