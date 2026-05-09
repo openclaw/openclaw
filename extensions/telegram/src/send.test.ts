@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import type { Bot } from "grammy";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { classifyTelegramRuntimeCommsText } from "./runtime-comms-guard.js";
 import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
@@ -308,6 +310,96 @@ describe("buildInlineKeyboard", () => {
 });
 
 describe("sendMessageTelegram", () => {
+  it("suppresses visible runtime leak text at the final Telegram send boundary", async () => {
+    const to = `guard-tech-${randomUUID()}`;
+
+    const modelGate = await sendMessageTelegram(
+      to,
+      "MODEL-GATE\ntask_type: security/guard/auth/runtime work\nproceed_status: PROCEED",
+      { cfg: TELEGRAM_TEST_CFG, token: "tok", accountId: "default" },
+    );
+    const restart = await sendMessageTelegram(
+      to,
+      "Gateway restart restart ok\nReason: restart verification\nRun: openclaw doctor --non-interactive",
+      { cfg: TELEGRAM_TEST_CFG, token: "tok", accountId: "default" },
+    );
+    const working = await sendMessageTelegram(to, "Working...", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "default",
+    });
+
+    expect(botCtorSpy).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(modelGate.messageId).toBe("openclaw-runtime-comms-guard-suppressed");
+    expect(restart.messageId).toBe("openclaw-runtime-comms-guard-suppressed");
+    expect(working.messageId).toBe("openclaw-runtime-comms-guard-suppressed");
+  });
+
+  it("dedupes allowed progress at the final Telegram send boundary", async () => {
+    const to = String(100_000_000 + Math.floor(Math.random() * 800_000_000));
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 101, chat: { id: to } });
+
+    const first = await sendMessageTelegram(to, "Идет работа.", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "default",
+    });
+    const duplicate = await sendMessageTelegram(to, "Идет работа.", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "default",
+    });
+
+    expect(first.messageId).toBe("101");
+    expect(duplicate.messageId).toBe("openclaw-runtime-comms-guard-deduped");
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedupes report artifacts at the final Telegram send boundary", async () => {
+    const to = String(100_000_000 + Math.floor(Math.random() * 800_000_000));
+    const mediaUrl = `file:///tmp/openclaw-report-${randomUUID()}.txt`;
+    mockLoadedMedia({
+      buffer: Buffer.from("report"),
+      contentType: "text/plain",
+      fileName: "report.txt",
+    });
+    botApi.sendDocument.mockResolvedValueOnce({ message_id: 201, chat: { id: to } });
+
+    const first = await sendMessageTelegram(to, "test artifact", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "default",
+      mediaUrl,
+      forceDocument: true,
+    });
+    const duplicate = await sendMessageTelegram(to, "test artifact", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "default",
+      mediaUrl,
+      forceDocument: true,
+    });
+
+    expect(first.messageId).toBe("201");
+    expect(duplicate.messageId).toBe("openclaw-runtime-comms-guard-deduped");
+    expect(loadWebMedia).toHaveBeenCalledTimes(1);
+    expect(botApi.sendDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies visible leak markers as technical", () => {
+    for (const text of [
+      "MODEL-GATE",
+      "task_type: security/guard/auth/runtime work",
+      "Gateway restart restart ok",
+      "Reason: restart verification",
+      "Run: openclaw doctor --non-interactive",
+      "Working...",
+      "tool output",
+    ]) {
+      expect(classifyTelegramRuntimeCommsText(text)).toBe("technical");
+    }
+  });
   it("sends typing to the resolved chat and topic", async () => {
     loadConfig.mockReturnValue({
       channels: {

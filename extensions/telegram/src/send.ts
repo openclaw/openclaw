@@ -30,6 +30,12 @@ import {
   resolveTelegramSendThreadSpec,
 } from "./reply-parameters.js";
 import {
+  classifyTelegramRuntimeCommsText,
+  runtimeCommsGuardSuppressedResult,
+  shouldSendTelegramRuntimeCommsMedia,
+  shouldSendTelegramRuntimeCommsText,
+} from "./runtime-comms-guard.js";
+import {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
   isGifMedia,
@@ -600,8 +606,35 @@ export async function sendMessageTelegram(
   text: string,
   opts: TelegramSendOpts,
 ): Promise<TelegramSendResult> {
-  const { cfg, account, api } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
+  const guardContext = {
+    to,
+    accountId: opts.accountId,
+    threadId: opts.messageThreadId ?? target.messageThreadId,
+  };
+  const mediaUrl = opts.mediaUrl?.trim();
+  if (
+    mediaUrl &&
+    !(await shouldSendTelegramRuntimeCommsMedia({
+      context: guardContext,
+      mediaUrl,
+    }))
+  ) {
+    return runtimeCommsGuardSuppressedResult(to, true);
+  }
+  if (
+    text &&
+    !(await shouldSendTelegramRuntimeCommsText({
+      context: guardContext,
+      text,
+    }))
+  ) {
+    return runtimeCommsGuardSuppressedResult(
+      to,
+      classifyTelegramRuntimeCommsText(text) !== "technical",
+    );
+  }
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
@@ -610,7 +643,6 @@ export async function sendMessageTelegram(
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
   });
-  const mediaUrl = opts.mediaUrl?.trim();
   const mediaMaxBytes =
     opts.maxBytes ??
     (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) * 1024 * 1024;

@@ -97,13 +97,25 @@ export function classifyTelegramRuntimeCommsText(
   if (!normalized) {
     return null;
   }
-  if (/^(Идет работа\.|Идёт работа\.|Working[.….]*)$/iu.test(normalized)) {
+  if (/^(Идет работа\.|Идёт работа\.)$/iu.test(normalized)) {
     return "progress";
   }
   if (isJsonDump(text ?? "")) {
     return "technical";
   }
   const technicalPatterns = [
+    /^MODEL-GATE\b/im,
+    /^task_type:/im,
+    /^risk_level:/im,
+    /^recommended_model:/im,
+    /^recommended_reasoning:/im,
+    /^current_model_sufficient:/im,
+    /^cheaper_safe_alternative:/im,
+    /^proceed_status:/im,
+    /^Working[.….]*$/i,
+    /^Gateway restart\b/i,
+    /^Reason:\s+/i,
+    /^Run:\s+/i,
     /^Command exited with code\s+\d+/i,
     /^Command still running\b/i,
     /^Service:\s+LaunchAgent\b/i,
@@ -114,11 +126,14 @@ export function classifyTelegramRuntimeCommsText(
     /^Troubleshooting:\s+https?:\/\//i,
     /^\$\s*openclaw\b/i,
     /^openclaw\s+(gateway|doctor|status|models)\b/i,
+    /\bopenclaw doctor\b/i,
     /\b(openclaw gateway status|openclaw doctor|gateway restart)\b/i,
     /\b(stdout|stderr|runId|threadId|messageId|stack trace|Traceback)\b/i,
+    /\b(command|exec|tool output)\b/i,
     /\bat\s+\S+\s*\([^)]*:\d+:\d+\)/,
     /\b[0-9a-f]{40,64}\b.*\b(SHA|sha|bytes?|byte counts?)\b/i,
     /\b(SHA|sha|bytes?|byte counts?)\b.*\b[0-9a-f]{40,64}\b/i,
+    /\b(SHA dumps?|byte counts?)\b/i,
   ];
   if (technicalPatterns.some((pattern) => pattern.test(normalized))) {
     return "technical";

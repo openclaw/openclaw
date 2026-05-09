@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { verifyDurableFinalCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,80 +10,11 @@ vi.mock("./send.js", () => ({
 }));
 
 import { telegramOutbound } from "./outbound-adapter.js";
-import { clearTelegramRuntimeCommsGuardMemoryForTests } from "./runtime-comms-guard.js";
 
 describe("telegramOutbound", () => {
   beforeEach(() => {
-    clearTelegramRuntimeCommsGuardMemoryForTests();
     pinMessageTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
-  });
-
-  it("suppresses Telegram technical runtime output before delivery", async () => {
-    const result = await telegramOutbound.sendText!({
-      cfg: {} as never,
-      to: `guard-tech-${randomUUID()}`,
-      text: "Service: LaunchAgent (loaded)\nRuntime: running (pid 123)",
-      deps: { sendTelegram: sendMessageTelegramMock },
-    });
-
-    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
-    expect(result.messageId).toBe("openclaw-runtime-comms-guard-suppressed");
-  });
-
-  it("dedupes progress messages through the persistent Telegram runtime guard", async () => {
-    const to = `guard-progress-${randomUUID()}`;
-    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-progress", chatId: to });
-
-    await telegramOutbound.sendText!({
-      cfg: {} as never,
-      to,
-      text: "Идет работа.",
-      deps: { sendTelegram: sendMessageTelegramMock },
-    });
-    clearTelegramRuntimeCommsGuardMemoryForTests();
-    const duplicate = await telegramOutbound.sendText!({
-      cfg: {} as never,
-      to,
-      text: "Идет работа.",
-      deps: { sendTelegram: sendMessageTelegramMock },
-    });
-
-    expect(sendMessageTelegramMock).toHaveBeenCalledTimes(1);
-    expect(duplicate).toEqual({
-      channel: "telegram",
-      messageId: "openclaw-runtime-comms-guard-deduped",
-      chatId: to,
-    });
-  });
-
-  it("dedupes report media through the persistent Telegram runtime guard", async () => {
-    const to = `guard-media-${randomUUID()}`;
-    const mediaUrl = `file:///tmp/report-${randomUUID()}.txt`;
-    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-report", chatId: to });
-
-    await telegramOutbound.sendMedia!({
-      cfg: {} as never,
-      to,
-      text: "report",
-      mediaUrl,
-      deps: { sendTelegram: sendMessageTelegramMock },
-    });
-    clearTelegramRuntimeCommsGuardMemoryForTests();
-    const duplicate = await telegramOutbound.sendMedia!({
-      cfg: {} as never,
-      to,
-      text: "report",
-      mediaUrl,
-      deps: { sendTelegram: sendMessageTelegramMock },
-    });
-
-    expect(sendMessageTelegramMock).toHaveBeenCalledTimes(1);
-    expect(duplicate).toEqual({
-      channel: "telegram",
-      messageId: "openclaw-runtime-comms-guard-deduped",
-      chatId: to,
-    });
   });
 
   it("forwards mediaLocalRoots in direct media sends", async () => {
