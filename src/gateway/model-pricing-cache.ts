@@ -26,8 +26,10 @@ import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/st
 import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
+  getGatewayModelPricingBootstrapError,
   getGatewayModelPricingCacheMeta as getGatewayModelPricingCacheMetaState,
   replaceGatewayModelPricingCache,
+  setGatewayModelPricingBootstrapError,
   type CachedModelPricing,
   type CachedPricingTier,
 } from "./model-pricing-cache-state.js";
@@ -73,7 +75,7 @@ type ExternalPricingSourcePolicy = {
   modelIdTransforms: readonly PluginManifestModelPricingModelIdTransform[];
 };
 
-export { getCachedGatewayModelPricing };
+export { getCachedGatewayModelPricing, getGatewayModelPricingBootstrapError };
 
 type PricingModelNormalizationOptions = {
   allowManifestNormalization: boolean;
@@ -1317,6 +1319,7 @@ export async function refreshGatewayModelPricingCache(
       return;
     }
     replaceGatewayModelPricingCache(nextPricing);
+    setGatewayModelPricingBootstrapError(null);
     scheduleRefresh({ ...params, fetchImpl });
   })();
 
@@ -1342,7 +1345,9 @@ export function startGatewayModelPricingRefresh(
     }
     void refreshGatewayModelPricingCache({ ...params, signal: abortController.signal }).catch(
       (error: unknown) => {
-        log.warn(`pricing bootstrap failed: ${String(error)}`);
+        const message = String(error);
+        log.warn(`pricing bootstrap failed: ${message}`);
+        setGatewayModelPricingBootstrapError(message);
       },
     );
   });

@@ -19,6 +19,7 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
+import { getGatewayModelPricingBootstrapError } from "../gateway/model-pricing-cache.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -508,12 +509,14 @@ export async function getHealthSnapshot(params?: {
   }
 
   const pluginHealth = buildPluginHealthSummary();
+  const modelPricingError = getGatewayModelPricingBootstrapError();
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
     ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
+    ...(modelPricingError != null ? { modelPricingError } : {}),
     channels,
     channelOrder,
     channelLabels,
@@ -700,6 +703,11 @@ export async function healthCommand(
     const eventLoopLine = formatEventLoopHealthLine(summary);
     if (eventLoopLine) {
       runtime.log(styleHealthChannelLine(eventLoopLine, rich));
+    }
+    if (summary.modelPricingError) {
+      runtime.log(
+        styleHealthChannelLine(`model-pricing: degraded (${summary.modelPricingError})`, rich),
+      );
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];

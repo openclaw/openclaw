@@ -22,6 +22,7 @@ export type CachedModelPricing = {
 
 let cachedPricing = new Map<string, CachedModelPricing>();
 let cachedAt = 0;
+let lastBootstrapError: string | null = null;
 
 function modelPricingCacheKey(provider: string, model: string): string {
   const providerId = normalizeProviderId(provider);
@@ -47,6 +48,15 @@ export function replaceGatewayModelPricingCache(
 export function clearGatewayModelPricingCacheState(): void {
   cachedPricing = new Map();
   cachedAt = 0;
+  lastBootstrapError = null;
+}
+
+export function setGatewayModelPricingBootstrapError(error: string | null): void {
+  lastBootstrapError = error;
+}
+
+export function getGatewayModelPricingBootstrapError(): string | null {
+  return lastBootstrapError;
 }
 
 export function getCachedGatewayModelPricing(params: {
