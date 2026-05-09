@@ -524,7 +524,7 @@ export const dispatchTelegramMessage = async ({
     replyToMode !== "off" && typeof msg.message_id === "number"
       ? (replyQuoteMessageId ?? msg.message_id)
       : undefined;
-  const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
+  const draftMinInitialChars = streamMode === "block" ? DRAFT_MIN_INITIAL_CHARS : 0;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
