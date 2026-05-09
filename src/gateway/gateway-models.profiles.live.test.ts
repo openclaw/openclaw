@@ -1913,17 +1913,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   await fs.mkdir(workspaceDir, { recursive: true });
-  await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
   await fs.writeFile(
-    path.join(workspaceDir, ".openclaw", "workspace-state.json"),
-    `${JSON.stringify(
-      {
-        version: 1,
-        setupCompletedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    )}\n`,
+    path.join(workspaceDir, "IDENTITY.md"),
+    "# Identity\n\n- Purpose: gateway model profile live test assistant.\n",
   );
   await fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true });
   const nonceA = randomUUID();
