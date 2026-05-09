@@ -10,6 +10,14 @@ import {
   resolveRuntimeOptionsFromMeta,
 } from "./runtime-options.js";
 
+function isUnsupportedOptionalTimeoutConfigOptionError(key: string, error: unknown): boolean {
+  if (key !== "timeout") {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("session/set_config_option") && message.includes("Method not found");
+}
+
 export async function resolveManagerRuntimeCapabilities(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -100,11 +108,18 @@ export async function applyManagerRuntimeControls(params: {
               `ACP backend "${backend}" does not accept config key "${key}".`,
             );
           }
-          await params.runtime.setConfigOption({
-            handle: params.handle,
-            key,
-            value,
-          });
+          try {
+            await params.runtime.setConfigOption({
+              handle: params.handle,
+              key,
+              value,
+            });
+          } catch (error) {
+            if (isUnsupportedOptionalTimeoutConfigOptionError(key, error)) {
+              continue;
+            }
+            throw error;
+          }
         }
       }
     },

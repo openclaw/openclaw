@@ -3005,6 +3005,94 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("continues turns when only optional timeout config is unsupported by the backend", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.setConfigOption.mockImplementation(async (input: { key: string }) => {
+      if (input.key === "timeout") {
+        throw new Error(
+          'Agent rejected session/set_config_option for "timeout"="120": "Method not found": session/set_config_option (ACP -32601)',
+        );
+      }
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:pi:acp:session-1",
+      storeSessionKey: "agent:pi:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "pi" }),
+        runtimeOptions: {
+          model: "openai-codex/gpt-5.5",
+          timeoutSeconds: 120,
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:pi:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "model",
+        value: "openai-codex/gpt-5.5",
+      }),
+    );
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "timeout",
+        value: "120",
+      }),
+    );
+    expect(runtimeState.runTurn).toHaveBeenCalled();
+  });
+
+  it("still fails when non-timeout runtime config options are unsupported by the backend", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.setConfigOption.mockRejectedValue(
+      new Error(
+        'Agent rejected session/set_config_option for "model"="gpt": "Method not found": session/set_config_option (ACP -32601)',
+      ),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:pi:acp:session-1",
+      storeSessionKey: "agent:pi:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "pi" }),
+        runtimeOptions: {
+          model: "gpt",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:pi:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+    });
+    expect(runtimeState.runTurn).not.toHaveBeenCalled();
+  });
+
   it("re-ensures runtime handles after cwd runtime option updates", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
