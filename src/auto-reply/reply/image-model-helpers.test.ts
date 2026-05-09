@@ -132,20 +132,15 @@ describe("prepareImageModelFallbacks", () => {
       allowAny: true,
       allowedKeys: new Set(),
     });
+    mockResolveModelRefFromString.mockReturnValue({
+      ref: { provider: "openai", model: "gpt-4o" },
+    });
 
     const result = prepareImageModelFallbacks({
       ...baseParams,
       fallbacks: ["", "  ", "openai/gpt-4o"],
     });
-    mockResolveModelRefFromString.mockReturnValue({
-      ref: { provider: "openai", model: "gpt-4o" },
-    });
-    // Re-call since mock was set after first call
-    const result2 = prepareImageModelFallbacks({
-      ...baseParams,
-      fallbacks: ["", "  ", "openai/gpt-4o"],
-    });
-    expect(result2).toEqual(["openai/gpt-4o"]);
+    expect(result).toEqual(["openai/gpt-4o"]);
   });
 
   it("processes multiple fallbacks in order", () => {

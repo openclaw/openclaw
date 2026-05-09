@@ -2180,8 +2180,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
 
       if (imageModelFallbacks.length > 0) {
+        // When imageModelPrimary is not configured, the first fallback was already
+        // used as modelOverride — skip it to avoid redundant resolution.
+        const fallbacksForOverride = imageModelPrimary
+          ? imageModelFallbacks
+          : imageModelFallbacks.slice(1);
         modelOverrideFallbacks = prepareImageModelFallbacks({
-          fallbacks: imageModelFallbacks,
+          fallbacks: fallbacksForOverride,
           cfg,
           agentId,
           aliasIndex,
