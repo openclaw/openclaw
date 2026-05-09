@@ -268,7 +268,7 @@ describe("buildExportSessionReply", () => {
     expect(html).toContain('const base64 = document.getElementById("session-data").textContent;');
   });
 
-  it("exports from scoped SQLite transcript events when the JSONL file is missing", async () => {
+  it("exports from scoped SQLite transcript events without a legacy JSONL file", async () => {
     const { buildExportSessionReply } = await import("./commands-export-session.js");
     hoisted.pathExistsMock.mockResolvedValue(false);
     hoisted.hasSqliteSessionTranscriptEventsMock.mockReturnValue(true);

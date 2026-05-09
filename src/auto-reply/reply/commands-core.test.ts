@@ -136,7 +136,7 @@ describe("emitResetCommandHooks", () => {
     );
   });
 
-  it("uses scoped SQLite transcript events for before_reset when JSONL is missing", async () => {
+  it("uses scoped SQLite transcript events for before_reset without legacy JSONL input", async () => {
     sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents.mockReturnValue(true);
     sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl.mockReturnValue(
       `${JSON.stringify({

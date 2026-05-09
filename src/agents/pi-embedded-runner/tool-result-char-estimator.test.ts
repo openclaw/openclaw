@@ -11,8 +11,8 @@ import {
  * See https://github.com/openclaw/openclaw/issues/34979
  *
  * A plugin tool handler returning undefined produces {type: "text"} (no text
- * property) in the session JSONL. Without guards, this crashes the char
- * estimator with: TypeError: Cannot read properties of undefined (reading 'length')
+ * property) in the persisted session transcript. Without guards, this crashes
+ * the char estimator with: TypeError: Cannot read properties of undefined (reading 'length')
  */
 describe("tool-result-char-estimator", () => {
   it("uses the unknown-block fallback for malformed text blocks", () => {
