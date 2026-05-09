@@ -254,7 +254,7 @@ describe("session hook context wiring", () => {
     expectFields(event, { reason: "new" });
   });
 
-  it("marks daily stale rollovers without exposing a transcript locator", async () => {
+  it("marks daily stale rollovers without exposing transcript path metadata", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));

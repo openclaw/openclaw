@@ -102,7 +102,7 @@ describe("runEmbeddedPiAgent worker launch", () => {
     );
   });
 
-  it("does not include transcript locators in worker handoff", async () => {
+  it("does not include transcript path metadata in worker handoff", async () => {
     const workerResult = {
       payloads: [{ text: "worker-ok" }],
       meta: { durationMs: 12 },

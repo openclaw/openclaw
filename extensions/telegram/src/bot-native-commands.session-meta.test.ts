@@ -1293,7 +1293,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expectUnauthorizedNewCommandBlocked(sendMessage);
   });
 
-  it("passes a persisted topic transcript locator to plugin commands", async () => {
+  it("passes persisted topic session identity to plugin commands", async () => {
     sessionMocks.sessionStore.value = {
       "agent:main:telegram:group:-1001234567890:topic:42": {
         sessionId: "sess-topic",

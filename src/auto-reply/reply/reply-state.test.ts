@@ -544,7 +544,7 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
-  it("updates sessionId without persisting transcript locators when compaction rotates sessions", async () => {
+  it("updates sessionId without persisting transcript metadata when compaction rotates sessions", async () => {
     const { stored, sessionKey } = await rotateCompactionSessionId({
       tempPrefix: "openclaw-compact-rotate-",
       newSessionId: "s2",
@@ -562,7 +562,7 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey]).not.toHaveProperty("transcriptLocator");
   });
 
-  it("drops legacy transcript locator paths during compaction rotation", async () => {
+  it("drops legacy transcript metadata during compaction rotation", async () => {
     const { stored, sessionKey } = await rotateCompactionSessionId({
       tempPrefix: "openclaw-compact-unsafe-",
       newSessionId: "s2",
@@ -587,7 +587,7 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(4);
   });
 
-  it("updates sessionId without persisting transcript locators when newSessionId is provided", async () => {
+  it("updates sessionId without persisting transcript metadata when newSessionId is provided", async () => {
     const entry = {
       sessionId: "old-session-id",
       updatedAt: Date.now(),
@@ -609,7 +609,7 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(2);
   });
 
-  it("does not persist transcript locators when newSessionId matches current sessionId", async () => {
+  it("does not persist transcript metadata when newSessionId matches current sessionId", async () => {
     const entry = {
       sessionId: "same-id",
       updatedAt: Date.now(),

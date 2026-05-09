@@ -423,7 +423,7 @@ describe("diagnostics command", () => {
     expect(calls[1]?.diagnosticsUploadApproved).toBe(true);
   });
 
-  it("passes sidecar-bound transcript locators to Codex diagnostics even when harness metadata is stale", async () => {
+  it("passes session identities to Codex diagnostics even when harness metadata is stale", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
