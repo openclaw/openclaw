@@ -40,11 +40,15 @@ type SetupCommandDeps = {
 };
 
 type AgentWorkspaceModule = typeof import("../agents/workspace.js");
+type AgentWorkspaceDefaultModule = typeof import("../agents/workspace-default.js");
 type ConfigIOModule = typeof import("../config/config.js");
 type ConfigLoggingModule = typeof import("../config/logging.js");
 
 const agentWorkspaceModuleLoader = createLazyImportLoader<AgentWorkspaceModule>(
   () => import("../agents/workspace.js"),
+);
+const agentWorkspaceDefaultModuleLoader = createLazyImportLoader<AgentWorkspaceDefaultModule>(
+  () => import("../agents/workspace-default.js"),
 );
 const configIOModuleLoader = createLazyImportLoader<ConfigIOModule>(
   () => import("../config/config.js"),
@@ -55,6 +59,10 @@ const configLoggingModuleLoader = createLazyImportLoader<ConfigLoggingModule>(
 
 function loadAgentWorkspaceModule(): Promise<AgentWorkspaceModule> {
   return agentWorkspaceModuleLoader.load();
+}
+
+function loadAgentWorkspaceDefaultModule(): Promise<AgentWorkspaceDefaultModule> {
+  return agentWorkspaceDefaultModuleLoader.load();
 }
 
 function loadConfigIOModule(): Promise<ConfigIOModule> {
@@ -146,6 +154,8 @@ export async function setupCommand(
 
   const workspace =
     desiredWorkspace ?? defaults.workspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
+  const { canonicalizeDefaultAgentWorkspacePath } = await loadAgentWorkspaceDefaultModule();
+  const persistedWorkspace = canonicalizeDefaultAgentWorkspacePath(workspace);
 
   const next: OpenClawConfig = {
     ...cfg,
@@ -153,7 +163,7 @@ export async function setupCommand(
       ...cfg.agents,
       defaults: {
         ...defaults,
-        workspace,
+        workspace: persistedWorkspace,
       },
     },
     gateway: {
@@ -164,7 +174,7 @@ export async function setupCommand(
 
   if (
     !existingRaw.exists ||
-    defaults.workspace !== workspace ||
+    defaults.workspace !== persistedWorkspace ||
     cfg.gateway?.mode !== next.gateway?.mode
   ) {
     const replaceConfig =
@@ -178,7 +188,7 @@ export async function setupCommand(
       runtime.log(`Wrote ${await formatConfigPath(configPath)}`);
     } else {
       const updates: string[] = [];
-      if (defaults.workspace !== workspace) {
+      if (defaults.workspace !== persistedWorkspace) {
         updates.push("set agents.defaults.workspace");
       }
       if (cfg.gateway?.mode !== next.gateway?.mode) {

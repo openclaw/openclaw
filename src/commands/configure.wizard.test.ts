@@ -626,7 +626,7 @@ describe("runConfigureWizard", () => {
     expect(retryCall.nextConfig).toMatchObject({
       agents: {
         defaults: {
-          workspace: expect.stringContaining("/.openclaw/workspace"),
+          workspace: "~/.openclaw/workspace",
         },
       },
       plugins: {

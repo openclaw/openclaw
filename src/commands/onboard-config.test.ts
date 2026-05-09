@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyLocalSetupWorkspaceConfig,
@@ -7,6 +8,13 @@ import {
 } from "./onboard-config.js";
 
 describe("applyLocalSetupWorkspaceConfig", () => {
+  it("persists the recognized default workspace as a portable path", () => {
+    const baseConfig: OpenClawConfig = {};
+    const result = applyLocalSetupWorkspaceConfig(baseConfig, resolveDefaultAgentWorkspaceDir());
+
+    expect(result.agents?.defaults?.workspace).toBe("~/.openclaw/workspace");
+  });
+
   it("defaults local setup tool profile to coding", () => {
     expect(ONBOARDING_DEFAULT_TOOLS_PROFILE).toBe("coding");
   });
