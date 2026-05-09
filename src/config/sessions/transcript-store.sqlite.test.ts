@@ -196,7 +196,10 @@ describe("SQLite session transcript store", () => {
       {
         agentId: "main",
         sessionId: "session-1",
-        path: createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "session-1" }),
+        locator: createSqliteSessionTranscriptLocator({
+          agentId: "main",
+          sessionId: "session-1",
+        }),
         updatedAt: 200,
         eventCount: 2,
       },

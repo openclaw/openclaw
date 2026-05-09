@@ -58,12 +58,12 @@ export type SqliteSessionTranscriptScope = {
 };
 
 export type SqliteSessionTranscriptLocator = SqliteSessionTranscriptScope & {
-  path: string;
+  locator: string;
   updatedAt: number;
 };
 
 export type SqliteSessionTranscript = SqliteSessionTranscriptScope & {
-  path?: string;
+  locator?: string;
   updatedAt: number;
   eventCount: number;
 };
@@ -277,8 +277,8 @@ export function listSqliteSessionTranscriptLocators(
   return listSqliteSessionTranscripts(options).map((transcript) => ({
     agentId: transcript.agentId,
     sessionId: transcript.sessionId,
-    path:
-      transcript.path ??
+    locator:
+      transcript.locator ??
       createSqliteSessionTranscriptLocator({
         agentId: transcript.agentId,
         sessionId: transcript.sessionId,
@@ -335,7 +335,7 @@ export function listSqliteSessionTranscripts(
           {
             agentId: agentDatabase.agentId,
             sessionId: normalizeSessionId(record.session_id),
-            path: createSqliteSessionTranscriptLocator({
+            locator: createSqliteSessionTranscriptLocator({
               agentId: agentDatabase.agentId,
               sessionId: normalizeSessionId(record.session_id),
             }),
