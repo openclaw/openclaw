@@ -47,6 +47,12 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath: string;
   message: string;
   label?: string;
+  /**
+   * When set, stamps the persisted assistant entry's `provider` field so
+   * downstream UIs (avatar/handle resolvers) can attribute the inject to a
+   * non-OpenClaw source (e.g. "hermes", "codex"). Default remains "openclaw".
+   */
+  originAgent?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
@@ -88,7 +94,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     usage,
     // Make these explicit so downstream tooling never treats this as model output.
     api: "openai-responses",
-    provider: "openclaw",
+    provider: params.originAgent ?? "openclaw",
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.abortMeta
