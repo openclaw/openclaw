@@ -18,7 +18,7 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
 
 function expectResetAcpState(
   acp:
@@ -109,7 +109,7 @@ test("sessions.reset aborts active runs and clears queues", async () => {
 });
 
 test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
   const prepareFreshSession = vi.fn(async () => {});
   acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
@@ -227,7 +227,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
 });
 
 test("sessions.reset does not emit lifecycle events when key does not exist", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
   await seedGatewaySessionEntries({
     entries: {
@@ -249,7 +249,7 @@ test("sessions.reset does not emit lifecycle events when key does not exist", as
 });
 
 test("sessions.reset emits subagent targetKind for subagent sessions", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   await writeSingleLineSession(dir, "sess-subagent", "hello");
   await seedGatewaySessionEntries({
     entries: {
@@ -283,7 +283,7 @@ test("sessions.reset emits subagent targetKind for subagent sessions", async () 
 });
 
 test("sessions.reset directly unbinds thread bindings when hooks are unavailable", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
   await seedGatewaySessionEntries({
     entries: {

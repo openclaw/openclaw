@@ -12,7 +12,7 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir, openClient } = setupGatewaySessionsTestHarness();
 
 function seedTranscript(params: { sessionId: string; events: unknown[]; agentId?: string }) {
   replaceSqliteSessionTranscriptEvents({
@@ -30,7 +30,7 @@ function seedTranscriptLines(sessionId: string, lines: string[], agentId?: strin
   });
 }
 
-function seedRawSessionStore(store: Record<string, unknown>) {
+function seedRawSessionRows(store: Record<string, unknown>) {
   const databases = new Map<string, ReturnType<typeof openOpenClawAgentDatabase>>();
   const getDatabase = (agentId: string) => {
     const existing = databases.get(agentId);
@@ -55,7 +55,7 @@ function seedRawSessionStore(store: Record<string, unknown>) {
 }
 
 test("sessions.preview returns transcript previews", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   const sessionId = "sess-preview";
   const lines = createToolSummaryPreviewTranscriptLines(sessionId);
   seedTranscriptLines(sessionId, lines);
@@ -82,7 +82,7 @@ test("sessions.preview returns transcript previews", async () => {
 });
 
 test("sessions.resolve and mutators use canonical main key without cleaning legacy ghost keys", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentsConfig = { list: [{ id: "ops", default: true }] };
   testState.sessionConfig = { mainKey: "work" };
   const sessionId = "sess-alias-cleanup";
@@ -97,7 +97,7 @@ test("sessions.resolve and mutators use canonical main key without cleaning lega
   });
 
   const writeRawStore = async (store: Record<string, unknown>) => {
-    seedRawSessionStore(store);
+    seedRawSessionRows(store);
   };
   const readStore = async () =>
     Object.fromEntries(
@@ -177,7 +177,7 @@ test("sessions.resolve and mutators use canonical main key without cleaning lega
 });
 
 test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   const now = Date.now();
   const entries: Record<string, { sessionId: string; updatedAt: number; label?: string }> = {
     "agent:main:subagent:target": {
@@ -204,7 +204,7 @@ test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns
 });
 
 test("sessions.resolve by key respects spawnedBy visibility filters", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   const now = Date.now();
   await seedGatewaySessionEntries({
     entries: {

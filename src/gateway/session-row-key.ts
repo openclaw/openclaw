@@ -1,6 +1,7 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   canonicalizeMainSessionAlias,
+  resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -97,6 +98,17 @@ export function resolveStoredSessionRowKeyForAgent(params: {
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
   }
+  const storageAgentId = normalizeAgentId(params.agentId);
+  if (storageAgentId === resolveDefaultSessionAgentId(params.cfg)) {
+    const storageAgentCanonicalKey = canonicalizeMainSessionAlias({
+      cfg: params.cfg,
+      agentId: storageAgentId,
+      sessionKey: lowered,
+    });
+    if (storageAgentCanonicalKey !== lowered) {
+      return storageAgentCanonicalKey;
+    }
+  }
   const key = parseAgentSessionKey(raw) ? raw : canonicalizeSessionKeyForAgent(params.agentId, raw);
   return resolveSessionRowKey({
     cfg: params.cfg,
@@ -109,6 +121,23 @@ export function resolveStoredSessionOwnerAgentId(params: {
   agentId: string;
   sessionKey: string;
 }): string | null {
+  const storageAgentId = normalizeAgentId(params.agentId);
+  const rawKey = normalizeLowercaseStringOrEmpty(params.sessionKey);
+  const storageAgentMainKey = resolveAgentMainSessionKey({
+    cfg: params.cfg,
+    agentId: storageAgentId,
+  });
+  const storageAgentCanonicalKey =
+    storageAgentId === resolveDefaultSessionAgentId(params.cfg)
+      ? canonicalizeMainSessionAlias({
+          cfg: params.cfg,
+          agentId: storageAgentId,
+          sessionKey: rawKey,
+        })
+      : rawKey;
+  if (storageAgentCanonicalKey === storageAgentMainKey && rawKey !== storageAgentCanonicalKey) {
+    return storageAgentId;
+  }
   const canonicalKey = resolveStoredSessionRowKeyForAgent(params);
   if (canonicalKey === "global" || canonicalKey === "unknown") {
     return null;

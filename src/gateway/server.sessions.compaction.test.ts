@@ -20,10 +20,10 @@ import {
   createCheckpointFixture,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir, openClient } = setupGatewaySessionsTestHarness();
 
 test("sessions.compaction.* lists checkpoints and branches or restores from pre-compaction snapshots", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   const fixture = await createCheckpointFixture(dir);
   const checkpointCreatedAt = Date.now();
   const { SessionManager } = await getSessionManagerModule();
@@ -225,7 +225,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
 });
 
 test("sessions.compact without maxLines runs embedded manual compaction for checkpoint-capable flows", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",

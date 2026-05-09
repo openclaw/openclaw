@@ -16,10 +16,10 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
 
 test("sessions.reset emits internal command hook with reason", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
 
   await seedGatewaySessionEntries({
@@ -67,7 +67,7 @@ test("sessions.reset emits internal command hook with reason", async () => {
 });
 
 test("sessions.reset emits before_reset hook with transcript context", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
@@ -117,7 +117,7 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
 });
 
 test("sessions.reset emits before_reset hook with scoped SQLite transcript context", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main-sqlite",
@@ -167,7 +167,7 @@ test("sessions.reset emits before_reset hook with scoped SQLite transcript conte
 });
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
@@ -256,7 +256,7 @@ test("sessions.reset returns unavailable when active run does not stop", async (
 });
 
 test("sessions.reset emits before_reset for the entry actually reset in the SQLite patch", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-old",
@@ -328,7 +328,7 @@ test("sessions.reset emits before_reset for the entry actually reset in the SQLi
 });
 
 test("sessions.create with emitCommandHooks=true fires command:new hook against parent (#76957)", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   await writeSingleLineSession(dir, "sess-parent", "hello from parent");
 
   await seedGatewaySessionEntries({
@@ -363,7 +363,7 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
 });
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-parent-hooks",
@@ -438,7 +438,7 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
 });
 
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-parent-dms",
@@ -500,7 +500,7 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
 });
 
 test("sessions.create without emitCommandHooks does not fire command:new hook (#76957)", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   await writeSingleLineSession(dir, "sess-parent2", "hello from parent 2");
 
   await seedGatewaySessionEntries({

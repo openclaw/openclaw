@@ -17,7 +17,7 @@ import {
   isInternalHookEvent,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient, getHarness } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir, openClient, getHarness } = setupGatewaySessionsTestHarness();
 
 function requireRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -35,7 +35,7 @@ function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[]
 }
 
 test("webchat clients cannot patch, delete, compact, or restore sessions", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   const fixture = await createCheckpointFixture(dir);
 
   await seedGatewaySessionEntries({
@@ -241,7 +241,7 @@ test("session:patch skips clone and dispatch when no hooks listen", async () => 
 });
 
 test("session:patch hook mutations cannot change the response path", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-cfg-isolation-test"),

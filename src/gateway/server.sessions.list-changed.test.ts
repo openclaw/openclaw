@@ -9,7 +9,7 @@ import {
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir, openClient } = setupGatewaySessionsTestHarness();
 
 type MockCalls = {
   mock: { calls: unknown[][] };
@@ -79,7 +79,7 @@ function expectChangedBroadcast(
 }
 
 test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     models: {
       "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
@@ -169,7 +169,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
 });
 
 test("sessions.list uses the gateway model catalog for effective thinking defaults", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     model: { primary: "test-provider/reasoner" },
   };
@@ -220,7 +220,7 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
 });
 
 test("sessions.list marks sessions with active abortable runs", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
@@ -254,7 +254,7 @@ test("sessions.list marks sessions with active abortable runs", async () => {
 });
 
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};
   const now = Date.now();
   for (let i = 0; i < 11; i += 1) {
@@ -316,7 +316,7 @@ test("sessions.list yields before responding during bulk transcript hydration", 
 });
 
 test("sessions.list does not block on slow model catalog discovery", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
@@ -360,7 +360,7 @@ test("sessions.list does not block on slow model catalog discovery", async () =>
 });
 
 test("sessions.changed mutation events include live usage metadata", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
@@ -432,7 +432,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
 });
 
 test("sessions.changed mutation events include live session setting metadata", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
@@ -484,7 +484,7 @@ test("sessions.changed mutation events include live session setting metadata", a
 });
 
 test("sessions.changed mutation events include sendPolicy metadata", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
@@ -524,7 +524,7 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
 });
 
 test("sessions.changed mutation events include subagent ownership metadata", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       "subagent:child": sessionStoreEntry("sess-child", {

@@ -10,10 +10,10 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir } = setupGatewaySessionsTestHarness();
 
 test("sessions.reset recomputes model from defaults instead of stale runtime model", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     model: {
       primary: "openai/gpt-test-a",
@@ -56,7 +56,7 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
 });
 
 test("sessions.reset drops cached skills snapshot so /new rebuilds visible skills", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     model: {
       primary: "openai/gpt-test-a",
@@ -94,7 +94,7 @@ test("sessions.reset drops cached skills snapshot so /new rebuilds visible skill
 });
 
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     model: {
       primary: "openai/gpt-test-a",
@@ -140,7 +140,7 @@ test("sessions.reset preserves legacy explicit model overrides without modelOver
 });
 
 test("sessions.reset clears fallback-pinned model overrides and restores the selected model", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     model: {
       primary: "openai/gpt-test-a",
@@ -185,7 +185,7 @@ test("sessions.reset clears fallback-pinned model overrides and restores the sel
 });
 
 test("sessions.reset follows the updated default after an auto fallback pinned an older default", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     model: {
       primary: "openai/gpt-test-c",
@@ -230,7 +230,7 @@ test("sessions.reset follows the updated default after an auto fallback pinned a
 });
 
 test("sessions.reset preserves spawned session ownership metadata", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   const stateDir = await fs.realpath(process.env.OPENCLAW_STATE_DIR ?? dir);
   const customTranscriptLocator = path.join(
     stateDir,

@@ -285,7 +285,7 @@ async function ensureSessionRuntimeCleanup(params: {
     });
   };
 
-  const queueKeys = new Set<string>([params.target.canonicalKey]);
+  const queueKeys = new Set<string>([params.key, params.target.canonicalKey]);
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }

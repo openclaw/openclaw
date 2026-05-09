@@ -1227,6 +1227,9 @@ keeps only the version-1 schema plus doctor file-to-database import.
   The runtime SQLite session backend test suite no longer fabricates a
   `sessions.json`; legacy source fixtures now live in the doctor
   tests that import them.
+  Gateway session tests no longer expose a `createSessionStoreDir` helper or
+  unused temp session-store path setup; fixture dirs are explicit, and direct
+  row setup uses SQLite session-row naming.
 - Keep tests that seed legacy files only for migration.
 - Replace JSON-file proof with SQL row proof.
 

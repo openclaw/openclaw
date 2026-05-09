@@ -8,7 +8,7 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir, openClient } = setupGatewaySessionsTestHarness();
 
 function requireNonEmptyString(value: string | undefined, label: string): string {
   if (!value) {
@@ -18,7 +18,7 @@ function requireNonEmptyString(value: string | undefined, label: string): string
 }
 
 test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   piSdkMock.enabled = true;
   piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
   await seedGatewaySessionEntries({
@@ -73,7 +73,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
 });
 
 test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
 
   const key = "agent:ops-agent:dashboard:direct:subagent-orchestrator";
   const created = await directSessionReq<{
@@ -96,7 +96,7 @@ test("sessions.create accepts an explicit key for persistent dashboard sessions"
 });
 
 test("sessions.create scopes the main alias to the requested agent", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
 
   const created = await directSessionReq<{
     key?: string;
@@ -119,7 +119,7 @@ test("sessions.create scopes the main alias to the requested agent", async () =>
 });
 
 test("sessions.create preserves global and unknown sentinel keys", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
 
   const globalCreated = await directSessionReq<{
     key?: string;
@@ -160,7 +160,7 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 });
 
 test("sessions.create rejects unknown parentSessionKey", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
 
   const created = await directSessionReq("sessions.create", {
     agentId: "ops",
@@ -174,7 +174,7 @@ test("sessions.create rejects unknown parentSessionKey", async () => {
 });
 
 test("sessions.create can start the first agent turn from an initial task", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   // Register "ops" so the deleted-agent guard added in #65986 does not
   // reject the auto-started chat.send triggered by `task:`.
   testState.agentsConfig = { list: [{ id: "ops", default: true }] };

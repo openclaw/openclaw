@@ -315,7 +315,6 @@ export function setupGatewaySessionsTestHarness() {
   }
 
   return {
-    createSessionStoreDir: createSessionFixtureDir,
     createSessionFixtureDir,
     getHarness: () => harness,
     openClient,
