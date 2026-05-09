@@ -2257,9 +2257,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         CommandBody: commandBody,
         InputProvenance: systemInputProvenance,
         SessionKey: sessionKey,
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
-        OriginatingChannel: originatingChannel,
+        Provider: (canInjectSystemProvenance(client) && systemInputProvenance?.sourceChannel) || INTERNAL_MESSAGE_CHANNEL,
+        Surface: (canInjectSystemProvenance(client) && systemInputProvenance?.sourceChannel) || INTERNAL_MESSAGE_CHANNEL,
+        OriginatingChannel: (canInjectSystemProvenance(client) && systemInputProvenance?.sourceChannel) || originatingChannel,
         OriginatingTo: originatingTo,
         ExplicitDeliverRoute: explicitDeliverRoute,
         AccountId: accountId,
@@ -2268,13 +2268,19 @@ export const chatHandlers: GatewayRequestHandlers = {
         ...(commandSource ? { CommandSource: commandSource } : {}),
         CommandAuthorized: true,
         MessageSid: clientRunId,
-        ...(!isOperatorUiClient(clientInfo)
+        ...(canInjectSystemProvenance(client) && systemInputProvenance?.senderId
           ? {
-              SenderId: clientInfo?.id,
-              SenderName: clientInfo?.displayName,
-              SenderUsername: clientInfo?.displayName,
+              SenderId: systemInputProvenance.senderId,
+              SenderName: systemInputProvenance.senderName || clientInfo?.displayName,
+              SenderUsername: systemInputProvenance.senderName || clientInfo?.displayName,
             }
-          : {}),
+          : !isOperatorUiClient(clientInfo)
+            ? {
+                SenderId: clientInfo?.id,
+                SenderName: clientInfo?.displayName,
+                SenderUsername: clientInfo?.displayName,
+              }
+            : {}),
         GatewayClientScopes: client?.connect?.scopes ?? [],
         ...pluginBoundMediaFields,
       };
