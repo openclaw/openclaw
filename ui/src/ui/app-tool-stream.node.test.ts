@@ -23,6 +23,7 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     toolStreamOrder: [],
     chatToolMessages: [],
     toolStreamSyncTimer: null,
+    chatModelOverrides: {},
     compactionStatus: null,
     compactionClearTimer: null,
     fallbackStatus: null,
@@ -209,6 +210,71 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(fallbackStatus.phase).toBe("cleared");
     expect(fallbackStatus.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
     vi.useRealTimers();
+  });
+
+  it("updates the chat model cache from session_status model changes", () => {
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "result",
+        name: "session_status",
+        toolCallId: "status-1",
+        result: {
+          details: {
+            ok: true,
+            sessionKey: "main",
+            changedModel: true,
+            modelProvider: "anthropic",
+            model: "claude-sonnet-4-6",
+            modelOverride: "anthropic/claude-sonnet-4-6",
+          },
+        },
+      },
+    });
+
+    expect(host.chatModelOverrides?.main).toEqual({
+      kind: "qualified",
+      value: "anthropic/claude-sonnet-4-6",
+    });
+  });
+
+  it("clears the chat model cache from session_status default resets", () => {
+    const host = createHost({
+      chatModelOverrides: {
+        main: { kind: "qualified", value: "anthropic/claude-sonnet-4-6" },
+      },
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "result",
+        name: "session_status",
+        toolCallId: "status-1",
+        result: {
+          details: {
+            ok: true,
+            sessionKey: "main",
+            changedModel: true,
+            modelProvider: "openai",
+            model: "gpt-5.4",
+            modelOverride: null,
+          },
+        },
+      },
+    });
+
+    expect(host.chatModelOverrides?.main).toBeNull();
   });
 
   it("keeps compaction in retry-pending state until the matching lifecycle end", () => {
