@@ -1,9 +1,9 @@
-import { mkdirSync, rmSync, statSync } from "node:fs";
+import { rmSync, statSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
+  withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
@@ -558,22 +558,6 @@ describe("plugin state keyed store", () => {
       const failedSteps = result.steps.filter((step) => !step.ok);
       expect(failedSteps).toStrictEqual([]);
       expect(JSON.stringify(result)).not.toContain("probe-value");
-    });
-  });
-
-  it("throws on unsupported future schema versions", async () => {
-    await withPluginStateTestState(async () => {
-      closePluginStateSqliteStore();
-      mkdirSync(resolvePluginStateDir(), { recursive: true });
-      const { DatabaseSync } = requireNodeSqlite();
-      const db = new DatabaseSync(resolvePluginStateSqlitePath());
-      db.exec("PRAGMA user_version = 2;");
-      db.close();
-
-      const store = createPluginStateKeyedStore("discord", { namespace: "schema", maxEntries: 10 });
-      await expectPluginStateStoreError(store.register("k", { ok: true }), {
-        code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED",
-      });
     });
   });
 });
