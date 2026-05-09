@@ -62,16 +62,16 @@ describe("cron run log", () => {
   }
 
   it("stores and pages SQLite run-log entries", async () => {
-    await withRunLogDir("openclaw-cron-log-sqlite-", async (dir) => {
-      const storePath = path.join(dir, "cron", "jobs.json");
-      await appendCronRunLogToSqlite(storePath, {
+    await withRunLogDir("openclaw-cron-log-sqlite-", async () => {
+      const storeKey = "cron-run-log-sqlite";
+      await appendCronRunLogToSqlite(storeKey, {
         ts: 1,
         jobId: "job-1",
         action: "finished",
         status: "ok",
         summary: "first",
       });
-      await appendCronRunLogToSqlite(storePath, {
+      await appendCronRunLogToSqlite(storeKey, {
         ts: 2,
         jobId: "job-1",
         action: "finished",
@@ -79,17 +79,17 @@ describe("cron run log", () => {
         error: "boom",
       });
 
-      expect(readCronRunLogEntriesFromSqliteSync(storePath, { jobId: "job-1" })).toEqual([
+      expect(readCronRunLogEntriesFromSqliteSync(storeKey, { jobId: "job-1" })).toEqual([
         expect.objectContaining({ ts: 1, summary: "first" }),
         expect.objectContaining({ ts: 2, error: "boom" }),
       ]);
-      const page = await readCronRunLogEntriesPageFromSqlite(storePath, {
+      const page = await readCronRunLogEntriesPageFromSqlite(storeKey, {
         jobId: "job-1",
         status: "error",
       });
       expect(page.entries).toEqual([expect.objectContaining({ ts: 2, status: "error" })]);
       const all = await readCronRunLogEntriesPageAllFromSqlite({
-        storeKey: storePath,
+        storeKey,
         query: "Nightly Backup",
         status: "error",
         jobNameById: { "job-1": "Nightly Backup" },

@@ -42,6 +42,12 @@ async function makeStorePath() {
   };
 }
 
+function makeStoreKey() {
+  return {
+    storeKey: `case-${caseId++}`,
+  };
+}
+
 function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   const now = Date.now();
   return {
@@ -83,8 +89,8 @@ describe("resolveLegacyCronStorePath", () => {
 
 describe("cron store", () => {
   it("returns empty store when SQLite has no rows for the store key", async () => {
-    const store = await makeStorePath();
-    const loaded = await loadCronStore(store.storePath);
+    const { storeKey } = makeStoreKey();
+    const loaded = await loadCronStore(storeKey);
     expect(loaded).toEqual({ version: 1, jobs: [] });
   });
 
@@ -132,28 +138,26 @@ describe("cron store", () => {
   });
 
   it("persists and round-trips job definitions through SQLite without writing jobs.json", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = makeStoreKey();
     const payload = makeStore("job-1", true);
     payload.jobs[0].state = {
       nextRunAtMs: payload.jobs[0].createdAtMs + 60_000,
     };
 
-    await saveCronStore(storePath, payload);
+    await saveCronStore(storeKey, payload);
 
-    const loaded = await loadCronStore(storePath);
+    const loaded = await loadCronStore(storeKey);
     expect(loaded.jobs[0]).toMatchObject({
       id: "job-1",
       state: { nextRunAtMs: payload.jobs[0].createdAtMs + 60_000 },
     });
-    await expectPathMissing(storePath);
-    await expectPathMissing(`${storePath}.bak`);
   });
 
   it("loads SQLite state synchronously for task reconciliation", async () => {
-    const { storePath } = await makeStorePath();
-    await saveCronStore(storePath, makeStore("job-sync", true));
+    const { storeKey } = makeStoreKey();
+    await saveCronStore(storeKey, makeStore("job-sync", true));
 
-    const loaded = loadCronStoreSync(storePath);
+    const loaded = loadCronStoreSync(storeKey);
 
     expect(loaded.jobs).toHaveLength(1);
     expect(loaded.jobs[0]?.id).toBe("job-sync");
@@ -162,30 +166,30 @@ describe("cron store", () => {
   });
 
   it("stateOnly saves runtime state without replacing job definitions", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = makeStoreKey();
     const first = makeStore("job-1", true);
     const second = makeStore("job-2", false);
     second.jobs[0].state = {
       nextRunAtMs: second.jobs[0].createdAtMs + 60_000,
     };
 
-    await saveCronStore(storePath, first);
-    await saveCronStore(storePath, second, { stateOnly: true });
+    await saveCronStore(storeKey, first);
+    await saveCronStore(storeKey, second, { stateOnly: true });
 
-    const loaded = await loadCronStore(storePath);
+    const loaded = await loadCronStore(storeKey);
     expect(loaded.jobs.map((job) => job.id)).toEqual(["job-1"]);
     expect(loaded.jobs[0]?.state).toEqual({});
   });
 
   it("updates matching cron rows without rewriting the whole store", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = makeStoreKey();
     const first = makeStore("job-1", true);
     const second = makeStore("job-2", true);
     second.jobs[0].delivery = { channel: "telegram", to: "@old" } as never;
     first.jobs.push(second.jobs[0]);
-    await saveCronStore(storePath, first);
+    await saveCronStore(storeKey, first);
 
-    const result = await updateCronStoreJobs(storePath, (job) => {
+    const result = await updateCronStoreJobs(storeKey, (job) => {
       if (job.id !== "job-2") {
         return undefined;
       }
@@ -195,7 +199,7 @@ describe("cron store", () => {
       };
     });
 
-    const loaded = await loadCronStore(storePath);
+    const loaded = await loadCronStore(storeKey);
     expect(result).toEqual({ updatedJobs: 1 });
     expect(loaded.jobs.map((job) => job.id)).toEqual(["job-1", "job-2"]);
     expect(loaded.jobs[0]).toMatchObject({ id: "job-1" });
@@ -204,7 +208,6 @@ describe("cron store", () => {
       id: "job-2",
       delivery: { channel: "telegram", to: "-100123" },
     });
-    await expectPathMissing(storePath);
   });
 
   it("imports legacy jobs.json into SQLite and removes the source file", async () => {
