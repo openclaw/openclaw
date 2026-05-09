@@ -4,6 +4,7 @@
 // without recursing through provider-specific facades.
 
 import { createHash } from "node:crypto";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { findNormalizedProviderKey } from "../agents/provider-id.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
@@ -14,7 +15,6 @@ import type {
   ModelCatalogModel,
   ModelCatalogTieredCost,
 } from "../model-catalog/types.js";
-import { normalizeGooglePreviewModelId } from "./provider-model-id-normalize.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
@@ -201,17 +201,6 @@ function resolveConfiguredProviderModels(
   return Array.isArray(providerConfig.models) ? providerConfig.models : [];
 }
 
-function normalizeConfiguredProviderCatalogModelId(id: string): string {
-  const trimmed = id.trim();
-  const googlePrefix = "google/";
-  if (!trimmed.startsWith(googlePrefix)) {
-    return trimmed;
-  }
-  const modelId = trimmed.slice(googlePrefix.length);
-  const normalizedModelId = normalizeGooglePreviewModelId(modelId);
-  return normalizedModelId === modelId ? trimmed : `${googlePrefix}${normalizedModelId}`;
-}
-
 export function readConfiguredProviderCatalogEntries(params: {
   config?: OpenClawConfig;
   providerId: string;
@@ -228,7 +217,7 @@ export function readConfiguredProviderCatalogEntries(params: {
     if (!id) {
       continue;
     }
-    const normalizedId = normalizeConfiguredProviderCatalogModelId(id);
+    const normalizedId = normalizeConfiguredProviderCatalogModelId(provider, id);
     const name =
       (typeof model.name === "string" ? model.name : normalizedId).trim() || normalizedId;
     const contextWindow =

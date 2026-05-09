@@ -130,6 +130,43 @@ describe("provider-catalog-shared native streaming usage compat", () => {
 });
 
 describe("provider-catalog-shared configured catalog entries", () => {
+  it("normalizes bare retired Gemini ids for Google-owned configured providers", () => {
+    expect(
+      readConfiguredProviderCatalogEntries({
+        providerId: "google",
+        config: {
+          models: {
+            providers: {
+              google: {
+                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                models: [
+                  {
+                    id: "gemini-3-pro-preview",
+                    name: "Gemini 3 Pro Preview",
+                    input: ["text", "image"],
+                    reasoning: true,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 1048576,
+                    maxTokens: 65536,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        provider: "google",
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 1048576,
+      },
+    ]);
+  });
+
   it("preserves configured audio and video input modalities while normalizing nested Gemini ids", () => {
     expect(
       readConfiguredProviderCatalogEntries({
