@@ -114,6 +114,36 @@ afterEach(() => {
 });
 
 describe("tool_result_persist hook", () => {
+  it("marks only the requested persisted user message as a runtime-only event", () => {
+    let markNext = true;
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      markRuntimeOnlyUserMessageForPersistence: () => {
+        const shouldMark = markNext;
+        markNext = false;
+        return shouldMark;
+      },
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    appendMessage({
+      role: "user",
+      content: "Continue the OpenClaw runtime event.",
+      timestamp: 1,
+    } as AgentMessage);
+    appendMessage({
+      role: "user",
+      content: "Follow-up from a real user.",
+      timestamp: 2,
+    } as AgentMessage);
+
+    const messages = sm
+      .getEntries()
+      .filter((entry) => entry.type === "message")
+      .map((entry) => (entry as { message: Record<string, unknown> }).message);
+    expect(messages[0]?.__openclaw).toMatchObject({ runtimeOnlyEvent: true });
+    expect(messages[1]?.__openclaw).toBeUndefined();
+  });
+
   it("does not modify persisted toolResult messages when no hook is registered", () => {
     const sm = guardSessionManager(SessionManager.inMemory(), {
       agentId: "main",

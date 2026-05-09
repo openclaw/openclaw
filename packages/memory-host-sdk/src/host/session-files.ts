@@ -8,6 +8,7 @@ import {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
+  hasRuntimeOnlyEventUserMessageProvenance,
   isCompactionCheckpointTranscriptFileName,
   isCronRunSessionKey,
   isExecCompletionEvent,
@@ -455,8 +456,13 @@ function isGeneratedHeartbeatPromptMessage(text: string, role: "user" | "assista
   return role === "user" && isHeartbeatUserMessage({ role, content: text }, HEARTBEAT_PROMPT);
 }
 
-function isGeneratedRuntimeEventPromptMessage(text: string, role: "user" | "assistant"): boolean {
-  return role === "user" && text === OPENCLAW_RUNTIME_EVENT_USER_PROMPT;
+function isGeneratedRuntimeEventPromptMessage(
+  text: string,
+  message: { role?: unknown; __openclaw?: unknown },
+): boolean {
+  return (
+    text === OPENCLAW_RUNTIME_EVENT_USER_PROMPT && hasRuntimeOnlyEventUserMessageProvenance(message)
+  );
 }
 
 function sanitizeSessionText(text: string, role: "user" | "assistant"): string | null {
@@ -473,9 +479,6 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
     return null;
   }
   if (isGeneratedHeartbeatPromptMessage(normalized, role)) {
-    return null;
-  }
-  if (isGeneratedRuntimeEventPromptMessage(normalized, role)) {
     return null;
   }
   if (isSilentReplyPayloadText(normalized)) {
@@ -600,7 +603,7 @@ export async function buildSessionEntry(
         continue;
       }
       const message = (record as { message?: unknown }).message as
-        | { role?: unknown; content?: unknown; provenance?: unknown }
+        | { role?: unknown; content?: unknown; provenance?: unknown; __openclaw?: unknown }
         | undefined;
       if (!message || typeof message.role !== "string") {
         continue;
@@ -622,9 +625,7 @@ export async function buildSessionEntry(
       const strippedRawText = stripInternalRuntimeContext(
         stripInboundMetadataForUserRole(rawText, message.role),
       );
-      if (
-        isGeneratedRuntimeEventPromptMessage(normalizeSessionText(strippedRawText), message.role)
-      ) {
+      if (isGeneratedRuntimeEventPromptMessage(normalizeSessionText(strippedRawText), message)) {
         skipAssistantAfterRuntimeEventPrompt = true;
         continue;
       }

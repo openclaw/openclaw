@@ -1392,6 +1392,7 @@ describe("memory-core dreaming phases", () => {
             role: "user",
             timestamp: "2026-04-16T18:07:30.000Z",
             content: "Continue the OpenClaw runtime event.",
+            __openclaw: { runtimeOnlyEvent: true },
           },
         }),
         JSON.stringify({

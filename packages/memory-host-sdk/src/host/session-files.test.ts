@@ -306,6 +306,7 @@ describe("buildSessionEntry", () => {
         message: {
           role: "user",
           content: "Continue the OpenClaw runtime event.",
+          __openclaw: { runtimeOnlyEvent: true },
         },
       }),
       JSON.stringify({
@@ -329,5 +330,29 @@ describe("buildSessionEntry", () => {
       "User: Remember the database maintenance window.\nAssistant: I noted the database maintenance window.",
     );
     expect(entry.lineMap).toEqual([3, 4]);
+  });
+
+  it("keeps user-typed runtime marker turns", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Continue the OpenClaw runtime event.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "That text is now part of the conversation." },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "user-typed-runtime-marker-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe(
+      "User: Continue the OpenClaw runtime event.\nAssistant: That text is now part of the conversation.",
+    );
+    expect(entry.lineMap).toEqual([1, 2]);
   });
 });
