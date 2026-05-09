@@ -48,7 +48,11 @@ type EventHandlerContext = {
   localMode?: boolean;
 };
 
-const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
+// Streaming-watchdog default fires "response is taking longer than expected" when
+// no stream delta arrives for this long. Originally 30s, raised to 10m so long
+// reasoning / tool runs and SSE keepalive gaps don't cause spurious "idle" trips.
+// Override per-install via `cli.tui.streamingWatchdogMs`.
+const DEFAULT_STREAMING_WATCHDOG_MS = 600_000;
 const STREAMING_WATCHDOG_USER_MESSAGE =
   "This response is taking longer than expected. Send another message to continue.";
 

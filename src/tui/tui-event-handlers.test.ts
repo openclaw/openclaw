@@ -1233,6 +1233,30 @@ describe("tui-event-handlers: streaming watchdog", () => {
     handlers.dispose?.();
   });
 
+  it("falls back to the 10-minute default when streamingWatchdogMs is undefined", () => {
+    const { state, chatLog, setActivityStatus, handlers } = createHarness();
+
+    handlers.handleChatEvent({
+      runId: "run-default",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hi" },
+    } satisfies ChatEvent);
+
+    // Old default was 30s — verify it does NOT fire at 31s anymore.
+    vi.advanceTimersByTime(31_000);
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+    expect(state.activeChatRunId).toBe("run-default");
+
+    // New default is 10m — verify it DOES fire just past the 10m boundary.
+    vi.advanceTimersByTime(600_001 - 31_000);
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+    expect(chatLog.addSystem).toHaveBeenCalledWith(expectedTimeoutMessage);
+
+    handlers.dispose?.();
+  });
+
   it("is disabled when streamingWatchdogMs is 0", () => {
     const { state, chatLog, setActivityStatus, handlers } = createHarness({
       streamingWatchdogMs: 0,

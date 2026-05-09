@@ -19,6 +19,7 @@ import {
   resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnOptions,
   resolveTuiSessionKey,
+  resolveTuiStreamingWatchdogMs,
   stopTuiSafely,
 } from "./tui.js";
 
@@ -496,5 +497,60 @@ describe("resolveLocalAuthSpawnCwd", () => {
         defaultCwd: "/worktree/subdir",
       }),
     ).toBe("/worktree/subdir");
+  });
+});
+
+describe("resolveTuiStreamingWatchdogMs", () => {
+  it("returns undefined when cli.tui.streamingWatchdogMs is unset", () => {
+    expect(resolveTuiStreamingWatchdogMs({} as OpenClawConfig)).toBeUndefined();
+    expect(resolveTuiStreamingWatchdogMs({ cli: {} } as OpenClawConfig)).toBeUndefined();
+    expect(resolveTuiStreamingWatchdogMs({ cli: { tui: {} } } as OpenClawConfig)).toBeUndefined();
+  });
+
+  it("returns the configured value when finite and non-negative", () => {
+    expect(
+      resolveTuiStreamingWatchdogMs({
+        cli: { tui: { streamingWatchdogMs: 900_000 } },
+      } as OpenClawConfig),
+    ).toBe(900_000);
+  });
+
+  it("preserves 0 (caller-side disable signal)", () => {
+    expect(
+      resolveTuiStreamingWatchdogMs({
+        cli: { tui: { streamingWatchdogMs: 0 } },
+      } as OpenClawConfig),
+    ).toBe(0);
+  });
+
+  it("floors fractional values", () => {
+    expect(
+      resolveTuiStreamingWatchdogMs({
+        cli: { tui: { streamingWatchdogMs: 1234.9 } },
+      } as OpenClawConfig),
+    ).toBe(1234);
+  });
+
+  it("rejects negative, NaN, Infinity, and non-number inputs", () => {
+    expect(
+      resolveTuiStreamingWatchdogMs({
+        cli: { tui: { streamingWatchdogMs: -10 } },
+      } as OpenClawConfig),
+    ).toBeUndefined();
+    expect(
+      resolveTuiStreamingWatchdogMs({
+        cli: { tui: { streamingWatchdogMs: Number.NaN } },
+      } as OpenClawConfig),
+    ).toBeUndefined();
+    expect(
+      resolveTuiStreamingWatchdogMs({
+        cli: { tui: { streamingWatchdogMs: Number.POSITIVE_INFINITY } },
+      } as OpenClawConfig),
+    ).toBeUndefined();
+    expect(
+      resolveTuiStreamingWatchdogMs({
+        cli: { tui: { streamingWatchdogMs: "600000" as unknown as number } },
+      } as OpenClawConfig),
+    ).toBeUndefined();
   });
 });

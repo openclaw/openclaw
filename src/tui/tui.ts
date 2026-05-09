@@ -78,6 +78,14 @@ const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
 
 const OPENAI_CODEX_PROVIDER = "openai-codex";
 
+export function resolveTuiStreamingWatchdogMs(config: OpenClawConfig): number | undefined {
+  const value = config.cli?.tui?.streamingWatchdogMs;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;
   config?: OpenClawConfig;
@@ -1083,6 +1091,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     isLocalBtwRunId,
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
+    streamingWatchdogMs: resolveTuiStreamingWatchdogMs(config),
   });
 
   const deferredFinish = createDeferredTuiFinish();

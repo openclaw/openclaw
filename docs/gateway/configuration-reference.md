@@ -1145,6 +1145,9 @@ Notes:
     banner: {
       taglineMode: "off", // random | default | off
     },
+    tui: {
+      streamingWatchdogMs: 600000, // default 10m; 0 disables
+    },
   },
 }
 ```
@@ -1154,6 +1157,11 @@ Notes:
   - `"default"`: fixed neutral tagline (`All your chats, one OpenClaw.`).
   - `"off"`: no tagline text (banner title/version still shown).
 - To hide the entire banner (not just taglines), set env `OPENCLAW_HIDE_BANNER=1`.
+- `cli.tui.streamingWatchdogMs` is the no-stream-delta window after which the
+  interactive TUI resets activity status to idle and posts the "taking longer
+  than expected" notice. Default: `600000` (10 minutes). Set to `0` to disable.
+  Raise this when working with long-reasoning models, slow tool runs, or
+  upstreams with long SSE keepalive gaps.
 
 ---
 

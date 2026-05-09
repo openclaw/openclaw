@@ -469,6 +469,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        tui: z
+          .object({
+            streamingWatchdogMs: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
