@@ -11,7 +11,9 @@ import type {
   WebhookParseOptions,
   ProviderWebhookParseResult,
   StartListeningInput,
+  StartMediaStreamInput,
   StopListeningInput,
+  StopMediaStreamInput,
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
@@ -88,4 +90,17 @@ export interface VoiceCallProvider {
    * so the caller can keep the call and rely on timer-based fallback.
    */
   getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult>;
+
+  /**
+   * Optional. Begin a bidirectional media stream for the given call.
+   * Implemented by providers that expose a Call Control–style streaming
+   * command (e.g. Telnyx). Used by the realtime path on providers that do
+   * not negotiate the stream via TwiML.
+   */
+  startMediaStream?: (input: StartMediaStreamInput) => Promise<void>;
+
+  /**
+   * Optional. Stop an active media stream for the given call. Idempotent.
+   */
+  stopMediaStream?: (input: StopMediaStreamInput) => Promise<void>;
 }

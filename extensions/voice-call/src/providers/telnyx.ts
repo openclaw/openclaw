@@ -12,7 +12,9 @@ import type {
   PlayTtsInput,
   ProviderWebhookParseResult,
   StartListeningInput,
+  StartMediaStreamInput,
   StopListeningInput,
+  StopMediaStreamInput,
   WebhookContext,
   WebhookParseOptions,
   WebhookVerificationResult,
@@ -319,6 +321,42 @@ export class TelnyxProvider implements VoiceCallProvider {
     await this.apiRequest(
       `/calls/${input.providerCallId}/actions/transcription_stop`,
       { command_id: crypto.randomUUID() },
+      { allowNotFound: true },
+    );
+  }
+
+  /**
+   * Begin a bidirectional media stream for the given call. Posts
+   * `streaming_start` with `stream_bidirectional_mode: "rtp"` so audio is
+   * both received from and sent to the call over the same WebSocket. Used
+   * by the realtime path; Telnyx does not negotiate the stream via TwiML
+   * the way Twilio does, so this command runs once the call is answered.
+   *
+   * @see https://developers.telnyx.com/docs/voice/programmable-voice/media-streaming
+   * @see https://developers.telnyx.com/api/call-control/start-call-streaming
+   */
+  async startMediaStream(input: StartMediaStreamInput): Promise<void> {
+    const body: Record<string, unknown> = {
+      command_id: `openclaw-stream-start-${input.callId}`,
+      stream_url: input.streamUrl,
+      stream_track: input.track ?? "inbound_track",
+      stream_bidirectional_mode: "rtp",
+      stream_bidirectional_codec: input.codec ?? "PCMU",
+    };
+    if (input.samplingRate !== undefined) {
+      body.stream_bidirectional_sampling_rate = input.samplingRate;
+    }
+    await this.apiRequest(`/calls/${input.providerCallId}/actions/streaming_start`, body);
+  }
+
+  /**
+   * Stop the active media stream for a call. Idempotent — `allowNotFound`
+   * lets us no-op when the stream is already gone (e.g. the call ended).
+   */
+  async stopMediaStream(input: StopMediaStreamInput): Promise<void> {
+    await this.apiRequest(
+      `/calls/${input.providerCallId}/actions/streaming_stop`,
+      { command_id: `openclaw-stream-stop-${input.callId}` },
       { allowNotFound: true },
     );
   }

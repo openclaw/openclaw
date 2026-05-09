@@ -223,6 +223,31 @@ describe("validateProviderConfig", () => {
         "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",
       );
     });
+
+    it("accepts telnyx provider in realtime mode", () => {
+      const config = createBaseConfig("telnyx");
+      config.telnyx = { apiKey: "KEY123", connectionId: "CONN456", publicKey: "pub-key" };
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
+
+    it("rejects providers other than twilio and telnyx in realtime mode", () => {
+      const config = createBaseConfig("plivo");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      );
+    });
   });
 });
 

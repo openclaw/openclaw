@@ -259,6 +259,29 @@ export type StopListeningInput = {
   providerCallId: ProviderCallId;
 };
 
+/**
+ * Begin a bidirectional media stream for realtime audio (telephony media
+ * streams). Provider-agnostic shape; not all providers expose a Call
+ * Control–style streaming command.
+ */
+export type StartMediaStreamInput = {
+  callId: CallId;
+  providerCallId: ProviderCallId;
+  /** Public wss:// URL the provider should connect its media stream to. */
+  streamUrl: string;
+  /** Which leg(s) to stream. Provider semantics vary; default is inbound only. */
+  track?: "inbound_track" | "outbound_track" | "both_tracks";
+  /** Bidirectional codec hint (PCMU/PCMA/L16/G722/OPUS/AMR-WB). */
+  codec?: "PCMU" | "PCMA" | "G722" | "OPUS" | "AMR-WB" | "L16";
+  /** Sampling rate in Hz when the codec supports multiple rates (e.g. L16/16000). */
+  samplingRate?: number;
+};
+
+export type StopMediaStreamInput = {
+  callId: CallId;
+  providerCallId: ProviderCallId;
+};
+
 // -----------------------------------------------------------------------------
 // Call Status Verification (used on restart to verify persisted calls)
 // -----------------------------------------------------------------------------

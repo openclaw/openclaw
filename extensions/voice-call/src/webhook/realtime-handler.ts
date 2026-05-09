@@ -97,6 +97,21 @@ export class RealtimeCallHandler {
     return `${this.publicPathPrefix}${normalizePath(this.config.streamPath ?? "/voice/stream/realtime")}`;
   }
 
+  /**
+   * Mint a stream token and return the full wss:// URL the provider should
+   * connect to. Used by providers that negotiate the realtime media stream
+   * out-of-band (e.g. Telnyx `streaming_start`) instead of via TwiML.
+   * Returns `null` when the public origin is not yet known — the caller
+   * is expected to log and skip in that case.
+   */
+  mintStreamUrl(meta: Omit<PendingStreamToken, "expiry"> = {}): string | null {
+    if (!this.publicOrigin) {
+      return null;
+    }
+    const token = this.issueStreamToken(meta);
+    return `wss://${this.publicOrigin}${this.getStreamPathPattern()}/${token}`;
+  }
+
   buildTwiMLPayload(req: http.IncomingMessage, params?: URLSearchParams): WebhookResponsePayload {
     const host = this.publicOrigin || req.headers.host || DEFAULT_HOST;
     const rawDirection = params?.get("Direction");
@@ -141,15 +156,32 @@ export class RealtimeCallHandler {
       ws.on("message", (data: Buffer) => {
         try {
           const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+          // Some providers (Telnyx) emit a `connected` frame before `start`.
+          // It carries no data we need; ignore it so we still wait for `start`.
+          if (!initialized && msg.event === "connected") {
+            return;
+          }
           if (!initialized && msg.event === "start") {
             initialized = true;
             const startData =
               typeof msg.start === "object" && msg.start !== null
                 ? (msg.start as Record<string, unknown>)
                 : undefined;
+            // Twilio uses `start.streamSid` / `start.callSid`; Telnyx uses
+            // top-level `stream_id` and `start.call_control_id`. Accept both
+            // so the same realtime bridge serves either provider's transport.
             const streamSid =
-              typeof startData?.streamSid === "string" ? startData.streamSid : "unknown";
-            const callSid = typeof startData?.callSid === "string" ? startData.callSid : "unknown";
+              typeof startData?.streamSid === "string"
+                ? startData.streamSid
+                : typeof msg.stream_id === "string"
+                  ? msg.stream_id
+                  : "unknown";
+            const callSid =
+              typeof startData?.callSid === "string"
+                ? startData.callSid
+                : typeof startData?.call_control_id === "string"
+                  ? startData.call_control_id
+                  : "unknown";
             const nextBridge = this.handleCall(streamSid, callSid, ws, callerMeta);
             if (!nextBridge) {
               return;

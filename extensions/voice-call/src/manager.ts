@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CallManagerContext } from "./manager/context.js";
@@ -77,10 +78,21 @@ export class CallManager {
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
+  private realtimeStreamStarter: ((call: CallRecord) => void | Promise<void>) | null = null;
 
   constructor(config: VoiceCallConfig, storePath?: string) {
     this.config = config;
     this.storePath = resolveDefaultStoreBase(config, storePath);
+  }
+
+  /**
+   * Register a callback fired on `call.answered` for providers that need to
+   * negotiate the realtime media stream out-of-band (e.g. Telnyx, which
+   * issues `streaming_start` after answering rather than via TwiML).
+   * Twilio's realtime path is still TwiML-driven and does not use this.
+   */
+  setRealtimeStreamStarter(starter: ((call: CallRecord) => void | Promise<void>) | null): void {
+    this.realtimeStreamStarter = typeof starter === "function" ? starter : null;
   }
 
   /**
@@ -323,6 +335,24 @@ export class CallManager {
   }
 
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
+    // Realtime providers that need an out-of-band stream-start command
+    // (e.g. Telnyx) get triggered here, on first answered. The realtime
+    // bridge then handles the greeting via the model's
+    // initialGreetingInstructions, so the TTS path below is a no-op for
+    // realtime mode (mode === "conversation" branch returns early).
+    if (
+      this.config.realtime.enabled &&
+      this.realtimeStreamStarter &&
+      this.provider &&
+      call.providerCallId
+    ) {
+      void Promise.resolve(this.realtimeStreamStarter(call)).catch((err: unknown) => {
+        console.warn(
+          `[voice-call] Failed to start realtime media stream for call ${call.callId}: ${formatErrorMessage(err)}`,
+        );
+      });
+    }
+
     const initialMessage = normalizeOptionalString(call.metadata?.initialMessage) ?? "";
 
     if (!initialMessage) {

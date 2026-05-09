@@ -129,6 +129,15 @@ describe("RealtimeCallHandler path routing", () => {
     );
   });
 
+  it("mintStreamUrl returns a wss URL with a fresh token, or null without a public origin", () => {
+    const handler = makeHandler();
+    expect(handler.mintStreamUrl()).toBeNull();
+
+    handler.setPublicUrl("https://public.example/voice/webhook");
+    const url = handler.mintStreamUrl({ direction: "inbound" });
+    expect(url).toMatch(/^wss:\/\/public\.example\/voice\/stream\/realtime\/[0-9a-f-]{36}$/);
+  });
+
   it("normalizes Twilio outbound realtime directions", async () => {
     let callbacks:
       | {
@@ -326,6 +335,80 @@ describe("RealtimeCallHandler path routing", () => {
         expect(submitToolResult).not.toHaveBeenCalledWith("custom-call", expect.anything(), {
           willContinue: true,
         });
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("RealtimeCallHandler Telnyx websocket shape", () => {
+  it("accepts start frames with stream_id and call_control_id", async () => {
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        void request;
+        return makeBridge();
+      },
+    );
+    const processEvent = vi.fn();
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-tlx",
+        providerCallId: "v3:telnyx-cc-id",
+        provider: "telnyx",
+        direction: "inbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      }),
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCallByProviderCallId,
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        // Telnyx emits a `connected` frame before `start`; the handler
+        // must ignore it and still wait for `start` to arrive.
+        ws.send(JSON.stringify({ event: "connected", version: "1.0.0" }));
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            sequence_number: "1",
+            stream_id: "32DE0DEA-53CB-4B21-89A4-9E1819C043BC",
+            start: {
+              call_control_id: "v3:telnyx-cc-id",
+              from: "+15550001234",
+              to: "+15550009999",
+              media_format: { encoding: "PCMU", sample_rate: 8000, channels: 1 },
+            },
+          }),
+        );
+
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+        expect(getCallByProviderCallId).toHaveBeenCalledWith("v3:telnyx-cc-id");
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.initiated",
+            providerCallId: "v3:telnyx-cc-id",
+          }),
+        );
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();

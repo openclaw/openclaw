@@ -382,6 +382,54 @@ export async function createVoiceCallRuntime(params: {
       );
     }
     webhookServer.setRealtimeHandler(realtimeHandler);
+
+    // Providers that don't negotiate the realtime media stream via TwiML
+    // (Telnyx today; others later) get a stream-starter callback that fires
+    // on `call.answered`. Twilio's TwiML <Connect><Stream/> path is
+    // unchanged.
+    if (provider.name !== "twilio" && typeof provider.startMediaStream === "function") {
+      // Per-call dedup: some providers (notably Telnyx) deliver
+      // `call.answered` twice when we explicitly issue `answer` on top of
+      // their own auto-answer. Each duplicate would otherwise issue a fresh
+      // `streaming_start`, racing the first connection.
+      const startedStreamCallIds = new Set<string>();
+      manager.setRealtimeStreamStarter(async (call) => {
+        if (!call.providerCallId) {
+          return;
+        }
+        if (startedStreamCallIds.has(call.callId)) {
+          return;
+        }
+        startedStreamCallIds.add(call.callId);
+        const streamUrl = realtimeHandler.mintStreamUrl({
+          from: call.from,
+          to: call.to,
+          direction: call.direction,
+        });
+        if (!streamUrl) {
+          log.warn(
+            `[voice-call] Cannot start realtime media stream for call ${call.callId}: public origin not yet known`,
+          );
+          startedStreamCallIds.delete(call.callId);
+          return;
+        }
+        log.info(
+          `[voice-call] Starting realtime media stream for ${provider.name} call ${call.callId} -> ${streamUrl}`,
+        );
+        try {
+          await provider.startMediaStream?.({
+            callId: call.callId,
+            providerCallId: call.providerCallId,
+            streamUrl,
+          });
+        } catch (err) {
+          // Reset the dedup so a retried `call.answered` (or a manual
+          // recovery path) can attempt the stream again.
+          startedStreamCallIds.delete(call.callId);
+          throw err;
+        }
+      });
+    }
   }
   const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer });
 

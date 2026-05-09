@@ -338,3 +338,109 @@ describe("TelnyxProvider speak control", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("TelnyxProvider media stream control", () => {
+  it("issues streaming_start with bidirectional rtp + PCMU defaults", async () => {
+    const release = vi.fn(async () => {});
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
+      release,
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+
+    await provider.startMediaStream({
+      callId: "call-1",
+      providerCallId: "call-control-1",
+      streamUrl: "wss://example.test/voice/stream/realtime/tok",
+    });
+
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.telnyx.com/v2/calls/call-control-1/actions/streaming_start",
+        auditContext: "voice-call.telnyx.api",
+        policy: { allowedHostnames: ["api.telnyx.com"] },
+        init: expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            command_id: "openclaw-stream-start-call-1",
+            stream_url: "wss://example.test/voice/stream/realtime/tok",
+            stream_track: "inbound_track",
+            stream_bidirectional_mode: "rtp",
+            stream_bidirectional_codec: "PCMU",
+          }),
+        }),
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors caller overrides for track/codec/sampling rate", async () => {
+    const release = vi.fn(async () => {});
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
+      release,
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+
+    await provider.startMediaStream({
+      callId: "call-2",
+      providerCallId: "call-control-2",
+      streamUrl: "wss://example.test/stream",
+      track: "both_tracks",
+      codec: "L16",
+      samplingRate: 16000,
+    });
+
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.telnyx.com/v2/calls/call-control-2/actions/streaming_start",
+        init: expect.objectContaining({
+          body: JSON.stringify({
+            command_id: "openclaw-stream-start-call-2",
+            stream_url: "wss://example.test/stream",
+            stream_track: "both_tracks",
+            stream_bidirectional_mode: "rtp",
+            stream_bidirectional_codec: "L16",
+            stream_bidirectional_sampling_rate: 16000,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("issues streaming_stop with allowNotFound for idempotent cleanup", async () => {
+    const release = vi.fn(async () => {});
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
+      release,
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+
+    await provider.stopMediaStream({
+      callId: "call-3",
+      providerCallId: "call-control-3",
+    });
+
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.telnyx.com/v2/calls/call-control-3/actions/streaming_stop",
+        init: expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ command_id: "openclaw-stream-stop-call-3" }),
+        }),
+      }),
+    );
+  });
+});
