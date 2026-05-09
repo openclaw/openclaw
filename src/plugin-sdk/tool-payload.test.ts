@@ -100,6 +100,14 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
 });
 
 describe("stripPlainTextToolCallBlocks", () => {
+  it("preserves paragraph separation around bracketed local-model blocks", () => {
+    expect(
+      stripPlainTextToolCallBlocks(
+        ["before", "[read]", '{"path":"/tmp/file.txt"}', "[END_TOOL_REQUEST]", "after"].join("\n"),
+      ),
+    ).toBe("before\n\nafter");
+  });
+
   it("strips standalone Harmony tool calls", () => {
     expect(
       stripPlainTextToolCallBlocks(

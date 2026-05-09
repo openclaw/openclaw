@@ -313,9 +313,11 @@ export function stripPlainTextToolCallBlocks(text: string): string {
     }
     result += text.slice(cursor, index);
     cursor = block.end;
-    const afterBlockLineBreak = consumeLineBreak(text, cursor);
-    if (afterBlockLineBreak !== null) {
-      cursor = afterBlockLineBreak;
+    if (text[blockStart] !== "[") {
+      const afterBlockLineBreak = consumeLineBreak(text, cursor);
+      if (afterBlockLineBreak !== null) {
+        cursor = afterBlockLineBreak;
+      }
     }
     index = cursor;
   }
