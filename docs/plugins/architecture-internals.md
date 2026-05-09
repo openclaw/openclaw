@@ -256,7 +256,7 @@ listed here.
 
 | #   | Hook                              | What it does                                                                                                   | When to use                                                                                                                                   |
 | --- | --------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `catalog`                         | Publish provider config into `models.providers` during `models.json` generation                                | Provider owns a catalog or base URL defaults                                                                                                  |
+| 1   | `catalog`                         | Publish provider config into `models.providers` during model catalog materialization                           | Provider owns a catalog or base URL defaults                                                                                                  |
 | 2   | `applyConfigDefaults`             | Apply provider-owned global config defaults during config materialization                                      | Defaults depend on auth mode, env, or provider model-family semantics                                                                         |
 | --  | _(built-in model lookup)_         | OpenClaw tries the normal registry/catalog path first                                                          | _(not a plugin hook)_                                                                                                                         |
 | 3   | `normalizeModelId`                | Normalize legacy or preview model-id aliases before lookup                                                     | Provider owns alias cleanup before canonical model resolution                                                                                 |
@@ -1014,7 +1014,7 @@ plugin index entry with `source: "path"` and a workspace-relative
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
 surface. The persisted plugin index in the global SQLite
-`installed_plugin_index/current` KV entry is the install source of truth and can
+`installed_plugin_index` table is the install source of truth and can
 be refreshed without loading plugin runtime modules. Its `installRecords` map is
 durable even when a plugin manifest is missing or invalid; its `plugins` array
 is a rebuildable manifest view.
