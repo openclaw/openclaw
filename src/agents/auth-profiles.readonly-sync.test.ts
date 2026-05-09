@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import {
+  loadPersistedAuthProfileStore,
+  savePersistedAuthProfileSecretsStore,
+} from "./auth-profiles/persisted.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn(() => [
@@ -47,13 +52,15 @@ describe("auth profiles read-only external auth overlay", () => {
 
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
+    closeOpenClawStateDatabaseForTest();
     vi.clearAllMocks();
   });
 
-  it("overlays runtime-only external auth without writing auth-profiles.json in read-only mode", () => {
+  it("overlays runtime-only external auth without persisting it in read-only mode", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-readonly-sync-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(agentDir, ".openclaw-state");
     try {
-      const authPath = path.join(agentDir, "auth-profiles.json");
       const baseline: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
@@ -64,7 +71,7 @@ describe("auth profiles read-only external auth overlay", () => {
           },
         },
       };
-      fs.writeFileSync(authPath, `${JSON.stringify(baseline, null, 2)}\n`, "utf8");
+      savePersistedAuthProfileSecretsStore(baseline, agentDir);
 
       const loaded = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
@@ -90,9 +97,10 @@ describe("auth profiles read-only external auth overlay", () => {
       expect(loaded.profiles["minimax-portal:default"]?.type).toBe("oauth");
       expect(loaded.profiles["minimax-portal:default"]?.provider).toBe("minimax-portal");
 
-      const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as AuthProfileStore;
+      const persisted = loadPersistedAuthProfileStore(agentDir);
+      expect(persisted).toBeTruthy();
       expect(persisted.profiles["minimax-portal:default"]).toBeUndefined();
-      const persistedOpenAiProfile = persisted.profiles["openai:default"];
+      const persistedOpenAiProfile = persisted?.profiles["openai:default"];
       expect(persistedOpenAiProfile?.type).toBe("api_key");
       if (persistedOpenAiProfile?.type !== "api_key") {
         throw new Error("expected persisted OpenAI API key profile");
@@ -100,6 +108,12 @@ describe("auth profiles read-only external auth overlay", () => {
       expect(persistedOpenAiProfile.provider).toBe("openai");
       expect(persistedOpenAiProfile.key).toBe("sk-test");
     } finally {
+      closeOpenClawStateDatabaseForTest();
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
