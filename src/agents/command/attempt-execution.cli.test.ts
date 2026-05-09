@@ -510,8 +510,9 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
     const sessionFile = updatedFirst?.sessionFile;
-    expect(sessionFile).toBeTruthy();
-    if (!sessionFile) {
+    expect(typeof sessionFile).toBe("string");
+    expect(sessionFile?.length ?? 0).toBeGreaterThan(0);
+    if (typeof sessionFile !== "string" || sessionFile.length === 0) {
       throw new Error("Expected CLI transcript session file.");
     }
 
