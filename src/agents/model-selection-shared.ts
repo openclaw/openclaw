@@ -76,6 +76,37 @@ function mergeModelCatalogEntries(params: {
   return merged;
 }
 
+export function parseConfiguredModelVisibilityEntries(params: { cfg?: OpenClawConfig }): {
+  exactModelRefs: string[];
+  providerWildcards: Set<string>;
+  hasEntries: boolean;
+} {
+  const rawModels = Object.keys(params.cfg?.agents?.defaults?.models ?? {});
+  const exactModelRefs: string[] = [];
+  const providerWildcards = new Set<string>();
+
+  for (const raw of rawModels) {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed.endsWith("/*")) {
+      const provider = normalizeProviderId(trimmed.slice(0, -2));
+      if (provider) {
+        providerWildcards.add(provider);
+        continue;
+      }
+    }
+    exactModelRefs.push(raw);
+  }
+
+  return {
+    exactModelRefs,
+    providerWildcards,
+    hasEntries: rawModels.length > 0,
+  };
+}
+
 export function inferUniqueProviderFromConfiguredModels(params: {
   cfg: OpenClawConfig;
   model: string;
@@ -97,7 +128,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   if (configuredModels) {
     for (const key of Object.keys(configuredModels)) {
       const ref = key.trim();
-      if (!ref || !ref.includes("/")) {
+      if (!ref || !ref.includes("/") || ref.endsWith("/*")) {
         continue;
       }
       const parsed = parseModelRef(ref, DEFAULT_PROVIDER, {
@@ -343,13 +374,13 @@ export function buildConfiguredAllowlistKeys(params: {
   cfg: OpenClawConfig | undefined;
   defaultProvider: string;
 }): Set<string> | null {
-  const rawAllowlist = Object.keys(params.cfg?.agents?.defaults?.models ?? {});
-  if (rawAllowlist.length === 0) {
+  const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
+  if (visibility.exactModelRefs.length === 0) {
     return null;
   }
 
   const keys = new Set<string>();
-  for (const raw of rawAllowlist) {
+  for (const raw of visibility.exactModelRefs) {
     const key = resolveAllowlistModelKey({
       cfg: params.cfg,
       raw,
@@ -375,6 +406,10 @@ export function buildModelAliasIndex(
 
   const rawModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
+    const trimmedKey = keyRaw.trim();
+    if (trimmedKey.endsWith("/*") && normalizeProviderId(trimmedKey.slice(0, -2))) {
+      continue;
+    }
     const parsed = parseModelRefWithCompatAlias({
       cfg: params.cfg,
       raw: keyRaw,
@@ -623,11 +658,8 @@ export function buildAllowedModelSetWithFallbacks(params: {
     primary: params.catalog,
     secondary: configuredCatalog,
   }).map((entry) => applyModelCatalogMetadata({ entry, metadata }));
-  const rawAllowlist = (() => {
-    const modelMap = params.cfg.agents?.defaults?.models ?? {};
-    return Object.keys(modelMap);
-  })();
-  const allowAny = rawAllowlist.length === 0;
+  const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
+  const allowAny = !visibility.hasEntries;
   const defaultModel = params.defaultModel?.trim();
   const defaultRef =
     defaultModel && params.defaultProvider
@@ -667,6 +699,12 @@ export function buildAllowedModelSetWithFallbacks(params: {
       allowedRefs.push(ref);
     }
   };
+  for (const entry of catalog) {
+    if (!visibility.providerWildcards.has(normalizeProviderId(entry.provider))) {
+      continue;
+    }
+    allowedKeys.add(modelKey(entry.provider, entry.id));
+  }
   const addAllowedModelRef = (raw: string) => {
     const trimmed = raw.trim();
     const defaultProvider = !trimmed.includes("/")
@@ -697,15 +735,21 @@ export function buildAllowedModelSetWithFallbacks(params: {
     }
   };
 
-  for (const raw of rawAllowlist) {
+  for (const raw of visibility.exactModelRefs) {
     addAllowedModelRef(raw);
   }
 
-  for (const fallback of params.fallbackModels) {
-    addAllowedModelRef(fallback);
+  if (visibility.exactModelRefs.length > 0) {
+    for (const fallback of params.fallbackModels) {
+      addAllowedModelRef(fallback);
+    }
   }
 
-  if (defaultKey) {
+  if (
+    defaultKey &&
+    (visibility.exactModelRefs.length > 0 ||
+      (defaultRef && visibility.providerWildcards.has(normalizeProviderId(defaultRef.provider))))
+  ) {
     allowedKeys.add(defaultKey);
     if (defaultRef) {
       addAllowedCatalogRef(defaultRef);
@@ -722,7 +766,11 @@ export function buildAllowedModelSetWithFallbacks(params: {
     ...syntheticCatalogEntries.values(),
   ];
 
-  if (allowedCatalog.length === 0 && allowedKeys.size === 0) {
+  if (
+    allowedCatalog.length === 0 &&
+    allowedKeys.size === 0 &&
+    visibility.providerWildcards.size === 0
+  ) {
     if (defaultKey) {
       catalogKeys.add(defaultKey);
     }

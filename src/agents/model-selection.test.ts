@@ -939,6 +939,70 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has("ollama/glm-5.1:cloud")).toBe(true);
     });
 
+    it("allows every discovered catalog model for provider wildcard entries", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/*": {},
+              "vllm/*": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+          { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+          { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+          { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+          { provider: "vllm", id: "local-added-after-startup", name: "Local Added After Startup" },
+        ],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual([]);
+      expect(result.allowedKeys.has("openai-codex/gpt-5.4-codex")).toBe(true);
+      expect(result.allowedKeys.has("openai-codex/gpt-5.5-codex")).toBe(true);
+      expect(result.allowedKeys.has("vllm/local-added-after-startup")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
+    });
+
+    it("unions exact model entries with provider wildcard entries", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "openai-codex/*": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+          { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+          { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+          { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+        ],
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      ]);
+      expect(result.allowedKeys.has("openai-codex/gpt-5.5-codex")).toBe(true);
+      expect(result.allowedKeys.has("vllm/qwen-local")).toBe(false);
+    });
+
     it("matches allowlisted catalog entries with normalized provider and model ids", () => {
       const cfg: OpenClawConfig = {
         agents: {

@@ -9,8 +9,11 @@ import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import {
+  buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
+  modelKey,
   normalizeProviderId,
+  parseConfiguredModelVisibilityEntries,
   resolveBareModelDefaultProvider,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
@@ -93,11 +96,25 @@ export async function buildModelsProviderData(
     cfg,
     defaultProvider: resolvedDefault.provider,
   });
+  const visibility = parseConfiguredModelVisibilityEntries({ cfg });
+  const providerAllowlist = visibility.providerWildcards;
+  const exactAllowlist = buildConfiguredAllowlistKeys({
+    cfg,
+    defaultProvider: resolvedDefault.provider,
+  });
+  const restrictToProviderWildcards = options.view !== "all" && providerAllowlist.size > 0;
 
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
     if (!isModelPickerVisibleProvider(key)) {
+      return;
+    }
+    if (
+      restrictToProviderWildcards &&
+      !providerAllowlist.has(key) &&
+      !exactAllowlist?.has(modelKey(key, m))
+    ) {
       return;
     }
     const set = byProvider.get(key) ?? new Set<string>();
@@ -155,7 +172,7 @@ export async function buildModelsProviderData(
     add(entry.provider, entry.id);
   }
 
-  for (const raw of Object.keys(cfg.agents?.defaults?.models ?? {})) {
+  for (const raw of visibility.exactModelRefs) {
     addRawModelRef(raw);
   }
 

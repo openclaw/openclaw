@@ -1,7 +1,13 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
-import { buildAllowedModelSet, buildConfiguredModelCatalog, modelKey } from "./model-selection.js";
+import {
+  buildAllowedModelSet,
+  buildConfiguredModelCatalog,
+  modelKey,
+  normalizeProviderId,
+  parseConfiguredModelVisibilityEntries,
+} from "./model-selection.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
 
@@ -41,6 +47,24 @@ export function resolveVisibleModelCatalog(params: {
     return params.catalog;
   }
 
+  const buildDefaultVisibleCatalog = () => {
+    const configuredCatalog = sortModelCatalogEntries(
+      buildConfiguredModelCatalog({ cfg: params.cfg }),
+    );
+    const hasAuth = createProviderAuthChecker({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      env: params.env,
+      allowPluginSyntheticAuth: params.runtimeAuthDiscovery,
+      discoverExternalCliAuth: params.runtimeAuthDiscovery,
+    });
+    const authBackedCatalog = params.catalog.filter((entry) => hasAuth(entry.provider));
+    return sortModelCatalogEntries(
+      dedupeModelCatalogEntries([...configuredCatalog, ...authBackedCatalog]),
+    );
+  };
+
   const allowed = buildAllowedModelSet({
     cfg: params.cfg,
     catalog: params.catalog,
@@ -48,23 +72,20 @@ export function resolveVisibleModelCatalog(params: {
     defaultModel: params.defaultModel,
     agentId: params.agentId,
   });
-  if (!allowed.allowAny && allowed.allowedCatalog.length > 0) {
+  if (!allowed.allowAny) {
+    const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
+    if (visibility.providerWildcards.size > 0) {
+      return sortModelCatalogEntries(
+        dedupeModelCatalogEntries([
+          ...buildDefaultVisibleCatalog().filter((entry) =>
+            visibility.providerWildcards.has(normalizeProviderId(entry.provider)),
+          ),
+          ...allowed.allowedCatalog,
+        ]),
+      );
+    }
     return sortModelCatalogEntries(allowed.allowedCatalog);
   }
 
-  const configuredCatalog = sortModelCatalogEntries(
-    buildConfiguredModelCatalog({ cfg: params.cfg }),
-  );
-  const hasAuth = createProviderAuthChecker({
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    env: params.env,
-    allowPluginSyntheticAuth: params.runtimeAuthDiscovery,
-    discoverExternalCliAuth: params.runtimeAuthDiscovery,
-  });
-  const authBackedCatalog = params.catalog.filter((entry) => hasAuth(entry.provider));
-  return sortModelCatalogEntries(
-    dedupeModelCatalogEntries([...configuredCatalog, ...authBackedCatalog]),
-  );
+  return buildDefaultVisibleCatalog();
 }

@@ -764,4 +764,48 @@ describe("Discord model picker interactions", () => {
 
     expect(loadSpy).toHaveBeenCalledWith(context.cfg, "worker");
   });
+
+  it("opens the first visible provider when the current model provider is filtered out", async () => {
+    const context = createModelPickerContext();
+    const pickerData = createModelsProviderData({
+      "openai-codex": ["gpt-5.5-codex"],
+      vllm: ["qwen3-local"],
+    });
+    pickerData.resolvedDefault = {
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+    };
+    const loadSpy = vi
+      .spyOn(modelPickerModule, "loadDiscordModelPickerData")
+      .mockResolvedValue(pickerData);
+    const interaction = createInteraction({ userId: "owner" });
+
+    await replyWithDiscordModelPickerProviders({
+      interaction: interaction as never,
+      cfg: {
+        ...context.cfg,
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: {
+              "openai-codex/*": {},
+              "vllm/*": {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      command: "model",
+      userId: "owner",
+      accountId: context.accountId,
+      threadBindings: context.threadBindings,
+      preferFollowUp: false,
+      safeInteractionCall: async (_label, fn) => await fn(),
+    });
+
+    expect(loadSpy).toHaveBeenCalledWith(expect.any(Object), "main");
+    const payload = JSON.stringify(interaction.reply.mock.calls[0]?.[0]);
+    expect(payload).toContain("openai-codex");
+    expect(payload).toContain("gpt-5.5-codex");
+    expect(payload).not.toContain("Provider not found");
+  });
 });

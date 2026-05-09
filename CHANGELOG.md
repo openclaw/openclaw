@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp: keep Baileys media uploads from passing non-Dispatcher agents to undici in `7.0.0-rc10`, and patch the bundled Baileys declaration so the latest tsdown build stays warning-clean.
 - Build: keep tsdown `0.22.0` warning-clean by externalizing known third-party declaration edges and replacing relative channel config module augmentations with explicit built-in channel fields.
 - ACP sessions: map canonical runtime options to backend-advertised ACP config keys like Claude's `effort` while keeping persisted OpenClaw state canonical. (#79926) Thanks @InTheCloudDan.
+- Models/Discord: support `provider/*` entries in `agents.defaults.models` so `/model`, `/models`, and model pickers can show dynamically discovered models for selected providers without exact model allowlists. Fixes #79485. Thanks @rendrag-git.
 - Gateway/watch: rebuild or restage missing bundled-plugin dist and runtime-postbuild outputs before launching the Gateway from a source checkout, preventing incomplete watch-mode runtime trees. (#70805) Thanks @rubencu.
 - CLI/update: allow restart health probes from the previous gateway protocol during self-update, and make plugin dry-runs report exact npm target versions instead of `unknown` while preserving unchanged status.
 - OpenAI/Codex: forward persisted `openai-codex` OAuth profile metadata into Codex plugin harness attempts after canonical `openai/*` migration, so OAuth-only installs keep using native Codex auth instead of falling through to direct OpenAI API-key auth. Fixes #79978.
