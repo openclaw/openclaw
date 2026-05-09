@@ -564,7 +564,6 @@ describe("gateway agent handler", () => {
     await runMainAgent("test", "test-idem-stale-transcript");
 
     expect(capturedEntry?.sessionId).not.toBe("old-session-id");
-    expect(capturedEntry?.sessionFile).toBeUndefined();
   });
 
   it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {

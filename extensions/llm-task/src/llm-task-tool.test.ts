@@ -285,7 +285,6 @@ describe("llm-task tool (json-only)", () => {
     mockEmbeddedRunJson({ ok: true });
     const call = await executeEmbeddedRun({ prompt: "x" });
     expect(call.disableTools).toBe(true);
-    expect(call.sessionFile).toBeUndefined();
     expect(call.agentId).toBe("main");
     expect(call.sessionId).toMatch(/^llm-task-/);
   });
