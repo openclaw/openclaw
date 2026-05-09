@@ -36,7 +36,6 @@ import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 const hoisted = getHoisted();
 const embeddedSessionId = "embedded-session";
-const transcriptLocator = "agent:main:session-attempt";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
 type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
@@ -85,7 +84,6 @@ async function runBootstrap(
     contextEngine,
     sessionId: embeddedSessionId,
     sessionKey,
-    transcriptLocator,
     sessionManager: hoisted.sessionManager,
     runtimeContext: {},
     runMaintenance: hoisted.runContextEngineMaintenanceMock,
@@ -122,7 +120,6 @@ async function finalizeTurn(
     yieldAborted: false,
     sessionIdUsed: embeddedSessionId,
     sessionKey,
-    transcriptLocator,
     messagesSnapshot: [doneMessage],
     prePromptMessageCount: 0,
     tokenBudget: 2048,

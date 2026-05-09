@@ -8,7 +8,6 @@ import {
 } from "../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getSessionEntry, upsertSessionEntry, type SessionEntry } from "../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
@@ -61,26 +60,14 @@ describe("listSessionsFromStore subagent metadata", () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:newest": {
         sessionId: "newest-session",
-        sessionFile: createSqliteSessionTranscriptLocator({
-          agentId: "main",
-          sessionId: "newest-session",
-        }),
         updatedAt: 300,
       } as SessionEntry,
       "agent:main:middle": {
         sessionId: "middle-session",
-        sessionFile: createSqliteSessionTranscriptLocator({
-          agentId: "main",
-          sessionId: "middle-session",
-        }),
         updatedAt: 200,
       } as SessionEntry,
       "agent:main:oldest": {
         sessionId: "old-session",
-        sessionFile: createSqliteSessionTranscriptLocator({
-          agentId: "main",
-          sessionId: "old-session",
-        }),
         updatedAt: 100,
       } as SessionEntry,
     };
