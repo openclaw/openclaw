@@ -156,6 +156,16 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value;
 }
 
+function requireSetupCheck(checks: unknown[] | undefined, id: string): Record<string, unknown> {
+  const check = checks
+    ?.map((item) => requireRecord(item, "setup check"))
+    .find((item) => item.id === id);
+  if (!check) {
+    throw new Error(`Expected setup check ${id}`);
+  }
+  return check;
+}
+
 function requireFetchGuardCall(auditContext: string): Record<string, unknown> {
   const call = (
     fetchGuardMocks.fetchWithSsrFGuard.mock.calls as Array<[Record<string, unknown>]>
@@ -1739,21 +1749,12 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", { action: "setup_status" });
 
     expect(result.details.ok).toBe(false);
-    expect(result.details.checks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "chrome-node-connected",
-          ok: false,
-          message: expect.stringContaining("parallels-macos"),
-        }),
-      ]),
-    );
-    const check = result.details.checks?.find(
-      (item) => (item as { id?: unknown }).id === "chrome-node-connected",
-    ) as { message?: string } | undefined;
-    expect(check?.message).toContain("offline");
-    expect(check?.message).toContain("missing googlemeet.chrome");
-    expect(check?.message).toContain("missing browser.proxy/browser capability");
+    const check = requireSetupCheck(result.details.checks, "chrome-node-connected");
+    expect(check.ok).toBe(false);
+    expect(check.message).toContain("parallels-macos");
+    expect(check.message).toContain("offline");
+    expect(check.message).toContain("missing googlemeet.chrome");
+    expect(check.message).toContain("missing browser.proxy/browser capability");
   });
 
   it("reports missing local Chrome audio prerequisites in setup status", async () => {
@@ -1781,15 +1782,9 @@ describe("google-meet plugin", () => {
       const result = await tool.execute("id", { action: "setup_status", transport: "chrome" });
 
       expect(result.details.ok).toBe(false);
-      expect(result.details.checks).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "chrome-local-audio-device",
-            ok: false,
-            message: expect.stringContaining("BlackHole 2ch audio device not found"),
-          }),
-        ]),
-      );
+      const check = requireSetupCheck(result.details.checks, "chrome-local-audio-device");
+      expect(check.ok).toBe(false);
+      expect(check.message).toContain("BlackHole 2ch audio device not found");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
@@ -1823,15 +1818,9 @@ describe("google-meet plugin", () => {
       const result = await tool.execute("id", { action: "setup_status", transport: "chrome" });
 
       expect(result.details.ok).toBe(false);
-      expect(result.details.checks).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "chrome-local-audio-commands",
-            ok: false,
-            message: "Chrome audio command missing: sox",
-          }),
-        ]),
-      );
+      const check = requireSetupCheck(result.details.checks, "chrome-local-audio-commands");
+      expect(check.ok).toBe(false);
+      expect(check.message).toBe("Chrome audio command missing: sox");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
@@ -1870,15 +1859,9 @@ describe("google-meet plugin", () => {
       const result = await tool.execute("id", { action: "setup_status", transport: "chrome" });
 
       expect(result.details.ok).toBe(false);
-      expect(result.details.checks).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "chrome-local-audio-commands",
-            ok: false,
-            message: "Chrome audio command missing: missing-barge-capture",
-          }),
-        ]),
-      );
+      const check = requireSetupCheck(result.details.checks, "chrome-local-audio-commands");
+      expect(check.ok).toBe(false);
+      expect(check.message).toBe("Chrome audio command missing: missing-barge-capture");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
@@ -1912,14 +1895,10 @@ describe("google-meet plugin", () => {
       });
 
       expect(result.details.ok).toBe(true);
-      expect(result.details.checks).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "audio-bridge",
-            ok: true,
-            message: "Chrome observe-only mode does not require a realtime audio bridge",
-          }),
-        ]),
+      const check = requireSetupCheck(result.details.checks, "audio-bridge");
+      expect(check.ok).toBe(true);
+      expect(check.message).toBe(
+        "Chrome observe-only mode does not require a realtime audio bridge",
       );
       expect(
         result.details.checks?.filter((check) => check.id === "chrome-local-audio-device"),
@@ -1966,22 +1945,9 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", { action: "setup_status" });
 
     expect(result.details.ok).toBe(true);
-    expect(result.details.checks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "twilio-voice-call-plugin",
-          ok: true,
-        }),
-        expect.objectContaining({
-          id: "twilio-voice-call-credentials",
-          ok: true,
-        }),
-        expect.objectContaining({
-          id: "twilio-voice-call-webhook",
-          ok: true,
-        }),
-      ]),
-    );
+    expect(requireSetupCheck(result.details.checks, "twilio-voice-call-plugin").ok).toBe(true);
+    expect(requireSetupCheck(result.details.checks, "twilio-voice-call-credentials").ok).toBe(true);
+    expect(requireSetupCheck(result.details.checks, "twilio-voice-call-webhook").ok).toBe(true);
   });
 
   it("reports missing voice-call wiring for explicit Twilio transport", async () => {
@@ -2011,17 +1977,9 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", { action: "setup_status", transport: "twilio" });
 
     expect(result.details.ok).toBe(false);
-    expect(result.details.checks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "twilio-voice-call-plugin",
-          ok: false,
-        }),
-        expect.objectContaining({
-          id: "twilio-voice-call-credentials",
-          ok: false,
-        }),
-      ]),
+    expect(requireSetupCheck(result.details.checks, "twilio-voice-call-plugin").ok).toBe(false);
+    expect(requireSetupCheck(result.details.checks, "twilio-voice-call-credentials").ok).toBe(
+      false,
     );
   });
 
@@ -2050,14 +2008,7 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", { action: "setup_status", transport: "twilio" });
 
     expect(result.details.ok).toBe(false);
-    expect(result.details.checks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "twilio-voice-call-plugin",
-          ok: false,
-        }),
-      ]),
-    );
+    expect(requireSetupCheck(result.details.checks, "twilio-voice-call-plugin").ok).toBe(false);
   });
 
   it("reports missing Twilio dial plan for explicit Twilio setup", async () => {
@@ -2093,15 +2044,9 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", { action: "setup_status", transport: "twilio" });
 
     expect(result.details.ok).toBe(false);
-    expect(result.details.checks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "twilio-dial-plan",
-          ok: false,
-          message: expect.stringContaining("dial-in phone number"),
-        }),
-      ]),
-    );
+    const check = requireSetupCheck(result.details.checks, "twilio-dial-plan");
+    expect(check.ok).toBe(false);
+    expect(check.message).toContain("dial-in phone number");
   });
 
   it("accepts request-provided Twilio dial-in details during setup", async () => {
@@ -2141,15 +2086,9 @@ describe("google-meet plugin", () => {
     });
 
     expect(result.details.ok).toBe(true);
-    expect(result.details.checks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "twilio-dial-plan",
-          ok: true,
-          message: expect.stringContaining("request includes"),
-        }),
-      ]),
-    );
+    const check = requireSetupCheck(result.details.checks, "twilio-dial-plan");
+    expect(check.ok).toBe(true);
+    expect(check.message).toContain("request includes");
   });
 
   it.each([
@@ -2191,14 +2130,7 @@ describe("google-meet plugin", () => {
       const result = await tool.execute("id", { action: "setup_status" });
 
       expect(result.details.ok).toBe(false);
-      expect(result.details.checks).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "twilio-voice-call-webhook",
-            ok: false,
-          }),
-        ]),
-      );
+      expect(requireSetupCheck(result.details.checks, "twilio-voice-call-webhook").ok).toBe(false);
     },
   );
 
