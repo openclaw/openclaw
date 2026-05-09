@@ -1086,6 +1086,20 @@ export async function startGatewayPostAttachRuntime(
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
+  // Start channels immediately — they depend only on the channel registry
+  // (populated during plugins.bootstrap) and have zero dependency on
+  // plugins.runtime-post-bind or ACPX. This decouples channel availability
+  // from the slowest startup subsystem (ACPX: 36-110s).
+  const skipChannels =
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  const earlyChannelsPromise =
+    params.minimalTestGateway || skipChannels
+      ? null
+      : measureStartup(params.startupTrace, "sidecars.early-channels", () =>
+          params.startChannels(),
+        );
+
   let pluginRegistry = params.pluginRegistry;
   let startupPluginsLoaded = false;
   let startupPluginsLoadPromise: Promise<{
@@ -1191,7 +1205,15 @@ export async function startGatewayPostAttachRuntime(
             pluginRegistry,
             defaultWorkspaceDir: params.defaultWorkspaceDir,
             deps: params.deps,
-            startChannels: params.startChannels,
+            // Channels already started early (before plugins.runtime-post-bind).
+            // Pass a no-op so startGatewaySidecars skips channel startup, then
+            // await the early promise to ensure channels are connected before
+            // declaring sidecars ready.
+            startChannels: earlyChannelsPromise
+              ? async () => {
+                  await earlyChannelsPromise;
+                }
+              : params.startChannels,
             log: params.log,
             logHooks: params.logHooks,
             logChannels: params.logChannels,
