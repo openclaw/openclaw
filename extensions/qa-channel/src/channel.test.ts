@@ -14,6 +14,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 
+type QaRunPreparedTurn = Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0];
+
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
@@ -100,7 +102,7 @@ function createMockQaRuntime(params?: {
         },
       },
       turn: {
-        async runPrepared(turn) {
+        async runPrepared(turn: QaRunPreparedTurn) {
           await turn.recordInboundSession({
             storePath: turn.storePath,
             sessionKey:
