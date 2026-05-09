@@ -1,6 +1,7 @@
 import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
 import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
+import { createSqliteSessionTranscriptLocator } from "../../../config/sessions/paths.js";
 import { getSessionEntry } from "../../../config/sessions/store.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
@@ -145,7 +146,14 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     linkedTask ? `TaskStatus: ${linkedTask.status}` : undefined,
     `Session: ${run.childSessionKey}`,
     `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
-    `Transcript: ${sessionEntry?.sessionFile ?? "n/a"}`,
+    `Transcript: ${
+      sessionEntry?.sessionId
+        ? createSqliteSessionTranscriptLocator({
+            agentId: parseAgentSessionKey(run.childSessionKey)?.agentId,
+            sessionId: sessionEntry.sessionId,
+          })
+        : "n/a"
+    }`,
     `Runtime: ${runtime}`,
     `Created: ${formatTimestampWithAge(run.createdAt)}`,
     `Started: ${formatTimestampWithAge(run.startedAt)}`,
