@@ -1261,8 +1261,7 @@ export async function dispatchReplyFromConfig(
     });
     const suppressDefaultToolProgressMessages =
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
-    const shouldSuppressDefaultToolProgressMessages = () =>
-      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
+    const shouldSuppressDefaultToolProgressMessages = () => suppressDefaultToolProgressMessages;
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
