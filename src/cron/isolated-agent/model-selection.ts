@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { CronJob } from "../types.js";
 import {
   DEFAULT_MODEL,
@@ -10,6 +11,8 @@ import {
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "./run-model-selection.runtime.js";
+
+const modelFallbackLog = createSubsystemLogger("model-fallback").child("decision");
 
 type CronSessionModelOverrides = {
   modelOverride?: string;
@@ -133,13 +136,23 @@ export async function resolveCronModelSelection(
       defaultModel: resolvedDefault.model,
     });
     if ("error" in resolvedOverride) {
+      const rejectionMessage = formatCronPayloadModelRejection({
+        cfg: params.cfgWithAgentDefaults,
+        modelOverride,
+        error: resolvedOverride.error,
+      });
+      modelFallbackLog.warn("cron payload.model rejected", {
+        event: "cron_payload_model_rejected",
+        tags: ["error_handling", "model_fallback", "cron"],
+        decision: "skip_candidate",
+        requestedModel: modelOverride,
+        fallbackModel: `${provider}/${model}`,
+        agentId: params.agentId,
+        consoleMessage: `model-fallback/decision: ${rejectionMessage}; falling back to ${provider}/${model}`,
+      });
       return {
         ok: false,
-        error: formatCronPayloadModelRejection({
-          cfg: params.cfgWithAgentDefaults,
-          modelOverride,
-          error: resolvedOverride.error,
-        }),
+        error: rejectionMessage,
       };
     }
     provider = resolvedOverride.ref.provider;
