@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -40,14 +39,6 @@ function makeAssistant(text: string, timestamp: number) {
   });
 }
 
-function scopeForTranscript(transcriptLocator: string) {
-  const scope = parseSqliteSessionTranscriptLocator(transcriptLocator);
-  if (!scope) {
-    throw new Error(`expected SQLite transcript locator: ${transcriptLocator}`);
-  }
-  return scope;
-}
-
 async function loadState(scope: { agentId: string; sessionId: string }) {
   return await readTranscriptStateForSession(scope);
 }
@@ -58,7 +49,7 @@ function transcriptParentReference(scope: { agentId: string; sessionId: string }
 
 function createCompactedSession(sessionDir: string): {
   manager: SessionManager;
-  transcriptLocator: string;
+  scope: { agentId: string; sessionId: string };
   firstKeptId: string;
   oldUserId: string;
 } {
@@ -75,18 +66,21 @@ function createCompactedSession(sessionDir: string): {
   manager.appendCompaction("Summary of old user and old assistant.", firstKeptId, 5000);
   manager.appendMessage({ role: "user", content: "post user", timestamp: 5 });
   manager.appendMessage(makeAssistant("post assistant", 6));
-  return { manager, transcriptLocator: manager.getTranscriptLocator()!, firstKeptId, oldUserId };
+  const scope = manager.getTranscriptScope();
+  if (!scope) {
+    throw new Error("expected persisted transcript scope");
+  }
+  return { manager, scope, firstKeptId, oldUserId };
 }
 
 describe("rotateTranscriptAfterCompaction", () => {
   it("can rotate a persisted transcript without opening a manager", async () => {
     const dir = await createTmpDir();
-    const { transcriptLocator } = createCompactedSession(dir);
+    const { scope: sourceScope } = createCompactedSession(dir);
 
     const openSpy = vi.spyOn(SessionManager, "openForSession").mockImplementation(() => {
       throw new Error("SessionManager.openForSession should not be used for SQLite rotation");
     });
-    const sourceScope = scopeForTranscript(transcriptLocator);
     const result = await rotateSqliteTranscriptAfterCompaction({
       ...sourceScope,
       now: () => new Date("2026-04-27T12:00:00.000Z"),
@@ -110,11 +104,10 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {
     const dir = await createTmpDir();
-    const { manager, transcriptLocator, firstKeptId, oldUserId } = createCompactedSession(dir);
+    const { manager, scope: sourceScope, firstKeptId, oldUserId } = createCompactedSession(dir);
     const originalEntryCount = manager.getEntries().length;
     const originalEntries = manager.getEntries();
 
-    const sourceScope = scopeForTranscript(transcriptLocator);
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
       ...sourceScope,
@@ -125,9 +118,7 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(result.sessionId).toBeTruthy();
     expect(result).not.toHaveProperty("transcriptLocator");
     expect(result.sessionId).not.toBe(sourceScope.sessionId);
-    expect((await loadState(scopeForTranscript(transcriptLocator))).getEntries()).toEqual(
-      originalEntries,
-    );
+    expect((await loadState(sourceScope)).getEntries()).toEqual(originalEntries);
 
     const successor = await loadState({
       agentId: "main",
@@ -183,7 +174,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      ...scopeForTranscript(manager.getTranscriptLocator()!),
+      ...manager.getTranscriptScope()!,
       now: () => new Date("2026-04-27T12:05:00.000Z"),
     });
 
@@ -238,7 +229,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      ...scopeForTranscript(manager.getTranscriptLocator()!),
+      ...manager.getTranscriptScope()!,
       now: () => new Date("2026-04-27T12:10:00.000Z"),
     });
 
@@ -262,7 +253,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      ...scopeForTranscript(manager.getTranscriptLocator()!),
+      ...manager.getTranscriptScope()!,
     });
 
     expect(result).toMatchObject({
@@ -283,9 +274,10 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
     manager.appendMessage(makeAssistant("detailed recent answer", 4));
     const compactionId = manager.appendCompaction("fresh manual summary", recentTailId, 200);
-    const transcriptLocator = manager.getTranscriptLocator();
-    expect(transcriptLocator).toBeTruthy();
-    const sourceScope = scopeForTranscript(transcriptLocator!);
+    const sourceScope = manager.getTranscriptScope();
+    if (!sourceScope) {
+      throw new Error("expected persisted transcript scope");
+    }
     const staleManager = await loadState(sourceScope);
 
     const hardened = await hardenManualCompactionBoundary({
@@ -343,10 +335,9 @@ describe("rotateTranscriptAfterCompaction", () => {
     manager.appendCompaction("Summary of main branch.", firstKeptId, 5000);
     manager.appendMessage({ role: "user", content: "next", timestamp: 7 });
 
-    const transcriptLocator = manager.getTranscriptLocator()!;
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      ...scopeForTranscript(transcriptLocator),
+      ...manager.getTranscriptScope()!,
       now: () => new Date("2026-04-27T12:45:00.000Z"),
     });
 
@@ -398,7 +389,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      ...scopeForTranscript(manager.getTranscriptLocator()!),
+      ...manager.getTranscriptScope()!,
       now: () => new Date("2026-04-27T13:00:00.000Z"),
     });
 

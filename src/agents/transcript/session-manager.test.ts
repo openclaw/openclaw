@@ -38,7 +38,7 @@ describe("TranscriptSessionManager", () => {
     await useTempStateDir();
     const memory = SessionManager.inMemory("/tmp/memory-workspace");
     expect(memory.isPersisted()).toBe(false);
-    expect(memory.getTranscriptLocator()).toBeUndefined();
+    expect(memory.getTranscriptScope()).toBeUndefined();
     const memoryUserId = memory.appendMessage({
       role: "user",
       content: "in memory",
@@ -136,8 +136,8 @@ describe("TranscriptSessionManager", () => {
       content: "sqlite default",
       timestamp: 3,
     });
-    const branchFile = sessionManager.createBranchedSession(userId);
-    if (!branchFile) {
+    const branchScope = sessionManager.createBranchedSession(userId);
+    if (!branchScope) {
       throw new Error("expected branched session");
     }
 
@@ -167,10 +167,10 @@ describe("TranscriptSessionManager", () => {
     });
     sessionManager.appendMessage({ role: "user", content: "first", timestamp: 1 });
 
-    const secondTranscriptLocator = sessionManager.newSession({ id: "second-session" });
+    const secondScope = sessionManager.newSession({ id: "second-session" });
     sessionManager.appendMessage({ role: "user", content: "second", timestamp: 2 });
 
-    expect(secondTranscriptLocator).toBeTruthy();
+    expect(secondScope).toEqual({ agentId: "main", sessionId: "second-session" });
     expect(readSessionEntries(firstScope).map((entry) => (entry as { id?: string }).id)).toEqual([
       "first-session",
       expect.any(String),
@@ -197,8 +197,8 @@ describe("TranscriptSessionManager", () => {
       timestamp: 4,
     });
 
-    const branchFile = sessionManager.createBranchedSession(userId);
-    expect(branchFile).toBeTruthy();
+    const branchScope = sessionManager.createBranchedSession(userId);
+    expect(branchScope).toMatchObject({ agentId: "qa" });
 
     const forked = SessionManager.forkFromSession({
       ...scope,

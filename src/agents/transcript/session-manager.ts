@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   appendSqliteSessionTranscriptEvent,
   listSqliteSessionTranscripts,
@@ -39,7 +38,6 @@ function createSessionHeader(params: {
 type SqliteTranscriptRecord = {
   agentId: string;
   sessionId: string;
-  path: string;
   updatedAt: number;
 };
 
@@ -61,19 +59,6 @@ function createTranscriptScope(params: {
     agentId,
     sessionId,
   };
-}
-
-function createTranscriptLocator(sessionId: string, agentId = DEFAULT_AGENT_ID): string {
-  return createSqliteSessionTranscriptLocator({
-    agentId,
-    sessionId,
-  });
-}
-
-function createTranscriptLocatorForScope(
-  scope: SessionTranscriptScope | undefined,
-): string | undefined {
-  return scope ? createTranscriptLocator(scope.sessionId, scope.agentId) : undefined;
 }
 
 function formatTranscriptParentReference(
@@ -169,7 +154,7 @@ function extractTextContent(message: { content: unknown }): string {
 }
 
 function buildSessionInfoFromState(
-  transcriptLocator: string,
+  scope: SessionTranscriptScope,
   state: TranscriptState,
   modifiedFallback: Date,
 ): SessionInfo | null {
@@ -215,11 +200,11 @@ function buildSessionInfoFromState(
     }
     const headerTime = Date.parse(header.timestamp);
     return {
-      path: transcriptLocator,
       id: header.id,
+      transcriptScope: { ...scope },
       cwd: header.cwd,
       name: state.getSessionName(),
-      parentSessionPath: header.parentSession,
+      parentSession: header.parentSession,
       created: Number.isFinite(headerTime) ? new Date(headerTime) : modifiedFallback,
       modified:
         typeof lastActivityTime === "number" && lastActivityTime > 0
@@ -253,12 +238,6 @@ function listSqliteTranscriptRecords(): SqliteTranscriptRecord[] {
     .map((entry) => ({
       agentId: entry.agentId,
       sessionId: entry.sessionId,
-      path:
-        entry.locator ??
-        createSqliteSessionTranscriptLocator({
-          agentId: entry.agentId,
-          sessionId: entry.sessionId,
-        }),
       updatedAt: entry.updatedAt,
     }));
 }
@@ -382,7 +361,11 @@ export class TranscriptSessionManager implements SessionManager {
       const state = loadTranscriptStateForRecord(record);
       loaded += 1;
       onProgress?.(loaded, records.length);
-      const info = buildSessionInfoFromState(record.path, state, new Date(record.updatedAt));
+      const info = buildSessionInfoFromState(
+        { agentId: record.agentId, sessionId: record.sessionId },
+        state,
+        new Date(record.updatedAt),
+      );
       if (info) {
         sessions.push(info);
       }
@@ -390,7 +373,10 @@ export class TranscriptSessionManager implements SessionManager {
     return sessions.toSorted((a, b) => b.modified.getTime() - a.modified.getTime());
   }
 
-  newSession(options?: { id?: string; parentSession?: string }): string | undefined {
+  newSession(options?: {
+    id?: string;
+    parentSession?: string;
+  }): SessionTranscriptScope | undefined {
     const header = createSessionHeader({
       id: options?.id,
       cwd: this.getCwd(),
@@ -405,7 +391,7 @@ export class TranscriptSessionManager implements SessionManager {
       });
       persistFullTranscriptStateToSqlite(this.sqliteScope, this.state);
     }
-    return createTranscriptLocatorForScope(this.sqliteScope);
+    return this.getTranscriptScope();
   }
 
   isPersisted(): boolean {
@@ -422,10 +408,6 @@ export class TranscriptSessionManager implements SessionManager {
 
   getTranscriptScope(): SessionTranscriptScope | undefined {
     return this.sqliteScope ? { ...this.sqliteScope } : undefined;
-  }
-
-  getTranscriptLocator(): string | undefined {
-    return createTranscriptLocatorForScope(this.sqliteScope);
   }
 
   appendMessage(message: Parameters<SessionManager["appendMessage"]>[0]): string {
@@ -549,7 +531,7 @@ export class TranscriptSessionManager implements SessionManager {
     );
   }
 
-  createBranchedSession(leafId: string): string | undefined {
+  createBranchedSession(leafId: string): SessionTranscriptScope | undefined {
     const branch = this.getBranch(leafId);
     if (branch.length === 0) {
       throw new Error(`Entry ${leafId} not found`);
@@ -570,7 +552,7 @@ export class TranscriptSessionManager implements SessionManager {
       entries: branch.filter((e) => e.type !== "label"),
     });
     persistFullTranscriptStateToSqlite(branchScope, state);
-    return createTranscriptLocatorForScope(branchScope);
+    return { ...branchScope };
   }
 
   private persistAppendedEntry(entry: SessionEntry): string {
