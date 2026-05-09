@@ -129,6 +129,9 @@ The branch already has a real shared SQLite base:
 - TUI last-session restore pointers now live in typed shared
   `tui_last_sessions` rows keyed by the hashed TUI connection/session scope.
   The old TUI JSON file is doctor migration input only.
+- Subagent run recovery and OpenRouter model capability cache runtime modules
+  now keep SQLite readers/writers separate from doctor-only legacy JSON import
+  helpers.
 - `src/agents/filesystem/virtual-agent-fs.sqlite.ts` implements a SQLite VFS
   over the agent database `vfs_entries` table.
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,

@@ -18,9 +18,6 @@
  * capabilities instead of the text-only fallback.
  */
 
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -34,7 +31,6 @@ const log = createSubsystemLogger("openrouter-model-capabilities");
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
-const LEGACY_JSON_CACHE_FILENAME = "openrouter-models.json";
 const SQLITE_CACHE_SCOPE = "openrouter_model_capabilities";
 const SQLITE_CACHE_KEY = "models";
 
@@ -86,14 +82,6 @@ interface OpenRouterModelCachePayload {
 // Persistent cache
 // ---------------------------------------------------------------------------
 
-function resolveLegacyJsonCacheDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(resolveStateDir(env), "cache");
-}
-
-function resolveLegacyJsonCachePath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(resolveLegacyJsonCacheDir(env), LEGACY_JSON_CACHE_FILENAME);
-}
-
 function mapToCachePayload(
   map: Map<string, OpenRouterModelCapabilities>,
 ): OpenRouterModelCachePayload {
@@ -141,7 +129,9 @@ function isValidCapabilities(value: unknown): value is OpenRouterModelCapabiliti
   );
 }
 
-function parseCachePayload(payload: unknown): Map<string, OpenRouterModelCapabilities> | undefined {
+export function parseOpenRouterModelCapabilitiesCachePayload(
+  payload: unknown,
+): Map<string, OpenRouterModelCapabilities> | undefined {
   if (!payload || typeof payload !== "object") {
     return undefined;
   }
@@ -162,23 +152,9 @@ function readSqliteCache(
   env?: NodeJS.ProcessEnv,
 ): Map<string, OpenRouterModelCapabilities> | undefined {
   try {
-    return parseCachePayload(
+    return parseOpenRouterModelCapabilitiesCachePayload(
       readOpenClawStateKvJson(SQLITE_CACHE_SCOPE, SQLITE_CACHE_KEY, sqliteOptionsForEnv(env)),
     );
-  } catch {
-    return undefined;
-  }
-}
-
-function readLegacyJsonCache(
-  env: NodeJS.ProcessEnv = process.env,
-): Map<string, OpenRouterModelCapabilities> | undefined {
-  try {
-    const cachePath = resolveLegacyJsonCachePath(env);
-    if (!existsSync(cachePath)) {
-      return undefined;
-    }
-    return parseCachePayload(JSON.parse(readFileSync(cachePath, "utf-8")) as unknown);
   } catch {
     return undefined;
   }
@@ -188,28 +164,11 @@ function readPersistentCache(): Map<string, OpenRouterModelCapabilities> | undef
   return readSqliteCache();
 }
 
-export function legacyOpenRouterModelCapabilitiesCacheExists(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return existsSync(resolveLegacyJsonCachePath(env));
-}
-
-export function importLegacyOpenRouterModelCapabilitiesCacheToSqlite(
-  env: NodeJS.ProcessEnv = process.env,
-): { imported: boolean; models: number } {
-  if (!legacyOpenRouterModelCapabilitiesCacheExists(env)) {
-    return { imported: false, models: 0 };
-  }
-  const legacyJsonCache = readLegacyJsonCache(env);
-  if (legacyJsonCache) {
-    writeSqliteCache(legacyJsonCache, env);
-  }
-  try {
-    unlinkSync(resolveLegacyJsonCachePath(env));
-  } catch {
-    // Import succeeded; a later doctor pass can remove the stale file.
-  }
-  return { imported: true, models: legacyJsonCache?.size ?? 0 };
+export function writeOpenRouterModelCapabilitiesCacheForMigration(
+  map: Map<string, OpenRouterModelCapabilities>,
+  env?: NodeJS.ProcessEnv,
+): void {
+  writeSqliteCache(map, env);
 }
 
 // ---------------------------------------------------------------------------

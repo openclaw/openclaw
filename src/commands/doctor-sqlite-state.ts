@@ -11,11 +11,11 @@ import {
 import {
   importLegacyOpenRouterModelCapabilitiesCacheToSqlite,
   legacyOpenRouterModelCapabilitiesCacheExists,
-} from "../agents/pi-embedded-runner/openrouter-model-capabilities.js";
+} from "../agents/pi-embedded-runner/openrouter-model-capabilities-legacy.js";
 import {
   importLegacySubagentRegistryFileToSqlite,
   legacySubagentRegistryFileExists,
-} from "../agents/subagent-registry.store.js";
+} from "../agents/subagent-registry.store-legacy.js";
 import {
   importLegacyCommitmentStoreFileToSqlite,
   legacyCommitmentStoreFileExists,

@@ -28,8 +28,10 @@ import {
 } from "./subagent-registry.persistence.test-support.js";
 import {
   importLegacySubagentRegistryFileToSqlite,
-  loadSubagentRegistryFromState,
   resolveLegacySubagentRegistryPath,
+} from "./subagent-registry.store-legacy.js";
+import {
+  loadSubagentRegistryFromState,
   saveSubagentRegistryToState,
 } from "./subagent-registry.store.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
