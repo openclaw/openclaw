@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
@@ -102,7 +103,7 @@ async function createTranscriptFixture(prefix: string) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   const sessionId = "sess-main";
-  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+  const transcriptPath = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
   await writeTranscriptHeader(transcriptPath, sessionId);
   setMockSessionEntry(transcriptPath, sessionId);
   return { transcriptPath, sessionId };

@@ -16,6 +16,10 @@ let gatewayConfig: {
   webchat: { chatHistoryMaxChars: 2000 },
 };
 let authCheckCalls = 0;
+const transcriptFixtures = vi.hoisted(() => ({
+  sessionOne: "sqlite-transcript://main/session-1.jsonl",
+  otherSession: "sqlite-transcript://main/other-session.jsonl",
+}));
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({
@@ -26,7 +30,7 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   getSessionEntry: () => ({
     sessionId: "session-1",
-    sessionFile: "/tmp/session-1.jsonl",
+    sessionFile: transcriptFixtures.sessionOne,
   }),
   listSessionEntries: () => [],
 }));
@@ -91,7 +95,7 @@ vi.mock("./session-utils.js", () => ({
     agentId: "main",
   }),
   readSessionMessagesAsync: async () => [],
-  resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
+  resolveSessionTranscriptCandidates: () => [transcriptFixtures.sessionOne],
 }));
 
 vi.mock("./session-history-state.js", () => ({
@@ -190,7 +194,7 @@ describe("session history SSE auth revocation", () => {
     authRevoked = true;
 
     transcriptUpdateHandler?.({
-      sessionFile: "/tmp/session-1.jsonl",
+      sessionFile: transcriptFixtures.sessionOne,
       message: { role: "assistant", content: [{ type: "text", text: "post-revocation secret" }] },
       messageId: "m-1",
     });
@@ -225,7 +229,7 @@ describe("session history SSE auth revocation", () => {
     };
 
     transcriptUpdateHandler?.({
-      sessionFile: "/tmp/session-1.jsonl",
+      sessionFile: transcriptFixtures.sessionOne,
       message: { role: "assistant", content: [{ type: "text", text: "stale-proxy event" }] },
       messageId: "m-2",
     });
@@ -261,7 +265,7 @@ describe("session history SSE auth revocation", () => {
     };
 
     transcriptUpdateHandler?.({
-      sessionFile: "/tmp/other-session.jsonl",
+      sessionFile: transcriptFixtures.otherSession,
       message: { role: "assistant", content: [{ type: "text", text: "other session" }] },
       messageId: "m-3",
     });
