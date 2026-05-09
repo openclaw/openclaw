@@ -5,7 +5,6 @@ import {
   hasInternalRuntimeContext,
   stripInternalRuntimeContext,
 } from "../agents/internal-runtime-context.js";
-import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { resolveStateDir } from "../config/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
@@ -15,6 +14,7 @@ import {
 } from "../state/openclaw-state-kv.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { resolveLegacyAgentSessionDirs } from "./doctor/legacy/session-dirs.js";
 
 const CODEX_APP_SERVER_BINDING_SIDECAR_SUFFIX = ".codex-app-server.json";
 const CODEX_APP_SERVER_BINDING_KV_SCOPE = "codex_app_server_thread_bindings";
@@ -408,7 +408,7 @@ export async function noteSessionTranscriptHealth(params?: {
   const shouldRepair = params?.shouldRepair === true;
   let sessionDirs = params?.sessionDirs;
   try {
-    sessionDirs ??= await resolveAgentSessionDirs(resolveStateDir(process.env));
+    sessionDirs ??= await resolveLegacyAgentSessionDirs(resolveStateDir(process.env));
   } catch (err) {
     note(`- Failed to inspect session transcripts: ${String(err)}`, "Session transcripts");
     return;
