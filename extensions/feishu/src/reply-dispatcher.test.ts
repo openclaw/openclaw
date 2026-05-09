@@ -1303,6 +1303,69 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(updateTexts.join("\n")).toContain("🛠️ run tests, `pnpm test -- --watch=false`");
   });
 
+  it("delivers tool result text as a separate message while streaming card is active", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    // Start a streaming reply first
+    await options.deliver({ text: "```md\nanswer\n```" }, { kind: "final" });
+    // Tool result arrives while streaming card is still active
+    await options.deliver({ text: "browser result" }, { kind: "tool" });
+    await options.onIdle?.();
+
+    // Tool result text is delivered as a separate card (not dropped)
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "browser result" }),
+    );
+    // Streaming card should only contain the answer, not the tool result
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\nanswer\n```", {
+      note: "Agent: agent",
+    });
+  });
+
+  it("delivers tool result with media while streaming card is active", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "```md\nanswer\n```" }, { kind: "final" });
+    await options.deliver(
+      { text: "captioned", mediaUrl: "https://example.com/tool.png" },
+      { kind: "tool" },
+    );
+    await options.onIdle?.();
+
+    // Text is sent as a separate card
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "captioned" }),
+    );
+    // Media is also sent
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.com/tool.png" }),
+    );
+  });
+
   it("omits message-like tools from streaming card status", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
