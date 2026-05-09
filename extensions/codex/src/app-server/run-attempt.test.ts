@@ -979,6 +979,83 @@ describe("runCodexAppServerAttempt", () => {
     expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
   });
 
+  it("does not count account rate-limit updates as turn completion activity", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
+
+    await expect(
+      handleRequest?.({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send", text: "already sent" },
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    await notify(rateLimitsUpdated(Math.ceil(Date.now() / 1000) + 120));
+
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server turn idle timed out waiting for completion",
+      expect.objectContaining({
+        timeoutMs: 5,
+        lastActivityReason: "request:item/tool/call:response",
+      }),
+    );
+  });
+
   it("keeps waiting when Codex emits a raw assistant item after a dynamic tool response", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:

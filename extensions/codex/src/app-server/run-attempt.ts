@@ -1039,9 +1039,6 @@ export async function runCodexAppServerAttempt(
   };
 
   const handleNotification = async (notification: CodexServerNotification) => {
-    touchTurnCompletionActivity(`notification:${notification.method}`, {
-      details: describeNotificationActivity(notification),
-    });
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
       pendingNotifications.push(notification);
@@ -1052,6 +1049,11 @@ export async function runCodexAppServerAttempt(
       thread.threadId,
       turnId,
     );
+    if (isCurrentTurnNotification) {
+      touchTurnCompletionActivity(`notification:${notification.method}`, {
+        details: describeNotificationActivity(notification),
+      });
+    }
     if (isCurrentTurnNotification && notification.method === "error") {
       if (isRetryableErrorNotification(notification.params)) {
         disarmTurnCompletionIdleWatch();
