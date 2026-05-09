@@ -56,10 +56,12 @@ describe("wave-03 h2-block-split", () => {
     expect(ast.blocks[0]?.heading).toBe("With space");
   });
 
-  it("H2-08 leading whitespace before `##` — does NOT match (regex anchored at line start)", () => {
+  it("H2-08 leading whitespace before `##` — recognized as heading (CommonMark)", () => {
+    // Substrate accepts up to 3 spaces of indentation as an atx
+    // heading per CommonMark. Lint rules can flag if a particular
+    // workspace file requires column-zero authoring.
     const { ast } = parseMd("   ## indented\n## not indented\n");
-    expect(ast.blocks.length).toBe(1);
-    expect(ast.blocks[0]?.heading).toBe("not indented");
+    expect(ast.blocks.map((b) => b.heading)).toEqual(["indented", "not indented"]);
   });
 
   it("H2-09 trailing whitespace on heading — trimmed in heading text", () => {
@@ -126,16 +128,19 @@ describe("wave-03 h2-block-split", () => {
   });
 
   it("H2-19 empty heading text (`## `)", () => {
+    // Substrate accepts an empty atx heading; downstream lint
+    // (`OC_HEADING_EMPTY`) flags it. Slug is empty string — collisions
+    // are a lint-level concern, not a parser refusal.
     const { ast } = parseMd("## \n");
-    // Empty heading is technically a valid match (`## ` + empty text)
-    // but the regex requires `(.+?)` so empty doesn't match. Validates
-    // it's NOT split.
-    expect(ast.blocks).toEqual([]);
+    expect(ast.blocks.length).toBe(1);
+    expect(ast.blocks[0]?.heading).toBe("");
+    expect(ast.blocks[0]?.slug).toBe("");
   });
 
   it("H2-20 heading with only whitespace (`##    `)", () => {
     const { ast } = parseMd("##    \n");
-    expect(ast.blocks).toEqual([]);
+    expect(ast.blocks.length).toBe(1);
+    expect(ast.blocks[0]?.heading).toBe("");
   });
 
   it("H2-21 heading-shaped text inside multi-line bullet body — does split", () => {

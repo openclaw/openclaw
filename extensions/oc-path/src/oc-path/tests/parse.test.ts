@@ -135,53 +135,6 @@ describe("parseMd — items", () => {
   });
 });
 
-describe("parseMd — tables", () => {
-  it("extracts a simple table", () => {
-    const raw = `## Tool Guidance
-
-| tool | guidance |
-| --- | --- |
-| gh | use for GitHub |
-| curl | HTTP client |
-`;
-    const { ast } = parseMd(raw);
-    const table = ast.blocks[0]?.tables[0];
-    if (!table) {
-      throw new Error("expected parsed markdown table");
-    }
-    expect(table.headers).toEqual(["tool", "guidance"]);
-    expect(table.rows.length).toBe(2);
-    expect(table.rows[0]).toEqual(["gh", "use for GitHub"]);
-  });
-});
-
-describe("parseMd — code blocks", () => {
-  it("extracts a fenced code block", () => {
-    const raw = `## Examples
-
-\`\`\`ts
-const x = 1;
-\`\`\`
-`;
-    const { ast } = parseMd(raw);
-    expect(ast.blocks[0]?.codeBlocks[0]).toMatchObject({
-      lang: "ts",
-      text: "const x = 1;",
-    });
-  });
-
-  it("handles unlanguaged fences", () => {
-    const raw = `## Block
-
-\`\`\`
-plain text
-\`\`\`
-`;
-    const { ast } = parseMd(raw);
-    expect(ast.blocks[0]?.codeBlocks[0]?.lang).toBeNull();
-  });
-});
-
 describe("parseMd — byte-fidelity", () => {
   it("preserves raw on the AST", () => {
     const raw = `---\nname: x\n---\n\n## Sec\n\n- a\n- b\n`;

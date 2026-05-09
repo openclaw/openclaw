@@ -56,7 +56,7 @@ describe("wave-12 real-world-fixtures", () => {
     }
   });
 
-  it("F-04 TOOLS.md table extracted from Tool Guidance section", () => {
+  it("F-04 TOOLS.md tool-guidance section resolves by slug", () => {
     const raw = load("TOOLS.md");
     const { ast } = parseMd(raw);
     expect(emitMd(ast)).toBe(raw);
@@ -65,10 +65,6 @@ describe("wave-12 real-world-fixtures", () => {
       section: "tool-guidance",
     });
     expect(guidance?.kind).toBe("block");
-    if (guidance?.kind === "block") {
-      expect(guidance.node.tables.length).toBeGreaterThan(0);
-      expect(guidance.node.tables[0]?.headers).toEqual(["tool", "guidance"]);
-    }
   });
 
   it("F-05 IDENTITY.md sections resolvable by slug", () => {

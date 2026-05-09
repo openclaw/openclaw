@@ -85,23 +85,27 @@ describe("wave-04 items", () => {
     expect(ast.blocks[0]?.items[0]?.text).toBe("spaced");
   });
 
-  it("I-15 empty bullet text is dropped", () => {
+  it("I-15 empty bullet — recognized with empty text/slug", () => {
+    // Substrate accepts an empty bullet; lint can flag if collisions
+    // matter. Both `- ` and `- real` become items.
     const { ast } = parseMd("## H\n- \n- real\n");
-    // The regex requires (.+?) non-empty, so `- ` alone doesn't match.
-    expect(ast.blocks[0]?.items.length).toBe(1);
+    expect(ast.blocks[0]?.items.length).toBe(2);
+    expect(ast.blocks[0]?.items.map((i) => i.text)).toEqual(["", "real"]);
   });
 
-  it("I-16 indented bullet (sub-bullet) — current parser still picks up", () => {
-    // The current regex `^(?:[-*+])\\s+(.+?)\\s*$` requires column-0
-    // bullet markers; indented bullets do NOT match. Documented as a
-    // limit — sub-bullets surface in body text but not in items.
+  it("I-16 indented bullet (sub-bullet) — recognized as item alongside parent", () => {
+    // Substrate flattens the bullet tree into a list of items;
+    // sub-bullets surface as their own AstItem entries. Lint rules
+    // can flag depth or duplicate-slug collisions.
     const { ast } = parseMd("## H\n- top\n  - sub\n");
-    expect(ast.blocks[0]?.items.map((i) => i.text)).toEqual(["top"]);
+    expect(ast.blocks[0]?.items.map((i) => i.text)).toEqual(["top", "sub"]);
   });
 
-  it("I-17 numbered list (1. item) is NOT extracted as item", () => {
+  it("I-17 numbered list (1. item) — recognized as items", () => {
+    // Substrate treats ordered and unordered lists symmetrically.
+    // Lint rules can flag if a particular file requires bullet style.
     const { ast } = parseMd("## H\n1. first\n2. second\n");
-    expect(ast.blocks[0]?.items).toEqual([]);
+    expect(ast.blocks[0]?.items.map((i) => i.text)).toEqual(["first", "second"]);
   });
 
   it("I-18 items in a section with no body before — first item line is heading+1", () => {

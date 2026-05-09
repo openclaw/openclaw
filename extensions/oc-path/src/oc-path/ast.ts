@@ -58,31 +58,16 @@ export interface AstItem {
 }
 
 /**
- * A markdown table. Tables surface in `## Tool Guidance` blocks and
- * elsewhere; lint rules can address rows by header value if needed.
- */
-export interface AstTable {
-  readonly headers: readonly string[];
-  readonly rows: readonly (readonly string[])[];
-  readonly line: number;
-}
-
-/**
- * A fenced code block. Carries the language tag (or `null`) and the
- * verbatim body.
- */
-export interface AstCodeBlock {
-  readonly lang: string | null;
-  readonly text: string;
-  readonly line: number;
-}
-
-/**
  * An H2-delimited block. The `slug` is the kebab-case lowercase form of
  * `heading` and is what OcPath `section` matches against. `bodyText` is
  * the prose between this heading and the next H2 (or end of file),
- * verbatim. `items`, `tables`, `codeBlocks` are extracted from
- * `bodyText` for addressing convenience but the raw text is preserved.
+ * verbatim. `items` are extracted from `bodyText` for addressing
+ * convenience but the raw text is preserved.
+ *
+ * Tables and fenced code blocks are NOT modeled as first-class AST
+ * children — addressing into them is out of scope for the substrate.
+ * Lint rules that need table rows or code-block contents re-tokenize
+ * the block's `bodyText` on demand.
  */
 export interface AstBlock {
   readonly heading: string;
@@ -90,8 +75,6 @@ export interface AstBlock {
   readonly line: number;
   readonly bodyText: string;
   readonly items: readonly AstItem[];
-  readonly tables: readonly AstTable[];
-  readonly codeBlocks: readonly AstCodeBlock[];
 }
 
 /**
