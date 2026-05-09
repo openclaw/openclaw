@@ -350,7 +350,9 @@ describe("backup commands", () => {
       expect(result.skippedVolatileCount).toBe(1);
       expect(runtime.log).toHaveBeenCalledTimes(1);
       const payload = vi.mocked(runtime.log).mock.calls[0]?.[0];
-      expect(typeof payload).toBe("string");
+      if (typeof payload !== "string") {
+        throw new Error("backup test expected JSON string output");
+      }
       expect(payload).not.toContain("Backup skipped");
       expect(JSON.parse(payload)).toMatchObject({ skippedVolatileCount: 1 });
     } finally {
