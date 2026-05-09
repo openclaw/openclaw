@@ -735,7 +735,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     rotateTranscriptAfterCompactionMock.mockResolvedValueOnce({
       rotated: true,
       sessionId: "rotated-session",
-      transcriptLocator: TEST_ROTATED_SESSION_FILE,
       leafId: "rotated-leaf",
     });
 
@@ -761,7 +760,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       expect(listener).toHaveBeenCalledWith({
         agentId: "main",
         sessionId: "rotated-session",
-        transcriptLocator: TEST_ROTATED_SESSION_FILE,
         sessionKey: TEST_SESSION_KEY,
       });
       expect(sync).toHaveBeenCalledTimes(1);

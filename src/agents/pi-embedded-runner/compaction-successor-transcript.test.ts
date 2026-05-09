@@ -94,7 +94,8 @@ describe("rotateTranscriptAfterCompaction", () => {
     openSpy.mockRestore();
 
     expect(result.rotated).toBe(true);
-    expect(result.transcriptLocator).toBeTruthy();
+    expect(result.sessionId).toBeTruthy();
+    expect(result).not.toHaveProperty("transcriptLocator");
 
     const successor = await loadState({
       agentId: "main",
@@ -122,8 +123,8 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     expect(result.rotated).toBe(true);
     expect(result.sessionId).toBeTruthy();
-    expect(result.transcriptLocator).toBeTruthy();
-    expect(result.transcriptLocator).not.toBe(transcriptLocator);
+    expect(result).not.toHaveProperty("transcriptLocator");
+    expect(result.sessionId).not.toBe(sourceScope.sessionId);
     expect((await loadState(scopeForTranscript(transcriptLocator))).getEntries()).toEqual(
       originalEntries,
     );

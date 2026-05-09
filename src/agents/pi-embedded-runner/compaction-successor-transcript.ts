@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
@@ -25,7 +24,6 @@ export type CompactionTranscriptRotation = {
   rotated: boolean;
   reason?: string;
   sessionId?: string;
-  transcriptLocator?: string;
   compactionEntryId?: string;
   leafId?: string;
   entriesWritten?: number;
@@ -56,10 +54,6 @@ export async function rotateTranscriptAfterCompaction(params: {
   const compaction = branch[latestCompactionIndex] as CompactionEntry;
   const timestamp = (params.now?.() ?? new Date()).toISOString();
   const sessionId = randomUUID();
-  const successorTranscriptLocator = resolveSuccessorTranscriptLocator({
-    sessionId,
-    agentId,
-  });
   const successorEntries = buildSuccessorEntries({
     allEntries: params.sessionManager.getEntries(),
     branch,
@@ -86,7 +80,6 @@ export async function rotateTranscriptAfterCompaction(params: {
   return {
     rotated: true,
     sessionId,
-    transcriptLocator: successorTranscriptLocator,
     compactionEntryId: compaction.id,
     leafId: successorEntries[successorEntries.length - 1]?.id,
     entriesWritten: successorEntries.length,
@@ -315,13 +308,6 @@ function buildSuccessorHeader(params: {
     cwd: params.previousHeader?.cwd || params.cwd,
     parentSession: params.parentSession,
   };
-}
-
-function resolveSuccessorTranscriptLocator(params: { sessionId: string; agentId: string }): string {
-  return createSqliteSessionTranscriptLocator({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-  });
 }
 
 function formatTranscriptParentReference(params: { agentId: string; sessionId: string }): string {
