@@ -10,7 +10,6 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
-import { resolveSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
 import {
   hasSqliteSessionTranscriptEvents,
@@ -82,10 +81,6 @@ function tryResolveNativeRealPath(targetPath: string): string | null {
   } catch {
     return null;
   }
-}
-
-function resolveComparableTranscriptPath(filePath: string): string {
-  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
 }
 
 function isReachableConfiguredAgentDir(params: {
@@ -229,23 +224,30 @@ function resolveTranscriptSqliteScope(params: { agentId: string; sessionId: stri
 function hasSessionTranscript(params: {
   agentId: string;
   sessionId: string;
-  transcriptPath: string;
+  legacyTranscriptPath?: string;
 }): boolean {
   const scope = resolveTranscriptSqliteScope(params);
-  return hasSqliteSessionTranscriptEvents(scope) || existsFile(params.transcriptPath);
+  return (
+    hasSqliteSessionTranscriptEvents(scope) ||
+    (params.legacyTranscriptPath ? existsFile(params.legacyTranscriptPath) : false)
+  );
 }
 
 function countSessionTranscriptEvents(params: {
   agentId: string;
   sessionId: string;
-  transcriptPath: string;
+  legacyTranscriptPath?: string;
 }): number {
   const scope = resolveTranscriptSqliteScope(params);
   const sqliteEvents = loadSqliteSessionTranscriptEvents(scope);
   if (sqliteEvents.length > 0) {
     return sqliteEvents.length;
   }
-  return countJsonlLines(params.transcriptPath);
+  return params.legacyTranscriptPath ? countJsonlLines(params.legacyTranscriptPath) : 0;
+}
+
+function resolveLegacyTranscriptPathForSession(sessionsDir: string, sessionId: string): string {
+  return path.join(sessionsDir, `${sessionId}.jsonl`);
 }
 
 function findOtherStateDirs(stateDir: string): string[] {
@@ -880,8 +882,11 @@ export async function noteStateIntegrity(
       if (!sessionId) {
         return false;
       }
-      const transcriptPath = resolveSessionTranscriptLocator(sessionId, sessionPathOpts);
-      return !hasSessionTranscript({ agentId, sessionId, transcriptPath });
+      return !hasSessionTranscript({
+        agentId,
+        sessionId,
+        legacyTranscriptPath: resolveLegacyTranscriptPathForSession(sessionsDir, sessionId),
+      });
     });
     if (missing.length > 0) {
       warnings.push(
@@ -968,16 +973,21 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionTranscriptLocator(mainEntry.sessionId, sessionPathOpts);
-      if (!hasSessionTranscript({ agentId, sessionId: mainEntry.sessionId, transcriptPath })) {
+      const legacyTranscriptPath = resolveLegacyTranscriptPathForSession(
+        sessionsDir,
+        mainEntry.sessionId,
+      );
+      if (
+        !hasSessionTranscript({ agentId, sessionId: mainEntry.sessionId, legacyTranscriptPath })
+      ) {
         warnings.push(
-          `- Main session transcript missing (${shortenHomePath(transcriptPath)}). History will appear to reset.`,
+          `- Main session transcript missing (${agentId}/${mainEntry.sessionId}). History will appear to reset.`,
         );
       } else {
         const eventCount = countSessionTranscriptEvents({
           agentId,
           sessionId: mainEntry.sessionId,
-          transcriptPath,
+          legacyTranscriptPath,
         });
         if (eventCount <= 1) {
           warnings.push(
@@ -989,28 +999,10 @@ export async function noteStateIntegrity(
   }
 
   if (existsDir(sessionsDir)) {
-    const referencedTranscriptPaths = new Set<string>();
-    for (const [, entry] of entries) {
-      if (!entry?.sessionId) {
-        continue;
-      }
-      try {
-        referencedTranscriptPaths.add(
-          resolveComparableTranscriptPath(
-            resolveSessionTranscriptLocator(entry.sessionId, sessionPathOpts),
-          ),
-        );
-      } catch {
-        // ignore invalid legacy paths
-      }
-    }
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimaryLegacySessionTranscriptFileName(entry.name))
-      .map((entry) => path.join(sessionsDir, entry.name))
-      .filter(
-        (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
-      );
+      .map((entry) => path.join(sessionsDir, entry.name));
     if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);
