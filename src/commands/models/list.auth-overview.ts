@@ -1,6 +1,6 @@
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import { resolveAuthProfileDisplayLabel } from "../../agents/auth-profiles/display.js";
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { resolveAuthProfileStoreLocationForDisplay } from "../../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
@@ -135,7 +135,7 @@ export function resolveProviderAuthOverview(params: {
       return {
         kind: "profiles",
         detail: shortenHomePath(
-          resolveAuthStorePathForDisplay(
+          resolveAuthProfileStoreLocationForDisplay(
             resolveProfileSourceAgentDir({
               agentDir: params.agentDir,
               profileIds: profiles,

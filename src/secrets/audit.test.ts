@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { savePersistedAuthProfileSecretsStore } from "../agents/auth-profiles/persisted.js";
 import { writeStoredModelsConfigRaw } from "../agents/models-config-store.js";
 import { runSecretsAudit } from "./audit.js";
 
@@ -32,6 +33,17 @@ function countNonEmptyLines(value: string): number {
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function writeAuthProfileStore(fixture: AuditFixture, profiles: Record<string, unknown>): void {
+  savePersistedAuthProfileSecretsStore(
+    {
+      version: 1,
+      profiles,
+    },
+    fixture.agentDir,
+    { env: fixture.env },
+  );
 }
 
 async function writeExecResolverShellScript(params: {
@@ -179,10 +191,7 @@ async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
   await writeJsonFile(fixture.configPath, {
     models: { providers: seededProvider },
   });
-  await writeJsonFile(fixture.authStorePath, {
-    version: 1,
-    profiles: Object.fromEntries(seededProfiles),
-  });
+  writeAuthProfileStore(fixture, Object.fromEntries(seededProfiles));
   writeStoredModelsConfigRaw(
     fixture.agentDir,
     `${JSON.stringify({
@@ -280,11 +289,9 @@ describe("secrets audit", () => {
   });
 
   it("reports malformed sidecar JSON as findings instead of crashing", async () => {
-    await fs.writeFile(fixture.authStorePath, "{invalid-json", "utf8");
     await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expectFindingFile(report, fixture.authStorePath);
     expectFindingFile(report, fixture.authJsonPath);
     expectFindingCode(report, "REF_UNRESOLVED");
   });
@@ -611,10 +618,7 @@ describe("secrets audit", () => {
         },
       },
     });
-    await writeJsonFile(fixture.authStorePath, {
-      version: 1,
-      profiles: {},
-    });
+    writeAuthProfileStore(fixture, {});
     await fs.writeFile(fixture.envPath, "", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });

@@ -9,7 +9,7 @@ import {
   type OpenClawStateJsonValue,
 } from "../../state/openclaw-state-kv.js";
 import { normalizeProviderId } from "../provider-id.js";
-import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { AUTH_PROFILE_STORE_KV_SCOPE, AUTH_STORE_VERSION, log } from "./constants.js";
 import {
   hasOAuthIdentity,
   hasUsableOAuthCredential,
@@ -17,7 +17,7 @@ import {
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-shared.js";
-import { resolveAuthStorePath } from "./paths.js";
+import { resolveAuthProfileStoreKey } from "./paths.js";
 import {
   coerceAuthProfileState,
   loadPersistedAuthProfileState,
@@ -33,10 +33,10 @@ import type {
   ProfileUsageStats,
 } from "./types.js";
 
-export const AUTH_PROFILE_STORE_KV_SCOPE = "auth-profiles";
+export { AUTH_PROFILE_STORE_KV_SCOPE } from "./constants.js";
 
 export function authProfileStoreKey(agentDir?: string): string {
-  return resolveAuthStorePath(agentDir);
+  return resolveAuthProfileStoreKey(agentDir);
 }
 
 type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";

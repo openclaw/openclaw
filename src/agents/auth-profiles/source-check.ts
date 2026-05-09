@@ -1,4 +1,4 @@
-import { resolveAuthStorePath } from "./path-resolve.js";
+import { resolveAuthProfileStoreKey } from "./path-resolve.js";
 import { hasPersistedAuthProfileSecretsStore } from "./persisted.js";
 import { hasAnyRuntimeAuthProfileStoreSource } from "./runtime-snapshots.js";
 
@@ -10,9 +10,9 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
     return true;
   }
 
-  const authPath = resolveAuthStorePath(agentDir);
-  const mainAuthPath = resolveAuthStorePath();
-  if (agentDir && authPath !== mainAuthPath && hasPersistedAuthProfileSecretsStore(undefined)) {
+  const storeKey = resolveAuthProfileStoreKey(agentDir);
+  const mainStoreKey = resolveAuthProfileStoreKey();
+  if (agentDir && storeKey !== mainStoreKey && hasPersistedAuthProfileSecretsStore(undefined)) {
     return true;
   }
   return false;

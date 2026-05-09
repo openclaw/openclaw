@@ -1,4 +1,7 @@
 export {
+  resolveAuthProfileStoreAgentDir,
+  resolveAuthProfileStoreKey,
+  resolveAuthProfileStoreLocationForDisplay,
   resolveAuthStatePath,
   resolveAuthStatePathForDisplay,
   resolveAuthStorePath,

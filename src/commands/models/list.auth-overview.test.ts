@@ -16,8 +16,10 @@ vi.mock("../../agents/auth-profiles/persisted.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles/paths.js", () => ({
-  resolveAuthStorePathForDisplay: vi.fn((agentDir?: string) =>
-    agentDir ? `${agentDir}/auth-profiles.json` : "/tmp/auth-profiles.json",
+  resolveAuthProfileStoreLocationForDisplay: vi.fn((agentDir?: string) =>
+    agentDir
+      ? `/tmp/openclaw.sqlite#kv/auth-profiles/${agentDir}`
+      : "/tmp/openclaw.sqlite#kv/auth-profiles/main",
   ),
 }));
 
@@ -140,7 +142,7 @@ describe("resolveProviderAuthOverview", () => {
 
     expect(overview.effective).toEqual({
       kind: "profiles",
-      detail: "/tmp/openclaw-agent-custom/auth-profiles.json",
+      detail: "/tmp/openclaw.sqlite#kv/auth-profiles//tmp/openclaw-agent-custom",
     });
   });
 
@@ -170,7 +172,7 @@ describe("resolveProviderAuthOverview", () => {
 
     expect(overview.effective).toEqual({
       kind: "profiles",
-      detail: "/tmp/auth-profiles.json",
+      detail: "/tmp/openclaw.sqlite#kv/auth-profiles/main",
     });
   });
 

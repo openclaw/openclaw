@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveAuthProfileStoreLocationForDisplay } from "../agents/auth-profiles/paths.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import {
   isNonSecretApiKeyMarker,
   isSecretRefHeaderValueMarker,
@@ -32,7 +34,7 @@ import {
 import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelCatalogDirs,
-  listAuthProfileStorePaths,
+  listAuthProfileStoreAgentDirs,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
@@ -262,30 +264,18 @@ function collectConfigSecrets(params: {
 }
 
 function collectAuthStoreSecrets(params: {
-  authStorePath: string;
+  agentDir?: string;
   collector: AuditCollector;
   defaults?: SecretDefaults;
+  env?: NodeJS.ProcessEnv;
 }): void {
-  if (!fs.existsSync(params.authStorePath)) {
+  const authStoreLocation = resolveAuthProfileStoreLocationForDisplay(params.agentDir, params.env);
+  const store = loadPersistedAuthProfileStore(params.agentDir, { env: params.env });
+  if (!store || !isRecord(store.profiles)) {
     return;
   }
-  params.collector.filesScanned.add(params.authStorePath);
-  const parsedResult = readJsonObjectIfExists(params.authStorePath);
-  if (parsedResult.error) {
-    addFinding(params.collector, {
-      code: "REF_UNRESOLVED",
-      severity: "error",
-      file: params.authStorePath,
-      jsonPath: "<root>",
-      message: `Invalid JSON in auth-profiles store: ${parsedResult.error}`,
-    });
-    return;
-  }
-  const parsed = parsedResult.value;
-  if (!parsed || !isRecord(parsed.profiles)) {
-    return;
-  }
-  for (const entry of iterateAuthProfileCredentials(parsed.profiles)) {
+  params.collector.filesScanned.add(authStoreLocation);
+  for (const entry of iterateAuthProfileCredentials(store.profiles)) {
     if (entry.kind === "api_key" || entry.kind === "token") {
       const { ref } = resolveSecretInputRef({
         value: entry.value,
@@ -294,7 +284,7 @@ function collectAuthStoreSecrets(params: {
       });
       if (ref) {
         params.collector.refAssignments.push({
-          file: params.authStorePath,
+          file: authStoreLocation,
           path: `profiles.${entry.profileId}.${entry.valueField}`,
           ref,
           expected: "string",
@@ -306,7 +296,7 @@ function collectAuthStoreSecrets(params: {
         addFinding(params.collector, {
           code: "PLAINTEXT_FOUND",
           severity: "warn",
-          file: params.authStorePath,
+          file: authStoreLocation,
           jsonPath: `profiles.${entry.profileId}.${entry.valueField}`,
           message:
             entry.kind === "api_key"
@@ -323,7 +313,7 @@ function collectAuthStoreSecrets(params: {
       addFinding(params.collector, {
         code: "LEGACY_RESIDUE",
         severity: "info",
-        file: params.authStorePath,
+        file: authStoreLocation,
         jsonPath: `profiles.${entry.profileId}`,
         message: "OAuth credentials are present (out of scope for static SecretRef migration).",
         provider: entry.provider,
@@ -690,11 +680,12 @@ export async function runSecretsAudit(
       configPath,
       collector,
     });
-    for (const authStorePath of listAuthProfileStorePaths(config, stateDir)) {
+    for (const agentDir of listAuthProfileStoreAgentDirs(config, stateDir)) {
       collectAuthStoreSecrets({
-        authStorePath,
+        agentDir,
         collector,
         defaults,
+        env,
       });
     }
     for (const agentDir of listAgentModelCatalogDirs(config, stateDir, env)) {

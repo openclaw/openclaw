@@ -3,7 +3,7 @@ import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
-  resolveAuthStorePathForDisplay,
+  resolveAuthProfileStoreLocationForDisplay,
 } from "../../agents/auth-profiles.js";
 import {
   ensureAuthProfileStore,
@@ -200,7 +200,7 @@ export const resolveAuthLabel = async (
     });
     return {
       label: labels.join(", "),
-      source: `auth-profiles.json: ${formatPath(resolveAuthStorePathForDisplay(agentDir))}`,
+      source: `SQLite auth store: ${formatPath(resolveAuthProfileStoreLocationForDisplay(agentDir))}`,
     };
   }
 

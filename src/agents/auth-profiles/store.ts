@@ -10,7 +10,7 @@ import { AUTH_STORE_VERSION, EXTERNAL_CLI_SYNC_TTL_MS } from "./constants.js";
 import { overlayExternalAuthProfiles, shouldPersistExternalAuthProfile } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import { isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
-import { resolveAuthStorePath } from "./paths.js";
+import { resolveAuthProfileStoreKey } from "./paths.js";
 import {
   buildPersistedAuthProfileSecretsStore,
   loadPersistedAuthProfileStoreEntry,
@@ -70,9 +70,9 @@ function isInheritedMainOAuthCredential(params: {
   if (!params.agentDir || params.credential.type !== "oauth") {
     return false;
   }
-  const authPath = resolveAuthStorePath(params.agentDir);
-  const mainAuthPath = resolveAuthStorePath();
-  if (authPath === mainAuthPath) {
+  const storeKey = resolveAuthProfileStoreKey(params.agentDir);
+  const mainStoreKey = resolveAuthProfileStoreKey();
+  if (storeKey === mainStoreKey) {
     return false;
   }
 
@@ -112,8 +112,8 @@ function shouldUseMainOwnerForLocalOAuthCredential(params: {
 }
 
 function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | null {
-  const mainKey = resolveAuthStorePath(undefined);
-  const requestedKey = resolveAuthStorePath(agentDir);
+  const mainKey = resolveAuthProfileStoreKey(undefined);
+  const requestedKey = resolveAuthProfileStoreKey(agentDir);
   const mainStore = getRuntimeAuthProfileStoreSnapshot(undefined);
   const requestedStore = getRuntimeAuthProfileStoreSnapshot(agentDir);
 
@@ -142,10 +142,10 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
 }
 
 function readCachedAuthProfileStore(params: {
-  authPath: string;
+  storeKey: string;
   authMtimeMs: number | null;
 }): AuthProfileStore | null {
-  const cached = loadedAuthStoreCache.get(params.authPath);
+  const cached = loadedAuthStoreCache.get(params.storeKey);
   if (!cached || cached.authMtimeMs !== params.authMtimeMs) {
     return null;
   }
@@ -156,11 +156,11 @@ function readCachedAuthProfileStore(params: {
 }
 
 function writeCachedAuthProfileStore(params: {
-  authPath: string;
+  storeKey: string;
   authMtimeMs: number | null;
   store: AuthProfileStore;
 }): void {
-  loadedAuthStoreCache.set(params.authPath, {
+  loadedAuthStoreCache.set(params.storeKey, {
     authMtimeMs: params.authMtimeMs,
     syncedAtMs: Date.now(),
     store: cloneAuthProfileStore(params.store),
@@ -336,12 +336,12 @@ function loadAuthProfileStoreForAgent(
   options?: LoadAuthProfileStoreOptions,
 ): AuthProfileStore {
   const readOnly = options?.readOnly === true;
-  const authPath = resolveAuthStorePath(agentDir);
+  const storeKey = resolveAuthProfileStoreKey(agentDir);
   const persisted = loadPersistedAuthProfileStoreEntry(agentDir, { env: options?.env });
   const authMtimeMs = persisted?.updatedAt ?? null;
   if (!readOnly) {
     const cached = readCachedAuthProfileStore({
-      authPath,
+      storeKey,
       authMtimeMs,
     });
     if (cached) {
@@ -352,7 +352,7 @@ function loadAuthProfileStoreForAgent(
   if (asStore) {
     if (!readOnly) {
       writeCachedAuthProfileStore({
-        authPath,
+        storeKey,
         authMtimeMs,
         store: asStore,
       });
@@ -367,7 +367,7 @@ function loadAuthProfileStoreForAgent(
 
   if (!readOnly) {
     writeCachedAuthProfileStore({
-      authPath,
+      storeKey,
       authMtimeMs,
       store,
     });
@@ -380,10 +380,10 @@ export function loadAuthProfileStoreForRuntime(
   options?: LoadAuthProfileStoreOptions,
 ): AuthProfileStore {
   const store = loadAuthProfileStoreForAgent(agentDir, options);
-  const authPath = resolveAuthStorePath(agentDir);
-  const mainAuthPath = resolveAuthStorePath();
+  const storeKey = resolveAuthProfileStoreKey(agentDir);
+  const mainStoreKey = resolveAuthProfileStoreKey();
   const externalCli = resolveExternalCliOverlayOptions(options);
-  if (!agentDir || authPath === mainAuthPath) {
+  if (!agentDir || storeKey === mainStoreKey) {
     return overlayExternalAuthProfiles(store, {
       agentDir,
       ...externalCli,
@@ -411,9 +411,9 @@ export function loadAuthProfileStoreWithoutExternalProfiles(
     ...(options?.env ? { env: options.env } : {}),
   };
   const store = loadAuthProfileStoreForAgent(agentDir, loadOptions);
-  const authPath = resolveAuthStorePath(agentDir);
-  const mainAuthPath = resolveAuthStorePath();
-  if (!agentDir || authPath === mainAuthPath) {
+  const storeKey = resolveAuthProfileStoreKey(agentDir);
+  const mainStoreKey = resolveAuthProfileStoreKey();
+  if (!agentDir || storeKey === mainStoreKey) {
     return store;
   }
 
@@ -450,9 +450,9 @@ export function ensureAuthProfileStoreWithoutExternalProfiles(
     return runtimeStore;
   }
   const store = loadAuthProfileStoreForAgent(agentDir, options);
-  const authPath = resolveAuthStorePath(agentDir);
-  const mainAuthPath = resolveAuthStorePath();
-  if (!agentDir || authPath === mainAuthPath) {
+  const storeKey = resolveAuthProfileStoreKey(agentDir);
+  const mainStoreKey = resolveAuthProfileStoreKey();
+  if (!agentDir || storeKey === mainStoreKey) {
     return store;
   }
 
@@ -470,9 +470,9 @@ export function findPersistedAuthProfileCredential(params: {
     return requestedProfile;
   }
 
-  const requestedPath = resolveAuthStorePath(params.agentDir);
-  const mainPath = resolveAuthStorePath();
-  if (requestedPath === mainPath) {
+  const requestedKey = resolveAuthProfileStoreKey(params.agentDir);
+  const mainKey = resolveAuthProfileStoreKey();
+  if (requestedKey === mainKey) {
     return requestedProfile;
   }
 
@@ -487,9 +487,9 @@ export function resolvePersistedAuthProfileOwnerAgentDir(params: {
     return undefined;
   }
   const requestedStore = loadPersistedAuthProfileStore(params.agentDir);
-  const requestedPath = resolveAuthStorePath(params.agentDir);
-  const mainPath = resolveAuthStorePath();
-  if (requestedPath === mainPath) {
+  const requestedKey = resolveAuthProfileStoreKey(params.agentDir);
+  const mainKey = resolveAuthProfileStoreKey();
+  if (requestedKey === mainKey) {
     return undefined;
   }
 
@@ -510,9 +510,9 @@ export function resolvePersistedAuthProfileOwnerAgentDir(params: {
 export function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthProfileStore {
   const options: LoadAuthProfileStoreOptions = { syncExternalCli: false };
   const store = loadAuthProfileStoreForAgent(agentDir, options);
-  const authPath = resolveAuthStorePath(agentDir);
-  const mainAuthPath = resolveAuthStorePath();
-  if (!agentDir || authPath === mainAuthPath) {
+  const storeKey = resolveAuthProfileStoreKey(agentDir);
+  const mainStoreKey = resolveAuthProfileStoreKey();
+  if (!agentDir || storeKey === mainStoreKey) {
     return store;
   }
 
@@ -567,10 +567,10 @@ function refreshAuthProfileStoreCache(
   agentDir?: string,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  const authPath = resolveAuthStorePath(agentDir);
+  const storeKey = resolveAuthProfileStoreKey(agentDir);
   const persisted = loadPersistedAuthProfileStoreEntry(agentDir, options);
   writeCachedAuthProfileStore({
-    authPath,
+    storeKey,
     authMtimeMs: persisted?.updatedAt ?? null,
     store,
   });

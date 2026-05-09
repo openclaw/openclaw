@@ -21,7 +21,7 @@ import {
 } from "./oauth-shared.js";
 import {
   OAUTH_REFRESH_LOCK_SCOPE,
-  resolveAuthStorePath,
+  resolveAuthProfileStoreKey,
   resolveOAuthRefreshLockKey,
 } from "./paths.js";
 import {
@@ -323,7 +323,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     cfg?: OpenClawConfig;
   }): Promise<ResolvedOAuthAccess | null> {
     const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir(params);
-    const authPath = resolveAuthStorePath(ownerAgentDir);
+    const ownerStoreKey = resolveAuthProfileStoreKey(ownerAgentDir);
     const refreshLockKey = resolveOAuthRefreshLockKey(params.provider, params.profileId);
 
     try {
@@ -452,8 +452,8 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           store.profiles[params.profileId] = refreshedCredentials;
           saveAuthProfileStore(store, ownerAgentDir);
           if (ownerAgentDir) {
-            const mainPath = resolveAuthStorePath(undefined);
-            if (mainPath !== authPath) {
+            const mainStoreKey = resolveAuthProfileStoreKey(undefined);
+            if (mainStoreKey !== ownerStoreKey) {
               await mirrorRefreshedCredentialIntoMainStore({
                 profileId: params.profileId,
                 refreshed: refreshedCredentials,

@@ -11,7 +11,7 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { resolveAuthProfileStoreLocationForDisplay } from "../../agents/auth-profiles/paths.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
@@ -618,7 +618,7 @@ export async function modelsStatusCommand(
       aliases,
       allowed,
       auth: {
-        storePath: resolveAuthStorePathForDisplay(agentDir),
+        storePath: resolveAuthProfileStoreLocationForDisplay(agentDir),
         shellEnvFallback: {
           enabled: shellFallbackEnabled,
           appliedKeys: applied,
@@ -730,7 +730,7 @@ export async function modelsStatusCommand(
     `${label("Auth store")}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
       theme.info,
-      shortenHomePath(resolveAuthStorePathForDisplay(agentDir)),
+      shortenHomePath(resolveAuthProfileStoreLocationForDisplay(agentDir)),
     )}`,
   );
   runtime.log(

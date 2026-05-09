@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -30,12 +29,4 @@ export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: 
   }
 
   return [...dirs];
-}
-
-export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: string): string[] {
-  const paths = new Set<string>();
-  for (const agentDir of listAuthProfileStoreAgentDirs(config, stateDir)) {
-    paths.add(resolveUserPath(resolveAuthStorePath(agentDir)));
-  }
-  return [...paths];
 }

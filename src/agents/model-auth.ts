@@ -1,4 +1,3 @@
-import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
@@ -27,7 +26,8 @@ import {
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
-  resolveAuthStorePathForDisplay,
+  resolveAuthProfileStoreAgentDir,
+  resolveAuthProfileStoreLocationForDisplay,
 } from "./auth-profiles.js";
 import * as cliCredentials from "./cli-credentials.js";
 import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
@@ -782,12 +782,12 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
-  const resolvedAgentDir = path.dirname(authStorePath);
+  const authStoreLocation = resolveAuthProfileStoreLocationForDisplay(params.agentDir);
+  const resolvedAgentDir = resolveAuthProfileStoreAgentDir(params.agentDir);
   throw new Error(
     [
       `No API key found for provider "${provider}".`,
-      `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
+      `Auth store: ${authStoreLocation} (agentDir: ${resolvedAgentDir}).`,
       `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy only portable static auth profiles from the main agentDir.`,
     ].join(" "),
   );

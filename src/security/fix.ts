@@ -371,8 +371,6 @@ export async function collectSecurityPermissionTargets(params: {
     targets.push({ path: agentRoot, mode: 0o700, require: "dir" });
     targets.push({ path: agentDir, mode: 0o700, require: "dir" });
 
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    targets.push({ path: authPath, mode: 0o600, require: "file" });
     addSqlitePermissionTargets(
       targets,
       resolveOpenClawAgentSqlitePath({ agentId: normalizedAgentId, env: params.env }),

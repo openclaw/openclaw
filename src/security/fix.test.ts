@@ -238,7 +238,7 @@ describe("security fix", () => {
     await expectTightenedStateAndConfigPerms(stateDir, configPath);
   });
 
-  it("collects permission targets for credentials + agent auth/sessions + include files", async () => {
+  it("collects permission targets for credentials + SQLite state + include files", async () => {
     const stateDir = await createStateDir("includes");
 
     const includesDir = path.join(stateDir, "includes");
@@ -267,9 +267,6 @@ describe("security fix", () => {
 
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     await fs.mkdir(agentDir, { recursive: true });
-    const authProfilesPath = path.join(agentDir, "auth-profiles.json");
-    await fs.writeFile(authProfilesPath, "{}\n", "utf-8");
-    await fs.chmod(authProfilesPath, 0o644);
 
     const stateDbDir = path.join(stateDir, "state");
     await fs.mkdir(stateDbDir, { recursive: true });
@@ -303,7 +300,6 @@ describe("security fix", () => {
         { path: configPath, mode: 0o600, require: "file" },
         { path: credsDir, mode: 0o700, require: "dir" },
         { path: allowFromPath, mode: 0o600, require: "file" },
-        { path: authProfilesPath, mode: 0o600, require: "file" },
         { path: stateDbDir, mode: 0o700, require: "dir" },
         { path: stateDbPath, mode: 0o600, require: "file" },
         { path: stateWalPath, mode: 0o600, require: "file" },

@@ -36,7 +36,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   },
   resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
   resolveAuthProfileOrder: () => [],
-  resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
+  resolveAuthProfileStoreLocationForDisplay: () => "/tmp/openclaw.sqlite#kv/auth-profiles/main",
 }));
 
 vi.mock("../../agents/auth-profiles/store.js", () => {

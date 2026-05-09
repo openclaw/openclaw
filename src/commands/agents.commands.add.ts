@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -9,7 +8,7 @@ import {
   buildPortableAuthProfileSecretsStoreForAgentCopy,
   ensureAuthProfileStore,
 } from "../agents/auth-profiles.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
+import { resolveAuthProfileStoreKey } from "../agents/auth-profiles/paths.js";
 import {
   hasPersistedAuthProfileSecretsStore,
   loadPersistedAuthProfileStore,
@@ -280,14 +279,14 @@ export async function agentsAddCommand(
     const defaultAgentId = resolveDefaultAgentId(cfg);
     if (defaultAgentId !== agentId) {
       const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
-      const sourceAuthPath = resolveAuthStorePath(sourceAgentDir);
-      const mainAuthPath = resolveAuthStorePath(undefined);
+      const sourceAuthStoreKey = resolveAuthProfileStoreKey(sourceAgentDir);
+      const mainAuthStoreKey = resolveAuthProfileStoreKey(undefined);
       const sameAuthPath =
-        normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
-        normalizeLowercaseStringOrEmpty(path.resolve(resolveAuthStorePath(agentDir)));
+        normalizeLowercaseStringOrEmpty(sourceAuthStoreKey) ===
+        normalizeLowercaseStringOrEmpty(resolveAuthProfileStoreKey(agentDir));
       const sourceIsInheritedMain =
-        normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
-        normalizeLowercaseStringOrEmpty(path.resolve(mainAuthPath));
+        normalizeLowercaseStringOrEmpty(sourceAuthStoreKey) ===
+        normalizeLowercaseStringOrEmpty(mainAuthStoreKey);
       if (
         !sameAuthPath &&
         hasPersistedAuthProfileSecretsStore(sourceAgentDir) &&
