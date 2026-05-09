@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { callGateway } from "../gateway/call.js";
@@ -29,10 +30,6 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-function sessionTranscriptDir(agentId = "main"): string {
-  return path.join(tmpDir, "agents", agentId, "sessions");
-}
-
 async function writeStore(store: Record<string, SessionEntry>): Promise<void> {
   for (const [sessionKey, entry] of Object.entries(store)) {
     upsertSessionEntry({ agentId: "main", sessionKey, entry });
@@ -45,15 +42,11 @@ function readStore(): Record<string, SessionEntry> {
   );
 }
 
-async function writeTranscript(
-  transcriptDir: string,
-  sessionId: string,
-  messages: unknown[],
-): Promise<void> {
+async function writeTranscript(sessionId: string, messages: unknown[]): Promise<void> {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
-    transcriptPath: path.join(transcriptDir, `${sessionId}.jsonl`),
+    transcriptPath: createSqliteSessionTranscriptLocator({ agentId: "main", sessionId }),
     events: [
       {
         type: "session",
@@ -75,7 +68,6 @@ async function writeTranscript(
 
 describe("main-session-restart-recovery", () => {
   it("resumes marked sessions with a tool-result transcript tail", async () => {
-    const transcriptDir = sessionTranscriptDir();
     await writeStore({
       "agent:main:main": {
         sessionId: "main-session",
@@ -84,7 +76,7 @@ describe("main-session-restart-recovery", () => {
         abortedLastRun: true,
       },
     });
-    await writeTranscript(transcriptDir, "main-session", [
+    await writeTranscript("main-session", [
       { role: "user", content: "run the tool" },
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
       { role: "toolResult", content: "done" },
@@ -105,7 +97,6 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("fails marked sessions with stale approval-pending exec tool results", async () => {
-    const transcriptDir = sessionTranscriptDir();
     await writeStore({
       "agent:main:main": {
         sessionId: "main-session",
@@ -114,7 +105,7 @@ describe("main-session-restart-recovery", () => {
         abortedLastRun: true,
       },
     });
-    await writeTranscript(transcriptDir, "main-session", [
+    await writeTranscript("main-session", [
       { role: "user", content: "run a command that needs approval" },
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
       {
@@ -139,7 +130,6 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes marked sessions with a durable pending final delivery payload (Phase 2)", async () => {
-    const transcriptDir = sessionTranscriptDir();
     const pendingPayload = "The final answer is 42.";
     await writeStore({
       "agent:main:main": {
@@ -152,7 +142,7 @@ describe("main-session-restart-recovery", () => {
         pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
       },
     });
-    await writeTranscript(transcriptDir, "main-session", [
+    await writeTranscript("main-session", [
       { role: "user", content: "calculate the answer" },
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
       { role: "toolResult", content: "42" },
@@ -181,7 +171,6 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("does not scan ordinary running sessions without the restart-aborted marker", async () => {
-    const transcriptDir = sessionTranscriptDir();
     await writeStore({
       "agent:main:main": {
         sessionId: "main-session",
@@ -189,7 +178,7 @@ describe("main-session-restart-recovery", () => {
         status: "running",
       },
     });
-    await writeTranscript(transcriptDir, "main-session", [
+    await writeTranscript("main-session", [
       { role: "user", content: "current process owns this" },
       { role: "toolResult", content: "done" },
     ]);
@@ -201,7 +190,6 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("fails marked sessions whose transcript tail cannot be resumed", async () => {
-    const transcriptDir = sessionTranscriptDir();
     await writeStore({
       "agent:main:main": {
         sessionId: "main-session",
@@ -210,7 +198,7 @@ describe("main-session-restart-recovery", () => {
         abortedLastRun: true,
       },
     });
-    await writeTranscript(transcriptDir, "main-session", [
+    await writeTranscript("main-session", [
       { role: "user", content: "hello" },
       { role: "assistant", content: "partial answer" },
     ]);
