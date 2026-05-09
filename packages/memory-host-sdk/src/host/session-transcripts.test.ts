@@ -194,33 +194,9 @@ describe("buildSessionTranscriptEntry", () => {
     expect(entry.lineMap).toEqual([]);
   });
 
-  it("skips checkpoint artifacts so snapshots do not double-index session content", async () => {
-    const checkpointPath = path.join(
-      tmpDir,
-      "agents",
-      "main",
-      "sessions",
-      "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
-    );
-    seedTranscript({
-      sessionId: "ordinary.checkpoint.11111111-1111-4111-8111-111111111111",
-      transcriptPath: checkpointPath,
-      events: [
-        {
-          type: "message",
-          message: { role: "user", content: "Archived hello" },
-        },
-      ],
-    });
-
-    await expect(buildSessionTranscriptEntry(checkpointPath)).resolves.toBeNull();
-  });
-
-  it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
-    const archivePath = path.join(tmpDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
+  it("keeps cron-run transcripts opaque when the live session store entry is gone", async () => {
     const transcriptRef = seedTranscript({
       sessionId: "cron-run-deleted",
-      transcriptPath: archivePath,
       events: [
         {
           type: "message",
@@ -243,11 +219,9 @@ describe("buildSessionTranscriptEntry", () => {
     expect(entry.generatedByCronRun).toBe(true);
   });
 
-  it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
-    const archivePath = path.join(tmpDir, "cron-run.jsonl.reset.2026-02-16T22-26-33.000Z");
+  it("keeps cron-run transcripts opaque when session metadata preserves the cron key", async () => {
     const transcriptRef = seedTranscript({
       sessionId: "cron-run-reset",
-      transcriptPath: archivePath,
       events: [
         {
           type: "session-meta",

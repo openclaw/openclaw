@@ -282,7 +282,6 @@ describe("generateVoiceResponse", () => {
         agentId: "main",
         sandboxSessionKey: "agent:main:voice:15550001111",
         workspaceDir: "/tmp/openclaw/workspace/main",
-        sessionFile: expect.stringMatching(/^sqlite-transcript:\/\/main\/.+\.jsonl$/),
       }),
     );
   });
@@ -320,7 +319,6 @@ describe("generateVoiceResponse", () => {
         agentId: "voice",
         sandboxSessionKey: "agent:voice:voice:15550001111",
         workspaceDir: "/tmp/openclaw/workspace/voice",
-        sessionFile: expect.stringMatching(/^sqlite-transcript:\/\/voice\/.+\.jsonl$/),
       }),
     );
   });

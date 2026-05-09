@@ -48,7 +48,6 @@ export {
 } from "../../../../src/config/config.js";
 export type { OpenClawConfig } from "../../../../src/config/config.js";
 export { resolveStateDir } from "../../../../src/config/paths.js";
-export { isCompactionCheckpointTranscriptFileName } from "../../../../src/config/sessions/artifacts.js";
 export {
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,

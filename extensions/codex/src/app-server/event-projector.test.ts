@@ -184,18 +184,6 @@ function expectUsageFields(
   expect(record.total ?? record.totalTokens).toBe(expected.total);
 }
 
-function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
-  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
-  if (!Array.isArray(calls)) {
-    throw new Error(`Expected ${label} mock calls`);
-  }
-  const call = calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${callIndex + 1}`);
-  }
-  return call[argIndex];
-}
-
 function findAgentEvent(
   mock: unknown,
   params: { stream: string; phase?: string; itemId?: string; name?: string },
@@ -1671,37 +1659,26 @@ describe("CodexAppServerEventProjector", () => {
     );
     expect(openSpy).not.toHaveBeenCalled();
 
-    const beforePayload = requireRecord(
-      mockCallArg(beforeCompaction, 0, 0, "beforeCompaction"),
-      "before payload",
+    expect(beforeCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageCount: 1,
+        messages: [expect.objectContaining({ role: "assistant" })],
+      }),
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+      }),
     );
-    expect(beforePayload.messageCount).toBe(1);
-    expect(String(beforePayload.sessionFile)).toMatch(
-      /^sqlite-transcript:\/\/main\/session-1-.+\.jsonl$/u,
+    expect(afterCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageCount: 1,
+        compactedCount: -1,
+      }),
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+      }),
     );
-    const beforeMessages = requireArray(beforePayload.messages, "before messages");
-    expect(requireRecord(beforeMessages[0], "before message").role).toBe("assistant");
-    const beforeContext = requireRecord(
-      mockCallArg(beforeCompaction, 0, 1, "beforeCompaction"),
-      "before context",
-    );
-    expect(beforeContext.runId).toBe("run-1");
-    expect(beforeContext.sessionId).toBe("session-1");
-    const afterPayload = requireRecord(
-      mockCallArg(afterCompaction, 0, 0, "afterCompaction"),
-      "after payload",
-    );
-    expect(afterPayload.messageCount).toBe(1);
-    expect(afterPayload.compactedCount).toBe(-1);
-    expect(String(afterPayload.sessionFile)).toMatch(
-      /^sqlite-transcript:\/\/main\/session-1-.+\.jsonl$/u,
-    );
-    const afterContext = requireRecord(
-      mockCallArg(afterCompaction, 0, 1, "afterCompaction"),
-      "after context",
-    );
-    expect(afterContext.runId).toBe("run-1");
-    expect(afterContext.sessionId).toBe("session-1");
   });
 
   it("projects codex hook started and completed notifications into agent events", async () => {

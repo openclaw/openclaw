@@ -76,8 +76,8 @@ interfaces that still look like the old file world:
   JSON as possible write targets.
 - Agent-owned tables live in per-agent SQLite databases. The global DB keeps
   registry/control-plane rows; transcript identity is a canonical
-  `sqlite-transcript://<agent>/<session>.jsonl` locator derived from the
-  per-agent transcript rows.
+  `sqlite-transcript://<agent>/<session>` locator derived from the per-agent
+  transcript rows.
 - Doctor already imports several legacy files. The cleanup is to make that a
   single explicit migration implementation that doctor calls, with a durable
   migration report.
@@ -208,8 +208,8 @@ The remaining cleanup is mostly consolidation and deletion:
   SQLite; JSONL is now a legacy doctor input or in-memory export
   encoding, not a runtime state file.
 - Runtime session path resolution now canonicalizes active sessions to
-  `sqlite-transcript://<agent>/<session>.jsonl` locators. Legacy absolute JSONL
-  paths are doctor migration inputs instead of active runtime identity.
+  `sqlite-transcript://<agent>/<session>` locators. Legacy absolute JSONL paths
+  are doctor migration inputs instead of active runtime identity.
 - Gateway transcript-key lookup compares canonical transcript locators directly
   and no longer realpaths or stats transcript filenames.
 - Automatic compaction transcript rotation writes successor transcript rows
@@ -248,10 +248,9 @@ The remaining cleanup is mostly consolidation and deletion:
   SQLite transcript rows directly. Runtime callers pass canonical SQLite
   locators, not writable `.jsonl` paths.
 - Fresh runtime session rows now use virtual
-  `sqlite-transcript://<agent>/<session>.jsonl` locators instead of fake
+  `sqlite-transcript://<agent>/<session>` locators instead of fake
   `agents/<agentId>/sessions/*.jsonl` paths. The old path builders remain for
-  doctor imports, explicit debug/export artifacts, and path-compatibility
-  tests.
+  doctor imports and explicit debug/export artifacts.
 - Starting a new persisted transcript session now always allocates a fresh
   SQLite locator. The session manager no longer reuses a previous file-era
   transcript path as the identity for the new session.
@@ -283,9 +282,9 @@ The remaining cleanup is mostly consolidation and deletion:
   classification helpers; transcript filtering now derives from SQLite row
   metadata during entry construction.
 - Memory-host and QMD session-export tests default to virtual
-  `sqlite-transcript://<agent>/<session>.jsonl` locators. Old
+  `sqlite-transcript://<agent>/<session>` locators. Old
   `agents/<agentId>/sessions/*.jsonl` paths stay covered only where a test is
-  intentionally proving legacy path compatibility.
+  intentionally proving doctor/import/export compatibility.
 - QA-lab raw session inspection now uses `sessions.list` through the gateway
   instead of reading `agents/qa/sessions/sessions.json`; MSteams feedback
   appends directly to SQLite transcripts without fabricating a JSONL path.
