@@ -16,7 +16,7 @@ describe("ProxyConfigSchema", () => {
   });
 
   it("accepts an empty object", () => {
-    expect(ProxyConfigSchema.parse({})).toEqual({});
+    expect(ProxyConfigSchema.parse({})).toStrictEqual({});
   });
 
   it("accepts a full valid config", () => {
