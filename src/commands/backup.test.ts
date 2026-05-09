@@ -316,6 +316,44 @@ describe("backup commands", () => {
     }
   });
 
+  it("keeps volatile-skip notices out of json output", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-json-"));
+    try {
+      const runtime = createBackupTestRuntime();
+      await mockStateOnlyBackupPlan(stateDir);
+      tarCreateMock.mockImplementationOnce(
+        async (
+          options: { file: string; filter?: (entryPath: string) => boolean },
+          entryPaths: string[],
+        ) => {
+          const manifestPath = entryPaths[0];
+          const stateRoot = entryPaths[1];
+          expect(manifestPath).toBeDefined();
+          expect(stateRoot).toBeDefined();
+          expect(options.filter?.(manifestPath!)).toBe(true);
+          expect(
+            options.filter?.(path.join(stateRoot!, "agents", "main", "sessions", "s.jsonl")),
+          ).toBe(false);
+          await fs.writeFile(options.file, "archive-bytes", "utf8");
+        },
+      );
+
+      const result = await backupCreateCommand(runtime, {
+        output: backupDir,
+        json: true,
+      });
+
+      expect(result.skippedVolatileCount).toBe(1);
+      expect(runtime.log).toHaveBeenCalledTimes(1);
+      const payload = String(vi.mocked(runtime.log).mock.calls[0]?.[0] ?? "");
+      expect(payload).not.toContain("Backup skipped");
+      expect(JSON.parse(payload)).toMatchObject({ skippedVolatileCount: 1 });
+    } finally {
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects output paths that would be created inside a backed-up directory", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");

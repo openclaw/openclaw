@@ -129,7 +129,7 @@ describe("formatBackupCreateSummary", () => {
       "Included 1 path:",
       "- state: ~/.openclaw",
       "Created /tmp/openclaw-backup.tar.gz",
-      "Skipped 3 volatile files (live session/cron logs, sockets, pid/lock/tmp).",
+      "Skipped 3 volatile files (live sessions, cron logs, queues, sockets, pid/tmp).",
     ]);
   });
 });
@@ -286,6 +286,65 @@ describe("buildExtensionsNodeModulesFilter", () => {
 });
 
 describe("createBackupArchive", () => {
+  it("skips current live volatile state files while preserving workspace locks", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "split",
+        prefix: "openclaw-backup-volatile-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await state.writeConfig({
+          agents: {
+            list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+          },
+        });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.writeFile(path.join(state.workspaceDir, "Cargo.lock"), "workspace lock\n", "utf8");
+        await fs.writeFile(
+          path.join(state.workspaceDir, "pending.tmp"),
+          "workspace temp fixture\n",
+          "utf8",
+        );
+        await state.writeText("agents/main/sessions/live-session.jsonl", "session\n");
+        await state.writeText("sessions/legacy-session.jsonl", "legacy session\n");
+        await state.writeText("cron/runs/nightly.jsonl", "cron\n");
+        await state.writeText("logs/gateway.log", "log\n");
+        await state.writeJson("delivery-queue/message.json", { id: "delivery" });
+        await state.writeJson("session-delivery-queue/message.json", { id: "session-delivery" });
+        await state.writeText("tmp/staged.tmp", "tmp\n");
+        await state.writeText("gateway.pid", "123\n");
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: true,
+          nowMs: Date.UTC(2026, 4, 9, 8, 0, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+
+        expect(entries.some((entry) => entry.endsWith("/workspace/Cargo.lock"))).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/workspace/pending.tmp"))).toBe(true);
+        for (const suffix of [
+          "/state/agents/main/sessions/live-session.jsonl",
+          "/state/sessions/legacy-session.jsonl",
+          "/state/cron/runs/nightly.jsonl",
+          "/state/logs/gateway.log",
+          "/state/delivery-queue/message.json",
+          "/state/session-delivery-queue/message.json",
+          "/state/tmp/staged.tmp",
+          "/state/gateway.pid",
+        ]) {
+          expect(
+            entries.some((entry) => entry.endsWith(suffix)),
+            suffix,
+          ).toBe(false);
+        }
+        expect(result.skippedVolatileCount).toBe(8);
+      },
+    );
+  });
+
   it("omits installed plugin node_modules from the real archive while keeping plugin files", async () => {
     await withOpenClawTestState(
       {

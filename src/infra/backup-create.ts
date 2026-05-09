@@ -91,7 +91,7 @@ export type BackupCreateResult = {
   }>;
   /**
    * Count of files the archiver actively skipped because they matched the
-   * known-volatile filter (live session/cron logs, sockets, pid/lock/tmp).
+   * known-volatile filter (live sessions, cron logs, queues, sockets, pid/tmp).
    * Populated on real writes only; dry runs report 0.
    */
   skippedVolatileCount: number;
@@ -353,7 +353,7 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
       lines.push(
         `Skipped ${result.skippedVolatileCount} volatile file${
           result.skippedVolatileCount === 1 ? "" : "s"
-        } (live session/cron logs, sockets, pid/lock/tmp).`,
+        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
       );
     }
     if (result.verified) {
@@ -472,7 +472,7 @@ export async function createBackupArchive(
     const extensionsFilter = stateAsset
       ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath)
       : undefined;
-    const volatilePlan = { stateDirs: [plan.stateDir] };
+    const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
     const tarFilter = (entryPath: string): boolean => {
       // The manifest is staged in a tmp dir outside any state directory and
@@ -521,7 +521,7 @@ export async function createBackupArchive(
       opts.log?.(
         `Backup skipped ${skippedVolatileCount} volatile file${
           skippedVolatileCount === 1 ? "" : "s"
-        } (live session/cron logs, sockets, pid/lock/tmp).`,
+        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
       );
     }
     await publishTempArchive({ tempArchivePath, outputPath });
