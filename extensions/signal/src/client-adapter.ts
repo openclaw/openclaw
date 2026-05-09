@@ -32,7 +32,10 @@ export type SignalSseEvent = {
 export type { SignalRpcOptions } from "./client.js";
 
 // Cache auto-detected modes per baseUrl to avoid repeated network probes.
-const detectedModeCache = new Map<string, { mode: "native" | "container"; expiresAt: number }>();
+const detectedModeCache = new Map<
+  string,
+  { mode: "native" | "container"; expiresAt: number; receiveAccount?: string }
+>();
 
 function getConfiguredApiMode(): "native" | "container" | "auto" {
   const configured = getRuntimeConfig().channels?.signal?.apiMode;
@@ -46,31 +49,47 @@ function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function resolveAutoApiMode(baseUrl: string): Promise<"native" | "container"> {
+async function resolveAutoApiMode(
+  baseUrl: string,
+  options: { account?: string; requireContainerReceive?: boolean } = {},
+): Promise<"native" | "container"> {
   const cached = detectedModeCache.get(baseUrl);
   if (cached && cached.expiresAt > Date.now()) {
-    return cached.mode;
+    if (
+      cached.mode !== "container" ||
+      !options.requireContainerReceive ||
+      cached.receiveAccount === options.account
+    ) {
+      return cached.mode;
+    }
   }
-  const detected = await detectSignalApiMode(baseUrl);
-  detectedModeCache.set(baseUrl, { mode: detected, expiresAt: Date.now() + MODE_CACHE_TTL_MS });
+  const detected = await detectSignalApiMode(baseUrl, DEFAULT_TIMEOUT_MS, options);
+  detectedModeCache.set(baseUrl, {
+    mode: detected,
+    expiresAt: Date.now() + MODE_CACHE_TTL_MS,
+    ...(detected === "container" && options.requireContainerReceive && options.account
+      ? { receiveAccount: options.account }
+      : {}),
+  });
   return detected;
 }
 
-/**
- * Resolve the effective API mode for a given baseUrl + accountId.
- * Reads config internally; callers never need to pass apiMode.
- */
-async function resolveApiMode(
-  baseUrl: string,
-  _accountId?: string,
-): Promise<"native" | "container"> {
+async function resolveApiModeForOperation(params: {
+  baseUrl: string;
+  accountId?: string;
+  account?: string;
+  requireContainerReceive?: boolean;
+}): Promise<"native" | "container"> {
   const configured = getConfiguredApiMode();
 
   if (configured === "native" || configured === "container") {
     return configured;
   }
 
-  return resolveAutoApiMode(baseUrl);
+  return resolveAutoApiMode(params.baseUrl, {
+    account: params.account,
+    requireContainerReceive: params.requireContainerReceive,
+  });
 }
 
 /**
@@ -80,13 +99,21 @@ async function resolveApiMode(
 export async function detectSignalApiMode(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  options: { account?: string; requireContainerReceive?: boolean } = {},
 ): Promise<"native" | "container"> {
   const nativePromise = nativeCheck(baseUrl, timeoutMs).then((r) =>
     r.ok ? ("native" as const) : Promise.reject(new Error("native not ok")),
   );
-  const containerPromise = containerCheck(baseUrl, timeoutMs).then((r) =>
-    r.ok ? ("container" as const) : Promise.reject(new Error("container not ok")),
-  );
+  const containerAccount = options.requireContainerReceive ? options.account?.trim() : undefined;
+  const containerPromise = containerAccount
+    ? containerCheck(baseUrl, timeoutMs, containerAccount).then((r) =>
+        r.ok ? ("container" as const) : Promise.reject(new Error("container not ok")),
+      )
+    : options.requireContainerReceive
+      ? Promise.reject(new Error("container receive account required"))
+      : containerCheck(baseUrl, timeoutMs).then((r) =>
+          r.ok ? ("container" as const) : Promise.reject(new Error("container not ok")),
+        );
 
   try {
     return await Promise.any([nativePromise, containerPromise]);
@@ -104,7 +131,11 @@ export async function signalRpcRequest<T = unknown>(
   params: Record<string, unknown> | undefined,
   opts: SignalRpcOptions & { accountId?: string },
 ): Promise<T> {
-  const mode = await resolveApiMode(opts.baseUrl, opts.accountId);
+  const mode = await resolveApiModeForOperation({
+    baseUrl: opts.baseUrl,
+    accountId: opts.accountId,
+    account: typeof params?.account === "string" ? params.account : undefined,
+  });
   if (mode === "native") {
     return nativeRpcRequest<T>(method, params, opts);
   }
@@ -147,7 +178,12 @@ export async function streamSignalEvents(params: {
   onEvent: (event: SignalSseEvent) => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
-  const mode = await resolveApiMode(params.baseUrl, params.accountId);
+  const mode = await resolveApiModeForOperation({
+    baseUrl: params.baseUrl,
+    accountId: params.accountId,
+    account: params.account,
+    requireContainerReceive: true,
+  });
 
   if (mode === "container") {
     return streamContainerEvents({
@@ -181,7 +217,11 @@ export async function fetchAttachment(params: {
   groupId?: string;
   timeoutMs?: number;
 }): Promise<Buffer | null> {
-  const mode = await resolveApiMode(params.baseUrl, params.accountId);
+  const mode = await resolveApiModeForOperation({
+    baseUrl: params.baseUrl,
+    accountId: params.accountId,
+    account: params.account,
+  });
   if (mode === "container") {
     return containerFetchAttachment(params.attachmentId, {
       baseUrl: params.baseUrl,

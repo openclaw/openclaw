@@ -14,20 +14,66 @@ import {
 
 // spyOn approach works with vitest forks pool for cross-directory imports
 const mockFetch = vi.fn();
+const wsMockState = vi.hoisted(() => ({
+  behavior: "close" as "close" | "open" | "error" | "unexpected-response",
+  urls: [] as string[],
+}));
 
 beforeEach(() => {
   vi.spyOn(fetchModule, "resolveFetch").mockReturnValue(mockFetch as unknown as typeof fetch);
+  wsMockState.behavior = "close";
+  wsMockState.urls = [];
 });
 
 // Minimal WebSocket mock for connection-log assertions.
 vi.mock("ws", () => ({
   default: class MockWebSocket {
+    private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+
+    constructor(url: string | URL) {
+      wsMockState.urls.push(String(url));
+      setTimeout(() => {
+        if (wsMockState.behavior === "open") {
+          this.emit("open");
+        } else if (wsMockState.behavior === "error") {
+          this.emit("error", new Error("WebSocket failed"));
+        } else if (wsMockState.behavior === "unexpected-response") {
+          this.emit("unexpected-response", {}, { statusCode: 200, statusMessage: "OK" });
+        } else {
+          this.emit("close", 1000, Buffer.from("done"));
+        }
+      }, 0);
+    }
+
     on(event: string, callback: (...args: unknown[]) => void) {
-      if (event === "close") {
-        setTimeout(() => callback(1000, Buffer.from("done")), 0);
+      const handlers = this.handlers.get(event) ?? [];
+      handlers.push(callback);
+      this.handlers.set(event, handlers);
+      return this;
+    }
+
+    once(event: string, callback: (...args: unknown[]) => void) {
+      const onceCallback = (...args: unknown[]) => {
+        this.handlers.set(
+          event,
+          (this.handlers.get(event) ?? []).filter((handler) => handler !== onceCallback),
+        );
+        callback(...args);
+      };
+      return this.on(event, onceCallback);
+    }
+
+    close() {
+      this.emit("close", 1000, Buffer.from("done"));
+    }
+
+    terminate() {}
+
+    private emit(event: string, ...args: unknown[]) {
+      for (const handler of this.handlers.get(event) ?? []) {
+        handler(...args);
       }
     }
-    close() {}
   },
 }));
 
@@ -79,6 +125,29 @@ describe("containerCheck", () => {
 
     await containerCheck("localhost:8080");
     expect(mockFetch).toHaveBeenCalledWith("http://localhost:8080/v1/about", expect.anything());
+  });
+
+  it("validates the receive WebSocket when an account is provided", async () => {
+    wsMockState.behavior = "open";
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
+
+    expect(result).toEqual({ ok: true, status: 101, error: null });
+    expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
+  });
+
+  it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {
+    wsMockState.behavior = "unexpected-response";
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
+
+    expect(result).toEqual({
+      ok: false,
+      status: 200,
+      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+    });
   });
 });
 
@@ -474,6 +543,12 @@ describe("normalizeBaseUrl edge cases", () => {
 
     await containerCheck("http://192.168.1.100:9922");
     expect(mockFetch).toHaveBeenCalledWith("http://192.168.1.100:9922/v1/about", expect.anything());
+  });
+
+  it("rejects base URLs with credentials", async () => {
+    await expect(containerCheck("http://user:pass@localhost:8080")).rejects.toThrow(
+      "Signal base URL must not include credentials",
+    );
   });
 });
 

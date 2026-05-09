@@ -104,6 +104,31 @@ describe("detectSignalApiMode", () => {
     expect(mockNativeCheck).toHaveBeenCalledWith("http://localhost:8080", 5000);
     expect(mockContainerCheck).toHaveBeenCalledWith("http://localhost:8080", 5000);
   });
+
+  it("requires a working container receive WebSocket when requested", async () => {
+    mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
+    mockContainerCheck.mockResolvedValue({ ok: true, status: 101 });
+
+    const result = await detectSignalApiMode("http://localhost:8080", 5000, {
+      account: "+14259798283",
+      requireContainerReceive: true,
+    });
+
+    expect(result).toBe("container");
+    expect(mockContainerCheck).toHaveBeenCalledWith("http://localhost:8080", 5000, "+14259798283");
+  });
+
+  it("does not select container receive mode without an account", async () => {
+    mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
+
+    await expect(
+      detectSignalApiMode("http://localhost:8080", 5000, {
+        requireContainerReceive: true,
+      }),
+    ).rejects.toThrow("Signal API not reachable");
+
+    expect(mockContainerCheck).not.toHaveBeenCalled();
+  });
 });
 
 describe("signalRpcRequest", () => {
@@ -356,6 +381,38 @@ describe("streamSignalEvents", () => {
       expect.objectContaining({
         timeoutMs: 45000,
       }),
+    );
+  });
+
+  it("revalidates an unvalidated cached container mode before streaming", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
+    mockContainerCheck
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 200,
+        error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+      });
+
+    await expect(signalCheck("http://auto-cache.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+
+    await expect(
+      streamSignalEvents({
+        baseUrl: "http://auto-cache.local:8080",
+        account: "+14259798283",
+        onEvent: vi.fn(),
+      }),
+    ).rejects.toThrow("Signal API not reachable at http://auto-cache.local:8080");
+    expect(mockStreamContainerEvents).not.toHaveBeenCalled();
+    expect(mockContainerCheck).toHaveBeenLastCalledWith(
+      "http://auto-cache.local:8080",
+      10000,
+      "+14259798283",
     );
   });
 });

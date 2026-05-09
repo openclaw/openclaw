@@ -49,10 +49,16 @@ function normalizeBaseUrl(url: string): string {
   if (!trimmed) {
     throw new Error("Signal base URL is required");
   }
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed.replace(/\/+$/, "");
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  const parsed = new URL(withProtocol);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`Signal base URL unsupported protocol: ${parsed.protocol}`);
   }
-  return `http://${trimmed}`.replace(/\/+$/, "");
+  if (parsed.username || parsed.password) {
+    throw new Error("Signal base URL must not include credentials");
+  }
+  const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "");
+  return `${parsed.protocol}//${parsed.host}${pathname}`;
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
@@ -75,12 +81,17 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
 export async function containerCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  account?: string,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   const normalized = normalizeBaseUrl(baseUrl);
   try {
     const res = await fetchWithTimeout(`${normalized}/v1/about`, { method: "GET" }, timeoutMs);
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+    }
+    const receiveAccount = account?.trim();
+    if (receiveAccount) {
+      return await containerReceiveCheck(normalized, receiveAccount, timeoutMs);
     }
     return { ok: true, status: res.status, error: null };
   } catch (err) {
@@ -90,6 +101,62 @@ export async function containerCheck(
       error: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+function containerReceiveCheck(
+  normalizedBaseUrl: string,
+  account: string,
+  timeoutMs: number,
+): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
+  const wsUrl = `${normalizedBaseUrl.replace(/^http/, "ws")}/v1/receive/${encodeURIComponent(account)}`;
+  return new Promise((resolve) => {
+    let settled = false;
+    let ws: WebSocket | undefined;
+    const timer = setTimeout(() => {
+      settle({ ok: false, status: null, error: "Signal container receive WebSocket timed out" });
+      ws?.terminate();
+    }, timeoutMs);
+    timer.unref?.();
+    const settle = (result: { ok: boolean; status?: number | null; error?: string | null }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch (err) {
+      settle({
+        ok: false,
+        status: null,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    ws.once("open", () => {
+      settle({ ok: true, status: 101, error: null });
+      ws?.close();
+    });
+    ws.once("unexpected-response", (_request, response) => {
+      settle({
+        ok: false,
+        status: response.statusCode ?? null,
+        error: `Signal container receive endpoint did not upgrade to WebSocket (HTTP ${
+          response.statusCode ?? "unknown"
+        })`,
+      });
+      ws?.terminate();
+    });
+    ws.once("error", (err) => {
+      settle({
+        ok: false,
+        status: null,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  });
 }
 
 /**

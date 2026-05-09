@@ -223,11 +223,11 @@ The `apiMode` field controls which protocol OpenClaw uses:
 
 | Value         | Behavior                                                                             |
 | ------------- | ------------------------------------------------------------------------------------ |
-| `"auto"`      | (Default) Probes both endpoints and picks whichever responds first                   |
+| `"auto"`      | (Default) Probes both transports; streaming validates container WebSocket receive    |
 | `"native"`    | Force native signal-cli (JSON-RPC at `/api/v1/rpc`, SSE at `/api/v1/events`)         |
 | `"container"` | Force bbernhard container (REST at `/v2/send`, WebSocket at `/v1/receive/{account}`) |
 
-When `apiMode` is `"auto"`, OpenClaw caches the detected mode for 30 seconds to avoid repeated probes.
+When `apiMode` is `"auto"`, OpenClaw caches the detected mode for 30 seconds to avoid repeated probes. Container receive is only selected for streaming after `/v1/receive/{account}` upgrades to WebSocket, which requires `MODE=json-rpc`.
 
 ## Access control (DMs + groups)
 
