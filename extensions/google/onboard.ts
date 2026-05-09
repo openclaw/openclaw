@@ -3,7 +3,9 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
-export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
+// gemini-2.5-flash is the stable GA model; preview models share the Tier 1 free RPD=250
+// ceiling even on paid accounts, causing quota exhaustion under normal usage (#79670).
+export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-2.5-flash";
 
 export function applyGoogleGeminiModelDefault(cfg: OpenClawConfig): {
   next: OpenClawConfig;
