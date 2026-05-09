@@ -275,8 +275,11 @@ const result = resolveWindowsProviderAuth({
 });
 console.log(JSON.stringify(result));
 `;
-    expect(JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" }))).toMatchObject({
+    expect(JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" }))).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
+      apiKeyValue: "sk-openai",
+      authChoice: "openai-api-key",
+      authKeyFlag: "openai-api-key",
       modelId: "openai/gpt-5.5",
     });
 
@@ -287,7 +290,11 @@ console.log(JSON.stringify(result));
           OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL: "openai/custom-windows",
         }),
       ),
-    ).toMatchObject({
+    ).toEqual({
+      apiKeyEnv: "OPENAI_API_KEY",
+      apiKeyValue: "sk-openai",
+      authChoice: "openai-api-key",
+      authKeyFlag: "openai-api-key",
       modelId: "openai/custom-windows",
     });
   });
