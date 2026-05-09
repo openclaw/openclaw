@@ -168,7 +168,10 @@ describeLive("xai live", () => {
         message?: string;
       };
 
-      const errorMessage = [details.error, details.message].filter(Boolean).join(" ");
+      const errorMessage =
+        details.error && details.message
+          ? `${details.error} ${details.message}`
+          : details.error || details.message || "";
       if (isBillingErrorMessage(errorMessage)) {
         console.warn(`[xai:live] skip web-search: billing drift: ${errorMessage}`);
         return;
