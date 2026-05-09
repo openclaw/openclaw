@@ -13,7 +13,9 @@ import {
   expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
+import { savePersistedAuthProfileSecretsStore } from "../agents/auth-profiles/persisted.js";
 import { savePersistedAuthProfileState } from "../agents/auth-profiles/state.js";
+import type { AuthProfileSecretsStore } from "../agents/auth-profiles/types.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
   deleteSessionEntry,
@@ -757,28 +759,24 @@ describe("trigger handling", () => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       runEmbeddedPiAgentMock.mockReset();
       const authDir = join(home, ".openclaw", "agents", "main", "agent");
-      await fs.mkdir(authDir, { recursive: true });
-      await fs.writeFile(
-        join(authDir, "auth-profiles.json"),
-        JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              [TEST_PRIMARY_PROFILE_ID]: {
-                type: "oauth",
-                provider: "openai-codex",
-                access: "oauth-access-token-josh",
-              },
-              [TEST_SECONDARY_PROFILE_ID]: {
-                type: "oauth",
-                provider: "openai-codex",
-                access: "oauth-access-token",
-              },
+      savePersistedAuthProfileSecretsStore(
+        {
+          version: 1,
+          profiles: {
+            [TEST_PRIMARY_PROFILE_ID]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "oauth-access-token-josh",
+            },
+            [TEST_SECONDARY_PROFILE_ID]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "oauth-access-token",
             },
           },
-          null,
-          2,
-        ),
+        } as AuthProfileSecretsStore,
+        authDir,
+        { env: { ...process.env, OPENCLAW_STATE_DIR: join(home, ".openclaw") } },
       );
       savePersistedAuthProfileState(
         {
