@@ -143,14 +143,29 @@ describe("Dockerfile", () => {
   });
 
   it("keeps package manager patch files in runtime images", async () => {
-    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
     const pnpmWorkspace = YAML.parse(await readFile(pnpmWorkspacePath, "utf8")) as {
       patchedDependencies?: Record<string, string>;
     };
+    const saveSourceWorkspace = "cp pnpm-workspace.yaml /tmp/pnpm-workspace.source.yaml";
+    const usePruneWorkspace = "cp /tmp/pnpm-workspace.runtime.yaml pnpm-workspace.yaml";
+    const pruneProd = "CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod";
+    const restoreSourceWorkspace = "cp /tmp/pnpm-workspace.source.yaml pnpm-workspace.yaml";
+    const finalWorkspaceCopy =
+      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .";
 
     expect(Object.keys(pnpmWorkspace.patchedDependencies ?? {})).not.toHaveLength(0);
-    expect(dockerfile).toContain(
-      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .",
+    expect(dockerfile).toContain(saveSourceWorkspace);
+    expect(dockerfile).toContain(usePruneWorkspace);
+    expect(dockerfile).toContain(restoreSourceWorkspace);
+    expect(dockerfile).toContain(finalWorkspaceCopy);
+    expect(dockerfile.indexOf(saveSourceWorkspace)).toBeLessThan(
+      dockerfile.indexOf(usePruneWorkspace),
+    );
+    expect(dockerfile.indexOf(usePruneWorkspace)).toBeLessThan(dockerfile.indexOf(pruneProd));
+    expect(dockerfile.indexOf(pruneProd)).toBeLessThan(dockerfile.indexOf(restoreSourceWorkspace));
+    expect(dockerfile.indexOf(restoreSourceWorkspace)).toBeLessThan(
+      dockerfile.indexOf(finalWorkspaceCopy),
     );
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
