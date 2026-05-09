@@ -221,11 +221,15 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
     const allowlist = buildCrossOsReleaseSmokePluginAllowlist({ extensionId: "openai" });
 
-    expect(allowlist).toEqual(expect.arrayContaining(["openai", "acpx"]));
-    expect(allowlist).not.toContain("memory-core");
-    expect(allowlist).not.toContain("document-extract");
-    expect(allowlist).not.toContain("microsoft");
-    expect(allowlist).not.toContain("web-readability");
+    expect(allowlist).toEqual([
+      "openai",
+      "acpx",
+      "bonjour",
+      "browser",
+      "device-pair",
+      "phone-control",
+      "talk-voice",
+    ]);
   });
 
   it("can stage packaged-upgrade baselines without npm lifecycle scripts", () => {
@@ -354,28 +358,39 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
 
     expect(matrix.include).toHaveLength(12);
-    expect(matrix.include).toContainEqual(
-      expect.objectContaining({
-        os_id: "windows",
-        runner: "blacksmith-32vcpu-windows-2025",
-        suite: "dev-update",
-        lane: "upgrade",
-      }),
-    );
-    expect(matrix.include).toContainEqual(
-      expect.objectContaining({
-        os_id: "ubuntu",
-        suite: "installer-fresh",
-        lane: "fresh",
-      }),
-    );
-    expect(matrix.include).toContainEqual(
-      expect.objectContaining({
-        os_id: "macos",
-        runner: "blacksmith-6vcpu-macos-latest",
-        suite: "packaged-fresh",
-      }),
-    );
+    expect(
+      matrix.include.find((entry) => entry.os_id === "windows" && entry.suite === "dev-update"),
+    ).toEqual({
+      artifact_name: "windows",
+      display_name: "Windows",
+      lane: "upgrade",
+      os_id: "windows",
+      runner: "blacksmith-32vcpu-windows-2025",
+      suite: "dev-update",
+      suite_label: "dev update",
+    });
+    expect(
+      matrix.include.find((entry) => entry.os_id === "ubuntu" && entry.suite === "installer-fresh"),
+    ).toEqual({
+      artifact_name: "linux",
+      display_name: "Linux",
+      lane: "fresh",
+      os_id: "ubuntu",
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+      suite: "installer-fresh",
+      suite_label: "installer fresh",
+    });
+    expect(
+      matrix.include.find((entry) => entry.os_id === "macos" && entry.suite === "packaged-fresh"),
+    ).toEqual({
+      artifact_name: "macos",
+      display_name: "macOS",
+      lane: "fresh",
+      os_id: "macos",
+      runner: "blacksmith-6vcpu-macos-latest",
+      suite: "packaged-fresh",
+      suite_label: "packaged fresh",
+    });
   });
 
   it("keeps matrix resolution independent of package dependency imports", () => {
@@ -400,11 +415,15 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
 
     expect(matrix.include).toEqual([
-      expect.objectContaining({
-        os_id: "windows",
-        suite: "packaged-upgrade",
+      {
+        artifact_name: "windows",
+        display_name: "Windows",
         lane: "upgrade",
-      }),
+        os_id: "windows",
+        runner: "blacksmith-32vcpu-windows-2025",
+        suite: "packaged-upgrade",
+        suite_label: "packaged upgrade",
+      },
     ]);
   });
 
