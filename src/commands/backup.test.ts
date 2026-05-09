@@ -126,8 +126,7 @@ describe("backup commands", () => {
 
   function expectOnlyAssetKind(assets: Array<{ kind: string }>, kind: string) {
     expect(assets).toHaveLength(1);
-    const [asset] = assets;
-    expect(asset).toMatchObject({ kind });
+    expect(assets.map((asset) => asset.kind)).toStrictEqual([kind]);
   }
 
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
