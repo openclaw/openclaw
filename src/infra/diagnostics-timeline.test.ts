@@ -119,7 +119,7 @@ describe("diagnostics timeline", () => {
     ).toBe(false);
   });
 
-  it("writes JSONL diagnostic events with the stable envelope", async () => {
+  it("writes SQLite diagnostic events with the stable envelope", async () => {
     const { env } = await createTimelineEnv();
 
     emitDiagnosticsTimelineEvent(
