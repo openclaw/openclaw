@@ -62,7 +62,7 @@ import {
 } from "../model-auth.js";
 import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
+import { ensureOpenClawModelCatalog } from "../models-config.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
 import {
@@ -511,7 +511,7 @@ async function compactEmbeddedPiSessionDirectOnce(
   });
   const sessionAgentId = earlyAgentIds.sessionAgentId;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
-  await ensureOpenClawModelsJson(params.config, agentDir, {
+  await ensureOpenClawModelCatalog(params.config, agentDir, {
     workspaceDir: resolvedWorkspace,
   });
   const { model, error, authStorage, modelRegistry } = await resolveModelAsync(

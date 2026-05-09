@@ -148,7 +148,7 @@ const installRunEmbeddedMocks = () => {
     const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
     return {
       ...mod,
-      ensureOpenClawModelsJson: (...args: Parameters<typeof ensureOpenClawModelsJsonMock>) =>
+      ensureOpenClawModelCatalog: (...args: Parameters<typeof ensureOpenClawModelsJsonMock>) =>
         ensureOpenClawModelsJsonMock(...args),
     };
   });
@@ -337,7 +337,7 @@ function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
 }
 
 describe("runEmbeddedPiAgent", () => {
-  it("skips models.json generation when dynamic model resolution succeeds", async () => {
+  it("skips model catalog generation when dynamic model resolution succeeds", async () => {
     const sessionId = nextSessionId();
     const cfg = createEmbeddedPiRunnerOpenAiConfig([]);
     runEmbeddedAttemptMock.mockResolvedValueOnce(

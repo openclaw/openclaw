@@ -884,7 +884,7 @@ describe("getApiKeyForModel", () => {
       configuredApiKey: "config-demo-key",
     });
     expect(resolved.apiKey).toBe("config-demo-key");
-    expect(resolved.source).toBe("models.json");
+    expect(resolved.source).toBe("stored model catalog");
     expect(resolved.profileId).toBeUndefined();
   });
 
@@ -948,7 +948,7 @@ describe("getApiKeyForModel", () => {
       },
     });
     expect(resolved.apiKey).toBe("config-demo-key");
-    expect(resolved.source).toBe("models.json");
+    expect(resolved.source).toBe("stored model catalog");
     expect(resolved.profileId).toBeUndefined();
   });
 

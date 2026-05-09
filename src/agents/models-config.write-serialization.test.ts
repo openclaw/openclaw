@@ -4,18 +4,14 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
+import { readStoredModelsConfigRaw, writeStoredModelsConfigRaw } from "./models-config-store.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
   withModelsTempHome,
 } from "./models-config.e2e-harness.js";
-import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 const planOpenClawModelsJsonMock = vi.fn();
-const writePrivateStoreTextWriteMock = vi.fn();
-let actualPrivateFileStore:
-  | typeof import("../infra/private-file-store.js").privateFileStore
-  | undefined;
 
 installModelsConfigTestHooks();
 
@@ -96,29 +92,8 @@ function planParamsAt(callIndex: number): {
 
 beforeAll(async () => {
   vi.doMock("./models-config.plan.js", () => ({
-    planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
+    planOpenClawModelCatalog: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
   }));
-  vi.doMock("../infra/private-file-store.js", async () => {
-    const actual = await vi.importActual<typeof import("../infra/private-file-store.js")>(
-      "../infra/private-file-store.js",
-    );
-    actualPrivateFileStore = actual.privateFileStore;
-    return {
-      ...actual,
-      privateFileStore: (rootDir: string) => {
-        const store = actual.privateFileStore(rootDir);
-        return {
-          ...store,
-          writeText: (relativePath: string, content: string | Uint8Array) =>
-            writePrivateStoreTextWriteMock({
-              rootDir,
-              filePath: path.join(rootDir, relativePath),
-              content,
-            }),
-        };
-      },
-    };
-  });
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
   ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
     await import("../plugins/current-plugin-metadata-snapshot.js"));
@@ -126,19 +101,6 @@ beforeAll(async () => {
 
 beforeEach(() => {
   clearCurrentPluginMetadataSnapshot();
-  writePrivateStoreTextWriteMock
-    .mockReset()
-    .mockImplementation(
-      async (params: { filePath: string; rootDir: string; content: string | Uint8Array }) => {
-        if (!actualPrivateFileStore) {
-          throw new Error("private file store mock not initialized");
-        }
-        return await actualPrivateFileStore(params.rootDir).writeText(
-          path.basename(params.filePath),
-          params.content,
-        );
-      },
-    );
   planOpenClawModelsJsonMock
     .mockReset()
     .mockImplementation(async (params: { cfg?: typeof CUSTOM_PROXY_MODELS_CONFIG }) => ({
@@ -176,7 +138,7 @@ describe("models-config write serialization", () => {
     });
   });
 
-  it("writes implicit models.json into the configured default agent dir", async () => {
+  it("writes implicit model catalog config into SQLite for the configured default agent dir", async () => {
     await withModelsTempHome(async (home) => {
       const cfg = {
         agents: {
@@ -187,7 +149,8 @@ describe("models-config write serialization", () => {
       const result = await ensureOpenClawModelsJson(cfg);
 
       expect(result.agentDir).toBe(path.join(home, ".openclaw", "agents", "ops", "agent"));
-      await expect(fs.access(path.join(result.agentDir, "models.json"))).resolves.toBeUndefined();
+      expect(readStoredModelsConfigRaw(result.agentDir)?.raw).toContain('"providers"');
+      await expectMissingPath(fs.access(path.join(result.agentDir, "models.json")));
       await expectMissingPath(
         fs.access(path.join(home, ".openclaw", "agents", "main", "agent", "models.json")),
       );
@@ -214,7 +177,7 @@ describe("models-config write serialization", () => {
     });
   });
 
-  it("keeps the ready cache warm after models.json is written", async () => {
+  it("keeps the ready cache warm after the model catalog is written", async () => {
     await withModelsTempHome(async () => {
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
@@ -223,15 +186,16 @@ describe("models-config write serialization", () => {
     });
   });
 
-  it("invalidates the ready cache when models.json changes externally", async () => {
+  it("invalidates the ready cache when stored model catalog config changes externally", async () => {
     await withModelsTempHome(async () => {
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
-      const modelPath = path.join(resolveDefaultAgentDir({}), "models.json");
-      await fs.writeFile(modelPath, `${JSON.stringify({ external: true })}\n`, "utf8");
-      const externalMtime = new Date(Date.now() + 2000);
-      await fs.utimes(modelPath, externalMtime, externalMtime);
+      writeStoredModelsConfigRaw(
+        resolveDefaultAgentDir({}),
+        `${JSON.stringify({ providers: { external: { models: [] } } })}\n`,
+        { now: () => Date.now() + 2_000 },
+      );
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
       expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
@@ -254,7 +218,7 @@ describe("models-config write serialization", () => {
     });
   });
 
-  it("serializes concurrent models.json writes to avoid overlap", async () => {
+  it("serializes concurrent model catalog config writes to avoid overlap", async () => {
     await withModelsTempHome(async () => {
       const first = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
       const second = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
@@ -266,8 +230,8 @@ describe("models-config write serialization", () => {
       firstModel.name = "Proxy A";
       secondModel.name = "Proxy B with longer name";
 
-      let inFlightWrites = 0;
-      let maxInFlightWrites = 0;
+      let inFlightPlans = 0;
+      let maxInFlightPlans = 0;
       let markFirstModelsWriteStarted: () => void = () => {};
       const firstModelsWriteStarted = new Promise<void>((resolve) => {
         markFirstModelsWriteStarted = resolve;
@@ -276,33 +240,25 @@ describe("models-config write serialization", () => {
       const modelsWritesCanContinue = new Promise<void>((resolve) => {
         releaseModelsWrites = resolve;
       });
-      let modelsWriteCount = 0;
-      writePrivateStoreTextWriteMock.mockImplementation(
-        async (params: { filePath: string; rootDir: string; content: string | Uint8Array }) => {
-          const isModelsWrite = path.basename(params.filePath) === "models.json";
-          if (isModelsWrite) {
-            modelsWriteCount += 1;
-            inFlightWrites += 1;
-            if (inFlightWrites > maxInFlightWrites) {
-              maxInFlightWrites = inFlightWrites;
-            }
-            if (modelsWriteCount === 1) {
-              markFirstModelsWriteStarted();
-            }
+      let planCount = 0;
+      planOpenClawModelsJsonMock.mockImplementation(
+        async (params: { cfg?: typeof CUSTOM_PROXY_MODELS_CONFIG }) => {
+          planCount += 1;
+          inFlightPlans += 1;
+          if (inFlightPlans > maxInFlightPlans) {
+            maxInFlightPlans = inFlightPlans;
+          }
+          if (planCount === 1) {
+            markFirstModelsWriteStarted();
             await modelsWritesCanContinue;
           }
           try {
-            if (!actualPrivateFileStore) {
-              throw new Error("private file store mock not initialized");
-            }
-            return await actualPrivateFileStore(params.rootDir).writeText(
-              path.basename(params.filePath),
-              params.content,
-            );
+            return {
+              action: "write",
+              contents: `${JSON.stringify({ providers: params.cfg?.models?.providers ?? {} }, null, 2)}\n`,
+            };
           } finally {
-            if (isModelsWrite) {
-              inFlightWrites -= 1;
-            }
+            inFlightPlans -= 1;
           }
         },
       );
@@ -316,10 +272,14 @@ describe("models-config write serialization", () => {
       releaseModelsWrites();
       await writes;
 
-      expect(maxInFlightWrites).toBe(1);
-      const parsed = await readGeneratedModelsJson<{
+      expect(maxInFlightPlans).toBe(1);
+      const stored = readStoredModelsConfigRaw(resolveDefaultAgentDir({}));
+      if (!stored) {
+        throw new Error("expected stored model catalog config");
+      }
+      const parsed = JSON.parse(stored.raw) as {
         providers: { "custom-proxy"?: { models?: Array<{ name?: string }> } };
-      }>();
+      };
       expect(["Proxy A", "Proxy B with longer name"]).toContain(
         parsed.providers["custom-proxy"]?.models?.[0]?.name,
       );

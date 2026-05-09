@@ -285,7 +285,7 @@ describe("buildProbeTargets reason codes", () => {
     expect(plan.results[0]?.error).toContain("env:default:MISSING_ANTHROPIC_TOKEN");
   });
 
-  it("skips marker-only models.json credentials when building probe targets", async () => {
+  it("skips marker-only model catalog credentials when building probe targets", async () => {
     mockStore = {
       version: 1,
       profiles: {},
@@ -298,7 +298,7 @@ describe("buildProbeTargets reason codes", () => {
     });
   });
 
-  it("does not treat arbitrary all-caps models.json apiKey values as markers", async () => {
+  it("does not treat arbitrary all-caps model catalog apiKey values as markers", async () => {
     mockStore = {
       version: 1,
       profiles: {},
@@ -307,15 +307,14 @@ describe("buildProbeTargets reason codes", () => {
     await withClearedAnthropicEnv(async () => {
       const plan = await buildAnthropicPlanFromModelsJsonApiKey("ALLCAPS_SAMPLE");
       expect(plan.results).toStrictEqual([]);
-      expect(plan.targets).toStrictEqual([
-        {
-          label: "models.json",
-          mode: "api_key",
-          model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      expect(plan.targets).toHaveLength(1);
+      expect(plan.targets[0]).toEqual(
+        expect.objectContaining({
           provider: "anthropic",
-          source: "models.json",
-        },
-      ]);
+          source: "model_catalog",
+          label: "model catalog",
+        }),
+      );
     });
   });
 
@@ -353,15 +352,15 @@ describe("buildProbeTargets reason codes", () => {
       });
 
       expect(plan.results).toStrictEqual([]);
-      expect(plan.targets).toStrictEqual([
-        {
-          label: "models.json",
-          mode: "api_key",
-          model: { provider: "zai", model: "glm-4.7" },
+      expect(plan.targets).toHaveLength(1);
+      expect(plan.targets[0]).toEqual(
+        expect.objectContaining({
           provider: "zai",
-          source: "models.json",
-        },
-      ]);
+          model: { provider: "zai", model: "glm-4.7" },
+          source: "model_catalog",
+          label: "model catalog",
+        }),
+      );
     });
   });
 

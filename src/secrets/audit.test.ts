@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { writeStoredModelsConfigRaw } from "../agents/models-config-store.js";
 import { runSecretsAudit } from "./audit.js";
 
 type AuditFixture = {
@@ -10,6 +11,7 @@ type AuditFixture = {
   configPath: string;
   authStorePath: string;
   authJsonPath: string;
+  agentDir: string;
   modelsPath: string;
   envPath: string;
   env: NodeJS.ProcessEnv;
@@ -130,7 +132,8 @@ async function createAuditFixture(): Promise<AuditFixture> {
   const configPath = path.join(stateDir, "openclaw.json");
   const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
   const authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
-  const modelsPath = path.join(stateDir, "agents", "main", "agent", "models.json");
+  const agentDir = path.dirname(authStorePath);
+  const modelsPath = `stored model catalog: ${agentDir}`;
   const envPath = path.join(stateDir, ".env");
 
   await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -142,6 +145,7 @@ async function createAuditFixture(): Promise<AuditFixture> {
     configPath,
     authStorePath,
     authJsonPath,
+    agentDir,
     modelsPath,
     envPath,
     env: {
@@ -179,16 +183,20 @@ async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
     version: 1,
     profiles: Object.fromEntries(seededProfiles),
   });
-  await writeJsonFile(fixture.modelsPath, {
-    providers: {
-      openai: {
-        baseUrl: "https://api.openai.com/v1",
-        api: "openai-completions",
-        apiKey: OPENAI_API_KEY_MARKER,
-        models: [{ id: "gpt-5", name: "gpt-5" }],
+  writeStoredModelsConfigRaw(
+    fixture.agentDir,
+    `${JSON.stringify({
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: OPENAI_API_KEY_MARKER,
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
       },
-    },
-  });
+    })}\n`,
+    { env: fixture.env },
+  );
   await fs.writeFile(
     fixture.envPath,
     `${OPENAI_API_KEY_MARKER}=sk-openai-plaintext\n`, // pragma: allowlist secret
@@ -205,17 +213,21 @@ describe("secrets audit", () => {
       headers: Record<string, unknown>;
     }> = {},
   ) {
-    await writeJsonFile(fixture.modelsPath, {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions",
-          apiKey: OPENAI_API_KEY_MARKER,
-          models: [{ id: "gpt-5", name: "gpt-5" }],
-          ...overrides,
+    writeStoredModelsConfigRaw(
+      fixture.agentDir,
+      `${JSON.stringify({
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: OPENAI_API_KEY_MARKER,
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            ...overrides,
+          },
         },
-      },
-    });
+      })}\n`,
+      { env: fixture.env },
+    );
   }
 
   function expectModelsFinding(
@@ -419,7 +431,7 @@ describe("secrets audit", () => {
     expect(callCount).toBe(1);
   });
 
-  it("scans agent models.json files for plaintext provider apiKey values", async () => {
+  it("scans stored model catalogs for plaintext provider apiKey values", async () => {
     await writeModelsProvider({ apiKey: "sk-models-plaintext" }); // pragma: allowlist secret
 
     const report = await runSecretsAudit({ env: fixture.env });
@@ -430,7 +442,7 @@ describe("secrets audit", () => {
     expect(report.filesScanned).toContain(fixture.modelsPath);
   });
 
-  it("scans agent models.json files for plaintext provider header values", async () => {
+  it("scans stored model catalogs for plaintext provider header values", async () => {
     await writeModelsProvider({
       headers: {
         Authorization: "Bearer sk-header-plaintext", // pragma: allowlist secret
@@ -444,7 +456,7 @@ describe("secrets audit", () => {
     });
   });
 
-  it("does not flag non-sensitive routing headers in models.json", async () => {
+  it("does not flag non-sensitive routing headers in stored model catalogs", async () => {
     await writeModelsProvider({
       headers: {
         "X-Proxy-Region": "us-west",
@@ -459,7 +471,7 @@ describe("secrets audit", () => {
     });
   });
 
-  it("does not flag models.json marker values as plaintext", async () => {
+  it("does not flag stored model catalog marker values as plaintext", async () => {
     await writeModelsProvider();
 
     const report = await runSecretsAudit({ env: fixture.env });
@@ -470,7 +482,7 @@ describe("secrets audit", () => {
     });
   });
 
-  it("flags arbitrary all-caps models.json apiKey values as plaintext", async () => {
+  it("flags arbitrary all-caps stored model catalog apiKey values as plaintext", async () => {
     await writeModelsProvider({ apiKey: "ALLCAPS_SAMPLE" }); // pragma: allowlist secret
 
     const report = await runSecretsAudit({ env: fixture.env });
@@ -480,7 +492,7 @@ describe("secrets audit", () => {
     });
   });
 
-  it("does not flag models.json header marker values as plaintext", async () => {
+  it("does not flag stored model catalog header marker values as plaintext", async () => {
     await writeModelsProvider({
       headers: {
         Authorization: "secretref-env:OPENAI_HEADER_TOKEN", // pragma: allowlist secret
@@ -501,7 +513,7 @@ describe("secrets audit", () => {
     });
   });
 
-  it("reports unresolved models.json SecretRef objects in provider headers", async () => {
+  it("reports unresolved stored model catalog SecretRef objects in provider headers", async () => {
     await writeModelsProvider({
       headers: {
         Authorization: {
@@ -519,50 +531,51 @@ describe("secrets audit", () => {
     });
   });
 
-  it("reports malformed models.json as unresolved findings", async () => {
-    await fs.writeFile(fixture.modelsPath, "{bad-json", "utf8");
+  it("reports malformed stored model catalog JSON as unresolved findings", async () => {
+    writeStoredModelsConfigRaw(fixture.agentDir, "{bad-json", { env: fixture.env });
     const report = await runSecretsAudit({ env: fixture.env });
     expectModelsFinding(report, { code: "REF_UNRESOLVED" });
   });
 
-  it("reports non-regular models.json files as unresolved findings", async () => {
-    await fs.rm(fixture.modelsPath, { force: true });
-    await fs.mkdir(fixture.modelsPath, { recursive: true });
-    const report = await runSecretsAudit({ env: fixture.env });
-    expectModelsFinding(report, { code: "REF_UNRESOLVED" });
-  });
-
-  it("reports oversized models.json as unresolved findings", async () => {
+  it("reports oversized stored model catalog JSON as unresolved findings", async () => {
     const oversizedApiKey = "a".repeat(MAX_AUDIT_MODELS_JSON_BYTES + 256);
-    await writeJsonFile(fixture.modelsPath, {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions",
-          apiKey: oversizedApiKey,
-          models: [{ id: "gpt-5", name: "gpt-5" }],
+    writeStoredModelsConfigRaw(
+      fixture.agentDir,
+      `${JSON.stringify({
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: oversizedApiKey,
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
         },
-      },
-    });
+      })}\n`,
+      { env: fixture.env },
+    );
 
     const report = await runSecretsAudit({ env: fixture.env });
     expectModelsFinding(report, { code: "REF_UNRESOLVED" });
   });
 
-  it("scans active agent-dir override models.json even when outside state dir", async () => {
+  it("scans active agent-dir override model catalog even when outside state dir", async () => {
     const externalAgentDir = path.join(fixture.rootDir, "external-agent");
-    const externalModelsPath = path.join(externalAgentDir, "models.json");
+    const externalModelsPath = `stored model catalog: ${externalAgentDir}`;
     await fs.mkdir(externalAgentDir, { recursive: true });
-    await writeJsonFile(externalModelsPath, {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions",
-          apiKey: "sk-external-plaintext", // pragma: allowlist secret
-          models: [{ id: "gpt-5", name: "gpt-5" }],
+    writeStoredModelsConfigRaw(
+      externalAgentDir,
+      `${JSON.stringify({
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-external-plaintext", // pragma: allowlist secret
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
         },
-      },
-    });
+      })}\n`,
+      { env: fixture.env },
+    );
 
     const report = await runSecretsAudit({
       env: {

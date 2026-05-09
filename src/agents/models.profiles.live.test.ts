@@ -40,7 +40,7 @@ import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureOpenClawModelCatalog } from "./models-config.js";
 import { type Api, completeSimple, type Model } from "./pi-ai-contract.js";
 import {
   isCloudflareOrHtmlErrorPage,
@@ -69,7 +69,7 @@ const DEFAULT_LIVE_MODEL_CONCURRENCY = 20;
 const LIVE_MODEL_CONCURRENCY = resolveLiveModelConcurrency(
   process.env.OPENCLAW_LIVE_MODEL_CONCURRENCY,
 );
-const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs(
+const LIVE_MODEL_CATALOG_TIMEOUT_MS = resolveLiveModelCatalogTimeoutMs(
   process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
 );
 const LIVE_FILE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_FILE_PROBE_ENV);
@@ -421,20 +421,20 @@ describe("resolveLiveModelConcurrency", () => {
   });
 });
 
-function resolveLiveModelsJsonTimeoutMs(
-  modelsJsonTimeoutRaw?: string,
+function resolveLiveModelCatalogTimeoutMs(
+  modelCatalogTimeoutRaw?: string,
   setupTimeoutMs = LIVE_SETUP_TIMEOUT_MS,
 ): number {
-  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 120_000));
+  return Math.max(setupTimeoutMs, toInt(modelCatalogTimeoutRaw, 120_000));
 }
 
-describe("resolveLiveModelsJsonTimeoutMs", () => {
-  it("defaults models.json preparation to a longer setup timeout", () => {
-    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(120_000);
+describe("resolveLiveModelCatalogTimeoutMs", () => {
+  it("defaults model catalog preparation to a longer setup timeout", () => {
+    expect(resolveLiveModelCatalogTimeoutMs(undefined, 45_000)).toBe(120_000);
   });
 
   it("never goes below the shared live setup timeout", () => {
-    expect(resolveLiveModelsJsonTimeoutMs("30000", 45_000)).toBe(45_000);
+    expect(resolveLiveModelCatalogTimeoutMs("30000", 45_000)).toBe(45_000);
   });
 });
 
@@ -776,11 +776,11 @@ describeLive("live models (profile keys)", () => {
         Promise.resolve().then(() => getRuntimeConfig()),
         "[live-models] load config",
       );
-      logProgress("[live-models] preparing models.json");
+      logProgress("[live-models] preparing model catalog");
       await withLiveStageTimeout(
-        ensureOpenClawModelsJson(cfg),
-        "[live-models] prepare models.json",
-        LIVE_MODELS_JSON_TIMEOUT_MS,
+        ensureOpenClawModelCatalog(cfg),
+        "[live-models] prepare model catalog",
+        LIVE_MODEL_CATALOG_TIMEOUT_MS,
       );
       if (!DIRECT_ENABLED) {
         logProgress(

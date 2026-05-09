@@ -1243,7 +1243,9 @@ describe("session_status tool", () => {
       },
     };
     resolveUsableCustomProviderApiKeyMock.mockImplementation((params) =>
-      params?.provider === "qwen-dashscope" ? { apiKey: "sk-test", source: "models.json" } : null,
+      params?.provider === "qwen-dashscope"
+        ? { apiKey: "sk-test", source: "stored model catalog" }
+        : null,
     );
 
     const tool = getSessionStatusTool();
@@ -1253,7 +1255,7 @@ describe("session_status tool", () => {
     const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
     const agent = statusArg.agent as Record<string, unknown>;
     expectRecordFields(agent.model, { primary: "qwen-dashscope/qwen-max" });
-    expect(statusArg.modelAuth).toBe("api-key (models.json)");
+    expect(statusArg.modelAuth).toBe("api-key (stored model catalog)");
   });
 
   it("preserves an unknown runtime provider in the selected status card model", async () => {

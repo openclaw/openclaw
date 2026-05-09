@@ -217,7 +217,7 @@ export const resolveAuthLabel = async (
   if (customKey) {
     return {
       label: maskApiKey(customKey),
-      source: mode === "verbose" ? `models.json: ${formatPath(modelsPath)}` : "",
+      source: mode === "verbose" ? `stored model catalog: ${formatPath(modelsPath)}` : "",
     };
   }
   return { label: "missing", source: "missing" };

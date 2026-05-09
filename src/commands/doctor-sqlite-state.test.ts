@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readStoredModelsConfigRaw } from "../agents/models-config-store.js";
 import { loadCommitmentStore } from "../commitments/store.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { loadDeviceAuthStore } from "../infra/device-auth-store.js";
@@ -351,6 +352,19 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         );
         const agentDir = path.join(stateDir, "agents", "main", "agent");
         await fs.mkdir(agentDir, { recursive: true });
+        await fs.writeFile(
+          path.join(agentDir, "models.json"),
+          `${JSON.stringify({
+            providers: {
+              "custom-proxy": {
+                baseUrl: "https://models.example/v1",
+                apiKey: "CUSTOM_PROXY_API_KEY",
+                models: [{ id: "custom", name: "Custom" }],
+              },
+            },
+          })}\n`,
+          "utf8",
+        );
         const authStatePath = path.join(agentDir, "auth-state.json");
         await fs.writeFile(
           authStatePath,
@@ -570,6 +584,10 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           },
         );
         await expect(fs.stat(authStatePath)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(readStoredModelsConfigRaw(agentDir, { env })?.raw).toContain('"custom-proxy"');
+        await expect(fs.stat(path.join(agentDir, "models.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
         expect(
           readOpenClawStateKvJson("openrouter_model_capabilities", "models", { env }),
         ).toMatchObject({

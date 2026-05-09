@@ -51,6 +51,10 @@ import {
   legacyMemoryCoreDreamingStateFilesExist,
 } from "./doctor/legacy/memory-core-dreaming.js";
 import {
+  importLegacyModelsConfigFilesToSqlite,
+  legacyModelsConfigFilesExist,
+} from "./doctor/legacy/models-config.js";
+import {
   importLegacyNodeHostConfigFileToSqlite,
   legacyNodeHostConfigFileExists,
 } from "./doctor/legacy/node-host-config.js";
@@ -126,6 +130,7 @@ type LegacyStateProbe = {
   authProfileStateAgentDirs: string[];
   openRouterModelCache: boolean;
   memoryCoreDreamingState: boolean;
+  modelsConfig: boolean;
 };
 
 function resolveLegacyConfigHealthPath(baseDir: string): string {
@@ -207,6 +212,7 @@ async function probeLegacyRuntimeStateFiles(params: {
     memoryCoreDreamingState: params.cfg
       ? await legacyMemoryCoreDreamingStateFilesExist({ cfg: params.cfg })
       : false,
+    modelsConfig: legacyModelsConfigFilesExist({ env, cfg: params.cfg }),
   };
 }
 
@@ -227,7 +233,7 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
   }
   if (!params.prompter.shouldRepair) {
     note(
-      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, exec approvals, channel pairing, node pairing, node host config, push, media, plugin binding approvals, installed plugin index, subagent, TUI, ACP event ledger, TTS prefs, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
+      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, exec approvals, channel pairing, node pairing, node host config, push, media, plugin binding approvals, installed plugin index, subagent, TUI, ACP event ledger, TTS prefs, Voice Wake, memory-core dreaming checkpoints, auth routing, model catalog config, OpenRouter cache, and update-check state into SQLite.",
       "SQLite state",
     );
     return;
@@ -464,6 +470,14 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
         changes.push(
           `- Imported ${result.models} OpenRouter model cache entr${result.models === 1 ? "y" : "ies"} into SQLite.`,
         );
+      }
+    });
+  }
+  if (probe.modelsConfig) {
+    await runImport("Model catalog config", () => {
+      const result = importLegacyModelsConfigFilesToSqlite({ env, cfg: params.cfg });
+      if (result.imported > 0) {
+        changes.push(`- Imported ${result.imported} model catalog config file(s) into SQLite.`);
       }
     });
   }

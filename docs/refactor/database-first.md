@@ -87,6 +87,9 @@ proceed with these assumptions:
   file-backed: runtime reads canonical `auth-profiles.json` only. Retired
   per-agent `auth.json` and shared `credentials/oauth.json` files are doctor
   migration inputs, then removed after import.
+- Generated model catalog state is database-backed. Runtime code must not write
+  `agents/<agentId>/agent/models.json`; existing `models.json` files are legacy
+  doctor inputs and are removed after import into the global SQLite KV store.
 - Runtime must not migrate, normalize, or bridge transcript locators. Active
   transcript identity is `{agentId, sessionId}` in SQLite. File paths are
   legacy doctor inputs only, and `sqlite-transcript://...` must disappear from
@@ -729,6 +732,11 @@ sessionId}` and session key context.
 - `migration_sources` records each imported legacy file source with hash, size,
   record count, target table, run id, status, and source-removal state.
 - `backup_runs` records backup archive paths, status, and JSON manifests.
+- Generated model catalog config is stored in the global SQLite KV store keyed
+  by agent directory. Runtime callers use `ensureOpenClawModelCatalog`; the old
+  `ensureOpenClawModelsJson` export is a compatibility alias only. The
+  implementation writes SQLite and the embedded PI registry is hydrated from
+  that stored payload without creating a `models.json` file.
 - `check:database-first-legacy-stores` fails new runtime source that pairs
   legacy store names with write-style filesystem APIs. It also fails runtime
   source that reintroduces transcript bridge contracts such as

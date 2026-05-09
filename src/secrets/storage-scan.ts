@@ -45,15 +45,15 @@ function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = proces
   return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
 }
 
-export function listAgentModelsJsonPaths(
+export function listAgentModelCatalogDirs(
   config: OpenClawConfig,
   stateDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const resolvedStateDir = resolveUserPath(stateDir);
-  const paths = new Set<string>();
-  paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
-  paths.add(path.join(resolveActiveAgentDir(stateDir, env), "models.json"));
+  const dirs = new Set<string>();
+  dirs.add(path.join(resolvedStateDir, "agents", "main", "agent"));
+  dirs.add(resolveActiveAgentDir(stateDir, env));
 
   const agentsRoot = path.join(resolvedStateDir, "agents");
   if (fs.existsSync(agentsRoot)) {
@@ -61,20 +61,20 @@ export function listAgentModelsJsonPaths(
       if (!entry.isDirectory()) {
         continue;
       }
-      paths.add(path.join(agentsRoot, entry.name, "agent", "models.json"));
+      dirs.add(path.join(agentsRoot, entry.name, "agent"));
     }
   }
 
   for (const agentId of listAgentIds(config)) {
     if (agentId === "main") {
-      paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
+      dirs.add(path.join(resolvedStateDir, "agents", "main", "agent"));
       continue;
     }
     const agentDir = resolveAgentDir(config, agentId);
-    paths.add(path.join(resolveUserPath(agentDir), "models.json"));
+    dirs.add(resolveUserPath(agentDir));
   }
 
-  return [...paths];
+  return [...dirs];
 }
 
 export type ReadJsonObjectOptions = {

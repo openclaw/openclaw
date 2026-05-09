@@ -158,7 +158,7 @@ describe("models-config", () => {
     expect(observedTimeoutMs).toBe(5000);
   });
 
-  it("threads plugin metadata snapshots through models.json planning", async () => {
+  it("threads plugin metadata snapshots through model catalog planning", async () => {
     const pluginMetadataSnapshot = {
       index: { plugins: [] },
       manifestRegistry: { plugins: [], diagnostics: [] },
@@ -261,7 +261,7 @@ describe("models-config", () => {
     });
   });
 
-  it("does not overwrite already-set host env vars while ensuring models.json", async () => {
+  it("does not overwrite already-set host env vars while ensuring the model catalog", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       process.env.OPENROUTER_API_KEY = "from-host"; // pragma: allowlist secret
       process.env[TEST_ENV_VAR] = "from-host";

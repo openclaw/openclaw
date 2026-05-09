@@ -64,7 +64,7 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
+import { ensureOpenClawModelCatalog } from "../models-config.js";
 import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
@@ -691,8 +691,8 @@ export async function runEmbeddedPiAgent(
         params.config,
         {
           // Plugin dynamic model hooks can resolve explicit model refs without
-          // first generating PI models.json. This keeps one-shot model runs from
-          // blocking on unrelated provider discovery.
+          // first building the PI model catalog. This keeps one-shot model runs
+          // from blocking on unrelated provider discovery.
           skipPiDiscovery: true,
           workspaceDir: resolvedWorkspace,
         },
@@ -701,7 +701,7 @@ export async function runEmbeddedPiAgent(
         dynamicModelResolution.model || pluginHarnessOwnsTransport
           ? dynamicModelResolution
           : await (async () => {
-              await ensureOpenClawModelsJson(params.config, agentDir, {
+              await ensureOpenClawModelCatalog(params.config, agentDir, {
                 workspaceDir: resolvedWorkspace,
               });
               return await resolveModelAsync(provider, modelId, agentDir, params.config, {

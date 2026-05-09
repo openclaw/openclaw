@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
+import { readStoredModelsConfigRaw } from "./models-config-store.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -98,6 +98,16 @@ type ParsedProviderConfig = {
   models?: Array<{ id: string }>;
 };
 
+function readStoredProviderConfig(agentDir = resolveDefaultAgentDir({})): {
+  providers: Record<string, ParsedProviderConfig>;
+} {
+  const stored = readStoredModelsConfigRaw(agentDir);
+  if (!stored) {
+    throw new Error(`expected stored model catalog for ${agentDir}`);
+  }
+  return JSON.parse(stored.raw) as { providers: Record<string, ParsedProviderConfig> };
+}
+
 async function runEnvProviderCase(params: {
   envVar: "MINIMAX_API_KEY" | "SYNTHETIC_API_KEY";
   envValue: string;
@@ -109,9 +119,7 @@ async function runEnvProviderCase(params: {
   try {
     await ensureOpenClawModelsJson({});
 
-    const modelPath = path.join(resolveDefaultAgentDir({}), "models.json");
-    const raw = await fs.readFile(modelPath, "utf8");
-    const parsed = JSON.parse(raw) as { providers: Record<string, ParsedProviderConfig> };
+    const parsed = readStoredProviderConfig();
     const provider = parsed.providers[params.providerKey];
     expect(provider?.apiKey).toBe(params.expectedApiKeyRef);
   } finally {
@@ -162,8 +170,7 @@ describe("models-config", () => {
           agentDir,
         );
 
-        const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
-        const parsed = JSON.parse(raw) as { providers: Record<string, ParsedProviderConfig> };
+        const parsed = readStoredProviderConfig(agentDir);
 
         expect(result.wrote).toBe(true);
         expect(Object.keys(parsed.providers)).toStrictEqual([
@@ -179,13 +186,11 @@ describe("models-config", () => {
     });
   });
 
-  it("writes models.json for configured providers", async () => {
+  it("writes stored model catalog for configured providers", async () => {
     await withTempHome(async () => {
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
-      const modelPath = path.join(resolveDefaultAgentDir({}), "models.json");
-      const raw = await fs.readFile(modelPath, "utf8");
-      const parsed = JSON.parse(raw) as {
+      const parsed = readStoredProviderConfig() as {
         providers: Record<
           string,
           {

@@ -6,6 +6,7 @@ import {
   isSecretRefHeaderValueMarker,
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { readStoredModelsConfigRaw } from "../agents/models-config-store.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
@@ -30,7 +31,7 @@ import {
 } from "./secret-value.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
 import {
-  listAgentModelsJsonPaths,
+  listAgentModelCatalogDirs,
   listAuthProfileStorePaths,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
@@ -369,33 +370,48 @@ function collectAuthJsonResidue(params: { stateDir: string; collector: AuditColl
   }
 }
 
-function collectModelsJsonSecrets(params: {
-  modelsJsonPath: string;
+function collectStoredModelCatalogSecrets(params: {
+  agentDir: string;
+  env: NodeJS.ProcessEnv;
   collector: AuditCollector;
 }): void {
-  if (!fs.existsSync(params.modelsJsonPath)) {
+  const stored = readStoredModelsConfigRaw(params.agentDir, { env: params.env });
+  if (!stored) {
     return;
   }
-  params.collector.filesScanned.add(params.modelsJsonPath);
-  const parsedResult = readJsonObjectIfExists(params.modelsJsonPath, {
-    requireRegularFile: true,
-    maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
-  });
-  if (parsedResult.error) {
+  const sourceLabel = `stored model catalog: ${params.agentDir}`;
+  params.collector.filesScanned.add(sourceLabel);
+  if (stored.raw.length > MAX_AUDIT_MODELS_JSON_BYTES) {
     addFinding(params.collector, {
       code: "REF_UNRESOLVED",
       severity: "error",
-      file: params.modelsJsonPath,
+      file: sourceLabel,
       jsonPath: "<root>",
-      message: `Invalid JSON in models.json: ${parsedResult.error}`,
+      message: `Stored model catalog is oversized (${stored.raw.length} bytes); regenerate it.`,
     });
     return;
   }
-  const parsed = parsedResult.value;
-  if (!parsed || !isRecord(parsed.providers)) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored.raw);
+  } catch (error) {
+    addFinding(params.collector, {
+      code: "REF_UNRESOLVED",
+      severity: "error",
+      file: sourceLabel,
+      jsonPath: "<root>",
+      message: `Invalid JSON in stored model catalog: ${formatErrorMessage(error)}`,
+    });
     return;
   }
-  for (const [providerId, providerValue] of Object.entries(parsed.providers)) {
+  if (!isRecord(parsed)) {
+    return;
+  }
+  const providers = parsed.providers;
+  if (!isRecord(providers)) {
+    return;
+  }
+  for (const [providerId, providerValue] of Object.entries(providers)) {
     if (!isRecord(providerValue)) {
       continue;
     }
@@ -404,18 +420,19 @@ function collectModelsJsonSecrets(params: {
       addFinding(params.collector, {
         code: "REF_UNRESOLVED",
         severity: "error",
-        file: params.modelsJsonPath,
+        file: sourceLabel,
         jsonPath: `providers.${providerId}.apiKey`,
-        message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
+        message:
+          "Stored model catalog contains an unresolved SecretRef object; regenerate the model catalog.",
         provider: providerId,
       });
     } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
       addFinding(params.collector, {
         code: "PLAINTEXT_FOUND",
         severity: "warn",
-        file: params.modelsJsonPath,
+        file: sourceLabel,
         jsonPath: `providers.${providerId}.apiKey`,
-        message: "models.json provider apiKey is stored as plaintext.",
+        message: "Stored model catalog provider apiKey is plaintext.",
         provider: providerId,
       });
     }
@@ -430,10 +447,10 @@ function collectModelsJsonSecrets(params: {
         addFinding(params.collector, {
           code: "REF_UNRESOLVED",
           severity: "error",
-          file: params.modelsJsonPath,
+          file: sourceLabel,
           jsonPath: headerPath,
           message:
-            "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json.",
+            "Stored model catalog contains an unresolved SecretRef object for provider headers; regenerate the model catalog.",
           provider: providerId,
         });
         continue;
@@ -450,9 +467,9 @@ function collectModelsJsonSecrets(params: {
       addFinding(params.collector, {
         code: "PLAINTEXT_FOUND",
         severity: "warn",
-        file: params.modelsJsonPath,
+        file: sourceLabel,
         jsonPath: headerPath,
-        message: "models.json provider header value is stored as plaintext.",
+        message: "Stored model catalog provider header value is plaintext.",
         provider: providerId,
       });
     }
@@ -680,9 +697,10 @@ export async function runSecretsAudit(
         defaults,
       });
     }
-    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
-      collectModelsJsonSecrets({
-        modelsJsonPath,
+    for (const agentDir of listAgentModelCatalogDirs(config, stateDir, env)) {
+      collectStoredModelCatalogSecrets({
+        agentDir,
+        env,
         collector,
       });
     }

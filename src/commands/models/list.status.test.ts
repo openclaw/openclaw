@@ -898,7 +898,7 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("does fail --check when the only models.json auth is not resolvable", async () => {
+  it("does fail --check when the only model catalog auth is not resolvable", async () => {
     const localRuntime = createRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     const originalProfiles = { ...mocks.store.profiles };

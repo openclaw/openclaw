@@ -65,7 +65,7 @@ vi.mock("../../agents/model-auth.js", () => {
             ? { apiKey: process.env.OPENAI_API_KEY, source: "env: OPENAI_API_KEY" }
             : null;
         }
-        return { apiKey, source: "models.json" };
+        return { apiKey, source: "stored model catalog" };
       },
     ),
   };
@@ -87,7 +87,7 @@ function resolveOpenAiOverview(apiKey: string) {
       },
     } as never,
     store: { version: 1, profiles: {} } as never,
-    modelsPath: "/tmp/models.json",
+    modelsPath: "SQLite model catalog for /tmp/openclaw-agent-main",
   });
 }
 
@@ -110,7 +110,7 @@ describe("resolveProviderAuthOverview", () => {
           },
         },
       } as never,
-      modelsPath: "/tmp/models.json",
+      modelsPath: "SQLite model catalog for /tmp/openclaw-agent-main",
     });
 
     expect(overview.profiles.labels[0]).toContain("token:ref(env:GITHUB_TOKEN)");
@@ -137,7 +137,7 @@ describe("resolveProviderAuthOverview", () => {
           },
         },
       } as never,
-      modelsPath: "/tmp/openclaw-agent-custom/models.json",
+      modelsPath: "SQLite model catalog for /tmp/openclaw-agent-custom",
       agentDir: "/tmp/openclaw-agent-custom",
     });
 
@@ -168,7 +168,7 @@ describe("resolveProviderAuthOverview", () => {
           },
         },
       } as never,
-      modelsPath: "/tmp/openclaw-agent-custom/models.json",
+      modelsPath: "SQLite model catalog for /tmp/openclaw-agent-custom",
       agentDir: "/tmp/openclaw-agent-custom",
     });
 
@@ -178,25 +178,25 @@ describe("resolveProviderAuthOverview", () => {
     });
   });
 
-  it("renders marker-backed models.json auth as marker detail", () => {
+  it("renders marker-backed model catalog auth as marker detail", () => {
     const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
       resolveOpenAiOverview(NON_ENV_SECRETREF_MARKER),
     );
 
     expect(overview.effective.kind).toBe("missing");
     expect(overview.effective.detail).toBe("missing");
-    expect(overview.modelsJson?.value).toContain(`marker(${NON_ENV_SECRETREF_MARKER})`);
+    expect(overview.modelCatalog?.value).toContain(`marker(${NON_ENV_SECRETREF_MARKER})`);
   });
 
-  it("keeps env-var-shaped models.json values masked to avoid accidental plaintext exposure", () => {
+  it("keeps env-var-shaped model catalog values masked to avoid accidental plaintext exposure", () => {
     const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
       resolveOpenAiOverview("OPENAI_API_KEY"),
     );
 
     expect(overview.effective.kind).toBe("missing");
     expect(overview.effective.detail).toBe("missing");
-    expect(overview.modelsJson?.value).not.toContain("marker(");
-    expect(overview.modelsJson?.value).not.toContain("OPENAI_API_KEY");
+    expect(overview.modelCatalog?.value).not.toContain("marker(");
+    expect(overview.modelCatalog?.value).not.toContain("OPENAI_API_KEY");
   });
 
   it("treats env-var marker as usable only when the env key is currently resolvable", () => {

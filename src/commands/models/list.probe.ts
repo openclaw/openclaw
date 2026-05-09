@@ -65,7 +65,7 @@ export type AuthProbeResult = {
   model?: string;
   profileId?: string;
   label: string;
-  source: "profile" | "env" | "models.json";
+  source: "profile" | "env" | "model_catalog";
   mode?: string;
   status: AuthProbeStatus;
   reasonCode?: AuthProbeReasonCode;
@@ -78,7 +78,7 @@ type AuthProbeTarget = {
   model?: { provider: string; model: string } | null;
   profileId?: string;
   label: string;
-  source: "profile" | "env" | "models.json";
+  source: "profile" | "env" | "model_catalog";
   mode?: string;
 };
 
@@ -426,13 +426,13 @@ export async function buildProbeTargets(params: {
       config: cfg,
       workspaceDir,
     });
-    const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
-    if (!envKey && !hasUsableModelsJsonKey) {
+    const hasUsableModelCatalogKey = hasUsableCustomProviderApiKey(cfg, providerKey);
+    if (!envKey && !hasUsableModelCatalogKey) {
       continue;
     }
 
-    const label = envKey ? "env" : "models.json";
-    const source = envKey ? "env" : "models.json";
+    const label = envKey ? "env" : "model catalog";
+    const source = envKey ? "env" : "model_catalog";
     const mode = envKey?.source.includes("OAUTH_TOKEN") ? "oauth" : "api_key";
 
     if (!model) {

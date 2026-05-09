@@ -1,6 +1,7 @@
 export {
   AuthStorage,
   addEnvBackedPiCredentials,
+  applyStoredModelsConfigToRegistry,
   discoverAuthStorage,
   discoverModels,
   ModelRegistry,

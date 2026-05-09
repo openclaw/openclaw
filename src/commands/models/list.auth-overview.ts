@@ -155,7 +155,7 @@ export function resolveProviderAuthOverview(params: {
       };
     }
     if (usableCustomKey) {
-      return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+      return { kind: "model_catalog", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
     }
     if (params.syntheticAuth) {
       return { kind: "synthetic", detail: params.syntheticAuth.source };
@@ -188,9 +188,9 @@ export function resolveProviderAuthOverview(params: {
       : {}),
     ...(customKey
       ? {
-          modelsJson: {
+          modelCatalog: {
             value: formatMarkerOrSecret(customKey),
-            source: `models.json: ${shortenHomePath(params.modelsPath)}`,
+            source: `stored model catalog: ${shortenHomePath(params.modelsPath)}`,
           },
         }
       : {}),

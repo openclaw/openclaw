@@ -145,7 +145,7 @@ describe("models-config", () => {
     });
   });
 
-  it("keeps a non-empty existing models.json baseUrl when merge mode regenerates the provider", async () => {
+  it("keeps a non-empty existing model catalog baseUrl when merge mode regenerates the provider", async () => {
     const kilocodeProvider = {
       baseUrl: "https://api.kilo.ai/api/gateway/v1",
       api: "openai-completions" as const,

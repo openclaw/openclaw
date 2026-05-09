@@ -1,1 +1,1 @@
-export { ensureOpenClawModelsJson } from "./models-config.js";
+export { ensureOpenClawModelCatalog, ensureOpenClawModelsJson } from "./models-config.js";

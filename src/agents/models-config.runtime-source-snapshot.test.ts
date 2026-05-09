@@ -201,7 +201,7 @@ async function planGeneratedProviders(params: {
   );
   expect(plan.action).toBe("write");
   if (plan.action !== "write") {
-    throw new Error(`expected models.json write plan, got ${plan.action}`);
+    throw new Error(`expected model catalog write plan, got ${plan.action}`);
   }
   return JSON.parse(plan.contents).providers as Record<
     string,
@@ -328,7 +328,7 @@ describe("models-config runtime source snapshot", () => {
         expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
         expect(parsed.providers.openai?.headers?.["X-OpenClaw-Test"]).toBe("one");
 
-        // Header changes still rewrite models.json, but merge mode preserves the existing baseUrl.
+        // Header changes still rewrite the stored catalog, but merge mode preserves the existing baseUrl.
         await ensureOpenClawModelsJson(secondCandidate, agentDir);
         parsed = await readGeneratedModelsJson<{
           providers: Record<

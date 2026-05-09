@@ -98,7 +98,7 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
 };
 
 const SKIP_PI_DISCOVERY_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  // skipPiDiscovery is the lean path used before PI discovery/models.json has run.
+  // skipPiDiscovery is the lean path used before PI model catalog discovery has run.
   ...TARGET_PROVIDER_RUNTIME_HOOKS,
 };
 
@@ -532,7 +532,7 @@ function applyConfiguredProviderOverrides(params: {
     return {
       ...discoveredModel,
       ...(resolvedParams ? { params: resolvedParams } : {}),
-      // Discovered models originate from models.json and may contain persistence markers.
+      // Discovered models originate from the model catalog and may contain persistence markers.
       headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
   }

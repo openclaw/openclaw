@@ -429,7 +429,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../models-config.js", () => ({
-    ensureOpenClawModelsJson: vi.fn(async () => {}),
+    ensureOpenClawModelCatalog: vi.fn(async () => {}),
   }));
 
   vi.doMock("../model-auth.js", () => ({

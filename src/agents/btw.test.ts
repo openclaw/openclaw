@@ -56,7 +56,7 @@ vi.mock("./transcript/session-transcript-contract.js", () => ({
 }));
 
 vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: (...args: unknown[]) => ensureOpenClawModelsJsonMock(...args),
+  ensureOpenClawModelCatalog: (...args: unknown[]) => ensureOpenClawModelsJsonMock(...args),
 }));
 
 vi.mock("./pi-model-discovery.js", () => ({

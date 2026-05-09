@@ -398,7 +398,7 @@ describe("resolveUsableCustomProviderApiKey", () => {
     });
     expect(resolved).toEqual({
       apiKey: "sk-custom-runtime",
-      source: "models.json",
+      source: "stored model catalog",
     });
   });
 
@@ -878,7 +878,7 @@ describe("resolveApiKeyForProvider", () => {
 
     expectAuthFields(resolved, {
       apiKey: "sk-config-live",
-      source: "models.json",
+      source: "stored model catalog",
       mode: "api-key",
     });
   });
@@ -1019,7 +1019,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
 
     expectAuthFields(auth, {
       apiKey: "ollama-local",
-      source: "models.json (local marker)",
+      source: "stored model catalog (local marker)",
       mode: "api-key",
     });
   });
@@ -1088,7 +1088,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
 
     expectAuthFields(auth, {
       apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      source: "models.json (local marker)",
+      source: "stored model catalog (local marker)",
       mode: "api-key",
     });
   });

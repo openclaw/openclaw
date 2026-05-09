@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   resolveAgentDir,
   resolveAgentExplicitModelPrimary,
@@ -238,7 +237,7 @@ export async function modelsStatusCommand(
   const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
   const store = ensureAuthProfileStore(agentDir);
-  const modelsPath = path.join(agentDir, "models.json");
+  const modelCatalogSource = `SQLite model catalog for ${agentDir}`;
 
   const providersFromStore = new Set(
     Object.values(store.profiles)
@@ -364,7 +363,7 @@ export async function modelsStatusCommand(
         provider,
         cfg,
         store,
-        modelsPath,
+        modelsPath: modelCatalogSource,
         agentDir,
         workspaceDir,
         syntheticAuth: syntheticAuthByProvider.get(provider),
@@ -374,7 +373,7 @@ export async function modelsStatusCommand(
       const hasAny =
         entry.profiles.count > 0 ||
         Boolean(entry.env) ||
-        Boolean(entry.modelsJson) ||
+        Boolean(entry.modelCatalog) ||
         Boolean(entry.syntheticAuth);
       return hasAny;
     });
@@ -792,11 +791,14 @@ export async function modelsStatusCommand(
         ),
       );
     }
-    if (entry.modelsJson) {
+    if (entry.modelCatalog) {
       bits.push(
         formatKeyValue(
-          "models.json",
-          `${entry.modelsJson.value}${separator}${formatKeyValue("source", entry.modelsJson.source)}`,
+          "model catalog",
+          `${entry.modelCatalog.value}${separator}${formatKeyValue(
+            "source",
+            entry.modelCatalog.source,
+          )}`,
         ),
       );
     }

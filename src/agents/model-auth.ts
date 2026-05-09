@@ -157,7 +157,7 @@ export function resolveUsableCustomProviderApiKey(params: {
       source: resolveEnvSourceLabel({
         applied,
         envVars: [envVarName],
-        label: `${envVarName} (models.json secretref)`,
+        label: `${envVarName} (stored model catalog secretref)`,
       }),
     };
   }
@@ -167,7 +167,7 @@ export function resolveUsableCustomProviderApiKey(params: {
     return null;
   }
   if (!isNonSecretApiKeyMarker(customKey)) {
-    return { apiKey: customKey, source: "models.json" };
+    return { apiKey: customKey, source: "stored model catalog" };
   }
   if (isKnownEnvApiKeyMarker(customKey)) {
     const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[customKey]);
@@ -180,7 +180,7 @@ export function resolveUsableCustomProviderApiKey(params: {
       source: resolveEnvSourceLabel({
         applied,
         envVars: [customKey],
-        label: `${customKey} (models.json marker)`,
+        label: `${customKey} (stored model catalog marker)`,
       }),
     };
   }
@@ -193,7 +193,7 @@ export function resolveUsableCustomProviderApiKey(params: {
   ) {
     return {
       apiKey: customProviderConfig.api === "ollama" ? customKey : CUSTOM_LOCAL_AUTH_MARKER,
-      source: "models.json (local marker)",
+      source: "stored model catalog (local marker)",
     };
   }
   return null;
