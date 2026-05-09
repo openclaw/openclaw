@@ -709,9 +709,11 @@ sessionId}` and session key context.
   record count, target table, run id, status, and source-removal state.
 - `backup_runs` records backup archive paths, status, and JSON manifests.
 - `check:database-first-legacy-stores` fails new runtime source that pairs
-  legacy store names with write-style filesystem APIs. Tests and migration,
-  doctor, import, and explicit export code remain allowed. The guard now also
-  covers runtime `cache/*.json` stores, generic `thread-bindings.json`
+  legacy store names with write-style filesystem APIs. It also fails runtime
+  source that reintroduces transcript bridge contracts such as
+  `transcriptLocator`, `sqlite-transcript://...`, or `sessionFile`. Tests and
+  migration, doctor, import, and explicit export code remain allowed. The guard
+  now also covers runtime `cache/*.json` stores, generic `thread-bindings.json`
   sidecars, cron state/run-log JSON, config health JSON, restart and lock
   sidecars, Voice Wake settings, plugin binding approvals, installed plugin
   index JSON, File Transfer audit JSONL, and Memory Wiki activity logs.

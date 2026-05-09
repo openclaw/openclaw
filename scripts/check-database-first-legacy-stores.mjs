@@ -179,6 +179,18 @@ const legacySessionStoreApiPattern =
   /\b(?:loadSessionStore|saveSessionStore|updateSessionStore|updateSessionStoreEntry|resolveStorePath|resolveLegacySessionStorePath)\b/u;
 const forbiddenRuntimeLocatorContractMarkers = [
   {
+    label: "transcript locator runtime contract",
+    pattern: /\btranscriptLocator\b/u,
+  },
+  {
+    label: "SQLite transcript pseudo-locator",
+    pattern: /sqlite-transcript:\/\//u,
+  },
+  {
+    label: "session transcript file runtime contract",
+    pattern: /\bsessionFile\b/u,
+  },
+  {
     label: "session accounting transcript locator output",
     pattern: /\bnewTranscriptLocator\b/u,
   },
