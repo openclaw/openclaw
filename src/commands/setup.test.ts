@@ -61,10 +61,11 @@ describe("setupCommand", () => {
 
       const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
       expect(logs).toContain(
-        "Setup complete: local config, workspace, and session directories are ready.",
+        "Setup complete: config, workspace, and session directories are ready.",
       );
+      expect(logs).toContain("openclaw onboard");
       expect(logs).toContain("openclaw configure");
-      expect(logs).toContain("openclaw setup --wizard");
+      expect(logs).toContain("openclaw channels add");
     });
   });
 
@@ -162,7 +163,7 @@ describe("setupCommand", () => {
         gateway?: { mode?: string };
       };
 
-      expect(raw.agents?.defaults?.workspace).toBeTruthy();
+      expect(raw.agents?.defaults?.workspace).toBe(workspace);
       expect(raw.gateway?.mode).toBe("local");
     });
   });

@@ -139,7 +139,7 @@ describe("host env reported baseline coverage", () => {
       ...baseline.reportedDangerousOverrideOnlyKeys,
     ]);
     expect(overrideResult.rejectedOverrideBlockedKeys).toEqual(expectedRejectedOverrideKeys);
-    expect(overrideResult.rejectedOverrideInvalidKeys).toEqual([]);
+    expect(overrideResult.rejectedOverrideInvalidKeys).toStrictEqual([]);
 
     for (const key of expectedRejectedOverrideKeys) {
       expect(overrideResult.env[key]).toBeUndefined();
@@ -158,7 +158,9 @@ describe("host env reported baseline coverage", () => {
     for (const key of expectedAllowlistKeys) {
       expect(INHERITED_ALLOWLIST_RATIONALE[key].trim().length).toBeGreaterThan(0);
       expect(isDangerousHostInheritedEnvVarName(key)).toBe(false);
-      expect(isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)).toBe(true);
+      expect([isDangerousHostEnvVarName(key), isDangerousHostEnvOverrideVarName(key)]).toContain(
+        true,
+      );
 
       const inheritedSanitized = sanitizeHostExecEnv({
         baseEnv: {
@@ -175,7 +177,7 @@ describe("host env reported baseline coverage", () => {
         },
       });
       expect(overrideResult.rejectedOverrideBlockedKeys).toEqual([key]);
-      expect(overrideResult.rejectedOverrideInvalidKeys).toEqual([]);
+      expect(overrideResult.rejectedOverrideInvalidKeys).toStrictEqual([]);
       expect(overrideResult.env[key]).toBeUndefined();
     }
   });

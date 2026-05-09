@@ -1184,9 +1184,11 @@ describe("readSessionMessages", () => {
     sessionManager.appendMessage(buildSessionAssistantMessage("old answer", 2));
 
     const sessionFile = sessionManager.getSessionFile();
-    expect(sessionFile).toBeTruthy();
+    if (!sessionFile) {
+      throw new Error("expected SessionManager to expose a session file");
+    }
 
-    const out = readSessionMessages(sessionId, storePath, sessionFile ?? undefined);
+    const out = readSessionMessages(sessionId, storePath, sessionFile);
 
     expect(
       out.map((message) => ({
@@ -1256,7 +1258,7 @@ describe("readSessionMessages", () => {
     ]);
   });
 
-  test("keeps blocked hook messages on the current active branch", async () => {
+  test("keeps blocked hook messages on the current active branch", () => {
     const sessionId = "blocked-hook-branch-session";
     const sessionKey = "agent:main:explicit:blocked-hook-branch";
     const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -1300,7 +1302,8 @@ describe("readSessionMessages", () => {
       pluginId: "hitl-test-hooks",
     });
 
-    expect(messageId).toBeTruthy();
+    expect(messageId).toBeTypeOf("string");
+    expect(messageId.length).toBeGreaterThan(0);
     const out = readSessionMessages(sessionId, storePath, sessionFile);
     expect(
       out.map((message) => ({
@@ -1316,7 +1319,7 @@ describe("readSessionMessages", () => {
     expect(JSON.stringify(out)).not.toContain("matched original");
   });
 
-  test("keeps repeated blocked hook messages together in a new session", async () => {
+  test("keeps repeated blocked hook messages together in a new session", () => {
     const sessionKey = "agent:main:explicit:repeated-blocked-hook";
     const sessionManager = SessionManager.create(tmpDir, tmpDir);
     const sessionId = sessionManager.getSessionId();
@@ -1790,7 +1793,7 @@ describe("resolveSessionTranscriptCandidates safety", () => {
       "/tmp/openclaw/agents/main/sessions/sessions.json",
     );
 
-    expect(candidates).toEqual([]);
+    expect(candidates).toStrictEqual([]);
   });
 
   test("drops unsafe sessionFile candidates and keeps safe fallbacks", () => {
@@ -1803,7 +1806,7 @@ describe("resolveSessionTranscriptCandidates safety", () => {
     const normalizedCandidates = candidates.map((value) => path.resolve(value));
     const expectedFallback = path.resolve(path.dirname(storePath), "sess-safe.jsonl");
 
-    expect(candidates.some((value) => value.includes("etc/passwd"))).toBe(false);
+    expect(candidates).not.toEqual(expect.arrayContaining([expect.stringContaining("etc/passwd")]));
     expect(normalizedCandidates).toContain(expectedFallback);
   });
 
@@ -1934,7 +1937,7 @@ describe("archiveSessionTranscripts", () => {
       reason: "reset",
     });
 
-    expect(archived).toEqual([]);
+    expect(archived).toStrictEqual([]);
   });
 
   test("skips files that do not exist and archives only existing ones", () => {
@@ -2053,9 +2056,7 @@ describe("oversized transcript line guards", () => {
       512 * 1024,
     );
 
-    expect(usage).not.toBeNull();
-    expect(usage?.modelProvider).not.toBe("oversized-provider");
-    expect(usage?.modelProvider).toBe("test-provider");
+    expect(usage).toMatchObject({ modelProvider: "test-provider" });
   });
 
   test("readSessionTitleFieldsFromTranscriptAsync delegates to bounded sync reader", async () => {

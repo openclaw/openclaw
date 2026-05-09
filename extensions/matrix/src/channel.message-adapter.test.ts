@@ -45,10 +45,15 @@ describe("matrix channel message adapter", () => {
   it("backs declared durable-final capabilities with runtime outbound proofs", async () => {
     const adapter = matrixPlugin.message;
     expect(adapter).toBeDefined();
+    if (!adapter?.send?.text || !adapter.send.media) {
+      throw new Error("Expected Matrix message adapter send capabilities.");
+    }
+    const sendText = adapter.send.text;
+    const sendMedia = adapter.send.media;
 
     const proveText = async () => {
       mocks.sendMessageMatrix.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await sendText({
         cfg,
         to: "room:!room:example",
         text: "hello",
@@ -65,7 +70,7 @@ describe("matrix channel message adapter", () => {
 
     const proveMedia = async () => {
       mocks.sendMessageMatrix.mockClear();
-      const result = await adapter!.send!.media!({
+      const result = await sendMedia({
         cfg,
         to: "room:!room:example",
         text: "caption",
@@ -89,7 +94,7 @@ describe("matrix channel message adapter", () => {
 
     const proveReplyThread = async () => {
       mocks.sendMessageMatrix.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await sendText({
         cfg,
         to: "room:!room:example",
         text: "threaded",
@@ -112,17 +117,83 @@ describe("matrix channel message adapter", () => {
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "matrixMessageAdapter",
-      adapter: adapter!,
+      adapter,
       proofs: {
         text: proveText,
         media: proveMedia,
         replyTo: proveReplyThread,
         thread: proveReplyThread,
         messageSendingHooks: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(adapter.send?.text).toBeTypeOf("function");
         },
       },
     });
+  });
+
+  it("forwards presentation payload hooks through the registered outbound adapter", async () => {
+    const outbound = matrixPlugin.outbound;
+    expect(outbound?.presentationCapabilities).toMatchObject({
+      supported: true,
+      buttons: true,
+      selects: true,
+      context: true,
+      divider: true,
+    });
+    if (!outbound?.renderPresentation || !outbound.sendPayload) {
+      throw new Error("Expected Matrix outbound presentation payload hooks.");
+    }
+
+    const presentation = {
+      title: "Select thinking level",
+      tone: "info" as const,
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Low", value: "/think low" }],
+        },
+      ],
+    };
+    const rendered = await outbound.renderPresentation({
+      payload: { text: "fallback", presentation },
+      presentation,
+      ctx: {} as never,
+    });
+
+    expect(rendered?.channelData?.matrix).toMatchObject({
+      extraContent: {
+        "com.openclaw.presentation": {
+          ...presentation,
+          version: 1,
+          type: "message.presentation",
+        },
+      },
+    });
+
+    await outbound.sendPayload({
+      cfg,
+      to: "room:!room:example",
+      text: rendered?.text ?? "",
+      payload: rendered!,
+      accountId: "default",
+      threadId: "$thread",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
+      "room:!room:example",
+      rendered?.text,
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        threadId: "$thread",
+        extraContent: {
+          "com.openclaw.presentation": {
+            ...presentation,
+            version: 1,
+            type: "message.presentation",
+          },
+        },
+      }),
+    );
   });
 
   it("backs declared live preview finalizer capabilities with adapter proofs", async () => {

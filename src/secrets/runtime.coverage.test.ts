@@ -277,9 +277,11 @@ async function ensureRuntimeWebToolsLoaded(): Promise<void> {
 }
 
 function toConcretePathSegments(pathPattern: string, wildcardToken = "sample"): string[] {
-  const segments = pathPattern.split(".").filter(Boolean);
   const out: string[] = [];
-  for (const segment of segments) {
+  for (const segment of pathPattern.split(".")) {
+    if (!segment) {
+      continue;
+    }
     if (segment === "*") {
       out.push(wildcardToken);
       continue;
@@ -824,7 +826,9 @@ describe("secrets runtime target coverage", () => {
         loadAuthStore: () => authStore,
       });
       const resolvedStore = snapshot.authStores[0]?.store;
-      expect(resolvedStore).toBeDefined();
+      if (!resolvedStore) {
+        throw new Error("expected resolved auth store snapshot");
+      }
       for (const [index, entry] of batch.entries()) {
         const resolved = getPath(
           resolvedStore,

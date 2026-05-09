@@ -27,6 +27,19 @@ beforeAll(async () => {
 
 installMinimaxProviderHttpMockCleanup();
 
+function expectMinimaxFetchCall(index: number, url: string) {
+  const call = fetchWithTimeoutMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected MiniMax fetch call ${index + 1}`);
+  }
+  const [actualUrl, init, timeoutMs, fetchFn] = call;
+  expect(actualUrl).toBe(url);
+  expect(init).toMatchObject({ method: "GET" });
+  expect(Number.isInteger(timeoutMs)).toBe(true);
+  expect(timeoutMs).toBeGreaterThan(0);
+  expect(fetchFn).toBe(fetch);
+}
+
 describe("minimax video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     const provider = buildMinimaxVideoGenerationProvider();
@@ -56,8 +69,8 @@ describe("minimax video generation provider", () => {
         }),
       })
       .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/webm" }),
+        arrayBuffer: async () => Buffer.from("webm-bytes"),
       });
 
     const provider = buildMinimaxVideoGenerationProvider();
@@ -80,6 +93,7 @@ describe("minimax video generation provider", () => {
       }),
     );
     expect(result.videos).toHaveLength(1);
+    expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.metadata).toEqual(
       expect.objectContaining({
         taskId: "task-123",
@@ -130,24 +144,8 @@ describe("minimax video generation provider", () => {
       cfg: {},
     });
 
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-      2,
-      "https://api.minimax.io/v1/files/retrieve?file_id=file-9",
-      expect.objectContaining({
-        method: "GET",
-      }),
-      expect.any(Number),
-      expect.any(Function),
-    );
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-      3,
-      "https://example.com/download.mp4",
-      expect.objectContaining({
-        method: "GET",
-      }),
-      expect.any(Number),
-      expect.any(Function),
-    );
+    expectMinimaxFetchCall(1, "https://api.minimax.io/v1/files/retrieve?file_id=file-9");
+    expectMinimaxFetchCall(2, "https://example.com/download.mp4");
     expect(result.videos).toHaveLength(1);
     expect(result.metadata).toEqual(
       expect.objectContaining({
@@ -221,14 +219,9 @@ describe("minimax video generation provider", () => {
         url: "https://api.minimaxi.com/v1/video_generation",
       }),
     );
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-      1,
+    expectMinimaxFetchCall(
+      0,
       "https://api.minimaxi.com/v1/query/video_generation?task_id=task-portal",
-      expect.objectContaining({
-        method: "GET",
-      }),
-      expect.any(Number),
-      expect.any(Function),
     );
   });
 });

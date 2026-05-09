@@ -2,7 +2,9 @@ import type { ChatType } from "../channels/chat-type.js";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
+  AgentModelEntryConfig,
   EmbeddedPiExecutionContract,
+  SubagentDelegationMode,
 } from "./types.agent-defaults.js";
 import type {
   AgentEmbeddedHarnessConfig,
@@ -86,6 +88,8 @@ export type AgentConfig = {
   /** @deprecated Use agentRuntime. */
   embeddedHarness?: AgentEmbeddedHarnessConfig;
   model?: AgentModelConfig;
+  /** Per-model metadata overrides for this agent. */
+  models?: Record<string, AgentModelEntryConfig>;
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Optional per-agent default verbosity level. */
@@ -113,6 +117,8 @@ export type AgentConfig = {
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {
+    /** Prompt-only guidance for how strongly this agent should delegate work. */
+    delegationMode?: SubagentDelegationMode;
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */

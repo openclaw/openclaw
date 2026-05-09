@@ -6,6 +6,7 @@ import {
   type RealtimeVoiceBrowserAudioContract,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceTool,
+  type RealtimeVoiceToolResultOptions,
 } from "../talk/provider-types.js";
 import {
   createRealtimeVoiceBridgeSession,
@@ -386,10 +387,12 @@ export function submitTalkRealtimeRelayToolResult(params: {
   connId: string;
   callId: string;
   result: unknown;
+  options?: RealtimeVoiceToolResultOptions;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  session.bridge.submitToolResult(params.callId, params.result);
+  session.bridge.submitToolResult(params.callId, params.result, params.options);
   const turnId = ensureRelayTurn(session);
+  const final = params.options?.willContinue !== true;
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "toolResult",
@@ -399,7 +402,7 @@ export function submitTalkRealtimeRelayToolResult(params: {
       callId: params.callId,
       turnId,
       payload: { result: params.result },
-      final: true,
+      final,
     }),
   });
 }

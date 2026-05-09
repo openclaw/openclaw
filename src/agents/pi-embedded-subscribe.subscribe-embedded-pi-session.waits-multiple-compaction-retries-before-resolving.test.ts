@@ -30,7 +30,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(resolved).toBe(true);
   });
 
-  it("does not count compaction until end event", async () => {
+  it("does not count compaction until end event", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-compaction-count",
     });
@@ -57,7 +57,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getLastCompactionTokensAfter()).toBe(6_789);
   });
 
-  it("does not count compaction when result is absent", async () => {
+  it("does not count compaction when result is absent", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-compaction-no-result",
     });
@@ -70,7 +70,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getCompactionCount()).toBe(0);
   });
 
-  it("emits compaction events on the agent event bus", async () => {
+  it("emits compaction events on the agent event bus", () => {
     const { emit } = createSubscribedSessionHarness({
       runId: "run-compaction",
     });
@@ -114,10 +114,14 @@ describe("subscribeEmbeddedPiSession", () => {
     const waitPromise = subscription.waitForCompactionRetry();
     subscription.unsubscribe();
 
-    await expect(waitPromise).rejects.toMatchObject({ name: "AbortError" });
-    await expect(subscription.waitForCompactionRetry()).rejects.toMatchObject({
-      name: "AbortError",
-    });
+    const firstAbort = await waitPromise.catch((error: unknown) => error);
+    expect(firstAbort).toBeInstanceOf(Error);
+    expect((firstAbort as Error).name).toBe("AbortError");
+    const secondAbort = await subscription
+      .waitForCompactionRetry()
+      .catch((error: unknown) => error);
+    expect(secondAbort).toBeInstanceOf(Error);
+    expect((secondAbort as Error).name).toBe("AbortError");
     expect(abortCompaction).toHaveBeenCalledTimes(1);
   });
 

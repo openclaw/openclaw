@@ -32,10 +32,16 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Owner boundary: fix owner-specific behavior in the owner module. Shared/core gets generic seams only; no owner ids, dependency strings, defaults, migrations, or recovery policy. If a bug names an extension or its dependency, start in that extension and add a generic core seam only when multiple owners need it.
 - Dependency ownership follows runtime ownership: extension-only deps stay plugin-local; root deps only for core imports or intentionally internalized bundled plugin runtime.
 - Legacy config repair: doctor/fix paths, not startup/load-time core migrations.
+- No legacy compatibility in core/runtime paths. When old config/store shapes need support, add an `openclaw doctor --fix` rewrite/repair rule with tests and keep runtime code on the canonical contract.
 - Core test asserting extension-specific behavior: move to owner extension or generic contract test.
 - New seams: backwards-compatible, documented, versioned. Third-party plugins exist.
 - Channels: `src/channels/**` is implementation; plugin authors get SDK seams.
 - Providers: core owns generic loop; provider plugins own auth/catalog/runtime hooks.
+- Request-time runtime resolution: when a path already knows the provider id, model ref, channel id, outbound target, capability family, or attachment class, carry that as a prepared runtime fact instead of rediscovering it later.
+- Prepared runtime facts should be small typed values produced once near startup, reply dispatch, model selection, tool planning, or channel resolution, then passed through context to consumers. Prefer `AgentRuntimePlan`, `ProviderRuntimePluginHandle`, scoped model/catalog helpers, active/runtime registries, manifest/public-artifact lookups, single-provider resolvers, and lazy registry construction.
+- Avoid broad request-time rediscovery: hot reply/tool/outbound/media paths should not call broad plugin/provider/channel/capability loaders such as `loadOpenClawPlugins`, `resolveProviderPluginsForHooks`, `resolvePluginCapabilityProviders`, `resolvePluginDiscoveryProvidersRuntime`, `getChannelPlugin`, or broad model/tool/media registry builders just to answer a question the caller already knows. Do not build multimodal/provider registries for document-only or otherwise non-participating paths.
+- Compatibility fallbacks are allowed only for startup/setup/admin/standalone/legacy callers that genuinely lack prepared facts. Keep them explicit, tested, and outside migrated hot reply/tool/outbound paths.
+- Do not fix repeated request-time discovery by adding scattered cache layers. Move the canonical fact earlier, reuse the existing prepared-runtime object, and delete duplicate lookup branches when the last migrated caller stops needing them.
 - Gateway protocol changes: additive first; incompatible needs versioning/docs/client follow-through.
 - Config contract: exported types, schema/help, metadata, baselines, docs aligned. Retired public keys stay retired; compat in raw migration/doctor.
 - Direction: manifest-first control plane; targeted runtime loaders; no hidden contract bypasses; broad mutable registries transitional.
@@ -65,7 +71,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## GitHub / CI
 
 - Triage: list first, hydrate few. Use bounded `gh --json --jq`; avoid repeated full comment scans.
-- Automatic PR/issue discovery: skip maintainer-owned items unless directly relevant. Do not comment, close, label, retitle, rebase, fix up, or land them without Peter asking.
+- Bare GitHub issue/PR URL or number => `review <ref>`: load repo maintainer skill if available, inspect live with `gh`, report findings in chat. No comments/close/merge/fix unless explicitly asked.
+- Automatic PR/issue discovery: skip maintainer-owned items unless directly relevant. Do not comment, close, label, retitle, rebase, fix up, or land them without explicit maintainer request.
 - PR scan/triage: no unsolicited PR comments/reviews. Report in chat only unless explicitly asked, or a close/duplicate action needs a reason comment.
 - Search/dedupe: prefer `gh search issues 'repo:openclaw/openclaw is:open <terms>' --json number,title,state,updatedAt --limit 20`.
 - GitHub search boolean text is fussy. If `OR` queries return empty, split exact terms and search title/body/comments separately before concluding no hits.
@@ -151,8 +158,10 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## Docs / Changelog
 
 - Docs change with behavior/API. Use docs list/read_when hints; docs links per `docs/AGENTS.md`.
+- When upgrading the bundled Codex harness (`@openai/codex` in `extensions/codex/package.json`), refresh the model availability snapshot in `docs/plugins/codex-harness.md` from the new harness's `model/list` result.
 - Docs final answers: when doc files changed, end with the relevant full `https://docs.openclaw.ai/...` URL(s).
 - Changelog user-facing only; fixing an issue or landing/merging a PR needs one unless pure test/internal.
+- Missing changelog is not a PR review finding or merge blocker. If landing/fixing a user-visible change, add/update changelog automatically when practical; never ask or block solely on it.
 - Changelog placement: active version `### Changes`/`### Fixes`; contributor-facing added entries should include at least one `Thanks @author` attribution, using credited human GitHub username(s). Never add `Thanks @codex`, `Thanks @openclaw`, `Thanks @clawsweeper`, or `Thanks @steipete`; if the real credited human is unknown, leave attribution blank instead of guessing or adding a random person.
 - Changelog bullets are always single-line. No wrapping/continuation across multiple lines. Long entries stay on one long line so dedupe, PR-ref, and credit-audit tooling work and so the visual style stays uniform.
 
@@ -189,7 +198,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Mac gateway: dev watch = `pnpm gateway:watch` (tmux `openclaw-gateway-watch-main`, auto-attach). Noninteractive: `OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch`; attach/stop: `tmux attach -t openclaw-gateway-watch-main` / `tmux kill-session -t openclaw-gateway-watch-main`. Managed installs: `openclaw gateway restart/status --deep`. No launchd/ad-hoc tmux. Logs: `./scripts/clawlog.sh`.
 - Version bump touches: `package.json`, `apps/android/app/build.gradle.kts`, `apps/ios/version.json` + `pnpm ios:version:sync`, macOS `Info.plist`, `docs/install/updating.md`. Appcast only for Sparkle release.
 - Mobile LAN pairing: plaintext `ws://` loopback-only. Private-network `ws://` needs `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`; Tailscale/public use `wss://` or tunnel.
-- A2UI hash `src/canvas-host/a2ui/.bundle.hash`: generated; ignore unless running `pnpm canvas:a2ui:bundle`; commit separately.
+- A2UI hash `extensions/canvas/src/host/a2ui/.bundle.hash`: generated; ignore unless running `pnpm canvas:a2ui:bundle`; commit separately.
 
 ## Ops / Footguns
 

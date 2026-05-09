@@ -20,17 +20,19 @@ describe("arcee provider plugin", () => {
       providers: [provider],
       choice: "arceeai-api-key",
     });
-    expect(directChoice).not.toBeNull();
-    expect(directChoice?.provider.id).toBe("arcee");
-    expect(directChoice?.method.id).toBe("arcee-platform");
+    expect(directChoice).toMatchObject({
+      provider: { id: "arcee" },
+      method: { id: "arcee-platform" },
+    });
 
     const orChoice = resolveProviderPluginChoice({
       providers: [provider],
       choice: "arceeai-openrouter",
     });
-    expect(orChoice).not.toBeNull();
-    expect(orChoice?.provider.id).toBe("arcee");
-    expect(orChoice?.method.id).toBe("openrouter");
+    expect(orChoice).toMatchObject({
+      provider: { id: "arcee" },
+      method: { id: "openrouter" },
+    });
   });
 
   it("stores the OpenRouter onboarding path under the OpenRouter auth profile", async () => {
@@ -92,6 +94,12 @@ describe("arcee provider plugin", () => {
       "trinity-large-preview",
       "trinity-large-thinking",
     ]);
+    expect(
+      catalogProvider.models?.find((model) => model.id === "trinity-large-thinking")?.compat,
+    ).toMatchObject({
+      supportsTools: false,
+      supportsReasoningEffort: false,
+    });
   });
 
   it("builds the OpenRouter-backed Arcee AI model catalog", async () => {
@@ -112,6 +120,12 @@ describe("arcee provider plugin", () => {
       "arcee/trinity-large-preview",
       "arcee/trinity-large-thinking",
     ]);
+    expect(
+      catalogProvider.models?.find((model) => model.id === "arcee/trinity-large-thinking")?.compat,
+    ).toMatchObject({
+      supportsTools: false,
+      supportsReasoningEffort: false,
+    });
   });
 
   it("normalizes Arcee OpenRouter models to vendor-prefixed runtime ids", async () => {

@@ -1,4 +1,8 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
+import {
+  normalizeAgentModelMapForConfig,
+  normalizeAgentModelRefForConfig,
+} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -88,12 +92,64 @@ function mergeConfigPatch<T>(base: T, patch: unknown): T {
   return next as T;
 }
 
+function normalizeAgentModelConfigForWrite(value: unknown): unknown {
+  if (typeof value === "string") {
+    return normalizeAgentModelRefForConfig(value);
+  }
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+
+  const next: Record<string, unknown> = { ...value };
+  if (typeof next.primary === "string") {
+    next.primary = normalizeAgentModelRefForConfig(next.primary);
+  }
+  if (Array.isArray(next.fallbacks)) {
+    next.fallbacks = next.fallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+  }
+  return next;
+}
+
+function normalizeAgentModelMapForWrite(value: unknown): unknown {
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+  return normalizeAgentModelMapForConfig(value);
+}
+
+function normalizeConfigModelRefsForWrite(cfg: OpenClawConfig): OpenClawConfig {
+  const defaults = cfg.agents?.defaults;
+  if (!defaults) {
+    return cfg;
+  }
+
+  const nextDefaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {
+    ...defaults,
+  };
+  if (defaults.model !== undefined) {
+    nextDefaults.model = normalizeAgentModelConfigForWrite(defaults.model) as typeof defaults.model;
+  }
+  if (defaults.models !== undefined) {
+    nextDefaults.models = normalizeAgentModelMapForWrite(defaults.models) as typeof defaults.models;
+  }
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: nextDefaults,
+    },
+  };
+}
+
 export function applyProviderAuthConfigPatch(
   cfg: OpenClawConfig,
   patch: unknown,
   options?: { replaceDefaultModels?: boolean },
 ): OpenClawConfig {
-  const merged = mergeConfigPatch(cfg, patch);
+  const merged = normalizeConfigModelRefsForWrite(mergeConfigPatch(cfg, patch));
   if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {
     return merged;
   }
@@ -104,7 +160,7 @@ export function applyProviderAuthConfigPatch(
     return merged;
   }
 
-  return {
+  return normalizeConfigModelRefsForWrite({
     ...merged,
     agents: {
       ...merged.agents,
@@ -116,7 +172,7 @@ export function applyProviderAuthConfigPatch(
         >["models"],
       },
     },
-  };
+  });
 }
 
 export function applyDefaultModel(
@@ -124,8 +180,11 @@ export function applyDefaultModel(
   model: string,
   opts?: { preserveExistingPrimary?: boolean },
 ): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[model] = models[model] ?? {};
+  const normalizedModel = normalizeAgentModelRefForConfig(model);
+  const models = {
+    ...normalizeAgentModelMapForConfig(cfg.agents?.defaults?.models ?? {}),
+  };
+  models[normalizedModel] = models[normalizedModel] ?? {};
 
   const existingModel = cfg.agents?.defaults?.model;
   const existingPrimary =
@@ -134,6 +193,15 @@ export function applyDefaultModel(
       : existingModel && typeof existingModel === "object"
         ? (existingModel as { primary?: string }).primary
         : undefined;
+  const normalizedExistingPrimary = existingPrimary
+    ? normalizeAgentModelRefForConfig(existingPrimary)
+    : undefined;
+  const existingFallbacks =
+    existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
+      ? (existingModel as { fallbacks?: string[] }).fallbacks?.map((fallback) =>
+          normalizeAgentModelRefForConfig(fallback),
+        )
+      : undefined;
   return {
     ...cfg,
     agents: {
@@ -142,10 +210,11 @@ export function applyDefaultModel(
         ...cfg.agents?.defaults,
         models,
         model: {
-          ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
-            ? { fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks }
-            : undefined),
-          primary: opts?.preserveExistingPrimary === true ? (existingPrimary ?? model) : model,
+          ...(existingFallbacks ? { fallbacks: existingFallbacks } : undefined),
+          primary:
+            opts?.preserveExistingPrimary === true
+              ? (normalizedExistingPrimary ?? normalizedModel)
+              : normalizedModel,
         },
       },
     },

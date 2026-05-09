@@ -66,6 +66,16 @@ function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnaps
   };
 }
 
+async function expectMissingPath(operation: Promise<unknown>) {
+  let error: NodeJS.ErrnoException | undefined;
+  try {
+    await operation;
+  } catch (caught) {
+    error = caught as NodeJS.ErrnoException;
+  }
+  expect(error?.code).toBe("ENOENT");
+}
+
 beforeAll(async () => {
   vi.doMock("./models-config.plan.js", () => ({
     planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
@@ -128,9 +138,10 @@ describe("models-config write serialization", () => {
 
       await ensureOpenClawModelsJson({}, agentDir);
 
-      expect(planOpenClawModelsJsonMock).toHaveBeenCalledWith(
-        expect.not.objectContaining({ pluginMetadataSnapshot: snapshot }),
-      );
+      const params = planOpenClawModelsJsonMock.mock.calls[0]?.[0] as
+        | { pluginMetadataSnapshot?: PluginMetadataSnapshot }
+        | undefined;
+      expect(params?.pluginMetadataSnapshot).not.toBe(snapshot);
     });
   });
 
@@ -143,12 +154,11 @@ describe("models-config write serialization", () => {
 
       await ensureOpenClawModelsJson({}, agentDir, { workspaceDir });
 
-      expect(planOpenClawModelsJsonMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceDir,
-          pluginMetadataSnapshot: snapshot,
-        }),
-      );
+      const params = planOpenClawModelsJsonMock.mock.calls[0]?.[0] as
+        | { workspaceDir?: string; pluginMetadataSnapshot?: PluginMetadataSnapshot }
+        | undefined;
+      expect(params?.workspaceDir).toBe(workspaceDir);
+      expect(params?.pluginMetadataSnapshot).toBe(snapshot);
     });
   });
 
@@ -164,9 +174,9 @@ describe("models-config write serialization", () => {
 
       expect(result.agentDir).toBe(path.join(home, ".openclaw", "agents", "ops", "agent"));
       await expect(fs.access(path.join(result.agentDir, "models.json"))).resolves.toBeUndefined();
-      await expect(
+      await expectMissingPath(
         fs.access(path.join(home, ".openclaw", "agents", "main", "agent", "models.json")),
-      ).rejects.toThrow();
+      );
     });
   });
 
@@ -184,12 +194,14 @@ describe("models-config write serialization", () => {
       });
 
       expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
-      expect(planOpenClawModelsJsonMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          providerDiscoveryProviderIds: ["anthropic"],
-          providerDiscoveryTimeoutMs: 5000,
-        }),
-      );
+      const params = planOpenClawModelsJsonMock.mock.calls[1]?.[0] as
+        | {
+            providerDiscoveryProviderIds?: string[];
+            providerDiscoveryTimeoutMs?: number;
+          }
+        | undefined;
+      expect(params?.providerDiscoveryProviderIds).toEqual(["anthropic"]);
+      expect(params?.providerDiscoveryTimeoutMs).toBe(5000);
     });
   });
 
@@ -247,15 +259,28 @@ describe("models-config write serialization", () => {
 
       let inFlightWrites = 0;
       let maxInFlightWrites = 0;
+      let markFirstModelsWriteStarted: () => void = () => {};
+      const firstModelsWriteStarted = new Promise<void>((resolve) => {
+        markFirstModelsWriteStarted = resolve;
+      });
+      let releaseModelsWrites: () => void = () => {};
+      const modelsWritesCanContinue = new Promise<void>((resolve) => {
+        releaseModelsWrites = resolve;
+      });
+      let modelsWriteCount = 0;
       writePrivateStoreTextWriteMock.mockImplementation(
         async (params: { filePath: string; rootDir: string; content: string | Uint8Array }) => {
           const isModelsWrite = path.basename(params.filePath) === "models.json";
           if (isModelsWrite) {
+            modelsWriteCount += 1;
             inFlightWrites += 1;
             if (inFlightWrites > maxInFlightWrites) {
               maxInFlightWrites = inFlightWrites;
             }
-            await new Promise((resolve) => setTimeout(resolve, 10));
+            if (modelsWriteCount === 1) {
+              markFirstModelsWriteStarted();
+            }
+            await modelsWritesCanContinue;
           }
           try {
             if (!actualPrivateFileStore) {
@@ -273,7 +298,14 @@ describe("models-config write serialization", () => {
         },
       );
 
-      await Promise.all([ensureOpenClawModelsJson(first), ensureOpenClawModelsJson(second)]);
+      const writes = Promise.all([
+        ensureOpenClawModelsJson(first),
+        ensureOpenClawModelsJson(second),
+      ]);
+      await firstModelsWriteStarted;
+      await Promise.resolve();
+      releaseModelsWrites();
+      await writes;
 
       expect(maxInFlightWrites).toBe(1);
       const parsed = await readGeneratedModelsJson<{

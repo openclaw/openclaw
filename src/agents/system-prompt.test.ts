@@ -96,9 +96,23 @@ describe("buildAgentSystemPrompt", () => {
     const tokenA = lineA?.match(/[a-f0-9]{12}/)?.[0];
     const tokenB = lineB?.match(/[a-f0-9]{12}/)?.[0];
 
-    expect(tokenA).toBeDefined();
-    expect(tokenB).toBeDefined();
+    expect(tokenA).toMatch(/^[a-f0-9]{12}$/);
+    expect(tokenB).toMatch(/^[a-f0-9]{12}$/);
     expect(tokenA).not.toBe(tokenB);
+  });
+
+  it("injects the current model identity into the runtime prompt", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        agentId: "main",
+        model: "openai/gpt-5.5",
+      },
+    });
+
+    expect(prompt).toContain(
+      "Current model identity: openai/gpt-5.5. If asked what model you are, answer with this value for the current run.",
+    );
   });
 
   it("omits extended sections in minimal prompt mode", () => {
@@ -286,7 +300,6 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
         channel: "webchat",
-        canvasRootDir: "/Users/example/.openclaw-dev/canvas",
       },
     });
 
@@ -300,7 +313,7 @@ describe("buildAgentSystemPrompt", () => {
       "Never use local filesystem paths or `file://...` URLs in `[embed ...]`.",
     );
     expect(prompt).toContain(
-      "The active hosted embed root for this session is: `/Users/example/.openclaw-dev/canvas`.",
+      "The active hosted embed root is profile-scoped, not workspace-scoped.",
     );
     expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
@@ -771,6 +784,40 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds stronger sub-agent delegation guidance in prefer mode", () => {
+    const defaultPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+    });
+    const preferPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+      subagentDelegationMode: "prefer",
+    });
+
+    expect(defaultPrompt).not.toContain("## Sub-Agent Delegation");
+    expect(preferPrompt).toContain("## Sub-Agent Delegation");
+    expect(preferPrompt).toContain("Mode: prefer");
+    expect(preferPrompt).toContain("responsive coordinator");
+    expect(preferPrompt).toContain(
+      "Anything requiring more work than a direct reply should go through `sessions_spawn`",
+    );
+    expect(preferPrompt).toContain(
+      "Use `subagents(action=list|steer|kill)` only when explicitly asked for status",
+    );
+  });
+
+  it("omits prefer delegation guidance when sessions_spawn is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["subagents"],
+      subagentDelegationMode: "prefer",
+    });
+
+    expect(prompt).not.toContain("## Sub-Agent Delegation");
+    expect(prompt).toContain("Sub-agent orchestration");
+  });
+
   it("reapplies provider prompt contributions", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1056,7 +1103,6 @@ describe("buildAgentSystemPrompt", () => {
       runtimeInfo: {
         channel: "telegram",
         capabilities: ["inlineButtons"],
-        canvasRootDir: "/tmp/canvas",
       },
       contextFiles: [
         {
@@ -1112,8 +1158,8 @@ describe("buildAgentBootstrapSystemContext", () => {
   });
 
   it("returns nothing when bootstrap is not pending", () => {
-    expect(buildAgentBootstrapSystemContext({ bootstrapMode: "none" })).toEqual([]);
-    expect(buildAgentBootstrapSystemContext({})).toEqual([]);
+    expect(buildAgentBootstrapSystemContext({ bootstrapMode: "none" })).toStrictEqual([]);
+    expect(buildAgentBootstrapSystemContext({})).toStrictEqual([]);
   });
 });
 

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -8,6 +9,8 @@ import {
 } from "../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -192,11 +195,24 @@ describe("before_tool_call loop detection behavior", () => {
     });
   }
 
+  async function expectUnblockedToolExecution(
+    tool: ReturnType<typeof createWrappedTool>,
+    toolCallId: string,
+    params: unknown,
+  ) {
+    const result = await tool.execute(toolCallId, params, undefined, undefined);
+    expect(result).toMatchObject({
+      content: expect.any(Array),
+      details: expect.any(Object),
+    });
+    return result;
+  }
+
   it("blocks known poll loops when no progress repeats", async () => {
     const { tool, params } = createNoProgressProcessFixture("sess-1");
 
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-      await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
 
     const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
@@ -214,7 +230,7 @@ describe("before_tool_call loop detection behavior", () => {
     const params = { action: "poll", sessionId: "sess-off" };
 
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-      await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
   });
 
@@ -229,9 +245,7 @@ describe("before_tool_call loop detection behavior", () => {
     const params = { action: "poll", sessionId: "sess-2" };
 
     for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
-      await expect(
-        tool.execute(`poll-progress-${i}`, params, undefined, undefined),
-      ).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `poll-progress-${i}`, params);
     }
   });
 
@@ -239,7 +253,7 @@ describe("before_tool_call loop detection behavior", () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
     for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
-      await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
   });
 
@@ -247,7 +261,7 @@ describe("before_tool_call loop detection behavior", () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
     for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
-      await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+      await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
 
     const result = await tool.execute(
@@ -275,14 +289,10 @@ describe("before_tool_call loop detection behavior", () => {
     });
 
     for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
-      await expect(
-        firstRunTool.execute(`old-run-${i}`, params, undefined, undefined),
-      ).resolves.toBeDefined();
+      await expectUnblockedToolExecution(firstRunTool, `old-run-${i}`, params);
     }
 
-    await expect(
-      secondRunTool.execute("new-run-0", params, undefined, undefined),
-    ).resolves.toBeDefined();
+    await expectUnblockedToolExecution(secondRunTool, "new-run-0", params);
   });
 
   it("coalesces repeated generic warning events into threshold buckets", async () => {
@@ -350,14 +360,9 @@ describe("before_tool_call loop detection behavior", () => {
       const { readTool, listTool } = createPingPongTools({ withProgress: true });
       await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
 
-      await expect(
-        listTool.execute(
-          `list-${CRITICAL_THRESHOLD - 1}`,
-          { dir: "/workspace" },
-          undefined,
-          undefined,
-        ),
-      ).resolves.toBeDefined();
+      await expectUnblockedToolExecution(listTool, `list-${CRITICAL_THRESHOLD - 1}`, {
+        dir: "/workspace",
+      });
 
       const criticalPingPong = emitted.find(
         (evt) => evt.level === "critical" && evt.detector === "ping_pong",
@@ -366,7 +371,12 @@ describe("before_tool_call loop detection behavior", () => {
       const warningPingPong = emitted.find(
         (evt) => evt.level === "warning" && evt.detector === "ping_pong",
       );
-      expect(warningPingPong).toBeTruthy();
+      expect(warningPingPong).toMatchObject({
+        type: "tool.loop",
+        level: "warning",
+        action: "warn",
+        detector: "ping_pong",
+      });
     });
   });
 
@@ -639,6 +649,7 @@ describe("before_tool_call requireApproval handling", () => {
     }
     hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
     mockCallGateway.mockReset();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   async function runAbortDuringApprovalWait(options?: { onResolution?: ReturnType<typeof vi.fn> }) {
@@ -732,6 +743,209 @@ describe("before_tool_call requireApproval handling", () => {
     });
     expect(toolContext?.trace).not.toBe(trace);
     expect(Object.isFrozen(toolContext?.trace)).toBe(true);
+  });
+
+  it("passes host-derived apply_patch paths to before_tool_call hooks", async () => {
+    const cwd = path.join("/tmp", "openclaw-hooks");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: src/new.ts",
+      "+x",
+      "*** Update File: src/old.ts",
+      "*** Move to: src/renamed.ts",
+      "@@",
+      "+y",
+      "*** Delete File: src/dead.ts",
+      "*** End Patch",
+    ].join("\n");
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "apply_patch",
+      params: { input: patch },
+      toolCallId: "patch-1",
+      ctx: { agentId: "main", cwd, sessionKey: "main", runId: "run-patch" },
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "apply_patch",
+        runId: "run-patch",
+        toolCallId: "patch-1",
+        derivedPaths: [
+          path.join(cwd, "src/new.ts"),
+          path.join(cwd, "src/old.ts"),
+          path.join(cwd, "src/renamed.ts"),
+          path.join(cwd, "src/dead.ts"),
+        ],
+      }),
+      expect.objectContaining({
+        toolName: "apply_patch",
+        runId: "run-patch",
+        toolCallId: "patch-1",
+      }),
+    );
+  });
+
+  it("derives sandboxed apply_patch paths through the sandbox bridge", async () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: /workspace/src/new.ts",
+      "+x",
+      "*** End Patch",
+    ].join("\n");
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "apply_patch",
+      params: { input: patch },
+      toolCallId: "patch-sandbox",
+      ctx: {
+        agentId: "main",
+        cwd: "/workspace",
+        sandbox: {
+          root: "/workspace",
+          bridge: {
+            resolvePath: ({ filePath }: { filePath: string }) => ({
+              containerPath: filePath,
+              hostPath: "/host/sandbox/src/new.ts",
+              relativePath: "src/new.ts",
+            }),
+          } as never,
+        },
+        sessionKey: "main",
+        runId: "run-patch",
+      },
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "apply_patch",
+        derivedPaths: ["/host/sandbox/src/new.ts"],
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("does not fail hooks when sandbox path derivation rejects a target", async () => {
+    const patch = ["*** Begin Patch", "*** Add File: /outside.ts", "+x", "*** End Patch"].join(
+      "\n",
+    );
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "apply_patch",
+      params: { input: patch },
+      toolCallId: "patch-sandbox-rejected",
+      ctx: {
+        agentId: "main",
+        cwd: "/workspace",
+        sandbox: {
+          root: "/workspace",
+          bridge: {
+            resolvePath: () => {
+              throw new Error("Path escapes sandbox root");
+            },
+          } as never,
+        },
+        sessionKey: "main",
+        runId: "run-patch",
+      },
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
+      expect.not.objectContaining({ derivedPaths: expect.anything() }),
+      expect.objectContaining({
+        toolName: "apply_patch",
+        runId: "run-patch",
+        toolCallId: "patch-sandbox-rejected",
+      }),
+    );
+  });
+
+  it("skips derived path extraction when no policies or hooks can consume it", async () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const params = {};
+    Object.defineProperty(params, "input", {
+      enumerable: true,
+      get() {
+        throw new Error("should not derive paths");
+      },
+    });
+
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "apply_patch",
+        params,
+        toolCallId: "patch-no-hooks",
+      }),
+    ).resolves.toEqual({ blocked: false, params });
+    expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+  });
+
+  it("recomputes host-derived paths after trusted policy param rewrites", async () => {
+    const cwd = path.join("/tmp", "openclaw-hooks");
+    const originalPatch = [
+      "*** Begin Patch",
+      "*** Add File: src/old.ts",
+      "+x",
+      "*** End Patch",
+    ].join("\n");
+    const rewrittenPatch = [
+      "*** Begin Patch",
+      "*** Add File: src/new.ts",
+      "+x",
+      "*** End Patch",
+    ].join("\n");
+    const seenByLaterPolicy: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-rewriter",
+        pluginName: "Trusted Rewriter",
+        source: "test",
+        policy: {
+          id: "rewrite",
+          description: "rewrite",
+          evaluate: () => ({ params: { input: rewrittenPatch } }),
+        },
+      },
+      {
+        pluginId: "trusted-inspector",
+        pluginName: "Trusted Inspector",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenByLaterPolicy.push(event.derivedPaths);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "apply_patch",
+      params: { input: originalPatch },
+      toolCallId: "patch-rewrite",
+      ctx: { agentId: "main", cwd, sessionKey: "main", runId: "run-patch" },
+    });
+
+    expect(result).toEqual({ blocked: false, params: { input: rewrittenPatch } });
+    expect(seenByLaterPolicy).toEqual([[path.join(cwd, "src/new.ts")]]);
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { input: rewrittenPatch },
+        derivedPaths: [path.join(cwd, "src/new.ts")],
+      }),
+      expect.anything(),
+    );
   });
 
   it("calls gateway RPC and unblocks on allow-once", async () => {
@@ -934,7 +1148,7 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(removeListenerSpy.mock.calls.some(([type]) => type === "abort")).toBe(true);
+    expect(removeListenerSpy.mock.calls.map(([type]) => type)).toContain("abort");
   });
 
   it("calls onResolution with allow-once on approval", async () => {

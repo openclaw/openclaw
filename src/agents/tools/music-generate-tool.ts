@@ -359,8 +359,12 @@ async function loadReferenceImages(params: {
             readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
           })
         : await (async () => {
+            const referenceTarget = resolvedPath ?? resolvedInput;
+            const isRemoteReference = /^https?:\/\//i.test(referenceTarget);
             const { signal, cleanup } = buildTimeoutAbortSignal({
               timeoutMs: params.timeoutMs ?? DEFAULT_REFERENCE_FETCH_TIMEOUT_MS,
+              operation: "music-generate.reference-fetch",
+              ...(isRemoteReference ? { url: referenceTarget } : {}),
             });
             try {
               return await loadWebMedia(resolvedPath ?? resolvedInput, {
@@ -595,7 +599,10 @@ export function createMusicGenerateTool(options?: {
       const action = resolveAction(args);
 
       if (action === "list") {
-        return createMusicGenerateListActionResult(cfg);
+        return createMusicGenerateListActionResult(cfg, {
+          agentDir: options?.agentDir,
+          authStore: options?.authProfileStore,
+        });
       }
 
       if (action === "status") {

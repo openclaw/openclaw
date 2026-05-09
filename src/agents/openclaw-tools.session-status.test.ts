@@ -179,6 +179,16 @@ function createProviderUsageModuleMock() {
   };
 }
 
+function formatPrimaryModelLabel(provider: string | undefined, model: string): string {
+  return provider ? `${provider}/${model}` : model;
+}
+
+function formatStatusLines(primary: string, taskLineOverride: string | undefined): string {
+  return taskLineOverride
+    ? `OpenClaw\n🧠 Model: ${primary}\n${taskLineOverride}`
+    : `OpenClaw\n🧠 Model: ${primary}`;
+}
+
 function createCommandsStatusRuntimeModuleMock() {
   return {
     buildStatusText: async (params: {
@@ -207,9 +217,7 @@ function createCommandsStatusRuntimeModuleMock() {
           )
         : undefined;
       const primary =
-        params.primaryModelLabelOverride ??
-        [params.provider, params.model].filter(Boolean).join("/") ??
-        params.model;
+        params.primaryModelLabelOverride ?? formatPrimaryModelLabel(params.provider, params.model);
       const customAuth = params.provider
         ? resolveUsableCustomProviderApiKeyMock({ provider: params.provider })
         : null;
@@ -232,9 +240,7 @@ function createCommandsStatusRuntimeModuleMock() {
         includeTranscriptUsage: params.includeTranscriptUsage,
         workspaceDir: params.workspaceDir,
       });
-      return ["OpenClaw", `🧠 Model: ${primary}`, params.taskLineOverride]
-        .filter(Boolean)
-        .join("\n");
+      return formatStatusLines(primary, params.taskLineOverride);
     },
   };
 }
@@ -384,10 +390,15 @@ function expectSpawnedSessionLookupCalls(spawnedBy: string) {
   expect(callGatewayMock).toHaveBeenNthCalledWith(2, expectedCall);
 }
 
-function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: boolean }) {
+function getSessionStatusTool(
+  agentSessionKey = "main",
+  options?: { sandboxed?: boolean; activeModelProvider?: string; activeModelId?: string },
+) {
   const tool = createSessionStatusTool({
     agentSessionKey,
     sandboxed: options?.sandboxed,
+    activeModelProvider: options?.activeModelProvider,
+    activeModelId: options?.activeModelId,
     config: mockConfig as never,
   });
   expect(tool.name).toBe("session_status");
@@ -661,6 +672,51 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:current");
   });
 
+  it("does not apply the active run model to a literal current session key", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+      "agent:main:current": {
+        sessionId: "s-current",
+        updatedAt: 20,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      },
+    });
+
+    const tool = getSessionStatusTool("main", {
+      activeModelProvider: "openai-codex",
+      activeModelId: "gpt-5.2",
+    });
+
+    const result = await tool.execute("call-current-literal-key-active-model", {
+      sessionKey: "current",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:current");
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-6",
+        }),
+      }),
+    );
+    expect(buildStatusMessageMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "openai-codex/gpt-5.2",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("resolves sessionKey=current for a channel-plugin requester via implicit fallback", async () => {
     resetSessionStore({});
 
@@ -710,6 +766,121 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("🧠 Model:");
   });
 
+  it("renders the active run model for semantic current lookups", async () => {
+    resetSessionStore({
+      "agent:main:scope:scopy:direct:scopy": {
+        sessionId: "current-active-model",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
+      activeModelProvider: "openai-codex",
+      activeModelId: "gpt-5.2",
+    });
+
+    await tool.execute("call-current-active-model", { sessionKey: "current" });
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "openai-codex/gpt-5.2",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("renders the active run model for omitted sessionKey lookups", async () => {
+    resetSessionStore({
+      "agent:main:scope:scopy:direct:scopy": {
+        sessionId: "implicit-current-active-model",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
+      activeModelProvider: "openai-codex",
+      activeModelId: "gpt-5.2",
+    });
+
+    await tool.execute("call-implicit-current-active-model", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "openai-codex/gpt-5.2",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("renders the active run model for current lookups with persisted overrides", async () => {
+    resetSessionStore({
+      "agent:main:scope:scopy:direct:scopy": {
+        sessionId: "current-active-model-with-override",
+        updatedAt: 10,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
+      activeModelProvider: "openai-codex",
+      activeModelId: "gpt-5.2",
+    });
+
+    await tool.execute("call-current-active-model-with-override", { sessionKey: "current" });
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: expect.not.objectContaining({
+          providerOverride: expect.any(String),
+          modelOverride: expect.any(String),
+        }),
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "openai-codex/gpt-5.2",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("does not reuse the active run model after a semantic current reset", async () => {
+    resetSessionStore({
+      "agent:main:scope:scopy:direct:scopy": {
+        sessionId: "current-reset-model",
+        updatedAt: 10,
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.2",
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
+      activeModelProvider: "openai-codex",
+      activeModelId: "gpt-5.2",
+    });
+
+    await tool.execute("call-current-reset-model", {
+      sessionKey: "current",
+      model: "default",
+    });
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "openai/gpt-5.4",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("materializes a valid persisted session entry when implicit current fallback mutates model state", async () => {
     resetSessionStore({});
 
@@ -719,9 +890,18 @@ describe("session_status tool", () => {
       sessionKey: "current",
       model: "anthropic/claude-sonnet-4-6",
     });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
+    const details = result.details as {
+      ok?: boolean;
+      sessionKey?: string;
+      model?: string;
+      modelProvider?: string;
+      modelOverride?: string | null;
+    };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
+    expect(details.model).toBe("claude-sonnet-4-6");
+    expect(details.modelProvider).toBe("anthropic");
+    expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
     expect(updateSessionStoreMock).toHaveBeenCalled();
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,
@@ -735,7 +915,7 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toEqual(expect.any(String));
+    expect(saved.sessionId).toBeTypeOf("string");
     expect(saved.sessionId.trim().length).toBeGreaterThan(0);
   });
 
@@ -763,7 +943,7 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toEqual(expect.any(String));
+    expect(saved.sessionId).toBeTypeOf("string");
     expect(saved.sessionId.trim().length).toBeGreaterThan(0);
   });
 
@@ -1858,7 +2038,9 @@ describe("session_status tool", () => {
 
     const tool = getSessionStatusTool();
 
-    await tool.execute("call3", { model: "default" });
+    const result = await tool.execute("call3", { model: "default" });
+    const details = result.details as { modelOverride?: string | null };
+    expect(details.modelOverride).toBeNull();
     expect(updateSessionStoreMock).toHaveBeenCalled();
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,

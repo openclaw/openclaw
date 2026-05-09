@@ -1,5 +1,8 @@
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
-import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  createStartAccountContext,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   createTestRegistry,
@@ -11,6 +14,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 
+type QaRunPreparedTurn = Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0];
+
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
@@ -21,11 +26,19 @@ function installQaChannelTestRegistry() {
   );
 }
 
+function expectDispatchedContext(ctx: Record<string, unknown> | null): Record<string, unknown> {
+  expect(ctx).not.toBeNull();
+  if (ctx === null) {
+    throw new Error("Expected dispatched context");
+  }
+  return ctx;
+}
+
 function createMockQaRuntime(params?: {
   onDispatch?: (ctx: Record<string, unknown>) => void;
 }): PluginRuntime {
   const sessionUpdatedAt = new Map<string, number>();
-  return {
+  return createPluginRuntimeMock({
     channel: {
       mentions: {
         buildMentionRegexes() {
@@ -88,8 +101,28 @@ function createMockQaRuntime(params?: {
           });
         },
       },
+      turn: {
+        async runPrepared(turn: QaRunPreparedTurn) {
+          await turn.recordInboundSession({
+            storePath: turn.storePath,
+            sessionKey:
+              typeof turn.ctxPayload.SessionKey === "string"
+                ? turn.ctxPayload.SessionKey
+                : turn.routeSessionKey,
+            ctx: turn.ctxPayload,
+            onRecordError: turn.record?.onRecordError ?? (() => undefined),
+          });
+          return {
+            admission: turn.admission ?? { kind: "dispatch" as const },
+            dispatched: true,
+            ctxPayload: turn.ctxPayload,
+            routeSessionKey: turn.routeSessionKey,
+            dispatchResult: await turn.runDispatch(),
+          };
+        },
+      },
     },
-  } as unknown as PluginRuntime;
+  } as unknown as PluginRuntime);
 }
 
 function createQaChannelConfig(params: { baseUrl: string; allowFrom?: string[] }) {
@@ -105,6 +138,30 @@ function createQaChannelConfig(params: { baseUrl: string; allowFrom?: string[] }
   };
 }
 
+function requireQaStartAccount() {
+  const startAccount = qaChannelPlugin.gateway?.startAccount;
+  if (!startAccount) {
+    throw new Error("expected qa-channel gateway startAccount");
+  }
+  return startAccount;
+}
+
+function requireQaMessageAdapter() {
+  const adapter = qaChannelPlugin.message;
+  if (!adapter) {
+    throw new Error("expected qa-channel message adapter");
+  }
+  return adapter;
+}
+
+function requireQaActionHandler() {
+  const handleAction = qaChannelPlugin.actions?.handleAction;
+  if (!handleAction) {
+    throw new Error("expected qa-channel action handler");
+  }
+  return handleAction;
+}
+
 async function startQaChannelTestHarness(params?: {
   runtime?: PluginRuntime;
   allowFrom?: string[];
@@ -116,9 +173,8 @@ async function startQaChannelTestHarness(params?: {
   const cfg = createQaChannelConfig({ baseUrl: bus.baseUrl, allowFrom: params?.allowFrom });
   const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
   const abort = new AbortController();
-  const startAccount = qaChannelPlugin.gateway?.startAccount;
-  expect(startAccount).toBeDefined();
-  const task = startAccount!(
+  const startAccount = requireQaStartAccount();
+  const task = startAccount(
     createStartAccountContext({
       account,
       cfg,
@@ -216,11 +272,10 @@ describe("qa-channel plugin", () => {
   it("backs declared message adapter capabilities with qa bus sends", async () => {
     const harness = await startQaChannelTestHarness({ allowFrom: ["*"] });
     try {
-      const adapter = qaChannelPlugin.message;
-      expect(adapter).toBeDefined();
+      const adapter = requireQaMessageAdapter();
 
       const proveText = async () => {
-        const result = await adapter!.send!.text!({
+        const result = await adapter.send!.text!({
           cfg: createQaChannelConfig({ baseUrl: harness.baseUrl, allowFrom: ["*"] }),
           to: "thread:qa-room/thread-1",
           text: "hello",
@@ -239,13 +294,13 @@ describe("qa-channel plugin", () => {
 
       await verifyChannelMessageAdapterCapabilityProofs({
         adapterName: "qaChannelMessageAdapter",
-        adapter: adapter!,
+        adapter,
         proofs: {
           text: proveText,
           replyTo: proveText,
           thread: proveText,
           messageSendingHooks: () => {
-            expect(adapter!.send!.text).toBeTypeOf("function");
+            expect(adapter.send!.text).toBeTypeOf("function");
           },
         },
       });
@@ -360,16 +415,12 @@ describe("qa-channel plugin", () => {
         timeoutMs: 15_000,
       });
 
-      expect(dispatchedCtx).not.toBeNull();
-      if (!dispatchedCtx) {
-        throw new Error("expected dispatched context");
-      }
-      const mediaCtx: {
+      const mediaCtx = expectDispatchedContext(dispatchedCtx) as {
         MediaPath?: string;
         MediaPaths?: string[];
         MediaType?: string;
         MediaTypes?: string[];
-      } = dispatchedCtx;
+      };
       expect(mediaCtx.MediaPath).toEqual(expect.stringContaining("red-top-blue-bottom"));
       expect(mediaCtx.MediaType).toBe("image/png");
       expect(mediaCtx.MediaPaths).toEqual([mediaCtx.MediaPath]);
@@ -387,10 +438,9 @@ describe("qa-channel plugin", () => {
     try {
       const cfg = createQaChannelConfig({ baseUrl: bus.baseUrl });
 
-      const handleAction = qaChannelPlugin.actions?.handleAction;
-      expect(handleAction).toBeDefined();
+      const handleAction = requireQaActionHandler();
 
-      const threadResult = await handleAction!({
+      const threadResult = await handleAction({
         channel: "qa-channel",
         action: "thread-create",
         cfg,
@@ -404,7 +454,7 @@ describe("qa-channel plugin", () => {
         thread: { id: string };
         target: string;
       };
-      expect(threadPayload.thread.id).toBeTruthy();
+      expect(threadPayload.thread.id).toMatch(/^thread-/);
       expect(threadPayload.target).toContain(threadPayload.thread.id);
 
       const outbound = state.addOutboundMessage({
@@ -413,7 +463,7 @@ describe("qa-channel plugin", () => {
         threadId: threadPayload.thread.id,
       });
 
-      await handleAction!({
+      await handleAction({
         channel: "qa-channel",
         action: "react",
         cfg,
@@ -424,7 +474,7 @@ describe("qa-channel plugin", () => {
         },
       });
 
-      await handleAction!({
+      await handleAction({
         channel: "qa-channel",
         action: "edit",
         cfg,
@@ -435,7 +485,7 @@ describe("qa-channel plugin", () => {
         },
       });
 
-      const readResult = await handleAction!({
+      const readResult = await handleAction({
         channel: "qa-channel",
         action: "read",
         cfg,
@@ -447,7 +497,7 @@ describe("qa-channel plugin", () => {
       const readPayload = extractToolPayload(readResult) as { message: { text: string } };
       expect(readPayload.message.text).toContain("(edited)");
 
-      const searchResult = await handleAction!({
+      const searchResult = await handleAction({
         channel: "qa-channel",
         action: "search",
         cfg,
@@ -461,9 +511,9 @@ describe("qa-channel plugin", () => {
       const searchPayload = extractToolPayload(searchResult) as {
         messages: Array<{ id: string }>;
       };
-      expect(searchPayload.messages.some((message) => message.id === outbound.id)).toBe(true);
+      expect(searchPayload.messages.map((message) => message.id)).toContain(outbound.id);
 
-      await handleAction!({
+      await handleAction({
         channel: "qa-channel",
         action: "delete",
         cfg,

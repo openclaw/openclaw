@@ -34,14 +34,15 @@ export function defaultTitle(name: string): string {
   if (!cleaned) {
     return "Tool";
   }
-  return cleaned
-    .split(/\s+/)
-    .map((part) =>
+  const parts: string[] = [];
+  for (const part of cleaned.split(/\s+/)) {
+    parts.push(
       part.length <= 2 && part.toUpperCase() === part
         ? part
         : `${part.at(0)?.toUpperCase() ?? ""}${part.slice(1)}`,
-    )
-    .join(" ");
+    );
+  }
+  return parts.join(" ");
 }
 
 function normalizeVerb(value?: string): string | undefined {
@@ -131,14 +132,23 @@ function coerceDisplayValue(
     return String(value);
   }
   if (Array.isArray(value)) {
-    const values = value
-      .map((item) => coerceDisplayValue(item, opts))
-      .filter((item): item is string => Boolean(item));
-    if (values.length === 0) {
+    const values: string[] = [];
+    let displayValueCount = 0;
+    for (const item of value) {
+      const display = coerceDisplayValue(item, opts);
+      if (!display) {
+        continue;
+      }
+      displayValueCount += 1;
+      if (values.length < maxArrayEntries) {
+        values.push(display);
+      }
+    }
+    if (displayValueCount === 0) {
       return undefined;
     }
-    const preview = values.slice(0, maxArrayEntries).join(", ");
-    return values.length > maxArrayEntries ? `${preview}…` : preview;
+    const preview = values.join(", ");
+    return displayValueCount > maxArrayEntries ? `${preview}…` : preview;
   }
   return undefined;
 }
@@ -162,8 +172,13 @@ function lookupValueByPath(args: unknown, path: string): unknown {
 }
 
 export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
-  const segments = raw.split(".").filter(Boolean);
-  const last = segments.at(-1) ?? raw;
+  let last = "";
+  for (const segment of raw.split(".")) {
+    if (segment) {
+      last = segment;
+    }
+  }
+  last ||= raw;
   const override = overrides[last];
   if (override) {
     return override;
@@ -265,19 +280,76 @@ function resolveWebSearchDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  const query = normalizeOptionalString(record.query);
+  const queries = collectWebSearchQueries(record);
   const count =
     typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
       ? Math.floor(record.count)
-      : undefined;
+      : typeof record.max_results === "number" &&
+          Number.isFinite(record.max_results) &&
+          record.max_results > 0
+        ? Math.floor(record.max_results)
+        : typeof record.num_results === "number" &&
+            Number.isFinite(record.num_results) &&
+            record.num_results > 0
+          ? Math.floor(record.num_results)
+          : typeof record.limit === "number" && Number.isFinite(record.limit) && record.limit > 0
+            ? Math.floor(record.limit)
+            : typeof record.top_k === "number" && Number.isFinite(record.top_k) && record.top_k > 0
+              ? Math.floor(record.top_k)
+              : undefined;
 
-  if (!query) {
+  if (queries.length === 0) {
     return undefined;
   }
 
-  return count !== undefined ? `for "${query}" (top ${count})` : `for "${query}"`;
+  const displayedQueries = queries.slice(0, 3).map((query) => `"${query}"`);
+  const queryText =
+    queries.length > displayedQueries.length
+      ? `${displayedQueries.join(", ")}…`
+      : displayedQueries.join(", ");
+
+  return count !== undefined ? `for ${queryText} (top ${count})` : `for ${queryText}`;
 }
 
+function collectWebSearchQueries(record: Record<string, unknown>): string[] {
+  const queries: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: unknown) => {
+    const normalized = normalizeOptionalString(value);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    queries.push(normalized);
+  };
+
+  add(record.query);
+  add(record.q);
+  add(record.search);
+  add(record.input);
+
+  for (const key of ["search_query", "image_query", "queries"]) {
+    const value = record[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const entry of value) {
+      if (typeof entry === "string") {
+        add(entry);
+        continue;
+      }
+      const entryRecord = asRecord(entry);
+      if (!entryRecord) {
+        continue;
+      }
+      add(entryRecord.query);
+      add(entryRecord.q);
+      add(entryRecord.search);
+    }
+  }
+
+  return queries;
+}
 function resolveWebFetchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
@@ -295,12 +367,13 @@ function resolveWebFetchDetail(args: unknown): string | undefined {
       ? Math.floor(record.maxChars)
       : undefined;
 
-  const suffix = [
-    mode ? `mode ${mode}` : undefined,
-    maxChars !== undefined ? `max ${maxChars} chars` : undefined,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(", ");
+  let suffix = "";
+  if (mode) {
+    suffix = `mode ${mode}`;
+  }
+  if (maxChars !== undefined) {
+    suffix = suffix ? `${suffix}, max ${maxChars} chars` : `max ${maxChars} chars`;
+  }
 
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
@@ -366,10 +439,15 @@ function resolveDetailFromKeys(
     return undefined;
   }
 
-  return unique
-    .slice(0, opts.maxEntries ?? 8)
-    .map((entry) => `${entry.label} ${entry.value}`)
-    .join(" · ");
+  const maxEntries = opts.maxEntries ?? 8;
+  const parts: string[] = [];
+  for (let index = 0; index < unique.length && index < maxEntries; index += 1) {
+    const entry = unique[index];
+    if (entry) {
+      parts.push(`${entry.label} ${entry.value}`);
+    }
+  }
+  return parts.join(" · ");
 }
 
 function resolveToolVerbAndDetail(params: {
@@ -395,7 +473,7 @@ function resolveToolVerbAndDetail(params: {
   const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
 
   let detail: string | undefined;
-  if (params.toolKey === "exec") {
+  if (params.toolKey === "exec" || params.toolKey === "bash") {
     detail = resolveExecDetail(params.args, { detailMode: params.toolDetailMode });
   }
   if (!detail && params.toolKey === "read") {
@@ -438,11 +516,16 @@ export function formatToolDetailText(
     return undefined;
   }
   const normalized = detail.includes(" · ")
-    ? detail
-        .split(" · ")
-        .map((part) => part.trim())
-        .filter((part) => part.length > 0)
-        .join(", ")
+    ? (() => {
+        const parts: string[] = [];
+        for (const part of detail.split(" · ")) {
+          const trimmed = part.trim();
+          if (trimmed) {
+            parts.push(trimmed);
+          }
+        }
+        return parts.join(", ");
+      })()
     : detail;
   if (!normalized) {
     return undefined;

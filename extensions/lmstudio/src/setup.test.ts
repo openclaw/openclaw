@@ -8,7 +8,7 @@ import {
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-setup";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
@@ -46,6 +46,13 @@ vi.mock("openclaw/plugin-sdk/provider-setup", async (importOriginal) => {
     configureOpenAICompatibleSelfHostedProviderNonInteractive: (...args: unknown[]) =>
       configureSelfHostedNonInteractiveMock(...args),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./models.fetch.js");
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth");
+  vi.doUnmock("openclaw/plugin-sdk/provider-setup");
+  vi.resetModules();
 });
 
 function createModel(id: string, name = id): ModelDefinitionConfig {
@@ -728,7 +735,7 @@ describe("lmstudio setup", () => {
       provider: "lmstudio",
       agentDir: undefined,
     });
-    expect(result.profiles).toEqual([]);
+    expect(result.profiles).toStrictEqual([]);
     expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
@@ -812,7 +819,7 @@ describe("lmstudio setup", () => {
       provider: "lmstudio",
       agentDir: undefined,
     });
-    expect(result.profiles).toEqual([]);
+    expect(result.profiles).toStrictEqual([]);
     expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
@@ -849,7 +856,7 @@ describe("lmstudio setup", () => {
       provider: "lmstudio",
       agentDir: undefined,
     });
-    expect(result.profiles).toEqual([]);
+    expect(result.profiles).toStrictEqual([]);
     expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
       apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
     });

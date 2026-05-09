@@ -28,10 +28,12 @@ describeLive("xai x_search live", () => {
       },
     });
 
-    expect(tool).toBeTruthy();
-    let result: Awaited<ReturnType<NonNullable<typeof tool>["execute"]>>;
+    if (!tool) {
+      throw new Error("expected x_search tool to be registered");
+    }
+    let result: Awaited<ReturnType<typeof tool.execute>>;
     try {
-      result = await tool!.execute("x-search:live", {
+      result = await tool.execute("x-search:live", {
         query: "OpenClaw from:steipete",
         to_date: "2026-03-28",
       });
@@ -53,7 +55,10 @@ describeLive("xai x_search live", () => {
       message?: string;
     };
 
-    const errorMessage = [details.error, details.message].filter(Boolean).join(" ");
+    const errorMessage =
+      details.error && details.message
+        ? `${details.error} ${details.message}`
+        : details.error || details.message || "";
     if (isBillingErrorMessage(errorMessage)) {
       console.warn(`[xai:x-search:live] skip: billing drift: ${errorMessage}`);
       return;

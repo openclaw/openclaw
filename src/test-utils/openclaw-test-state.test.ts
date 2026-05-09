@@ -3,6 +3,16 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createOpenClawTestState, withOpenClawTestState } from "./openclaw-test-state.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${targetPath}`);
+}
+
 describe("openclaw test state", () => {
   it("creates an isolated home layout with spawn env and restores process env", async () => {
     const previousHome = process.env.HOME;
@@ -26,7 +36,7 @@ describe("openclaw test state", () => {
       expect(state.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
       expect(process.env.HOME).toBe(state.home);
       expect(process.env.OPENCLAW_HOME).toBe(state.home);
-      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual({});
+      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toStrictEqual({});
     } finally {
       await state.cleanup();
     }
@@ -35,7 +45,7 @@ describe("openclaw test state", () => {
     expect(process.env.OPENCLAW_HOME).toBe(previousOpenClawHome);
     expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
     expect(process.env.OPENCLAW_CONFIG_PATH).toBe(previousConfigPath);
-    await expect(fs.stat(state.root)).rejects.toThrow();
+    await expectPathMissing(state.root);
   });
 
   it("supports state-only layout without overriding HOME", async () => {
@@ -51,7 +61,7 @@ describe("openclaw test state", () => {
         expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
         expect(process.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
         expect(state.env.HOME).toBe(previousHome);
-        await expect(fs.stat(state.configPath)).rejects.toThrow();
+        await expectPathMissing(state.configPath);
       },
     );
   });
@@ -149,14 +159,12 @@ describe("openclaw test state", () => {
         });
 
         expect(profilePath).toBe(path.join(state.agentDir(), "auth-profiles.json"));
-        expect(JSON.parse(await fs.readFile(profilePath, "utf8"))).toMatchObject({
-          version: 1,
-          profiles: {
-            "openai:test": {
-              provider: "openai",
-            },
-          },
-        });
+        const profiles = JSON.parse(await fs.readFile(profilePath, "utf8")) as {
+          version?: unknown;
+          profiles?: Record<string, { provider?: unknown }>;
+        };
+        expect(profiles.version).toBe(1);
+        expect(profiles.profiles?.["openai:test"]?.provider).toBe("openai");
       },
     );
   });
@@ -168,15 +176,9 @@ describe("openclaw test state", () => {
       },
       async (state) => {
         const config = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-        expect(config).toMatchObject({
-          update: {
-            channel: "stable",
-          },
-          plugins: {
-            enabled: true,
-            allow: ["discord", "telegram", "whatsapp", "memory"],
-          },
-        });
+        expect(config.update?.channel).toBe("stable");
+        expect(config.plugins?.enabled).toBe(true);
+        expect(config.plugins?.allow).toStrictEqual(["discord", "telegram", "whatsapp", "memory"]);
       },
     );
   });

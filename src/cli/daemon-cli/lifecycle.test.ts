@@ -122,8 +122,9 @@ describe("runDaemonRestart health checks", () => {
     json?: boolean;
     safe?: boolean;
     force?: boolean;
+    skipDeferral?: boolean;
   }) => Promise<boolean>;
-  let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
+  let runDaemonStop: (opts?: { json?: boolean; disable?: boolean }) => Promise<void>;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   function mockUnmanagedRestart({
@@ -281,6 +282,25 @@ describe("runDaemonRestart health checks", () => {
 
     expect(callGatewayCli).not.toHaveBeenCalled();
     expect(runServiceRestart).toHaveBeenCalled();
+  });
+
+  it("forwards --safe --skip-deferral as skipDeferral: true on the RPC", async () => {
+    await runDaemonRestart({ json: true, safe: true, skipDeferral: true });
+
+    expect(callGatewayCli).toHaveBeenCalledWith({
+      method: "gateway.restart.request",
+      params: { reason: "gateway.restart.safe", skipDeferral: true },
+      timeoutMs: 10_000,
+    });
+    expect(runServiceRestart).not.toHaveBeenCalled();
+  });
+
+  it("rejects --skip-deferral without --safe", async () => {
+    await expect(runDaemonRestart({ json: true, skipDeferral: true })).rejects.toThrow(
+      "--skip-deferral requires --safe",
+    );
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(runServiceRestart).not.toHaveBeenCalled();
   });
 
   it("repairs stale loaded service definitions from gateway start", async () => {
@@ -445,6 +465,19 @@ describe("runDaemonRestart health checks", () => {
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
+  });
+
+  it("routes macOS disable stops through the service manager when not loaded", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+
+    await runDaemonStop({ json: true, disable: true });
+
+    expect(runServiceStop).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: { json: true, disable: true },
+        stopWhenNotLoaded: true,
+      }),
+    );
   });
 
   it("skips gateway port resolution on stop when the service manager handles the stop", async () => {

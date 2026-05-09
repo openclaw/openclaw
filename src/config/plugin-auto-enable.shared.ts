@@ -9,7 +9,9 @@ import {
   listBundledChannelIdsWithConfiguredState,
 } from "../channels/plugins/configured-state.js";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import {
   type PluginManifestRecord,
   type PluginManifestRegistry,
@@ -53,6 +55,10 @@ function resolveAutoEnableProviderPluginIds(
   return Object.fromEntries(entries);
 }
 
+function canReuseUnscopedCurrentPluginMetadataSnapshot(config: OpenClawConfig): boolean {
+  return normalizePluginsConfig(config.plugins).loadPaths.length === 0;
+}
+
 function extractProviderFromModelRef(value: string): string | null {
   const trimmed = value.trim();
   const slash = trimmed.indexOf("/");
@@ -63,7 +69,7 @@ function extractProviderFromModelRef(value: string): string | null {
 }
 
 function hasConfiguredEmbeddedHarnessRuntime(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return collectConfiguredAgentHarnessRuntimes(cfg, env).length > 0;
+  return collectConfiguredAgentHarnessRuntimes(cfg, env, { includeEnvRuntime: false }).length > 0;
 }
 
 function resolveAgentHarnessOwnerPluginIds(
@@ -635,7 +641,9 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
-  for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config, params.env)) {
+  for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config, params.env, {
+    includeEnvRuntime: false,
+  })) {
     const pluginIds = resolveAgentHarnessOwnerPluginIds(params.registry, runtime);
     for (const pluginId of pluginIds) {
       changes.push({
@@ -865,6 +873,7 @@ function hasMaterialPluginEntryConfig(entry: unknown): boolean {
     isRecord(entry.config) ||
     isRecord(entry.hooks) ||
     isRecord(entry.subagent) ||
+    isRecord(entry.llm) ||
     entry.apiKey !== undefined ||
     entry.env !== undefined
   );
@@ -951,8 +960,23 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
     env: params.env,
     allowWorkspaceScopedSnapshot: true,
   });
+  const policyCompatibleCurrentSnapshot =
+    currentSnapshot ??
+    (() => {
+      if (!canReuseUnscopedCurrentPluginMetadataSnapshot(params.config)) {
+        return undefined;
+      }
+      const snapshot = getCurrentPluginMetadataSnapshot({
+        env: params.env,
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      });
+      return snapshot?.policyHash === resolveInstalledPluginIndexPolicyHash(params.config)
+        ? snapshot
+        : undefined;
+    })();
   return (
-    currentSnapshot?.manifestRegistry ??
+    policyCompatibleCurrentSnapshot?.manifestRegistry ??
     loadPluginMetadataSnapshot({
       config: params.config,
       env: params.env,
