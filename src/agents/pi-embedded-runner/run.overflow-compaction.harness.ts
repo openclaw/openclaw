@@ -24,7 +24,6 @@ type MockCompactionResult =
         tokensBefore?: number;
         tokensAfter?: number;
         sessionId?: string;
-        transcriptLocator?: string;
       };
       reason?: string;
     }

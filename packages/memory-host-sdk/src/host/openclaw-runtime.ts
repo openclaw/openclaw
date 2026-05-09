@@ -52,7 +52,6 @@ export {
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../../../../src/config/sessions/transcript-store.sqlite.js";
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 export type {

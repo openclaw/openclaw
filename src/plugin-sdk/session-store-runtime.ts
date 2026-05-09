@@ -6,7 +6,6 @@ export {
 } from "../state/openclaw-agent-db.js";
 export { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 export { resolveSessionRowEntry } from "../config/sessions/store-entry.js";
-export { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 export { resolveAndPersistSessionTranscriptScope } from "../config/sessions/session-locator.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
