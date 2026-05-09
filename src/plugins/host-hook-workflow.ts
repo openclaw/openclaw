@@ -1,8 +1,12 @@
 import { lstat, open } from "node:fs/promises";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolvePathFromInput } from "../agents/path-policy.js";
+import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { detectMime, FILE_TYPE_SNIFF_MAX_BYTES, normalizeMimeType } from "../media/mime.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import type {
@@ -122,7 +126,11 @@ export function resolveAttachmentDelivery(params: {
 async function validateAttachmentFiles(
   files: PluginSessionAttachmentParams["files"],
   maxBytes: number,
-  options?: { forceDocumentMime?: string },
+  options?: {
+    forceDocumentMime?: string;
+    config?: OpenClawConfig;
+    sessionKey?: string;
+  },
 ): Promise<string[] | { error: string }> {
   if (files.length > MAX_ATTACHMENT_FILES) {
     return { error: `at most ${MAX_ATTACHMENT_FILES} attachment files are allowed` };
@@ -137,18 +145,23 @@ async function validateAttachmentFiles(
     if (!filePath) {
       return { error: "attachment file path is required" };
     }
-    const info = await lstat(filePath).catch(() => undefined);
+    const resolvedPath = resolveAttachmentFilePath({
+      filePath,
+      config: options?.config,
+      sessionKey: options?.sessionKey,
+    });
+    const info = await lstat(resolvedPath).catch(() => undefined);
     if (info?.isSymbolicLink()) {
-      return { error: `attachment file symlinks are not allowed: ${filePath}` };
+      return { error: `attachment file symlinks are not allowed: ${resolvedPath}` };
     }
     if (!info?.isFile()) {
-      return { error: `attachment file not found: ${filePath}` };
+      return { error: `attachment file not found: ${resolvedPath}` };
     }
     if (info.size > maxBytes) {
-      return { error: `attachment file exceeds ${maxBytes} bytes: ${filePath}` };
+      return { error: `attachment file exceeds ${maxBytes} bytes: ${resolvedPath}` };
     }
     if (options?.forceDocumentMime) {
-      const fileBuffer = await readMimeSniffBuffer(filePath, info.size);
+      const fileBuffer = await readMimeSniffBuffer(resolvedPath, info.size);
       if (!Buffer.isBuffer(fileBuffer)) {
         return fileBuffer;
       }
@@ -164,7 +177,7 @@ async function validateAttachmentFiles(
       if (detectedMime !== options.forceDocumentMime) {
         return {
           error:
-            `attachment file MIME mismatch for ${filePath}: ` +
+            `attachment file MIME mismatch for ${resolvedPath}: ` +
             `expected ${options.forceDocumentMime}, got ${detectedMime ?? "unknown"}`,
         };
       }
@@ -173,9 +186,21 @@ async function validateAttachmentFiles(
     if (totalBytes > maxBytes) {
       return { error: `attachment files exceed ${maxBytes} bytes total` };
     }
-    paths.push(filePath);
+    paths.push(resolvedPath);
   }
   return paths;
+}
+
+function resolveAttachmentFilePath(params: {
+  filePath: string;
+  config?: OpenClawConfig;
+  sessionKey?: string;
+}): string {
+  const workspaceDir =
+    params.sessionKey && params.config
+      ? resolveAgentWorkspaceDir(params.config, resolveAgentIdFromSessionKey(params.sessionKey))
+      : undefined;
+  return resolvePathFromInput(params.filePath, resolveWorkspaceRoot(workspaceDir));
 }
 
 function normalizeOptionalThreadId(value: unknown): string | number | undefined {
@@ -239,6 +264,8 @@ export async function sendPluginSessionAttachment(
   });
   const validated = await validateAttachmentFiles(params.files, maxBytes, {
     forceDocumentMime: resolvedDelivery.forceDocumentMime,
+    config: params.config,
+    sessionKey,
   });
   if (!Array.isArray(validated)) {
     return { ok: false, error: validated.error };

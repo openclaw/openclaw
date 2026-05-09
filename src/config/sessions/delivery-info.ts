@@ -118,7 +118,7 @@ function findSessionEntryInStore(
       );
       acceptCandidate(store[trimmed]);
     }
-    if (!foundRoutableCandidate) {
+    if (trimmed !== normalized || !foundRoutableCandidate) {
       normalizedIndex ??= buildFreshestSessionEntryIndex(store);
       const freshest = normalizedIndex.get(normalized);
       acceptCandidate(freshest);

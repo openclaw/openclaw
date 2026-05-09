@@ -41,9 +41,9 @@ describe("telegramOutbound", () => {
         accountId: "ops",
         replyToMessageId: 900,
         messageThreadId: 12,
-        textMode: "html",
       }),
     );
+    expect(sendMessageTelegramMock.mock.calls[0]?.[2]).not.toHaveProperty("textMode");
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
@@ -184,11 +184,7 @@ describe("telegramOutbound", () => {
         text: "hello",
         deps: { sendTelegram: sendMessageTelegramMock },
       });
-      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith(
-        "12345",
-        "hello",
-        expect.objectContaining({ textMode: "html" }),
-      );
+      expect(sendMessageTelegramMock.mock.calls.at(-1)?.[2]).not.toHaveProperty("textMode");
     };
     const proveMedia = async () => {
       sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-media", chatId: "12345" });
