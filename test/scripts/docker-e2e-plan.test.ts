@@ -46,7 +46,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       profile: RELEASE_PATH_PROFILE,
     });
 
-    expect(plan.needs).toMatchObject({
+    expect(plan.needs).toEqual({
       bareImage: true,
       e2eImage: true,
       functionalImage: true,
@@ -464,7 +464,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     const plan = planFor({ selectedLaneNames: ["live-models"] });
 
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["live-models"]);
-    expect(plan.needs).toMatchObject({
+    expect(plan.needs).toEqual({
       bareImage: false,
       e2eImage: false,
       functionalImage: false,
@@ -487,8 +487,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
         stateScenario: "empty",
       }),
     ]);
-    expect(plan.needs).toMatchObject({
+    expect(plan.needs).toEqual({
       bareImage: true,
+      e2eImage: true,
+      functionalImage: false,
       liveImage: true,
       package: true,
     });
@@ -509,7 +511,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
         resources: expect.arrayContaining(["docker", "live", "live:openai", "service"]),
       }),
     ]);
-    expect(plan.needs).toMatchObject({
+    expect(plan.needs).toEqual({
+      bareImage: false,
       e2eImage: true,
       functionalImage: true,
       liveImage: false,
@@ -677,8 +680,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
         resources: expect.arrayContaining(["docker", "npm"]),
       }),
     );
-    expect(plan.needs).toMatchObject({
+    expect(plan.needs).toEqual({
+      bareImage: false,
+      e2eImage: true,
       functionalImage: true,
+      liveImage: false,
       package: true,
     });
   });
