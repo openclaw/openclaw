@@ -1651,7 +1651,6 @@ describe("sendMessageTelegram", () => {
   it("retries sends without message_thread_id on thread-not-found", async () => {
     const cases = [
       { name: "forum", chatId: "-100123", text: "hello forum", messageId: 58 },
-      { name: "private", chatId: "123456789", text: "hello private", messageId: 59 },
     ] as const;
     const threadErr = new Error("400: Bad Request: message thread not found");
 
@@ -1693,6 +1692,29 @@ describe("sendMessageTelegram", () => {
       );
       expect(res.messageId, testCase.name).toBe(String(testCase.messageId));
     }
+  });
+
+  it("does not retry private DM topic sends without the topic id", async () => {
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram("123456789", "hello private", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        messageThreadId: 271,
+      }),
+    ).rejects.toThrow("message thread not found");
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith("123456789", "hello private", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
   });
 
   it("does not retry on non-retriable thread/chat errors", async () => {
