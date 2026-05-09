@@ -80,10 +80,6 @@ function getCaptureKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<ProxyCaptureKyselyDatabase>(db);
 }
 
-function assertNeverCaptureQueryPreset(preset: never): never {
-  throw new Error(`Unhandled capture query preset: ${String(preset)}`);
-}
-
 function captureBlobRecordFromEncoded(
   encoded: ReturnType<typeof encodeCaptureBlob>,
 ): CaptureBlobRecord {
@@ -104,7 +100,9 @@ function countTable(
   return (
     executeSqliteQueryTakeFirstSync(
       db,
-      getCaptureKysely(db).selectFrom(table).select((eb) => eb.fn.countAll<number>().as("count")),
+      getCaptureKysely(db)
+        .selectFrom(table)
+        .select((eb) => eb.fn.countAll<number>().as("count")),
     )?.count ?? 0
   );
 }
