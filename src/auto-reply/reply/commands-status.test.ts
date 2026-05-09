@@ -26,8 +26,14 @@ import {
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
 
+type LoadProviderUsageSummary =
+  typeof import("../../infra/provider-usage.js").loadProviderUsageSummary;
+
 const providerUsageMock = vi.hoisted(() => ({
-  loadProviderUsageSummary: vi.fn(async () => ({ updatedAt: Date.now(), providers: [] })),
+  loadProviderUsageSummary: vi.fn<LoadProviderUsageSummary>(async () => ({
+    updatedAt: Date.now(),
+    providers: [],
+  })),
 }));
 
 vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
@@ -693,11 +699,13 @@ describe("buildStatusReply subagent summary", () => {
         expect(normalizedImplicitCodex).toContain("oauth (openai-codex:status)");
         expect(normalizedImplicitCodex).toContain("Runtime: OpenAI Codex");
         expect(normalizedImplicitCodex).toContain("Usage: 5h 91% left");
-        expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
-          expect.objectContaining({
-            providers: ["openai-codex"],
-          }),
+        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+          ([params]) => params?.providers?.includes("openai-codex"),
         );
+        if (!providerUsageCall) {
+          throw new Error("expected provider usage summary call for openai-codex");
+        }
+        expect(providerUsageCall[0]?.providers).toEqual(["openai-codex"]);
       },
       {
         env: {

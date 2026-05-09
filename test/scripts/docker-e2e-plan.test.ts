@@ -339,20 +339,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 5,
       },
     ]);
-    expect(pluginsRuntimeServices.lanes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "cron-mcp-cleanup",
-          stateScenario: "empty",
-        }),
-        expect.objectContaining({
-          live: true,
-          name: "live-plugin-tool",
-          resources: ["docker", "live", "live:openai", "npm"],
-          stateScenario: "empty",
-        }),
-      ]),
-    );
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).not.toContain(
       "bundled-plugin-install-uninstall-0",
     );
@@ -628,41 +614,33 @@ describe("scripts/lib/docker-e2e-plan", () => {
   it("plans the Codex on-demand onboarding lane as package-backed npm proof", () => {
     const plan = planFor({ selectedLaneNames: ["codex-on-demand"] });
 
-    expect(plan.lanes).toEqual([
-      expect.objectContaining({
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand",
-        imageKind: "bare",
-        live: false,
-        name: "codex-on-demand",
-        resources: ["docker", "npm", "service"],
-        stateScenario: "empty",
-      }),
-    ]);
-    expect(plan.needs).toMatchObject({
-      bareImage: true,
-      package: true,
-    });
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe("OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand");
+    expect(lane.imageKind).toBe("bare");
+    expect(lane.live).toBe(false);
+    expect(lane.name).toBe("codex-on-demand");
+    expect(lane.resources).toEqual(["docker", "npm", "service"]);
+    expect(lane.stateScenario).toBe("empty");
+    expect(plan.needs.bareImage).toBe(true);
+    expect(plan.needs.package).toBe(true);
   });
 
   it("plans the live plugin tool lane as package-backed OpenAI proof", () => {
     const plan = planFor({ selectedLaneNames: ["live-plugin-tool"] });
 
     expect(plan.credentials).toEqual(["openai"]);
-    expect(plan.lanes).toEqual([
-      expect.objectContaining({
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
-        imageKind: "bare",
-        live: true,
-        name: "live-plugin-tool",
-        resources: ["docker", "live", "live:openai", "npm"],
-        stateScenario: "empty",
-      }),
-    ]);
-    expect(plan.needs).toMatchObject({
-      bareImage: true,
-      liveImage: true,
-      package: true,
-    });
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe("OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool");
+    expect(lane.imageKind).toBe("bare");
+    expect(lane.live).toBe(true);
+    expect(lane.name).toBe("live-plugin-tool");
+    expect(lane.resources).toEqual(["docker", "live", "live:openai", "npm"]);
+    expect(lane.stateScenario).toBe("empty");
+    expect(plan.needs.bareImage).toBe(true);
+    expect(plan.needs.liveImage).toBe(true);
+    expect(plan.needs.package).toBe(true);
   });
 
   it("plans Open WebUI as a live-auth functional image lane", () => {

@@ -59,6 +59,27 @@ function createSessionTranscript(params: {
   return sessionFile;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectMessageFields(value: unknown, expected: { role: string; content?: string }) {
+  const message = requireRecord(value, "message");
+  expect(message.role).toBe(expected.role);
+  if ("content" in expected) {
+    expect(message.content).toBe(expected.content);
+  }
+}
+
+function expectCompactionSummary(value: unknown, summary: string) {
+  const message = requireRecord(value, "compaction summary");
+  expect(message.role).toBe("compactionSummary");
+  expect(message.summary).toBe(summary);
+}
+
 describe("loadCliSessionHistoryMessages", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -81,14 +102,14 @@ describe("loadCliSessionHistoryMessages", () => {
     });
 
     try {
-      expect(
-        await loadCliSessionHistoryMessages({
-          sessionId: "session-test",
-          sessionFile: outsideFile,
-          sessionKey: "agent:main:main",
-          agentId: "main",
-        }),
-      ).toMatchObject([{ role: "user", content: "expected history" }]);
+      const history = await loadCliSessionHistoryMessages({
+        sessionId: "session-test",
+        sessionFile: outsideFile,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+      });
+      expect(history).toHaveLength(1);
+      expectMessageFields(history[0], { role: "user", content: "expected history" });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
       fs.rmSync(outsideDir, { recursive: true, force: true });
@@ -115,8 +136,8 @@ describe("loadCliSessionHistoryMessages", () => {
         agentId: "main",
       });
       expect(history).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES);
-      expect(history[0]).toMatchObject({ role: "user", content: "msg-25" });
-      expect(history.at(-1)).toMatchObject({
+      expectMessageFields(history[0], { role: "user", content: "msg-25" });
+      expectMessageFields(history.at(-1), {
         role: "user",
         content: `msg-${MAX_CLI_SESSION_HISTORY_MESSAGES + 24}`,
       });
@@ -201,19 +222,19 @@ describe("loadCliSessionHistoryMessages", () => {
     });
 
     try {
-      expect(
-        await loadCliSessionHistoryMessages({
-          sessionId: "session-custom-store",
-          sessionFile,
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          config: {
-            session: {
-              store: storePath,
-            },
+      const history = await loadCliSessionHistoryMessages({
+        sessionId: "session-custom-store",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        config: {
+          session: {
+            store: storePath,
           },
-        }),
-      ).toMatchObject([{ role: "user", content: "custom store history" }]);
+        },
+      });
+      expect(history).toHaveLength(1);
+      expectMessageFields(history[0], { role: "user", content: "custom store history" });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
       fs.rmSync(customStoreDir, { recursive: true, force: true });
@@ -271,8 +292,8 @@ describe("loadCliSessionReseedMessages", () => {
         rawTranscriptReseedReason: "missing-transcript",
       });
       expect(reseed).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES);
-      expect(reseed[0]).toMatchObject({ role: "user", content: "raw-25" });
-      expect(reseed.at(-1)).toMatchObject({
+      expectMessageFields(reseed[0], { role: "user", content: "raw-25" });
+      expectMessageFields(reseed.at(-1), {
         role: "user",
         content: `raw-${MAX_CLI_SESSION_HISTORY_MESSAGES + 24}`,
       });
@@ -363,10 +384,9 @@ describe("loadCliSessionReseedMessages", () => {
         sessionKey: "agent:main:main",
         agentId: "main",
       });
-      expect(reseed).toMatchObject([
-        { role: "compactionSummary", summary: "safe compacted summary" },
-        { role: "user", content: "post-compaction ask" },
-      ]);
+      expect(reseed).toHaveLength(2);
+      expectCompactionSummary(reseed[0], "safe compacted summary");
+      expectMessageFields(reseed[1], { role: "user", content: "post-compaction ask" });
       expect(buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" })).toContain(
         "Compaction summary: safe compacted summary",
       );

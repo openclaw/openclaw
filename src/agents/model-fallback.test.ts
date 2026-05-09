@@ -260,6 +260,38 @@ function setAuthRuntimeStore(agentDir: string | undefined, store: AuthProfileSto
   authRuntimeMock.setStore(agentDir, store);
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected rejection");
+}
+
+function requireFallbackSummaryError(error: unknown): FallbackSummaryError {
+  expect(error).toBeInstanceOf(FallbackSummaryError);
+  if (!(error instanceof FallbackSummaryError)) {
+    throw error;
+  }
+  return error;
+}
+
+function requireFailoverError(error: unknown): FailoverError {
+  expect(error).toBeInstanceOf(FailoverError);
+  if (!(error instanceof FailoverError)) {
+    throw error;
+  }
+  return error;
+}
+
 async function expectFallsBackToHaiku(params: {
   provider: string;
   model: string;
@@ -515,24 +547,24 @@ describe("runWithModelFallback", () => {
       }),
     );
 
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-5.4",
-        run,
-      }),
-    ).rejects.toMatchObject({
-      name: "FallbackSummaryError",
-      message: expect.stringContaining(rawError),
-      attempts: expect.arrayContaining([
-        expect.objectContaining({
-          error: rawError,
-          reason: "format",
-          status: 400,
+    const error = requireFallbackSummaryError(
+      await captureRejection(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.4",
+          run,
         }),
-      ]),
-    });
+      ),
+    );
+    expect(error.name).toBe("FallbackSummaryError");
+    expect(error.message).toContain(rawError);
+    const attempt = error.attempts.find((candidate) => candidate.error === rawError);
+    if (!attempt) {
+      throw new Error("expected raw error attempt");
+    }
+    expect(attempt.reason).toBe("format");
+    expect(attempt.status).toBe(400);
   });
 
   it("carries request attribution through exhausted fallback summaries", async () => {
@@ -551,8 +583,8 @@ describe("runWithModelFallback", () => {
       .mockRejectedValueOnce(Object.assign(new Error("rate limit exceeded"), { status: 429 }))
       .mockRejectedValueOnce(Object.assign(new Error("overloaded"), { status: 503 }));
 
-    try {
-      await runWithModelFallback({
+    const err = await captureRejection(
+      runWithModelFallback({
         cfg,
         provider: "openai",
         model: "gpt-5.4",
@@ -560,24 +592,16 @@ describe("runWithModelFallback", () => {
         sessionId: "session:browser-42713",
         lane: "answer",
         run,
-      });
-      throw new Error("expected fallback summary");
-    } catch (err) {
-      expect(err).toBeInstanceOf(FallbackSummaryError);
-      if (!(err instanceof FallbackSummaryError)) {
-        throw err;
-      }
-      expect(err).toMatchObject({
-        name: "FallbackSummaryError",
-        sessionId: "session:browser-42713",
-        lane: "answer",
-      });
-      expect(err.cause).toMatchObject({
-        name: "FailoverError",
-        sessionId: "session:browser-42713",
-        lane: "answer",
-      });
-    }
+      }),
+    );
+    const summary = requireFallbackSummaryError(err);
+    expect(summary.name).toBe("FallbackSummaryError");
+    expect(summary.sessionId).toBe("session:browser-42713");
+    expect(summary.lane).toBe("answer");
+    const cause = requireFailoverError(summary.cause);
+    expect(cause.name).toBe("FailoverError");
+    expect(cause.sessionId).toBe("session:browser-42713");
+    expect(cause.lane).toBe("answer");
   });
 
   it("uses optional result classification to continue to configured fallbacks", async () => {
@@ -618,12 +642,10 @@ describe("runWithModelFallback", () => {
     expect(result.result).toEqual({ payloads: [{ text: "fallback ok" }] });
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[1]).toEqual(["anthropic", "claude-haiku-3-5"]);
-    expect(result.attempts[0]).toMatchObject({
-      provider: "openai-codex",
-      model: "gpt-5.4",
-      reason: "format",
-      code: "empty_result",
-    });
+    expect(result.attempts[0]?.provider).toBe("openai-codex");
+    expect(result.attempts[0]?.model).toBe("gpt-5.4");
+    expect(result.attempts[0]?.reason).toBe("format");
+    expect(result.attempts[0]?.code).toBe("empty_result");
   });
 
   it("surfaces classified terminal results when no fallback remains", async () => {
@@ -639,30 +661,31 @@ describe("runWithModelFallback", () => {
     });
     const run = vi.fn().mockResolvedValueOnce({ payloads: [] });
 
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai-codex",
-        model: "gpt-5.4",
-        run,
-        classifyResult: ({ result }) => {
-          const payloads = (result as { payloads?: unknown[] }).payloads;
-          return Array.isArray(payloads) && payloads.length === 0
-            ? {
-                message: "terminal result contained no visible assistant reply",
-                reason: "format",
-                code: "empty_result",
-              }
-            : null;
-        },
-      }),
-    ).rejects.toMatchObject({
-      name: "FailoverError",
-      reason: "format",
-      provider: "openai-codex",
-      model: "gpt-5.4",
-      code: "empty_result",
-    });
+    const error = requireFailoverError(
+      await captureRejection(
+        runWithModelFallback({
+          cfg,
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          run,
+          classifyResult: ({ result }) => {
+            const payloads = (result as { payloads?: unknown[] }).payloads;
+            return Array.isArray(payloads) && payloads.length === 0
+              ? {
+                  message: "terminal result contained no visible assistant reply",
+                  reason: "format",
+                  code: "empty_result",
+                }
+              : null;
+          },
+        }),
+      ),
+    );
+    expect(error.name).toBe("FailoverError");
+    expect(error.reason).toBe("format");
+    expect(error.provider).toBe("openai-codex");
+    expect(error.model).toBe("gpt-5.4");
+    expect(error.code).toBe("empty_result");
     expect(run).toHaveBeenCalledTimes(1);
   });
 
@@ -754,16 +777,14 @@ describe("runWithModelFallback", () => {
       },
     };
 
-    expect(
-      classifyEmbeddedPiRunResultForModelFallback({
-        provider: "codex",
-        model: "gpt-5.4",
-        result: runResult,
-      }),
-    ).toMatchObject({
-      code: "planning_only_result",
-      reason: "format",
+    const classification = classifyEmbeddedPiRunResultForModelFallback({
+      provider: "codex",
+      model: "gpt-5.4",
+      result: runResult,
     });
+    const classificationRecord = requireRecord(classification, "planning-only classification");
+    expect(classificationRecord.code).toBe("planning_only_result");
+    expect(classificationRecord.reason).toBe("format");
   });
 
   it("classifies non-GPT incomplete terminal errors for configured fallback", () => {
@@ -776,16 +797,14 @@ describe("runWithModelFallback", () => {
       },
     };
 
-    expect(
-      classifyEmbeddedPiRunResultForModelFallback({
-        provider: "anthropic",
-        model: "claude-opus-4.7",
-        result: runResult,
-      }),
-    ).toMatchObject({
-      code: "incomplete_result",
-      reason: "format",
+    const classification = classifyEmbeddedPiRunResultForModelFallback({
+      provider: "anthropic",
+      model: "claude-opus-4.7",
+      result: runResult,
     });
+    const classificationRecord = requireRecord(classification, "incomplete classification");
+    expect(classificationRecord.code).toBe("incomplete_result");
+    expect(classificationRecord.reason).toBe("format");
   });
 
   it("keeps aborted harness-classified GPT-5 runs out of fallback", () => {
@@ -822,13 +841,12 @@ describe("runWithModelFallback", () => {
     });
 
     expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError.mock.calls[0]?.[0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      attempt: 1,
-      total: 2,
-    });
-    expect(onError.mock.calls[0]?.[0]?.error).toBe(unknownError);
+    const errorCall = requireRecord(onError.mock.calls[0]?.[0], "onError payload");
+    expect(errorCall.provider).toBe("openai");
+    expect(errorCall.model).toBe("gpt-4.1-mini");
+    expect(errorCall.attempt).toBe(1);
+    expect(errorCall.total).toBe(2);
+    expect(errorCall.error).toBe(unknownError);
   });
 
   it("throws unrecognized error on last candidate", async () => {
@@ -1363,18 +1381,19 @@ describe("runWithModelFallback", () => {
         throw Object.assign(new Error("rate limited"), { status: 429 });
       });
 
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-opus-4-5",
-          agentDir: tempDir,
-          run,
-        }),
-      ).rejects.toMatchObject({
-        name: "FallbackSummaryError",
-        soonestCooldownExpiry: expiry,
-      });
+      const error = requireFallbackSummaryError(
+        await captureRejection(
+          runWithModelFallback({
+            cfg,
+            provider: "anthropic",
+            model: "claude-opus-4-5",
+            agentDir: tempDir,
+            run,
+          }),
+        ),
+      );
+      expect(error.name).toBe("FallbackSummaryError");
+      expect(error.soonestCooldownExpiry).toBe(expiry);
     });
   });
 
@@ -1419,18 +1438,19 @@ describe("runWithModelFallback", () => {
         .fn()
         .mockRejectedValue(Object.assign(new Error("rate limited"), { status: 429 }));
 
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "anthropic",
-          model: "claude-opus-4-5",
-          agentDir: tempDir,
-          run,
-        }),
-      ).rejects.toMatchObject({
-        name: "FallbackSummaryError",
-        soonestCooldownExpiry: relevantExpiry,
-      });
+      const error = requireFallbackSummaryError(
+        await captureRejection(
+          runWithModelFallback({
+            cfg,
+            provider: "anthropic",
+            model: "claude-opus-4-5",
+            agentDir: tempDir,
+            run,
+          }),
+        ),
+      );
+      expect(error.name).toBe("FallbackSummaryError");
+      expect(error.soonestCooldownExpiry).toBe(relevantExpiry);
     });
   });
 
