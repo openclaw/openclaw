@@ -542,7 +542,6 @@ Areas for potential rework:
 Pi integration coverage spans these suites:
 
 - `src/agents/pi-*.test.ts`
-- `src/agents/pi-auth-json.test.ts`
 - `src/agents/pi-embedded-*.test.ts`
 - `src/agents/pi-embedded-helpers*.test.ts`
 - `src/agents/pi-embedded-runner*.test.ts`
