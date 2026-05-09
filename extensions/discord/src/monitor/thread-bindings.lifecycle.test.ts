@@ -1475,7 +1475,6 @@ describe("thread binding lifecycle", () => {
       sessionKey: "agent:codex:acp:uncertain",
       storeSessionKey: "agent:codex:acp:uncertain",
       cfg: EMPTY_DISCORD_TEST_CONFIG,
-      storePath: "/tmp/openclaw-agent.sqlite",
       storeReadFailed: true,
       entry: undefined,
       acp: undefined,

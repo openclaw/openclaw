@@ -876,18 +876,6 @@ describe("createFollowupRunner compaction", () => {
 
   it("injects the post-compaction refresh prompt before followup runs after preflight compaction", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-preflight-followup-"));
-    const transcriptPath = path.join(workspaceDir, "session.jsonl");
-    await fs.writeFile(
-      transcriptPath,
-      `${JSON.stringify({
-        message: {
-          role: "user",
-          content: "x".repeat(320_000),
-          timestamp: Date.now(),
-        },
-      })}\n`,
-      "utf-8",
-    );
     await fs.writeFile(
       path.join(workspaceDir, "AGENTS.md"),
       [

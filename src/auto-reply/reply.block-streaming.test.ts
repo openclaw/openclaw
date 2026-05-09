@@ -200,7 +200,6 @@ describe("block streaming", () => {
       resetTriggered: false,
       systemSent: false,
       abortedLastRun: false,
-      storePath: "/tmp/openclaw-agent.sqlite",
       sessionScope: "per-sender",
       groupResolution: undefined,
       isGroup: false,

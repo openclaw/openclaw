@@ -1148,7 +1148,6 @@ describe("native hook relay registry", () => {
         session_id: "codex-session-1",
         turn_id: "turn-1",
         cwd: "/repo",
-        transcript_path: "/tmp/session.jsonl",
         model: "gpt-5.4",
         permission_mode: "workspace-write",
         stop_hook_active: true,

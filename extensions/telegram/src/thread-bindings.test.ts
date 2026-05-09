@@ -327,7 +327,6 @@ describe("telegram thread bindings", () => {
     await __testing.resetTelegramThreadBindingsForTests();
     readAcpSessionEntryMock.mockReturnValue({
       cfg: {} as never,
-      storePath: "/tmp/acp-store.json",
       sessionKey: "agent:main:acp:stale-1",
       storeSessionKey: "agent:main:acp:stale-1",
       entry: undefined,
@@ -402,7 +401,6 @@ describe("telegram thread bindings", () => {
     await __testing.resetTelegramThreadBindingsForTests();
     readAcpSessionEntryMock.mockReturnValue({
       cfg: {} as never,
-      storePath: "/tmp/acp-store.json",
       sessionKey: "agent:main:acp:read-failed",
       storeSessionKey: "agent:main:acp:read-failed",
       entry: undefined,
