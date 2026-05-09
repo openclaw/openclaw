@@ -5,15 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const note = vi.hoisted(() => vi.fn());
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../../terminal/note.js", () => ({
   note,
 }));
 
-import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
-import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
+import { loadSqliteSessionTranscriptEvents } from "../../../config/sessions/transcript-store.sqlite.js";
+import { createPluginStateSyncKeyedStore } from "../../../plugin-state/plugin-state-store.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import { noteSessionTranscriptHealth } from "./session-transcript-health.js";
+
+const CODEX_APP_SERVER_BINDING_PLUGIN_ID = "codex";
+const CODEX_APP_SERVER_BINDING_NAMESPACE = "app-server-thread-bindings";
+const CODEX_APP_SERVER_BINDING_MAX_ENTRIES = 10_000;
 
 function countNonEmptyLines(value: string): number {
   let count = 0;
@@ -175,7 +179,7 @@ describe("doctor session transcript repair", () => {
         sessionId: "session-1",
       }).map((entry) => entry.event),
     ).toMatchObject([
-      { type: "session", id: "session-1" },
+      { type: "session", version: 1, id: "session-1" },
       { type: "message", id: "user-1" },
     ]);
     const [message, title] = note.mock.calls[0] as [string, string];
@@ -186,8 +190,12 @@ describe("doctor session transcript repair", () => {
   it("imports legacy Codex app-server binding sidecars during repair mode", async () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "session.jsonl");
-    const sidecarPath = `${sessionFile}.codex-app-server.json`;
+    const legacyTranscriptPath = path.join(sessionsDir, "session.jsonl");
+    await fs.writeFile(
+      legacyTranscriptPath,
+      `${JSON.stringify({ type: "session", version: 3, id: "session-1", cwd: root })}\n`,
+    );
+    const sidecarPath = `${legacyTranscriptPath}.codex-app-server.json`;
     await fs.writeFile(
       sidecarPath,
       JSON.stringify({
@@ -201,10 +209,15 @@ describe("doctor session transcript repair", () => {
     await noteSessionTranscriptHealth({ shouldRepair: true, sessionDirs: [sessionsDir] });
 
     await expect(fs.access(sidecarPath)).rejects.toThrow();
-    expect(readOpenClawStateKvJson("codex_app_server_thread_bindings", sessionFile)).toMatchObject({
+    expect(
+      createPluginStateSyncKeyedStore<Record<string, unknown>>(CODEX_APP_SERVER_BINDING_PLUGIN_ID, {
+        namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+      }).lookup("session-1"),
+    ).toMatchObject({
       schemaVersion: 1,
       threadId: "thread-123",
-      sessionFile,
+      sessionId: "session-1",
       cwd: root,
       model: "gpt-5.5",
     });
