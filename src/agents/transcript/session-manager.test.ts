@@ -19,6 +19,10 @@ type TranscriptScope = {
   sessionId: string;
 };
 
+function transcriptParentReference(scope: TranscriptScope): string {
+  return `agent-db:${scope.agentId}:transcript_events:${scope.sessionId}`;
+}
+
 function readSessionEntries(scope: TranscriptScope) {
   return loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
 }
@@ -59,7 +63,10 @@ describe("TranscriptSessionManager", () => {
     });
     expect(forked.getHeader()).toMatchObject({
       cwd: "/tmp/forked-workspace",
-      parentSession: created.getTranscriptLocator(),
+      parentSession: transcriptParentReference({
+        agentId: "main",
+        sessionId: sourceSessionId,
+      }),
     });
     expect(forked.buildSessionContext().messages).toMatchObject([
       { role: "user", content: "persist me" },
@@ -140,7 +147,10 @@ describe("TranscriptSessionManager", () => {
     });
     expect(forked.getHeader()).toMatchObject({
       cwd: "/tmp/sqlite-fork",
-      parentSession: sessionManager.getTranscriptLocator(),
+      parentSession: transcriptParentReference({
+        agentId: "main",
+        sessionId,
+      }),
     });
   });
 
