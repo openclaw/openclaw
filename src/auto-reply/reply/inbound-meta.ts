@@ -101,7 +101,7 @@ function formatUntrustedJsonBlock(label: string, payload: unknown): string {
 }
 
 function formatStructuredContextRelation(value: unknown): string | undefined {
-  const relation = normalizePromptMetadataString(value);
+  const relation = sanitizeTranscriptField(value);
   if (relation === "before_current_message") {
     return "before current message";
   }
@@ -118,12 +118,12 @@ function formatChatWindowMessage(
   if (!isRecord(value)) {
     return undefined;
   }
-  const messageId = normalizePromptMetadataString(value["message_id"]);
-  const sender = normalizePromptMetadataString(value["sender"]) ?? "unknown sender";
+  const messageId = sanitizeTranscriptField(value["message_id"]);
+  const sender = sanitizeTranscriptField(value["sender"]) ?? "unknown sender";
   const timestamp = formatConversationTimestamp(value["timestamp_ms"], envelope);
-  const replyToId = normalizePromptMetadataString(value["reply_to_id"]);
-  const mediaType = normalizePromptMetadataString(value["media_type"]);
-  const mediaRef = normalizePromptMetadataString(value["media_ref"]);
+  const replyToId = sanitizeTranscriptField(value["reply_to_id"]);
+  const mediaType = sanitizeTranscriptField(value["media_type"]);
+  const mediaRef = sanitizeTranscriptField(value["media_ref"]);
   const body = sanitizeTranscriptField(value["body"]);
   const details = [
     messageId ? `#${messageId}` : undefined,
@@ -154,9 +154,9 @@ function formatChatWindowStructuredContext(
   if (lines.length === 0) {
     return undefined;
   }
-  const label = normalizePromptMetadataString(entry.label) ?? "Chat window";
+  const label = sanitizeTranscriptField(entry.label) ?? "Chat window";
   const relation = formatStructuredContextRelation(entry.payload["relation"]);
-  const order = normalizePromptMetadataString(entry.payload["order"]);
+  const order = sanitizeTranscriptField(entry.payload["order"]);
   const qualifiers = ["untrusted", order, relation].filter(Boolean).join(", ");
   return [`${label} (${qualifiers}):`, ...lines].join("\n");
 }

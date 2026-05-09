@@ -318,7 +318,7 @@ export function createTelegramMessageCache(params?: {
         return threadId === undefined || node.threadId === threadId;
       })
       .map(({ node }) => node)
-      .sort(compareCachedMessageNodes);
+      .toSorted(compareCachedMessageNodes);
   };
 
   return {
