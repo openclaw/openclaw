@@ -62,11 +62,13 @@ describe("method scope resolution", () => {
   });
 
   it("leaves node-only pending drain outside operator scopes", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toEqual([]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toStrictEqual([]);
   });
 
   it("returns empty scopes for unknown methods", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method")).toEqual([]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method")).toStrictEqual(
+      [],
+    );
   });
 
   it("reads plugin-registered gateway method scopes from the active plugin registry", () => {
@@ -228,14 +230,14 @@ describe("core gateway method classification", () => {
     const unclassified = Object.keys(coreGatewayHandlers).filter(
       (method) => !isGatewayMethodClassified(method),
     );
-    expect(unclassified).toEqual([]);
+    expect(unclassified).toStrictEqual([]);
   });
 
   it("classifies every listed gateway method name", () => {
     const unclassified = listGatewayMethods().filter(
       (method) => !isGatewayMethodClassified(method),
     );
-    expect(unclassified).toEqual([]);
+    expect(unclassified).toStrictEqual([]);
   });
 });
 
