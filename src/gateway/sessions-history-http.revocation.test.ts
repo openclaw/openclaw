@@ -25,6 +25,7 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: () => ({ entries: [] }),
+  loadSessionStoreEntriesAsync: async () => ({ entries: [] }),
 }));
 
 vi.mock("../sessions/transcript-events.js", () => ({

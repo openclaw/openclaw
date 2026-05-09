@@ -2,6 +2,14 @@ import { Routes } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
 
+function createDeferred<T = void>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("createDiscordDraftStream", () => {
   it("holds the first preview until minInitialChars is reached", async () => {
     const rest = {
@@ -55,6 +63,64 @@ describe("createDiscordDraftStream", () => {
       body: { content: "second draft", allowed_mentions: { parse: [] } },
     });
     expect(stream.messageId()).toBe("m1");
+  });
+
+  it("coalesces same-turn preview updates before the first write", async () => {
+    const rest = {
+      post: vi.fn(async () => ({ id: "m1" })),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+    });
+
+    stream.update("first draft");
+    stream.update("second draft");
+    stream.update("final draft");
+    await stream.flush();
+
+    expect(rest.post).toHaveBeenCalledTimes(1);
+    expect(rest.post).toHaveBeenCalledWith(Routes.channelMessages("c1"), {
+      body: {
+        content: "final draft",
+        allowed_mentions: { parse: [] },
+      },
+    });
+    expect(rest.patch).not.toHaveBeenCalled();
+  });
+
+  it("keeps only the latest queued edit while a preview write is in flight", async () => {
+    const firstWrite = createDeferred<{ id: string }>();
+    const rest = {
+      post: vi.fn(async () => await firstWrite.promise),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+    });
+
+    stream.update("first draft");
+    await Promise.resolve();
+    expect(rest.post).toHaveBeenCalledTimes(1);
+
+    stream.update("second draft");
+    stream.update("final draft");
+    firstWrite.resolve({ id: "m1" });
+    await stream.flush();
+
+    expect(rest.patch).toHaveBeenCalledTimes(1);
+    expect(rest.patch).toHaveBeenCalledWith(Routes.channelMessage("c1", "m1"), {
+      body: {
+        content: "final draft",
+        allowed_mentions: { parse: [] },
+      },
+    });
   });
 
   it("suppresses mentions in preview creates and edits", async () => {

@@ -134,6 +134,22 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
+  it("rejects requests that exceed the default RPC timeout", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const request = harness.client.request("model/list", {});
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const assertion = expect(request).rejects.toThrow("model/list timed out");
+
+    await vi.advanceTimersByTimeAsync(__testing.DEFAULT_CODEX_APP_SERVER_RPC_TIMEOUT_MS);
+    await assertion;
+
+    harness.send({ id: outbound.id, result: { data: [] } });
+    expect(harness.writes).toHaveLength(1);
+  });
+
   it("rejects aborted requests and ignores late responses", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
@@ -344,6 +360,54 @@ describe("CodexAppServerClient", () => {
 
     // Subsequent requests keep the original close reason so startup logs stay actionable.
     await expect(harness.client.request("another/method")).rejects.toThrow("write EPIPE");
+  });
+
+  it("serializes app-server writes until backpressured stdin drains", async () => {
+    const stdout = new PassThrough();
+    const stdin = Object.assign(new EventEmitter(), {
+      write: vi.fn((chunk: string, callback?: (error?: Error | null) => void) => {
+        writes.push(chunk);
+        callbacks.push(callback);
+        return writes.length !== 1;
+      }),
+      end: vi.fn(),
+      destroy: vi.fn(),
+      unref: vi.fn(),
+    });
+    const process = Object.assign(new EventEmitter(), {
+      stdin,
+      stdout,
+      stderr: new PassThrough(),
+      killed: false,
+      kill: vi.fn(() => {
+        process.killed = true;
+      }),
+    });
+    const writes: string[] = [];
+    const callbacks: Array<((error?: Error | null) => void) | undefined> = [];
+    const client = CodexAppServerClient.fromTransportForTests(process);
+    clients.push(client);
+
+    const first = client.request("first/method", {}, { timeoutMs: 0 });
+    const second = client.request("second/method", {}, { timeoutMs: 0 });
+
+    await vi.waitFor(() => expect(stdin.write).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(writes[0] ?? "{}")).toMatchObject({ method: "first/method" });
+
+    callbacks.shift()?.();
+    stdin.emit("drain");
+
+    await vi.waitFor(() => expect(stdin.write).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(writes[1] ?? "{}")).toMatchObject({ method: "second/method" });
+    callbacks.shift()?.();
+
+    const firstOutbound = JSON.parse(writes[0] ?? "{}") as { id?: number };
+    const secondOutbound = JSON.parse(writes[1] ?? "{}") as { id?: number };
+    stdout.write(`${JSON.stringify({ id: firstOutbound.id, result: { ok: "first" } })}\n`);
+    stdout.write(`${JSON.stringify({ id: secondOutbound.id, result: { ok: "second" } })}\n`);
+
+    await expect(first).resolves.toEqual({ ok: "first" });
+    await expect(second).resolves.toEqual({ ok: "second" });
   });
 
   it("preserves redacted app-server stderr on exit errors", async () => {

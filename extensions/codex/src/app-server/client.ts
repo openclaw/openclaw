@@ -28,6 +28,7 @@ const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 1_000_000;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_CODEX_APP_SERVER_RPC_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 
 type PendingRequest = {
@@ -75,6 +76,7 @@ export class CodexAppServerClient {
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
   private nextId = 1;
+  private writeChain: Promise<void> | undefined;
   private initialized = false;
   private closed = false;
   private closeError: Error | undefined;
@@ -151,7 +153,7 @@ export class CodexAppServerClient {
       },
     } satisfies CodexInitializeParams);
     assertSupportedCodexAppServerVersion(response);
-    this.notify("initialized");
+    await this.writeMessage({ method: "initialized" });
     this.initialized = true;
   }
 
@@ -198,11 +200,9 @@ export class CodexAppServerClient {
         cleanup();
         reject(error);
       };
-      if (options.timeoutMs && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
-        timeout = setTimeout(
-          () => rejectPending(new Error(`${method} timed out`)),
-          Math.max(100, options.timeoutMs),
-        );
+      const timeoutMs = resolveCodexAppServerRpcTimeoutMs(options.timeoutMs);
+      if (timeoutMs !== undefined) {
+        timeout = setTimeout(() => rejectPending(new Error(`${method} timed out`)), timeoutMs);
         timeout.unref?.();
       }
       if (options.signal) {
@@ -226,16 +226,19 @@ export class CodexAppServerClient {
         rejectPending(new Error(`${method} aborted`));
         return;
       }
-      try {
-        this.writeMessage(message);
-      } catch (error) {
+      void this.writeMessage(message).catch((error: unknown) => {
         rejectPending(error instanceof Error ? error : new Error(String(error)));
-      }
+      });
     });
   }
 
   notify(method: string, params?: JsonValue): void {
-    this.writeMessage({ method, params });
+    void this.writeMessage({ method, params }).catch((error: unknown) => {
+      embeddedAgentLog.warn("codex app-server notify write failed", {
+        error,
+        method,
+      });
+    });
   }
 
   addRequestHandler(handler: CodexServerRequestHandler): () => void {
@@ -268,15 +271,80 @@ export class CodexAppServerClient {
     await closeCodexAppServerTransportAndWait(this.child, options);
   }
 
-  private writeMessage(message: RpcRequest | RpcResponse): void {
+  private writeMessage(message: RpcRequest | RpcResponse): Promise<void> {
     if (this.closed) {
-      return;
+      return Promise.resolve();
+    }
+    const write = () => this.writeMessageNow(message);
+    const previous = this.writeChain;
+    const next = previous ? previous.catch(() => undefined).then(write) : write();
+    const stored = next
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.writeChain === stored) {
+          this.writeChain = undefined;
+        }
+      });
+    this.writeChain = stored;
+    return next;
+  }
+
+  private writeMessageNow(message: RpcRequest | RpcResponse): Promise<void> {
+    if (this.closed) {
+      return Promise.resolve();
     }
     const id = "id" in message ? message.id : undefined;
     const method = "method" in message ? message.method : undefined;
-    this.child.stdin.write(`${JSON.stringify(message)}\n`, (error?: Error | null) => {
-      if (error) {
-        embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+    const payload = `${JSON.stringify(message)}\n`;
+    return new Promise<void>((resolve, reject) => {
+      let writeCallbackSettled = false;
+      let drainSettled = true;
+      let settled = false;
+      let onDrain: (() => void) | undefined;
+      const cleanup = () => {
+        if (onDrain) {
+          this.child.stdin.off?.("drain", onDrain);
+          onDrain = undefined;
+        }
+      };
+      const finish = (error?: Error | null) => {
+        if (settled) {
+          return;
+        }
+        if (error) {
+          settled = true;
+          cleanup();
+          embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+          reject(error);
+          return;
+        }
+        if (!writeCallbackSettled || !drainSettled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      onDrain = () => {
+        drainSettled = true;
+        finish();
+      };
+
+      try {
+        const writeResult = this.child.stdin.write(payload, (error?: Error | null) => {
+          writeCallbackSettled = true;
+          finish(error);
+        });
+        if (writeResult === false) {
+          drainSettled = false;
+          if (this.child.stdin.once) {
+            this.child.stdin.once("drain", onDrain);
+          } else {
+            drainSettled = true;
+          }
+        }
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }
@@ -376,12 +444,12 @@ export class CodexAppServerClient {
     try {
       const result = await this.runServerRequestHandlers(request);
       if (result !== undefined) {
-        this.writeMessage({ id: request.id, result });
+        await this.writeMessage({ id: request.id, result });
         return;
       }
-      this.writeMessage({ id: request.id, result: defaultServerRequestResponse(request) });
+      await this.writeMessage({ id: request.id, result: defaultServerRequestResponse(request) });
     } catch (error) {
-      this.writeMessage({
+      await this.writeMessage({
         id: request.id,
         error: {
           message: error instanceof Error ? error.message : String(error),
@@ -468,6 +536,14 @@ export class CodexAppServerClient {
       handler(this);
     }
   }
+}
+
+function resolveCodexAppServerRpcTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  const resolved = timeoutMs ?? DEFAULT_CODEX_APP_SERVER_RPC_TIMEOUT_MS;
+  if (!Number.isFinite(resolved) || resolved <= 0) {
+    return undefined;
+  }
+  return Math.max(100, Math.floor(resolved));
 }
 
 function defaultServerRequestResponse(
@@ -671,5 +747,6 @@ export const __testing = {
   closeCodexAppServerTransport,
   closeCodexAppServerTransportAndWait,
   CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+  DEFAULT_CODEX_APP_SERVER_RPC_TIMEOUT_MS,
   redactCodexAppServerLinePreview,
 } as const;

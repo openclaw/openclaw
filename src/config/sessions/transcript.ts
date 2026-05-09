@@ -67,6 +67,25 @@ type AssistantTranscriptText = {
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
 export type TailAssistantTranscriptText = AssistantTranscriptText;
 
+const TRANSCRIPT_IDEMPOTENCY_INDEX_TYPE = "openclaw-transcript-idempotency-index";
+const TRANSCRIPT_IDEMPOTENCY_INDEX_VERSION = 1;
+
+type TranscriptIdempotencyIndexEntry = {
+  messageId?: string;
+};
+
+type TranscriptIdempotencyIndex = {
+  type: typeof TRANSCRIPT_IDEMPOTENCY_INDEX_TYPE;
+  version: typeof TRANSCRIPT_IDEMPOTENCY_INDEX_VERSION;
+  indexedBytes: number;
+  keys: Record<string, TranscriptIdempotencyIndexEntry>;
+};
+
+type TranscriptIdempotencyLookup =
+  | { status: "hit"; messageId: string | true }
+  | { status: "miss" }
+  | { status: "unavailable" };
+
 function parseAssistantTranscriptText(line: string): AssistantTranscriptText | undefined {
   const parsed = JSON.parse(line) as {
     id?: unknown;
@@ -298,7 +317,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     params.idempotencyKey ??
     ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
   const existingMessageId = explicitIdempotencyKey
-    ? await transcriptHasIdempotencyKey(sessionFile, explicitIdempotencyKey)
+    ? await findTranscriptIdempotencyKey(sessionFile, explicitIdempotencyKey)
     : undefined;
   if (existingMessageId) {
     return {
@@ -315,6 +334,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
   }
 
+  const idempotencyIndexBaseBytes = explicitIdempotencyKey
+    ? await getTranscriptFileSize(sessionFile)
+    : undefined;
   const message = {
     ...params.message,
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
@@ -335,42 +357,211 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     case "none":
       break;
   }
+  if (explicitIdempotencyKey) {
+    await recordTranscriptIdempotencyKey({
+      transcriptPath: sessionFile,
+      idempotencyKey: explicitIdempotencyKey,
+      messageId,
+      previousIndexedBytes: idempotencyIndexBaseBytes,
+    });
+  }
   return { ok: true, sessionFile, messageId };
 }
 
-async function transcriptHasIdempotencyKey(
-  transcriptPath: string,
-  idempotencyKey: string,
-): Promise<string | true | undefined> {
-  try {
-    const raw = await fs.promises.readFile(transcriptPath, "utf-8");
-    for (const line of raw.split(/\r?\n/)) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(line) as {
-          id?: unknown;
-          message?: { idempotencyKey?: unknown };
-        };
-        if (
-          parsed.message?.idempotencyKey === idempotencyKey &&
-          typeof parsed.id === "string" &&
-          parsed.id
-        ) {
-          return parsed.id;
-        }
-        if (parsed.message?.idempotencyKey === idempotencyKey) {
-          return true;
-        }
-      } catch {
-        continue;
-      }
+function resolveTranscriptIdempotencyIndexPath(transcriptPath: string): string {
+  return `${transcriptPath}.idempotency.json`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseTranscriptIdempotencyIndex(raw: string): TranscriptIdempotencyIndex | undefined {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+  if (
+    parsed.type !== TRANSCRIPT_IDEMPOTENCY_INDEX_TYPE ||
+    parsed.version !== TRANSCRIPT_IDEMPOTENCY_INDEX_VERSION ||
+    typeof parsed.indexedBytes !== "number" ||
+    !Number.isSafeInteger(parsed.indexedBytes) ||
+    parsed.indexedBytes < 0 ||
+    !isRecord(parsed.keys)
+  ) {
+    return undefined;
+  }
+
+  const keys: Record<string, TranscriptIdempotencyIndexEntry> = {};
+  for (const [key, entry] of Object.entries(parsed.keys)) {
+    if (!key || !isRecord(entry)) {
+      return undefined;
     }
+    if ("messageId" in entry && typeof entry.messageId !== "string") {
+      return undefined;
+    }
+    keys[key] =
+      typeof entry.messageId === "string" && entry.messageId ? { messageId: entry.messageId } : {};
+  }
+
+  return {
+    type: TRANSCRIPT_IDEMPOTENCY_INDEX_TYPE,
+    version: TRANSCRIPT_IDEMPOTENCY_INDEX_VERSION,
+    indexedBytes: parsed.indexedBytes,
+    keys,
+  };
+}
+
+async function getTranscriptFileSize(transcriptPath: string): Promise<number | undefined> {
+  try {
+    return (await fs.promises.stat(transcriptPath)).size;
   } catch {
     return undefined;
   }
+}
+
+async function readTranscriptIdempotencyIndex(params: {
+  transcriptPath: string;
+  requireCurrentSize: boolean;
+}): Promise<TranscriptIdempotencyIndex | undefined> {
+  try {
+    const [raw, stat] = await Promise.all([
+      fs.promises.readFile(resolveTranscriptIdempotencyIndexPath(params.transcriptPath), "utf-8"),
+      fs.promises.stat(params.transcriptPath),
+    ]);
+    const index = parseTranscriptIdempotencyIndex(raw);
+    if (!index || index.indexedBytes > stat.size) {
+      return undefined;
+    }
+    if (params.requireCurrentSize && index.indexedBytes !== stat.size) {
+      return undefined;
+    }
+    return index;
+  } catch {
+    return undefined;
+  }
+}
+
+async function writeTranscriptIdempotencyIndex(
+  transcriptPath: string,
+  index: TranscriptIdempotencyIndex,
+): Promise<void> {
+  await fs.promises.writeFile(
+    resolveTranscriptIdempotencyIndexPath(transcriptPath),
+    `${JSON.stringify(index)}\n`,
+    { encoding: "utf-8", mode: 0o600 },
+  );
+}
+
+async function readTranscriptIdempotencyIndexLookup(
+  transcriptPath: string,
+  idempotencyKey: string,
+): Promise<TranscriptIdempotencyLookup> {
+  const index = await readTranscriptIdempotencyIndex({ transcriptPath, requireCurrentSize: true });
+  if (!index) {
+    return { status: "unavailable" };
+  }
+
+  const entry = index.keys[idempotencyKey];
+  if (entry) {
+    return { status: "hit", messageId: entry.messageId ?? true };
+  }
+
+  const transcriptSize = await getTranscriptFileSize(transcriptPath);
+  if (transcriptSize !== undefined && index.indexedBytes >= transcriptSize) {
+    return { status: "miss" };
+  }
+  return { status: "unavailable" };
+}
+
+async function findTranscriptIdempotencyKey(
+  transcriptPath: string,
+  idempotencyKey: string,
+): Promise<string | true | undefined> {
+  const indexedLookup = await readTranscriptIdempotencyIndexLookup(transcriptPath, idempotencyKey);
+  switch (indexedLookup.status) {
+    case "hit":
+      return indexedLookup.messageId;
+    case "miss":
+      return undefined;
+    case "unavailable":
+      return await scanTranscriptIdempotencyKey(transcriptPath, idempotencyKey);
+  }
   return undefined;
+}
+
+async function scanTranscriptIdempotencyKey(
+  transcriptPath: string,
+  idempotencyKey: string,
+): Promise<string | true | undefined> {
+  const keys: Record<string, TranscriptIdempotencyIndexEntry> = {};
+  let foundMessageId: string | true | undefined;
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(transcriptPath, "utf-8");
+  } catch {
+    return undefined;
+  }
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as {
+        id?: unknown;
+        message?: { idempotencyKey?: unknown };
+      };
+      const key = parsed.message?.idempotencyKey;
+      if (typeof key !== "string" || !key) {
+        continue;
+      }
+      const entry = typeof parsed.id === "string" && parsed.id ? { messageId: parsed.id } : {};
+      keys[key] ??= entry;
+      if (key === idempotencyKey && !foundMessageId) {
+        foundMessageId = entry.messageId ?? true;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  await writeTranscriptIdempotencyIndex(transcriptPath, {
+    type: TRANSCRIPT_IDEMPOTENCY_INDEX_TYPE,
+    version: TRANSCRIPT_IDEMPOTENCY_INDEX_VERSION,
+    indexedBytes: Buffer.byteLength(raw, "utf-8"),
+    keys,
+  }).catch(() => undefined);
+
+  return foundMessageId;
+}
+
+async function recordTranscriptIdempotencyKey(params: {
+  transcriptPath: string;
+  idempotencyKey: string;
+  messageId: string;
+  previousIndexedBytes: number | undefined;
+}): Promise<void> {
+  if (params.previousIndexedBytes === undefined) {
+    return;
+  }
+
+  const index = await readTranscriptIdempotencyIndex({
+    transcriptPath: params.transcriptPath,
+    requireCurrentSize: false,
+  });
+  if (!index || index.indexedBytes !== params.previousIndexedBytes) {
+    return;
+  }
+
+  const transcriptSize = await getTranscriptFileSize(params.transcriptPath);
+  if (transcriptSize === undefined || transcriptSize < index.indexedBytes) {
+    return;
+  }
+
+  index.keys[params.idempotencyKey] = { messageId: params.messageId };
+  index.indexedBytes = transcriptSize;
+  await writeTranscriptIdempotencyIndex(params.transcriptPath, index).catch(() => undefined);
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {

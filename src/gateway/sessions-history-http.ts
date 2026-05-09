@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionStore } from "../config/sessions.js";
+import { loadSessionStoreEntriesAsync } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
@@ -136,7 +136,7 @@ export async function handleSessionHistoryHttpRequest(
   const { cfg } = authResult;
 
   const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
-  const store = loadSessionStore(target.storePath);
+  const store = await loadSessionStoreEntriesAsync(target.storePath, target.storeKeys);
   const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
   if (!entry?.sessionId) {
     sendJson(res, 404, {

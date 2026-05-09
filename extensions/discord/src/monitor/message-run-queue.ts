@@ -18,6 +18,8 @@ type DiscordMessageRunQueueParams = {
   runtime: RuntimeEnv;
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
+  maxPendingPerSession?: number;
+  maxQueuedAgeMs?: number;
   replayGuard?: ClaimableDedupe;
   __testing?: DiscordMessageRunQueueTestingHooks;
 };
@@ -29,6 +31,11 @@ type DiscordMessageRunQueue = {
 
 export type DiscordMessageRunQueueTestingHooks = {
   processDiscordMessage?: ProcessDiscordMessage;
+};
+
+type QueuedDiscordInboundJob = {
+  job: DiscordInboundJob;
+  enqueuedAt: number;
 };
 
 let messageProcessRuntimePromise:
@@ -77,6 +84,9 @@ export function createDiscordMessageRunQueue(
   params: DiscordMessageRunQueueParams,
 ): DiscordMessageRunQueue {
   const replayGuard = params.replayGuard ?? createDiscordInboundReplayGuard();
+  const maxPendingPerSession = normalizePositiveInteger(params.maxPendingPerSession);
+  const maxQueuedAgeMs = normalizePositiveInteger(params.maxQueuedAgeMs);
+  const pendingBySession = new Map<string, QueuedDiscordInboundJob[]>();
   const runQueue = createChannelRunQueue({
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
@@ -87,7 +97,36 @@ export function createDiscordMessageRunQueue(
 
   return {
     enqueue(job) {
+      const pending = pendingBySession.get(job.queueKey) ?? [];
+      if (maxPendingPerSession !== undefined && pending.length >= maxPendingPerSession) {
+        params.runtime.error?.(
+          danger(
+            `discord message queue full for session ${job.queueKey}; maxPendingPerSession=${maxPendingPerSession}`,
+          ),
+        );
+        void commitDiscordInboundReplay({
+          replayKeys: job.replayKeys,
+          replayGuard,
+        });
+        return;
+      }
+      const queuedJob = { job, enqueuedAt: Date.now() };
+      pending.push(queuedJob);
+      pendingBySession.set(job.queueKey, pending);
       runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
+        removePendingJob(pendingBySession, queuedJob);
+        if (isStaleQueuedJob(queuedJob, maxQueuedAgeMs)) {
+          params.runtime.error?.(
+            danger(
+              `discord message queue dropped stale job for session ${job.queueKey} after ${Date.now() - queuedJob.enqueuedAt}ms`,
+            ),
+          );
+          await commitDiscordInboundReplay({
+            replayKeys: job.replayKeys,
+            replayGuard,
+          });
+          return;
+        }
         await processDiscordQueuedMessage({
           job,
           lifecycleSignal,
@@ -96,6 +135,40 @@ export function createDiscordMessageRunQueue(
         });
       });
     },
-    deactivate: runQueue.deactivate,
+    deactivate() {
+      pendingBySession.clear();
+      runQueue.deactivate();
+    },
   };
+}
+
+function normalizePositiveInteger(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+function removePendingJob(
+  pendingBySession: Map<string, QueuedDiscordInboundJob[]>,
+  queuedJob: QueuedDiscordInboundJob,
+): void {
+  const pending = pendingBySession.get(queuedJob.job.queueKey);
+  if (!pending) {
+    return;
+  }
+  const index = pending.indexOf(queuedJob);
+  if (index >= 0) {
+    pending.splice(index, 1);
+  }
+  if (pending.length === 0) {
+    pendingBySession.delete(queuedJob.job.queueKey);
+  }
+}
+
+function isStaleQueuedJob(
+  queuedJob: QueuedDiscordInboundJob,
+  maxQueuedAgeMs: number | undefined,
+): boolean {
+  return maxQueuedAgeMs !== undefined && Date.now() - queuedJob.enqueuedAt > maxQueuedAgeMs;
 }

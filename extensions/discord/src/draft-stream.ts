@@ -132,22 +132,68 @@ export function createDiscordDraftStream(params: {
     warn: params.warn,
     warnPrefix: "discord stream preview cleanup failed",
   });
+  let pendingCoalescedText: string | undefined;
+  let coalesceScheduled = false;
+
+  const drainCoalescedUpdate = () => {
+    coalesceScheduled = false;
+    const text = pendingCoalescedText;
+    pendingCoalescedText = undefined;
+    if (text !== undefined) {
+      update(text);
+    }
+  };
+
+  const clearCoalescedUpdate = () => {
+    pendingCoalescedText = undefined;
+    coalesceScheduled = false;
+  };
+
+  const updateCoalesced = (text: string) => {
+    if (streamState.stopped || streamState.final) {
+      return;
+    }
+    pendingCoalescedText = text;
+    if (coalesceScheduled) {
+      return;
+    }
+    coalesceScheduled = true;
+    queueMicrotask(drainCoalescedUpdate);
+  };
+
+  const flushCoalesced = async () => {
+    if (pendingCoalescedText !== undefined) {
+      drainCoalescedUpdate();
+    }
+    await loop.flush();
+  };
+
+  const discardPendingCoalesced = async () => {
+    clearCoalescedUpdate();
+    await discardPending();
+  };
+
+  const sealCoalesced = async () => {
+    clearCoalescedUpdate();
+    await seal();
+  };
 
   const forceNewMessage = () => {
     streamMessageId = undefined;
     lastSentText = "";
+    clearCoalescedUpdate();
     loop.resetPending();
   };
 
   params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
-    update,
-    flush: loop.flush,
+    update: updateCoalesced,
+    flush: flushCoalesced,
     messageId: () => streamMessageId,
     clear,
-    discardPending,
-    seal,
+    discardPending: discardPendingCoalesced,
+    seal: sealCoalesced,
     stop,
     forceNewMessage,
   };

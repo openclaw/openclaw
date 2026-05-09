@@ -31,6 +31,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     );
   }
 
+  function transcriptIdempotencyIndexPath(sessionFile: string): string {
+    return `${sessionFile}.idempotency.json`;
+  }
+
   function createExactAssistantMessage(params: {
     text?: string;
     content?: ExactAssistantMessage["content"];
@@ -145,6 +149,178 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const messageLine = JSON.parse(lines[1]);
     expect(messageLine.message.idempotencyKey).toBe("mirror:test-source-message");
     expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+  });
+
+  it("creates and uses the transcript idempotency sidecar for repeated mirror writes", async () => {
+    writeTranscriptStore();
+
+    const firstResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(firstResult.ok).toBe(true);
+    if (!firstResult.ok) {
+      return;
+    }
+
+    const indexPath = transcriptIdempotencyIndexPath(firstResult.sessionFile);
+    expect(fs.existsSync(indexPath)).toBe(true);
+    const index = JSON.parse(fs.readFileSync(indexPath, "utf-8")) as {
+      keys?: Record<string, { messageId?: string }>;
+    };
+    expect(index.keys?.["mirror:test-source-message"]?.messageId).toBe(firstResult.messageId);
+
+    const readSpy = vi.spyOn(fs.promises, "readFile");
+    const secondResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "This text should not be appended.",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(secondResult.ok).toBe(true);
+    if (secondResult.ok) {
+      expect(secondResult.messageId).toBe(firstResult.messageId);
+    }
+    expect(
+      readSpy.mock.calls.some(
+        ([file]) => typeof file === "string" && file === firstResult.sessionFile,
+      ),
+    ).toBe(false);
+    readSpy.mockRestore();
+
+    const lines = fs.readFileSync(firstResult.sessionFile, "utf-8").trim().split("\n");
+    expect(lines.length).toBe(2);
+    const messageLine = JSON.parse(lines[1]);
+    expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+  });
+
+  it("falls back to the transcript scan and recreates the sidecar when it is missing", async () => {
+    writeTranscriptStore();
+
+    const firstResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(firstResult.ok).toBe(true);
+    if (!firstResult.ok) {
+      return;
+    }
+
+    const indexPath = transcriptIdempotencyIndexPath(firstResult.sessionFile);
+    fs.unlinkSync(indexPath);
+
+    const secondResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "This text should not be appended.",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(secondResult.ok).toBe(true);
+    if (secondResult.ok) {
+      expect(secondResult.messageId).toBe(firstResult.messageId);
+    }
+    expect(fs.existsSync(indexPath)).toBe(true);
+    const lines = fs.readFileSync(firstResult.sessionFile, "utf-8").trim().split("\n");
+    expect(lines.length).toBe(2);
+  });
+
+  it("falls back to the transcript scan and rewrites a corrupt sidecar", async () => {
+    writeTranscriptStore();
+
+    const firstResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(firstResult.ok).toBe(true);
+    if (!firstResult.ok) {
+      return;
+    }
+
+    const indexPath = transcriptIdempotencyIndexPath(firstResult.sessionFile);
+    fs.writeFileSync(indexPath, "{not-json", "utf-8");
+
+    const secondResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "This text should not be appended.",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(secondResult.ok).toBe(true);
+    if (secondResult.ok) {
+      expect(secondResult.messageId).toBe(firstResult.messageId);
+    }
+    const rewrittenIndex = JSON.parse(fs.readFileSync(indexPath, "utf-8")) as {
+      keys?: Record<string, { messageId?: string }>;
+    };
+    expect(rewrittenIndex.keys?.["mirror:test-source-message"]?.messageId).toBe(
+      firstResult.messageId,
+    );
+    const lines = fs.readFileSync(firstResult.sessionFile, "utf-8").trim().split("\n");
+    expect(lines.length).toBe(2);
+  });
+
+  it("falls back to the transcript scan when the sidecar is stale", async () => {
+    writeTranscriptStore();
+
+    const firstResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(firstResult.ok).toBe(true);
+    if (!firstResult.ok) {
+      return;
+    }
+
+    const indexPath = transcriptIdempotencyIndexPath(firstResult.sessionFile);
+    fs.writeFileSync(
+      indexPath,
+      JSON.stringify({
+        type: "openclaw-transcript-idempotency-index",
+        version: 1,
+        indexedBytes: 1,
+        keys: {
+          "mirror:test-source-message": { messageId: "stale-sidecar-message-id" },
+        },
+      }) + "\n",
+      "utf-8",
+    );
+
+    const secondResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "This text should not be appended.",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(secondResult.ok).toBe(true);
+    if (secondResult.ok) {
+      expect(secondResult.messageId).toBe(firstResult.messageId);
+    }
+    const rewrittenIndex = JSON.parse(fs.readFileSync(indexPath, "utf-8")) as {
+      indexedBytes?: number;
+      keys?: Record<string, { messageId?: string }>;
+    };
+    expect(rewrittenIndex.indexedBytes).toBe(fs.statSync(firstResult.sessionFile).size);
+    expect(rewrittenIndex.keys?.["mirror:test-source-message"]?.messageId).toBe(
+      firstResult.messageId,
+    );
+    const lines = fs.readFileSync(firstResult.sessionFile, "utf-8").trim().split("\n");
+    expect(lines.length).toBe(2);
   });
 
   it("does not append a duplicate delivery mirror when the latest assistant message already matches", async () => {

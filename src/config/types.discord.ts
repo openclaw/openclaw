@@ -396,8 +396,7 @@ export type DiscordAccountConfig = {
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
   /**
-   * Legacy compatibility block. Discord no longer enforces channel-owned
-   * timeouts for queued inbound agent runs.
+   * Discord inbound worker queue controls.
    */
   inboundWorker?: {
     /**
@@ -405,6 +404,16 @@ export type DiscordAccountConfig = {
      * lifecycle, not by Discord channel config.
      */
     runTimeoutMs?: number;
+    /**
+     * Optional max pending queued inbound agent runs per session. Unset preserves
+     * the existing unbounded per-session queue.
+     */
+    maxPendingPerSession?: number;
+    /**
+     * Optional max age in milliseconds for a pending queued inbound agent run.
+     * Unset preserves existing behavior; stale jobs are skipped only when set.
+     */
+    maxQueuedAgeMs?: number;
   };
   /**
    * Discord EventQueue configuration. Controls how Discord gateway events are processed.

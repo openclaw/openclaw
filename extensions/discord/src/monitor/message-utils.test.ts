@@ -53,6 +53,16 @@ function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;
 }
 
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, resolve, reject };
+}
+
 const DISCORD_CDN_HOSTNAMES = [
   "cdn.discordapp.com",
   "media.discordapp.net",
@@ -675,6 +685,124 @@ describe("resolveMediaList", () => {
         placeholder: "<media:document>",
       },
     ]);
+  });
+
+  it("downloads attachments with bounded concurrency while preserving attachment order", async () => {
+    const attachments = Array.from({ length: 4 }, (_, index) => ({
+      id: `att-${index + 1}`,
+      url: `https://cdn.discordapp.com/attachments/1/${index + 1}.png`,
+      filename: `${index + 1}.png`,
+      content_type: "image/png",
+    }));
+    const downloads = attachments.map(() =>
+      createDeferred<{ buffer: Buffer; contentType: string }>(),
+    );
+    const activeUrls = new Set<string>();
+    let maxActive = 0;
+
+    fetchRemoteMedia.mockImplementation((params: { url: string }) => {
+      activeUrls.add(params.url);
+      maxActive = Math.max(maxActive, activeUrls.size);
+      const index = attachments.findIndex((attachment) => attachment.url === params.url);
+      const deferred = downloads[index];
+      if (!deferred) {
+        throw new Error(`unexpected url ${params.url}`);
+      }
+      return deferred.promise.finally(() => {
+        activeUrls.delete(params.url);
+      });
+    });
+    saveMediaBuffer.mockImplementation(
+      async (buffer: Buffer, contentType: string, _direction: string, _maxBytes: number, name) => ({
+        path: `/tmp/${buffer.toString()}`,
+        contentType,
+        fileName: name,
+      }),
+    );
+
+    const resultPromise = resolveMediaList(
+      asMessage({
+        attachments,
+      }),
+      512,
+    );
+
+    await vi.waitFor(() => expect(fetchRemoteMedia).toHaveBeenCalledTimes(3));
+    expect(maxActive).toBe(3);
+    expect(fetchRemoteMedia).not.toHaveBeenCalledWith(
+      expect.objectContaining({ url: attachments[3]?.url }),
+    );
+
+    downloads[1]?.resolve({ buffer: Buffer.from("two"), contentType: "image/png" });
+    await vi.waitFor(() => expect(fetchRemoteMedia).toHaveBeenCalledTimes(4));
+    downloads[3]?.resolve({ buffer: Buffer.from("four"), contentType: "image/png" });
+    downloads[2]?.resolve({ buffer: Buffer.from("three"), contentType: "image/png" });
+    downloads[0]?.resolve({ buffer: Buffer.from("one"), contentType: "image/png" });
+
+    await expect(resultPromise).resolves.toEqual([
+      { path: "/tmp/one", contentType: "image/png", placeholder: "<media:image>" },
+      { path: "/tmp/two", contentType: "image/png", placeholder: "<media:image>" },
+      { path: "/tmp/three", contentType: "image/png", placeholder: "<media:image>" },
+      { path: "/tmp/four", contentType: "image/png", placeholder: "<media:image>" },
+    ]);
+    expect(maxActive).toBeLessThanOrEqual(3);
+  });
+
+  it("passes maxBytes to every parallel attachment download and save", async () => {
+    const attachments = [
+      {
+        id: "att-one",
+        url: "https://cdn.discordapp.com/attachments/1/one.png",
+        filename: "one.png",
+        content_type: "image/png",
+      },
+      {
+        id: "att-two",
+        url: "https://cdn.discordapp.com/attachments/1/two.png",
+        filename: "two.png",
+        content_type: "image/png",
+      },
+    ];
+    fetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer
+      .mockResolvedValueOnce({ path: "/tmp/one.png", contentType: "image/png" })
+      .mockResolvedValueOnce({ path: "/tmp/two.png", contentType: "image/png" });
+
+    await resolveMediaList(
+      asMessage({
+        attachments,
+      }),
+      1234,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(2);
+    expect(fetchRemoteMedia).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ maxBytes: 1234 }),
+    );
+    expect(fetchRemoteMedia).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ maxBytes: 1234 }),
+    );
+    expect(saveMediaBuffer).toHaveBeenNthCalledWith(
+      1,
+      expect.any(Buffer),
+      "image/png",
+      "inbound",
+      1234,
+      "one.png",
+    );
+    expect(saveMediaBuffer).toHaveBeenNthCalledWith(
+      2,
+      expect.any(Buffer),
+      "image/png",
+      "inbound",
+      1234,
+      "two.png",
+    );
   });
 
   it("keeps sticker metadata when sticker download fails", async () => {

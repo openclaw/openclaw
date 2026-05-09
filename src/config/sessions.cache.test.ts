@@ -5,8 +5,10 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { readSessionStoreCache, writeSessionStoreCache } from "./sessions/store-cache.js";
 import {
   clearSessionStoreCacheForTest,
+  loadSessionStoreEntriesAsync,
   loadSessionStore,
   saveSessionStore,
+  updateSessionStore,
 } from "./sessions/store.js";
 import type { SessionEntry } from "./sessions/types.js";
 
@@ -82,6 +84,81 @@ describe("Session Store Cache", () => {
     expect(loaded2).toEqual(testStore);
     expect(readSpy).toHaveBeenCalledTimes(0);
     readSpy.mockRestore();
+  });
+
+  it("should serve targeted async reads from cache without disk reads", async () => {
+    const testStore: Record<string, SessionEntry> = {
+      "session:1": createSessionEntry({ displayName: "Test Session 1" }),
+      "session:2": createSessionEntry({ sessionId: "id-2", displayName: "Test Session 2" }),
+    };
+
+    await saveSessionStore(storePath, testStore);
+
+    const syncReadSpy = vi.spyOn(fs, "readFileSync");
+    const asyncReadSpy = vi.spyOn(fs.promises, "readFile");
+
+    const loaded = await loadSessionStoreEntriesAsync(storePath, ["session:2"]);
+
+    expect(loaded).toEqual({ "session:2": testStore["session:2"] });
+    expect(syncReadSpy).toHaveBeenCalledTimes(0);
+    expect(asyncReadSpy).toHaveBeenCalledTimes(0);
+
+    syncReadSpy.mockRestore();
+    asyncReadSpy.mockRestore();
+  });
+
+  it("should use async disk reads for targeted cache misses", async () => {
+    process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
+    clearSessionStoreCacheForTest();
+
+    const testStore: Record<string, SessionEntry> = {
+      "session:1": createSessionEntry({ displayName: "Test Session 1" }),
+      "session:2": createSessionEntry({ sessionId: "id-2", displayName: "Test Session 2" }),
+    };
+    fs.writeFileSync(storePath, JSON.stringify(testStore, null, 2));
+
+    const syncReadSpy = vi.spyOn(fs, "readFileSync");
+    const asyncReadSpy = vi.spyOn(fs.promises, "readFile");
+
+    const loaded = await loadSessionStoreEntriesAsync(storePath, ["session:2", "missing"]);
+
+    expect(loaded).toEqual({ "session:2": testStore["session:2"] });
+    expect(syncReadSpy).toHaveBeenCalledTimes(0);
+    expect(asyncReadSpy).toHaveBeenCalledTimes(1);
+
+    syncReadSpy.mockRestore();
+    asyncReadSpy.mockRestore();
+  });
+
+  it("should keep targeted async reads best-effort for missing or corrupt stores", async () => {
+    const missingPath = path.join(testDir, "missing.json");
+
+    await expect(loadSessionStoreEntriesAsync(missingPath, ["session:1"])).resolves.toEqual({});
+
+    fs.writeFileSync(storePath, "not valid json {");
+
+    await expect(loadSessionStoreEntriesAsync(storePath, ["session:1"])).resolves.toEqual({});
+  });
+
+  it("should reflect writer cache updates for targeted async reads", async () => {
+    const testStore = createSingleSessionStore(
+      createSessionEntry({ displayName: "Original Session" }),
+    );
+
+    await saveSessionStore(storePath, testStore);
+
+    const before = await loadSessionStoreEntriesAsync(storePath, ["session:1"]);
+    expect(before["session:1"].displayName).toBe("Original Session");
+
+    await updateSessionStore(storePath, (store) => {
+      store["session:1"] = {
+        ...store["session:1"],
+        displayName: "Updated Session",
+      };
+    });
+
+    const after = await loadSessionStoreEntriesAsync(storePath, ["session:1"]);
+    expect(after["session:1"].displayName).toBe("Updated Session");
   });
 
   it("should not allow cached session mutations to leak across loads", async () => {

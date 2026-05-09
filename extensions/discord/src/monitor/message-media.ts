@@ -47,6 +47,7 @@ const AUDIO_ATTACHMENT_EXTENSIONS = new Set([
 ]);
 
 const DISCORD_STICKER_ASSET_BASE_URL = "https://media.discordapp.net/stickers";
+const DEFAULT_DISCORD_MEDIA_DOWNLOAD_CONCURRENCY = 3;
 
 export type DiscordMediaInfo = {
   path: string;
@@ -271,47 +272,82 @@ async function appendResolvedMediaFromAttachments(params: {
   if (!attachments || attachments.length === 0) {
     return;
   }
-  for (const attachment of attachments) {
-    const attachmentUrl = normalizeOptionalString(attachment.url);
-    if (!attachmentUrl) {
-      logVerbose(
-        `${params.errorPrefix} ${attachment.id ?? attachment.filename ?? "attachment"}: missing url`,
-      );
-      continue;
-    }
-    try {
-      const fetched = await fetchDiscordMedia({
-        url: attachmentUrl,
-        filePathHint: attachment.filename ?? attachmentUrl,
-        maxBytes: params.maxBytes,
-        fetchImpl: params.fetchImpl,
-        ssrfPolicy: params.ssrfPolicy,
-        readIdleTimeoutMs: params.readIdleTimeoutMs,
-        totalTimeoutMs: params.totalTimeoutMs,
-        abortSignal: params.abortSignal,
-      });
-      const saved = await saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType ?? attachment.content_type,
-        "inbound",
-        params.maxBytes,
-        attachment.filename,
-      );
-      params.out.push({
-        path: saved.path,
-        contentType: saved.contentType,
-        placeholder: inferPlaceholder(attachment),
-      });
-    } catch (err) {
-      const id = attachment.id ?? attachmentUrl;
-      logVerbose(`${params.errorPrefix} ${id}: ${String(err)}`);
-      params.out.push({
-        path: attachmentUrl,
-        contentType: attachment.content_type,
-        placeholder: inferPlaceholder(attachment),
-      });
+  const resolved = await mapWithConcurrency(
+    attachments,
+    DEFAULT_DISCORD_MEDIA_DOWNLOAD_CONCURRENCY,
+    async (attachment) => {
+      const attachmentUrl = normalizeOptionalString(attachment.url);
+      if (!attachmentUrl) {
+        logVerbose(
+          `${params.errorPrefix} ${attachment.id ?? attachment.filename ?? "attachment"}: missing url`,
+        );
+        return undefined;
+      }
+      try {
+        const fetched = await fetchDiscordMedia({
+          url: attachmentUrl,
+          filePathHint: attachment.filename ?? attachmentUrl,
+          maxBytes: params.maxBytes,
+          fetchImpl: params.fetchImpl,
+          ssrfPolicy: params.ssrfPolicy,
+          readIdleTimeoutMs: params.readIdleTimeoutMs,
+          totalTimeoutMs: params.totalTimeoutMs,
+          abortSignal: params.abortSignal,
+        });
+        const saved = await saveMediaBuffer(
+          fetched.buffer,
+          fetched.contentType ?? attachment.content_type,
+          "inbound",
+          params.maxBytes,
+          attachment.filename,
+        );
+        return {
+          path: saved.path,
+          contentType: saved.contentType,
+          placeholder: inferPlaceholder(attachment),
+        };
+      } catch (err) {
+        const id = attachment.id ?? attachmentUrl;
+        logVerbose(`${params.errorPrefix} ${id}: ${String(err)}`);
+        return {
+          path: attachmentUrl,
+          contentType: attachment.content_type,
+          placeholder: inferPlaceholder(attachment),
+        };
+      }
+    },
+  );
+  for (const media of resolved) {
+    if (media !== undefined) {
+      params.out.push(media);
     }
   }
+}
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const limit = Math.max(1, Math.floor(concurrency));
+  const results: R[] = [];
+  results.length = items.length;
+  let nextIndex = 0;
+
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      await worker();
+    }),
+  );
+  return results;
 }
 
 function resolveStickerAssetCandidates(sticker: APIStickerItem): DiscordStickerAssetCandidate[] {
