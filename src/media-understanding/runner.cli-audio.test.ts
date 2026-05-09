@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
@@ -25,7 +26,11 @@ describe("media-understanding CLI audio entry", () => {
   });
 
   it("applies per-request prompt and language overrides to CLI transcription templating", async () => {
+    let mediaPath = "";
+
     await withAudioFixture("openclaw-cli-audio", async ({ ctx, cache }) => {
+      mediaPath = await fs.realpath(ctx.MediaPath);
+
       await runCliEntry({
         capability: "audio",
         entry: {
@@ -59,11 +64,10 @@ describe("media-understanding CLI audio entry", () => {
       });
     });
 
+    expect(runExecMock).toHaveBeenCalledTimes(1);
     const [command, args, options] = runExecMock.mock.calls[0] ?? [];
     expect(command).toBe("mock-transcriber");
-    expect(args).toEqual(
-      expect.arrayContaining(["--prompt", "Focus on names", "--language", "en"]),
-    );
+    expect(args).toEqual(["--prompt", "Focus on names", "--language", "en", "--file", mediaPath]);
     expect(options).toEqual({
       timeoutMs: 60_000,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,

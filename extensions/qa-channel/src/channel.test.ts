@@ -1,5 +1,8 @@
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
-import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  createStartAccountContext,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   createTestRegistry,
@@ -33,7 +36,7 @@ function createMockQaRuntime(params?: {
   onDispatch?: (ctx: Record<string, unknown>) => void;
 }): PluginRuntime {
   const sessionUpdatedAt = new Map<string, number>();
-  return {
+  return createPluginRuntimeMock({
     channel: {
       mentions: {
         buildMentionRegexes() {
@@ -96,8 +99,28 @@ function createMockQaRuntime(params?: {
           });
         },
       },
+      turn: {
+        async runPrepared(turn) {
+          await turn.recordInboundSession({
+            storePath: turn.storePath,
+            sessionKey:
+              typeof turn.ctxPayload.SessionKey === "string"
+                ? turn.ctxPayload.SessionKey
+                : turn.routeSessionKey,
+            ctx: turn.ctxPayload,
+            onRecordError: turn.record?.onRecordError ?? (() => undefined),
+          });
+          return {
+            admission: turn.admission ?? { kind: "dispatch" as const },
+            dispatched: true,
+            ctxPayload: turn.ctxPayload,
+            routeSessionKey: turn.routeSessionKey,
+            dispatchResult: await turn.runDispatch(),
+          };
+        },
+      },
     },
-  } as unknown as PluginRuntime;
+  } as unknown as PluginRuntime);
 }
 
 function createQaChannelConfig(params: { baseUrl: string; allowFrom?: string[] }) {
