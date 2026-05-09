@@ -1,24 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { createGatewayTool } from "./gateway-tool.js";
 
 type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewaySigusr1Restart>[0];
 
-const isRestartEnabledMock = vi.fn(() => true);
-const extractDeliveryInfoMock = vi.fn(() => ({
-  deliveryContext: {
-    channel: "slack",
-    to: "slack:C123",
-    accountId: "workspace-1",
-  },
-  threadId: "thread-42",
-}));
-const formatDoctorNonInteractiveHintMock = vi.fn(() => "Run: openclaw doctor --non-interactive");
-const writeRestartSentinelMock = vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/restart");
-const removeRestartSentinelFileMock = vi.fn(async (_path: string | null | undefined) => undefined);
-const scheduleGatewaySigusr1RestartMock = vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
-  scheduled: true,
-  delayMs: 250,
+const {
+  extractDeliveryInfoMock,
+  formatDoctorNonInteractiveHintMock,
+  isRestartEnabledMock,
+  removeRestartSentinelFileMock,
+  scheduleGatewaySigusr1RestartMock,
+  writeRestartSentinelMock,
+} = vi.hoisted(() => ({
+  isRestartEnabledMock: vi.fn(() => true),
+  extractDeliveryInfoMock: vi.fn(() => ({
+    deliveryContext: {
+      channel: "slack",
+      to: "slack:C123",
+      accountId: "workspace-1",
+    },
+    threadId: "thread-42",
+  })),
+  formatDoctorNonInteractiveHintMock: vi.fn(() => "Run: openclaw doctor --non-interactive"),
+  writeRestartSentinelMock: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/restart"),
+  removeRestartSentinelFileMock: vi.fn(async (_path: string | null | undefined) => undefined),
+  scheduleGatewaySigusr1RestartMock: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
+    scheduled: true,
+    delayMs: 250,
+  })),
 }));
 
 vi.mock("../../config/commands.js", () => ({
@@ -79,7 +89,6 @@ describe("gateway tool restart continuation", () => {
   });
 
   it("does not expose system-event continuations to the agent tool", async () => {
-    const { createGatewayTool } = await import("./gateway-tool.js");
     const tool = createGatewayTool();
 
     const parameters = tool.parameters as {
@@ -91,7 +100,6 @@ describe("gateway tool restart continuation", () => {
   });
 
   it("instructs agents to use continuationMessage when a restart still needs a reply", async () => {
-    const { createGatewayTool } = await import("./gateway-tool.js");
     const tool = createGatewayTool();
 
     expect(tool.description).toContain("still owe the user a reply");
@@ -100,7 +108,6 @@ describe("gateway tool restart continuation", () => {
   });
 
   it("writes an agentTurn continuation into the restart sentinel", async () => {
-    const { createGatewayTool } = await import("./gateway-tool.js");
     const tool = createGatewayTool({
       agentSessionKey: "agent:main:main",
       config: {},
@@ -148,7 +155,6 @@ describe("gateway tool restart continuation", () => {
   });
 
   it("coerces legacy continuationKind inputs to an agentTurn", async () => {
-    const { createGatewayTool } = await import("./gateway-tool.js");
     const tool = createGatewayTool({
       agentSessionKey: "agent:main:main",
       config: {},
@@ -174,7 +180,6 @@ describe("gateway tool restart continuation", () => {
   });
 
   it("defaults session-scoped restarts to a success continuation", async () => {
-    const { createGatewayTool } = await import("./gateway-tool.js");
     const { DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE } =
       await import("../../infra/restart-sentinel.js");
     const tool = createGatewayTool({
@@ -203,7 +208,6 @@ describe("gateway tool restart continuation", () => {
   });
 
   it("removes the prepared sentinel when restart emission is rejected", async () => {
-    const { createGatewayTool } = await import("./gateway-tool.js");
     const tool = createGatewayTool({
       agentSessionKey: "agent:main:main",
       config: {},

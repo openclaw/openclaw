@@ -1,6 +1,7 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
 const {
   buildProviderRequestDispatcherPolicyMock,
@@ -66,7 +67,6 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("pushes provider capture metadata into the shared guarded fetch seam", async () => {
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -96,7 +96,6 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("scopes fake-IP DNS exemptions to the configured provider host", async () => {
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -119,7 +118,6 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("does not apply fake-IP exemptions to non-provider hosts", async () => {
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -136,7 +134,6 @@ describe("buildGuardedModelFetch", () => {
 
   it("merges explicit private-network opt-in into the provider-host fake-IP policy", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({ allowPrivateNetwork: true });
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "qwen3:32b",
       provider: "ollama",
@@ -158,7 +155,6 @@ describe("buildGuardedModelFetch", () => {
 
   it("uses trusted env-proxy mode for provider calls when no explicit dispatcher policy is configured", async () => {
     shouldUseEnvHttpProxyForUrlMock.mockReturnValueOnce(true);
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -194,7 +190,6 @@ describe("buildGuardedModelFetch", () => {
   it("keeps explicit provider dispatcher policies in strict guarded-fetch mode", async () => {
     shouldUseEnvHttpProxyForUrlMock.mockReturnValueOnce(true);
     buildProviderRequestDispatcherPolicyMock.mockReturnValueOnce({ mode: "direct" });
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -214,7 +209,6 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("threads explicit transport timeouts into the shared guarded fetch seam", async () => {
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -233,7 +227,6 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("threads resolved provider timeout metadata into the shared guarded fetch seam", async () => {
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "qwen3:32b",
       provider: "ollama",
@@ -255,8 +248,6 @@ describe("buildGuardedModelFetch", () => {
   it("does not force explicit debug proxy overrides onto plain HTTP model transports", async () => {
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
     process.env.OPENCLAW_DEBUG_PROXY_URL = "http://127.0.0.1:7799";
-
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "kimi-k2.5:cloud",
       provider: "ollama",
@@ -292,8 +283,6 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/responses",
       release: vi.fn(async () => undefined),
     });
-
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -320,8 +309,6 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });
-
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -358,8 +345,6 @@ describe("buildGuardedModelFetch", () => {
         "https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent",
       release: vi.fn(async () => undefined),
     });
-
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gemini-3.1-pro-preview",
       provider: "google",
@@ -396,8 +381,6 @@ describe("buildGuardedModelFetch", () => {
       release: vi.fn(async () => undefined),
       refreshTimeout,
     });
-
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -442,8 +425,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -463,8 +444,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.openai.com/v1/responses",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(openaiModel)(
         "https://api.openai.com/v1/responses",
         { method: "POST" },
@@ -483,8 +462,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -503,8 +480,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -522,8 +497,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.individual.githubcopilot.com/responses",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(openaiModel)(
         "https://api.individual.githubcopilot.com/responses",
         { method: "POST" },
@@ -543,8 +516,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -563,8 +534,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -582,8 +551,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -601,8 +568,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -620,8 +585,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },

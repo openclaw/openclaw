@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveWebFetchToolRuntimeContext,
+  resolveWebSearchToolRuntimeContext,
+} from "./web-tool-runtime-context.js";
 
 const mocks = vi.hoisted(() => ({
   getActiveRuntimeWebToolsMetadata: vi.fn(),
@@ -47,7 +51,6 @@ describe("web tool runtime context", () => {
       },
       diagnostics: [],
     });
-    const { resolveWebSearchToolRuntimeContext } = await import("./web-tool-runtime-context.js");
 
     const resolved = resolveWebSearchToolRuntimeContext({
       config: { tools: { web: { search: { provider: "brave" } } } },
@@ -75,7 +78,6 @@ describe("web tool runtime context", () => {
     const capturedConfig = {
       tools: { web: { search: { provider: "brave" } } },
     };
-    const { resolveWebSearchToolRuntimeContext } = await import("./web-tool-runtime-context.js");
 
     const resolved = resolveWebSearchToolRuntimeContext({
       config: capturedConfig,
@@ -99,9 +101,7 @@ describe("web tool runtime context", () => {
     );
   });
 
-  it("uses configured provider ids when runtime metadata is absent", async () => {
-    const { resolveWebSearchToolRuntimeContext } = await import("./web-tool-runtime-context.js");
-
+  it("uses configured provider ids when runtime metadata is absent", () => {
     resolveWebSearchToolRuntimeContext({
       config: { tools: { web: { search: { provider: "Brave" } } } },
     });
@@ -116,7 +116,6 @@ describe("web tool runtime context", () => {
 
   it("keeps runtime providers disabled for bundled fetch owners", async () => {
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue("firecrawl");
-    const { resolveWebFetchToolRuntimeContext } = await import("./web-tool-runtime-context.js");
 
     const resolved = resolveWebFetchToolRuntimeContext({
       config: { tools: { web: { fetch: { provider: "firecrawl" } } } },
@@ -131,9 +130,7 @@ describe("web tool runtime context", () => {
     );
   });
 
-  it("keeps runtime provider discovery enabled when no provider is selected", async () => {
-    const { resolveWebFetchToolRuntimeContext } = await import("./web-tool-runtime-context.js");
-
+  it("keeps runtime provider discovery enabled when no provider is selected", () => {
     const resolved = resolveWebFetchToolRuntimeContext({
       config: {},
     });

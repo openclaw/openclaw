@@ -1,11 +1,15 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
+
+vi.mock("../../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: vi.fn(() => undefined),
+}));
 
 type MutableSession = {
   _baseSystemPrompt?: string;

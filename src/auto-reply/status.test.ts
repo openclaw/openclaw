@@ -34,6 +34,8 @@ vi.mock("../plugins/commands.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  listPluginCommands.mockReset();
+  listPluginCommands.mockImplementation(() => []);
   MODEL_CONTEXT_TOKEN_CACHE.clear();
 });
 
@@ -2131,9 +2133,7 @@ describe("buildCommandsMessagePaginated", () => {
     ];
     listPluginCommands.mockImplementation(() => pluginCommands);
     expect(listPluginCommands()).toEqual(pluginCommands);
-    vi.resetModules();
-    const { buildCommandsMessagePaginated: buildPaginatedCommands } = await import("./status.js");
-    const firstPage = buildPaginatedCommands(
+    const firstPage = buildCommandsMessagePaginated(
       {
         commands: { config: false, debug: false },
       } as unknown as OpenClawConfig,
@@ -2141,7 +2141,7 @@ describe("buildCommandsMessagePaginated", () => {
       { surface: "telegram", page: 1, forcePaginatedList: true },
     );
     const pages = Array.from({ length: firstPage.totalPages }, (_, index) =>
-      buildPaginatedCommands(
+      buildCommandsMessagePaginated(
         {
           commands: { config: false, debug: false },
         } as unknown as OpenClawConfig,

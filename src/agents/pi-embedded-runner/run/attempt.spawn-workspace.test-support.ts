@@ -996,11 +996,9 @@ export function createContextEngineBootstrapAndAssemble() {
 }
 
 export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessionKey: string) {
-  expect(mock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      sessionKey,
-    }),
-  );
+  expect(mock).toHaveBeenCalled();
+  const [params] = mock.mock.calls.at(-1) ?? [];
+  expect((params as { sessionKey?: string } | undefined)?.sessionKey).toBe(sessionKey);
 }
 
 export const testModel = {

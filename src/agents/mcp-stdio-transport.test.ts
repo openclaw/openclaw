@@ -2,6 +2,7 @@ import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const killProcessTreeMock = vi.hoisted(() => vi.fn());
@@ -33,7 +34,6 @@ describe("OpenClawStdioClientTransport", () => {
   it("starts stdio MCP servers in a disposable process group on POSIX", async () => {
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({
       command: "npx",
@@ -73,7 +73,6 @@ describe("OpenClawStdioClientTransport", () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
@@ -93,7 +92,6 @@ describe("OpenClawStdioClientTransport", () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
@@ -111,7 +109,6 @@ describe("OpenClawStdioClientTransport", () => {
   it("sends and receives JSON-RPC messages over stdio", async () => {
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const onmessage = vi.fn();
@@ -145,7 +142,6 @@ describe("OpenClawStdioClientTransport", () => {
     };
     child.stdin = brokenStdin;
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
@@ -165,7 +161,6 @@ describe("OpenClawStdioClientTransport", () => {
     };
     child.stdin = brokenStdin;
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();

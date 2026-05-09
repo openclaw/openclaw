@@ -80,7 +80,11 @@ async function createTestMcpLoopbackServer(port = 0) {
 }
 
 function createCliBackendConfig(
-  params: { systemPromptOverride?: string | null; bundleMcp?: boolean } = {},
+  params: {
+    systemPromptOverride?: string | null;
+    bundleMcp?: boolean;
+    reseedFromRawTranscriptWhenUncompacted?: boolean;
+  } = {},
 ): OpenClawConfig {
   return {
     agents: {
@@ -97,6 +101,9 @@ function createCliBackendConfig(
             sessionMode: "existing",
             output: "text",
             input: "arg",
+            ...(params.reseedFromRawTranscriptWhenUncompacted
+              ? { reseedFromRawTranscriptWhenUncompacted: true }
+              : {}),
             ...(params.bundleMcp
               ? { bundleMcp: true, bundleMcpMode: "claude-config-file" as const }
               : {}),
@@ -556,6 +563,89 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(context.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
       expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prepares raw-tail history for safe invalidations only when the backend opts in", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "user",
+        content: "prior no-compaction ask",
+        timestamp: 1,
+      },
+    });
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-raw-reseed-opt-in",
+        extraSystemPrompt: "changed stable prompt",
+        extraSystemPromptStatic: "changed stable prompt",
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: hashCliSessionText("old stable prompt"),
+        },
+        config: createCliBackendConfig({
+          systemPromptOverride: null,
+          reseedFromRawTranscriptWhenUncompacted: true,
+        }),
+      });
+
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "system-prompt" });
+      expect(context.openClawHistoryPrompt).toContain("prior no-compaction ask");
+      expect(context.openClawHistoryPrompt).toContain("latest ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prepares opted-in raw-tail history for session-expired retry without disabling native resume", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "user",
+        content: "prior resumable ask",
+        timestamp: 1,
+      },
+    });
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-session-expired-reseed-opt-in",
+        cliSessionBinding: {
+          sessionId: "cli-session",
+        },
+        config: createCliBackendConfig({
+          systemPromptOverride: null,
+          reseedFromRawTranscriptWhenUncompacted: true,
+        }),
+      });
+
+      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      expect(context.openClawHistoryPrompt).toContain("prior resumable ask");
+      expect(context.openClawHistoryPrompt).toContain("latest ask");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

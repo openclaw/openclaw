@@ -7,29 +7,7 @@ import {
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {
   it("preserves sender and current message routing for compaction", () => {
-    expect(
-      buildEmbeddedCompactionRuntimeContext({
-        sessionKey: "agent:main:thread:1",
-        messageChannel: "slack",
-        messageProvider: "slack",
-        agentAccountId: "acct-1",
-        currentChannelId: "C123",
-        currentThreadTs: "thread-9",
-        currentMessageId: "msg-42",
-        authProfileId: "openai:p1",
-        workspaceDir: "/tmp/workspace",
-        agentDir: "/tmp/agent",
-        config: {} as OpenClawConfig,
-        senderIsOwner: true,
-        senderId: "user-123",
-        provider: "openai-codex",
-        modelId: "gpt-5.4",
-        thinkLevel: "off",
-        reasoningLevel: "on",
-        extraSystemPrompt: "extra",
-        ownerNumbers: ["+15555550123"],
-      }),
-    ).toMatchObject({
+    const result = buildEmbeddedCompactionRuntimeContext({
       sessionKey: "agent:main:thread:1",
       messageChannel: "slack",
       messageProvider: "slack",
@@ -40,42 +18,58 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       authProfileId: "openai:p1",
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
+      config: {} as OpenClawConfig,
+      senderIsOwner: true,
       senderId: "user-123",
       provider: "openai-codex",
-      model: "gpt-5.4",
+      modelId: "gpt-5.4",
+      thinkLevel: "off",
+      reasoningLevel: "on",
+      extraSystemPrompt: "extra",
+      ownerNumbers: ["+15555550123"],
     });
+    expect(result.sessionKey).toBe("agent:main:thread:1");
+    expect(result.messageChannel).toBe("slack");
+    expect(result.messageProvider).toBe("slack");
+    expect(result.agentAccountId).toBe("acct-1");
+    expect(result.currentChannelId).toBe("C123");
+    expect(result.currentThreadTs).toBe("thread-9");
+    expect(result.currentMessageId).toBe("msg-42");
+    expect(result.authProfileId).toBe("openai:p1");
+    expect(result.workspaceDir).toBe("/tmp/workspace");
+    expect(result.agentDir).toBe("/tmp/agent");
+    expect(result.senderId).toBe("user-123");
+    expect(result.provider).toBe("openai-codex");
+    expect(result.model).toBe("gpt-5.4");
   });
 
   it("normalizes nullable compaction routing fields to undefined", () => {
-    expect(
-      buildEmbeddedCompactionRuntimeContext({
-        sessionKey: null,
-        messageChannel: null,
-        messageProvider: null,
-        agentAccountId: null,
-        currentChannelId: null,
-        currentThreadTs: null,
-        currentMessageId: null,
-        authProfileId: null,
-        workspaceDir: "/tmp/workspace",
-        agentDir: "/tmp/agent",
-        senderId: null,
-        provider: null,
-        modelId: null,
-      }),
-    ).toMatchObject({
-      sessionKey: undefined,
-      messageChannel: undefined,
-      messageProvider: undefined,
-      agentAccountId: undefined,
-      currentChannelId: undefined,
-      currentThreadTs: undefined,
-      currentMessageId: undefined,
-      authProfileId: undefined,
-      senderId: undefined,
-      provider: undefined,
-      model: undefined,
+    const result = buildEmbeddedCompactionRuntimeContext({
+      sessionKey: null,
+      messageChannel: null,
+      messageProvider: null,
+      agentAccountId: null,
+      currentChannelId: null,
+      currentThreadTs: null,
+      currentMessageId: null,
+      authProfileId: null,
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      senderId: null,
+      provider: null,
+      modelId: null,
     });
+    expect(result.sessionKey).toBeUndefined();
+    expect(result.messageChannel).toBeUndefined();
+    expect(result.messageProvider).toBeUndefined();
+    expect(result.agentAccountId).toBeUndefined();
+    expect(result.currentChannelId).toBeUndefined();
+    expect(result.currentThreadTs).toBeUndefined();
+    expect(result.currentMessageId).toBeUndefined();
+    expect(result.authProfileId).toBeUndefined();
+    expect(result.senderId).toBeUndefined();
+    expect(result.provider).toBeUndefined();
+    expect(result.model).toBeUndefined();
   });
 
   it("applies compaction.model override with provider/model format", () => {

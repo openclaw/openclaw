@@ -62,6 +62,16 @@ function collectMatching<T>(items: readonly T[], predicate: (item: T) => boolean
   return matches;
 }
 
+async function expectMissingPath(pathToCheck: string) {
+  let thrown: unknown;
+  try {
+    await fs.lstat(pathToCheck);
+  } catch (error) {
+    thrown = error;
+  }
+  expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
+}
+
 async function createTempWorkspaceDir() {
   const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -228,9 +238,7 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("browser-automation");
-    await expect(
-      fs.lstat(path.join(workspaceDir, ".plugin-skills", "browser-automation")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissingPath(path.join(workspaceDir, ".plugin-skills", "browser-automation"));
   });
 
   it("loads frontmatter edge cases in one workspace", async () => {
@@ -467,10 +475,8 @@ describe("loadWorkspaceSkillEntries", () => {
         filePath: path.join(skillDir, "SKILL.md"),
       });
 
-      expect(frontmatter).toMatchObject({
-        name: "root-allowed",
-        description: "Readable from filesystem root",
-      });
+      expect(frontmatter?.name).toBe("root-allowed");
+      expect(frontmatter?.description).toBe("Readable from filesystem root");
     },
   );
 
@@ -504,7 +510,8 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       const names = loadTestWorkspaceSkillEntries(workspaceDir).map((entry) => entry.skill.name);
-      expect(names).toEqual(expect.arrayContaining(["direct-skill", "grouped-skill"]));
+      expect(names).toContain("direct-skill");
+      expect(names).toContain("grouped-skill");
     });
 
     it("does not count invalid grouped candidates against the loaded skill cap", async () => {

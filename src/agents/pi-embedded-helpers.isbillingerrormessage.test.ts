@@ -48,6 +48,8 @@ const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
 const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = "Proxy notice: Status: Internal Server Error";
 const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; upstream connect error`;
 const INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; code:500`;
+const OPENAI_SERVER_ERROR_PAYLOAD =
+  'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,
@@ -673,6 +675,27 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBe("overloaded");
   });
 
+  it("does not let structured server_error markers override 4xx status handling", () => {
+    const payload = '{"type":"error","error":{"type":"server_error","code":"server_error"}}';
+
+    expect(classifyFailoverReasonFromHttpStatus(401, payload)).toBe("auth");
+    expect(classifyFailoverReasonFromHttpStatus(402, payload)).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(422, payload)).toBe("format");
+  });
+
+  it("preserves structured server_error markers on explicit HTTP 5xx statuses", () => {
+    expect(classifyFailoverReasonFromHttpStatus(500, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(502, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(504, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(500)).toBe("timeout");
+  });
+
   it("treats generic HTTP 410 responses as retryable timeouts", () => {
     expect(classifyFailoverReasonFromHttpStatus(410)).toBe("timeout");
     expect(classifyFailoverReasonFromHttpStatus(410, "")).toBe("timeout");
@@ -1148,11 +1171,10 @@ describe("classifyFailoverReason provider messages", () => {
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
       ),
     ).toBe("timeout");
-    expect(
-      classifyFailoverReason(
-        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
-      ),
-    ).toBe("timeout");
+    expect(classifyFailoverReason(OPENAI_SERVER_ERROR_PAYLOAD)).toBe("server_error");
+    expect(classifyFailoverReason(`402 Payment Required ${OPENAI_SERVER_ERROR_PAYLOAD}`)).toBe(
+      "billing",
+    );
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
     expect(
       classifyFailoverReason(

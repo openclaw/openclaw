@@ -249,6 +249,76 @@ describe("loadCliSessionReseedMessages", () => {
     }
   });
 
+  it("reseeds safe invalidated sessions from a bounded raw message tail when explicitly opted in", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-opt-in-raw-tail",
+      messages: Array.from(
+        { length: MAX_CLI_SESSION_HISTORY_MESSAGES + 25 },
+        (_, index) => `raw-${index}`,
+      ),
+    });
+
+    try {
+      const reseed = await loadCliSessionReseedMessages({
+        sessionId: "session-opt-in-raw-tail",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        allowRawTranscriptReseed: true,
+        rawTranscriptReseedReason: "missing-transcript",
+      });
+      expect(reseed).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES);
+      expect(reseed[0]).toMatchObject({ role: "user", content: "raw-25" });
+      expect(reseed.at(-1)).toMatchObject({
+        role: "user",
+        content: `raw-${MAX_CLI_SESSION_HISTORY_MESSAGES + 24}`,
+      });
+      expect(buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" })).toContain(
+        "raw-25",
+      );
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not raw-reseed auth-boundary invalidations even when opted in", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-auth-boundary",
+      messages: ["previous account context"],
+    });
+
+    try {
+      await expect(
+        loadCliSessionReseedMessages({
+          sessionId: "session-auth-boundary",
+          sessionFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          allowRawTranscriptReseed: true,
+          rawTranscriptReseedReason: "auth-profile",
+        }),
+      ).resolves.toStrictEqual([]);
+      await expect(
+        loadCliSessionReseedMessages({
+          sessionId: "session-auth-boundary",
+          sessionFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          allowRawTranscriptReseed: true,
+          rawTranscriptReseedReason: "auth-epoch",
+        }),
+      ).resolves.toStrictEqual([]);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("reseeds fresh CLI sessions from the latest compaction summary and post-compaction tail", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
