@@ -162,7 +162,7 @@ describe("zalouser setup wizard", () => {
     const result = await runSetup({ prompter });
 
     expect(result.cfg.channels?.zalouser?.groupPolicy).toBe("allowlist");
-    expect(result.cfg.channels?.zalouser?.groups).toEqual({});
+    expect(result.cfg.channels?.zalouser?.groups).toStrictEqual({});
     expect(
       note.mock.calls.some(([message]) =>
         message.includes("No group allowlist entries added yet."),

@@ -237,7 +237,7 @@ describe("discord doctor", () => {
     ]);
     expect(
       result.config.channels?.discord?.accounts?.work?.guilds?.["100"]?.channels?.["200"],
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(result.config.bindings).toEqual([
       { agentId: "main", match: { channel: "discord" } },
       {
@@ -285,7 +285,7 @@ describe("discord doctor", () => {
     expect(result.changes).toEqual([
       "Removed channels.discord.guilds.100.channels.200.agentId; a matching top-level bindings[] route already exists for Discord channel 200.",
     ]);
-    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toEqual({});
+    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toStrictEqual({});
     expect(result.config.bindings).toEqual([existingBinding]);
   });
 

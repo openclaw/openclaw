@@ -155,7 +155,7 @@ describe("setup surface helpers", () => {
 
       const result = await promptRefreshTokenSetup(mockPrompter, mockAccount);
 
-      expect(result).toEqual({});
+      expect(result).toStrictEqual({});
       expect(mockPromptConfirm).toHaveBeenCalledWith({
         message: "Enable automatic token refresh (requires client secret and refresh token)?",
         initialValue: false,
