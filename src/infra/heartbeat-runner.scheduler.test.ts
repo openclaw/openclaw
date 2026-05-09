@@ -513,6 +513,33 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("dispatches targeted exec-event wakes even when heartbeat every is 0m", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "0m" } },
+        },
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "main",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+      },
+    });
+
+    runner.stop();
+  });
+
   // Regression for runaway heartbeat loop: backgrounded `process.start` exits
   // call `requestHeartbeat({reason: "exec-event"})` from
   // `bash-tools.exec-runtime.ts:347` (`maybeNotifyOnExit`). If a heartbeat run

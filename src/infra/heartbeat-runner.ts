@@ -207,6 +207,10 @@ type HeartbeatAgent = {
 
 export { isCronSystemEvent };
 
+function isExecEventWake(params: { source?: HeartbeatWakeSource; reason?: string }): boolean {
+  return params.source === "exec-event" || params.reason === "exec-event";
+}
+
 function canHeartbeatDeliverCommitments(heartbeat?: HeartbeatConfig): boolean {
   return (normalizeOptionalString(heartbeat?.target) ?? "none") !== "none";
 }
@@ -1187,7 +1191,7 @@ export async function runHeartbeatOnce(opts: {
   if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat) && !isExecEventWake(opts)) {
     return { status: "skipped", reason: "disabled" };
   }
 
@@ -2163,7 +2167,15 @@ export function startHeartbeatRunner(opts: {
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (state.agents.size === 0) {
+    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
+    const requestedHeartbeat = params?.heartbeat;
+    const resolveRequestedHeartbeat = (heartbeat?: HeartbeatConfig) =>
+      requestedHeartbeat ? { ...heartbeat, ...requestedHeartbeat } : heartbeat;
+    const isTargetedExecEventWake =
+      isExecEventWake(params ?? {}) && Boolean(requestedSessionKey || requestedAgentId);
+
+    if (state.agents.size === 0 && !isTargetedExecEventWake) {
       return {
         status: "skipped",
         reason: "disabled",
@@ -2172,11 +2184,6 @@ export function startHeartbeatRunner(opts: {
 
     const reason = params?.reason;
     const intent = params.intent;
-    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
-    const requestedHeartbeat = params?.heartbeat;
-    const resolveRequestedHeartbeat = (heartbeat?: HeartbeatConfig) =>
-      requestedHeartbeat ? { ...heartbeat, ...requestedHeartbeat } : heartbeat;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -2190,7 +2197,19 @@ export function startHeartbeatRunner(opts: {
         const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
         const targetAgent = state.agents.get(targetAgentId);
         if (!targetAgent) {
-          return { status: "skipped", reason: "disabled" };
+          if (!isTargetedExecEventWake) {
+            return { status: "skipped", reason: "disabled" };
+          }
+          return await runOnce({
+            cfg: state.cfg,
+            agentId: targetAgentId,
+            heartbeat: resolveRequestedHeartbeat(resolveHeartbeatConfig(state.cfg, targetAgentId)),
+            source: params.source,
+            intent,
+            reason,
+            sessionKey: requestedSessionKey,
+            deps: { runtime: state.runtime },
+          });
         }
         const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);
         if (deferral.defer) {
