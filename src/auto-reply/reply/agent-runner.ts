@@ -1479,7 +1479,6 @@ export async function runReplyAgent(params: {
     const coveredByExistingCron =
       hasReminderCommitment && successfulCronAdds === 0
         ? await hasSessionRelatedCronJobs({
-            cronStorePath: cfg.cron?.store,
             sessionKey,
           })
         : false;

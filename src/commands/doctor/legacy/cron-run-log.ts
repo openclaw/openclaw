@@ -17,10 +17,11 @@ export async function legacyCronRunLogFilesExist(storePath: string): Promise<boo
 }
 
 export async function importLegacyCronRunLogFilesToSqlite(params: {
-  storePath: string;
+  legacyStorePath: string;
+  storeKey: string;
   opts?: { maxBytes?: number; keepLines?: number };
 }): Promise<{ imported: number; files: number; removedDir?: string }> {
-  const runsDir = path.resolve(path.dirname(path.resolve(params.storePath)), "runs");
+  const runsDir = path.resolve(path.dirname(path.resolve(params.legacyStorePath)), "runs");
   if (!(await pathExists(runsDir))) {
     return { imported: 0, files: 0 };
   }
@@ -35,7 +36,7 @@ export async function importLegacyCronRunLogFilesToSqlite(params: {
   for (const fileName of files) {
     const raw = await runsRoot.readText(fileName).catch(() => "");
     for (const entry of parseAllRunLogEntries(raw)) {
-      await appendCronRunLogToSqlite(params.storePath, entry, params.opts);
+      await appendCronRunLogToSqlite(params.storeKey, entry, params.opts);
       imported++;
     }
     await fs.rm(path.join(runsDir, fileName), { force: true }).catch(() => undefined);

@@ -42,7 +42,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 - Cron runs **inside the Gateway** process (not inside the model).
 - Job definitions and runtime execution state persist in the shared SQLite state database at `~/.openclaw/state/openclaw.sqlite`.
 - Legacy `jobs.json` and `jobs-state.json` files are imported and removed by `openclaw doctor --fix`.
-- The optional `cron.store` path is now a legacy import namespace and display hint, not a runtime JSON writer.
+- `cron.store` is legacy config. Runtime cron jobs use the shared SQLite state database; doctor still checks the old `cron.store` path when importing pre-SQLite `jobs.json` files.
 - All cron executions create [background task](/automation/tasks) records.
 - On Gateway startup, overdue isolated agent-turn jobs are rescheduled out of the channel-connect window instead of replaying immediately, so Discord/Telegram startup and native-command setup stay responsive after restarts.
 - One-shot jobs (`--at`) auto-delete after success by default.
@@ -413,7 +413,7 @@ Model override note:
 
 `maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
 
-Cron data is keyed by the resolved `cron.store` value inside the shared SQLite state database. That value is a legacy import key, not a runtime JSON write path. SQLite stores job definitions, pending slots, active markers, last-run metadata, and the schedule identity used to invalidate stale pending slots after a job update.
+Cron data is keyed by a stable SQLite cron store key inside the shared state database. SQLite stores job definitions, pending slots, active markers, last-run metadata, and the schedule identity used to invalidate stale pending slots after a job update. Doctor still uses the old `cron.store` path only to discover and import pre-SQLite `jobs.json` files.
 
 Run `openclaw doctor --fix` once after upgrading from an older version so doctor can import and remove legacy `jobs.json` and `jobs-state.json` files.
 

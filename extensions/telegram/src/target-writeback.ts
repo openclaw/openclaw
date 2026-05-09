@@ -192,7 +192,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
   }
 
   try {
-    const storeKey = resolveCronStoreKey(params.cfg.cron?.store);
+    const storeKey = resolveCronStoreKey();
     const result = await updateCronStoreJobs(storeKey, (job) => {
       if (job.delivery?.channel !== "telegram") {
         return undefined;

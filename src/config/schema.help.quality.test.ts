@@ -127,7 +127,6 @@ const TARGET_KEYS = [
   "gateway.controlUi.embedSandbox",
   "cron",
   "cron.enabled",
-  "cron.store",
   "cron.maxConcurrentRuns",
   "cron.retry",
   "cron.retry.maxAttempts",

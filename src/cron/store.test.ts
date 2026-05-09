@@ -11,7 +11,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import {
   loadCronStore,
   loadCronStoreSync,
-  resolveCronStoreKey,
+  resolveLegacyCronStorePath,
   saveCronStore,
   updateCronStoreJobs,
 } from "./store.js";
@@ -72,7 +72,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
-describe("resolveCronStoreKey", () => {
+describe("resolveLegacyCronStorePath", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -81,7 +81,7 @@ describe("resolveCronStoreKey", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
 
-    const result = resolveCronStoreKey("~/cron/jobs.json");
+    const result = resolveLegacyCronStorePath("~/cron/jobs.json");
     expect(result).toBe(path.resolve("/srv/openclaw-home", "cron", "jobs.json"));
   });
 });
@@ -224,7 +224,12 @@ describe("cron store", () => {
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify(legacy, null, 2), "utf-8");
 
-    await expect(importLegacyCronStoreToSqlite(store.storePath)).resolves.toMatchObject({
+    await expect(
+      importLegacyCronStoreToSqlite({
+        legacyStorePath: store.storePath,
+        storeKey: store.storePath,
+      }),
+    ).resolves.toMatchObject({
       imported: true,
       importedJobs: 1,
       removedPath: store.storePath,
@@ -266,7 +271,10 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    await importLegacyCronStateFileToSqlite(store.storePath);
+    await importLegacyCronStateFileToSqlite({
+      legacyStorePath: store.storePath,
+      storeKey: store.storePath,
+    });
     const loaded = await loadCronStore(store.storePath);
 
     expect(loaded.jobs[0]?.updatedAtMs).toBe(job.createdAtMs);
@@ -298,9 +306,12 @@ describe("cron store", () => {
     });
 
     try {
-      await expect(importLegacyCronStateFileToSqlite(store.storePath)).rejects.toThrow(
-        /Failed to read cron state/,
-      );
+      await expect(
+        importLegacyCronStateFileToSqlite({
+          legacyStorePath: store.storePath,
+          storeKey: store.storePath,
+        }),
+      ).rejects.toThrow(/Failed to read cron state/);
     } finally {
       spy.mockRestore();
     }

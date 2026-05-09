@@ -26,12 +26,9 @@ export function hasUnbackedReminderCommitment(text: string): boolean {
  * current session key. Used to suppress the "no reminder scheduled" guard note
  * when an existing cron (created in a prior turn) already covers the commitment.
  */
-export async function hasSessionRelatedCronJobs(params: {
-  cronStorePath?: string;
-  sessionKey?: string;
-}): Promise<boolean> {
+export async function hasSessionRelatedCronJobs(params: { sessionKey?: string }): Promise<boolean> {
   try {
-    const cronStorePath = resolveCronStoreKey(params.cronStorePath);
+    const cronStorePath = resolveCronStoreKey();
     const store = await loadCronStore(cronStorePath);
     if (store.jobs.length === 0) {
       return false;

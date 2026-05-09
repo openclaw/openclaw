@@ -5,7 +5,7 @@ import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
-import { saveCronStore } from "../cron/store.js";
+import { resolveCronStoreKey, saveCronStore } from "../cron/store.js";
 import type { CronStoreFile } from "../cron/types.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -113,8 +113,7 @@ async function createCronCasePaths(tempPrefix: string): Promise<{
 }> {
   const suiteRoot = await getCronSuiteTempRoot();
   const dir = path.join(suiteRoot, `${tempPrefix}${cronSuiteCaseId++}`);
-  const storePath = path.join(dir, "cron", "jobs.json");
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  const storePath = resolveCronStoreKey();
   return { dir, storePath };
 }
 
@@ -956,7 +955,7 @@ describe("gateway server cron", () => {
         | undefined;
       expect(statusPayload?.enabled).toBe(true);
       const storePath = typeof statusPayload?.storePath === "string" ? statusPayload.storePath : "";
-      expect(storePath).toContain("jobs.json");
+      expect(storePath).toBe("default");
 
       const autoRes = await directCronReq(cronState, "cron.add", {
         name: "auto run test",

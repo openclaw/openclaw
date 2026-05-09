@@ -112,17 +112,20 @@ export async function loadLegacyCronStoreForMigration(
   };
 }
 
-export async function importLegacyCronStateFileToSqlite(storePath: string): Promise<{
+export async function importLegacyCronStateFileToSqlite(params: {
+  legacyStorePath: string;
+  storeKey: string;
+}): Promise<{
   imported: boolean;
   importedJobs: number;
   removedPath?: string;
 }> {
-  const statePath = resolveStatePath(storePath);
+  const statePath = resolveStatePath(params.legacyStorePath);
   const stateFile = await loadStateFile(statePath);
   if (!stateFile) {
     return { imported: false, importedJobs: 0 };
   }
-  const importedJobs = writeCronJobRuntimeStateForMigration(storePath, stateFile);
+  const importedJobs = writeCronJobRuntimeStateForMigration(params.storeKey, stateFile);
   try {
     await fs.promises.rm(statePath, { force: true });
   } catch {
@@ -135,27 +138,31 @@ export async function importLegacyCronStateFileToSqlite(storePath: string): Prom
   };
 }
 
-export async function importLegacyCronStoreToSqlite(storePath: string): Promise<{
+export async function importLegacyCronStoreToSqlite(params: {
+  legacyStorePath: string;
+  storeKey: string;
+}): Promise<{
   imported: boolean;
   importedJobs: number;
   removedPath?: string;
 }> {
-  const store = await loadLegacyCronStoreForMigration(storePath);
+  const store = await loadLegacyCronStoreForMigration(params.legacyStorePath);
   if (!store) {
     return { imported: false, importedJobs: 0 };
   }
   const stateFile =
-    (await loadStateFile(resolveStatePath(storePath))) ?? extractCronStateFileForMigration(store);
-  writeCronJobsForMigration(storePath, store);
-  writeCronJobRuntimeStateForMigration(storePath, stateFile);
+    (await loadStateFile(resolveStatePath(params.legacyStorePath))) ??
+    extractCronStateFileForMigration(store);
+  writeCronJobsForMigration(params.storeKey, store);
+  writeCronJobRuntimeStateForMigration(params.storeKey, stateFile);
   try {
-    await fs.promises.rm(storePath, { force: true });
+    await fs.promises.rm(params.legacyStorePath, { force: true });
   } catch {
     // Import already succeeded; doctor can remove the stale source on the next pass.
   }
   return {
     imported: true,
     importedJobs: store.jobs.length,
-    removedPath: storePath,
+    removedPath: params.legacyStorePath,
   };
 }

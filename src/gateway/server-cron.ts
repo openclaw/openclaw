@@ -87,7 +87,7 @@ export function buildGatewayCronService(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const storePath = resolveCronStoreKey(params.cfg.cron?.store);
+  const storePath = resolveCronStoreKey();
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>

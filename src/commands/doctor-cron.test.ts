@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadCronStore, saveCronStore } from "../cron/store.js";
+import { loadCronStore, resolveCronStoreKey, saveCronStore } from "../cron/store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } from "./doctor-cron.js";
 
@@ -117,7 +117,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = await loadCronStore(storePath);
+    const persisted = await loadCronStore(resolveCronStoreKey());
     const [job] = persisted.jobs;
     const legacyJob = job as Record<string, unknown> | undefined;
     expect(legacyJob?.jobId).toBeUndefined();
@@ -188,7 +188,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const loaded = await loadCronStore(storePath);
+    const loaded = await loadCronStore(resolveCronStoreKey());
     expect(loaded.jobs[0]?.updatedAtMs).toBe(Date.parse("2026-02-01T00:01:00.000Z"));
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(Date.parse("2026-02-01T00:02:00.000Z"));
     await expect(fs.stat(statePath)).rejects.toThrow();
@@ -201,7 +201,7 @@ describe("maybeRepairLegacyCronStore", () => {
   it("imports legacy cron runtime state sidecars when job definitions are already SQLite-backed", async () => {
     const storePath = await makeTempStorePath();
     const statePath = storePath.replace(/\.json$/, "-state.json");
-    await saveCronStore(storePath, {
+    await saveCronStore(resolveCronStoreKey(), {
       version: 1,
       jobs: [
         {
@@ -243,7 +243,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const loaded = await loadCronStore(storePath);
+    const loaded = await loadCronStore(resolveCronStoreKey());
     expect(loaded.jobs[0]?.updatedAtMs).toBe(Date.parse("2026-02-01T00:01:00.000Z"));
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(Date.parse("2026-02-01T00:02:00.000Z"));
     await expect(fs.stat(storePath)).rejects.toThrow();
@@ -284,9 +284,9 @@ describe("maybeRepairLegacyCronStore", () => {
     });
 
     const { readCronRunLogEntriesFromSqliteSync } = await import("../cron/run-log.js");
-    expect(readCronRunLogEntriesFromSqliteSync(storePath, { jobId: "stateful-job" })).toEqual([
-      expect.objectContaining({ ts: 1, status: "ok" }),
-    ]);
+    expect(
+      readCronRunLogEntriesFromSqliteSync(resolveCronStoreKey(), { jobId: "stateful-job" }),
+    ).toEqual([expect.objectContaining({ ts: 1, status: "ok" })]);
     await expect(fs.stat(logPath)).rejects.toThrow();
     expect(noteMock).toHaveBeenCalledWith(
       expect.stringContaining("Imported 1 cron run-log row from 1 legacy run-log file"),
@@ -297,7 +297,7 @@ describe("maybeRepairLegacyCronStore", () => {
   it("imports legacy cron run-log files when job definitions are already SQLite-backed", async () => {
     const storePath = await makeTempStorePath();
     const logPath = path.join(path.dirname(storePath), "runs", "stateful-job.jsonl");
-    await saveCronStore(storePath, {
+    await saveCronStore(resolveCronStoreKey(), {
       version: 1,
       jobs: [
         {
@@ -328,9 +328,9 @@ describe("maybeRepairLegacyCronStore", () => {
     });
 
     const { readCronRunLogEntriesFromSqliteSync } = await import("../cron/run-log.js");
-    expect(readCronRunLogEntriesFromSqliteSync(storePath, { jobId: "stateful-job" })).toEqual([
-      expect.objectContaining({ ts: 1, status: "ok" }),
-    ]);
+    expect(
+      readCronRunLogEntriesFromSqliteSync(resolveCronStoreKey(), { jobId: "stateful-job" }),
+    ).toEqual([expect.objectContaining({ ts: 1, status: "ok" })]);
     await expect(fs.stat(storePath)).rejects.toThrow();
     await expect(fs.stat(logPath)).rejects.toThrow();
     expect(noteMock).toHaveBeenCalledWith(
@@ -361,7 +361,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = await loadCronStore(storePath);
+    const persisted = await loadCronStore(resolveCronStoreKey());
     expect(persisted.jobs[0]?.id).toBe("42");
     expect(typeof persisted.jobs[1]?.id).toBe("string");
     expect(persisted.jobs[1]?.id).toMatch(/^cron-/);
@@ -418,7 +418,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = await loadCronStore(storePath);
+    const persisted = await loadCronStore(resolveCronStoreKey());
     expect((persisted.jobs[0] as Record<string, unknown> | undefined)?.notify).toBe(true);
     expect(noteSpy).toHaveBeenCalledWith(
       expect.stringContaining('uses legacy notify fallback alongside delivery mode "announce"'),
@@ -495,7 +495,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = await loadCronStore(storePath);
+    const persisted = await loadCronStore(resolveCronStoreKey());
     expect((persisted.jobs[0] as Record<string, unknown> | undefined)?.notify).toBeUndefined();
     expect(persisted.jobs[0]?.delivery).toMatchObject({
       mode: "webhook",
@@ -532,7 +532,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = await loadCronStore(storePath);
+    const persisted = await loadCronStore(resolveCronStoreKey());
     const legacyJob = persisted.jobs[0] as Record<string, unknown> | undefined;
     expect(legacyJob?.channel).toBeUndefined();
     expect(legacyJob?.to).toBeUndefined();
@@ -575,7 +575,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = await loadCronStore(storePath);
+    const persisted = await loadCronStore(resolveCronStoreKey());
     const [job] = persisted.jobs;
     expect(job).toMatchObject({
       sessionTarget: "isolated",

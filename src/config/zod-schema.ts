@@ -681,7 +681,6 @@ export const OpenClawSchema = z
     cron: z
       .object({
         enabled: z.boolean().optional(),
-        store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
         retry: z
           .object({
