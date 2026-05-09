@@ -29,6 +29,7 @@ export const TELEGRAM_POLL_OPTION_LIMIT = 10;
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramSendModule = typeof import("./send.js");
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
+type TelegramSendResult = Awaited<ReturnType<TelegramSendFn>>;
 type ResolveTelegramSendFn = (deps?: OutboundSendDeps) => Promise<TelegramSendFn>;
 type LoadTelegramSendModuleFn = () => Promise<TelegramSendModule>;
 
@@ -44,6 +45,16 @@ async function resolveDefaultTelegramSend(deps?: OutboundSendDeps): Promise<Tele
     resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
     (await loadTelegramSendModule()).sendMessageTelegram
   );
+}
+
+function markProviderAccepted(result: TelegramSendResult): TelegramSendResult {
+  return {
+    ...result,
+    delivery: {
+      ...result.delivery,
+      providerAccepted: true,
+    },
+  };
 }
 
 async function resolveTelegramSendContext(params: {
@@ -121,20 +132,7 @@ export async function sendTelegramPayloadMessages(params: {
     ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
 
-  const markProviderAccepted = (
-    result: Awaited<ReturnType<TelegramSendFn>>,
-  ): Awaited<ReturnType<TelegramSendFn>> => ({
-    ...result,
-    delivery: {
-      ...result.delivery,
-      providerAccepted: true,
-    },
-  });
-
-  // Telegram allows reply_markup on media; attach buttons only to the first send.
-  // Annotate only results returned by a real Telegram send. The fallback result
-  // is local-only and must not be reported as provider-accepted.
-  return await sendPayloadMediaSequenceOrFallback<Awaited<ReturnType<TelegramSendFn>>>({
+  return await sendPayloadMediaSequenceOrFallback<TelegramSendResult>({
     text,
     mediaUrls,
     fallbackResult: { messageId: "unknown", chatId: params.to },
@@ -238,16 +236,11 @@ export function createTelegramOutboundAdapter(
           gatewayClientScopes,
           resolveSend,
         });
-        const result = await send(to, text, {
-          ...baseOpts,
-        });
-        return {
-          ...result,
-          delivery: {
-            ...result.delivery,
-            providerAccepted: true,
-          },
-        };
+        return markProviderAccepted(
+          await send(to, text, {
+            ...baseOpts,
+          }),
+        );
       },
       sendMedia: async ({
         cfg,
@@ -274,20 +267,15 @@ export function createTelegramOutboundAdapter(
           gatewayClientScopes,
           resolveSend,
         });
-        const result = await send(to, text, {
-          ...baseOpts,
-          mediaUrl,
-          mediaLocalRoots,
-          mediaReadFile,
-          forceDocument: forceDocument ?? false,
-        });
-        return {
-          ...result,
-          delivery: {
-            ...result.delivery,
-            providerAccepted: true,
-          },
-        };
+        return markProviderAccepted(
+          await send(to, text, {
+            ...baseOpts,
+            mediaUrl,
+            mediaLocalRoots,
+            mediaReadFile,
+            forceDocument: forceDocument ?? false,
+          }),
+        );
       },
     }),
     sendPayload: async ({

@@ -23,7 +23,6 @@ vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
   return {
     ...actual,
     deliverOutboundPayloads,
-    deliverOutboundPayloadsInternal: deliverOutboundPayloads,
     resolveOutboundDurableFinalDeliverySupport,
   };
 });
