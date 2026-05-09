@@ -1072,6 +1072,25 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     );
   });
 
+  it("treats whitespace-only replyToId as absent for replyInThread (falls back to threadId)", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "   ",
+      threadId: "om_topic_root",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_topic_root",
+        replyInThread: true,
+      }),
+    );
+  });
+
   it("forwards audioAsVoice to sendMediaFeishu", async () => {
     await feishuOutbound.sendMedia?.({
       cfg: emptyConfig,

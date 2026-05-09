@@ -417,8 +417,9 @@ function resolveFeishuMediaReplyMode(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
 }): FeishuMediaReplyMode {
+  const trimmedReplyToId = params.replyToId?.trim() || undefined;
   const replyToMessageId = resolveReplyToMessageId(params);
-  const replyInThread = params.threadId != null && !params.replyToId;
+  const replyInThread = params.threadId != null && !trimmedReplyToId;
   return { replyToMessageId, replyInThread };
 }
 
