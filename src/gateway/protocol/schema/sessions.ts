@@ -12,7 +12,6 @@ export const SessionCompactionCheckpointReasonSchema = Type.Union([
 export const SessionCompactionTranscriptReferenceSchema = Type.Object(
   {
     sessionId: NonEmptyString,
-    sessionFile: Type.Optional(NonEmptyString),
     leafId: Type.Optional(NonEmptyString),
     entryId: Type.Optional(NonEmptyString),
   },
