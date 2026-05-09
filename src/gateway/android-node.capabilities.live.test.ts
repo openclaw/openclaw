@@ -47,7 +47,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function expectRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toEqual(expect.any(Object));
+  expect(value, label).not.toBeNull();
+  expect(typeof value, label).toBe("object");
   expect(Array.isArray(value), label).toBe(false);
   return value as Record<string, unknown>;
 }
