@@ -146,8 +146,10 @@ function loadQaRunnerRuntimeSurface(
   });
 }
 
-export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution[] {
-  const env = resolvePrivateQaBundledPluginsEnv();
+export function listQaRunnerCliContributions(options?: {
+  env?: NodeJS.ProcessEnv;
+}): readonly QaRunnerCliContribution[] {
+  const env = options?.env ?? resolvePrivateQaBundledPluginsEnv();
   const contributions = new Map<string, QaRunnerCliContribution>();
 
   for (const plugin of listDeclaredQaRunnerPlugins(env)) {

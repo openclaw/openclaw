@@ -55,7 +55,13 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       }),
       "utf8",
     );
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    const env = {
+      ...process.env,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+    };
 
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
@@ -106,7 +112,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
 
     const module = await import("./qa-runner-runtime.js");
 
-    expect(module.listQaRunnerCliContributions()).toEqual([
+    expect(module.listQaRunnerCliContributions({ env })).toEqual([
       {
         pluginId: "qa-linked",
         commandName: "linked",
