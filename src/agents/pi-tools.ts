@@ -257,7 +257,6 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
-// eslint-disable-next-line no-underscore-dangle -- established test-only hook export
 export const __testing = {
   cleanToolSchemaForGemini,
   getToolParamsRecord,

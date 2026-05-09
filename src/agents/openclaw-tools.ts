@@ -484,7 +484,6 @@ export function createOpenClawTools(
   );
 }
 
-// eslint-disable-next-line no-underscore-dangle -- established test-only hook export
 export const __testing = {
   resolveOptionalMediaToolFactoryPlan,
   setDepsForTest(overrides?: Partial<OpenClawToolsDeps>) {
