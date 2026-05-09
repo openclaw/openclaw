@@ -128,7 +128,10 @@ const {
       play: vi.fn(),
       state: { status: "idle" },
     })),
-    resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
+    resolveAgentRouteMock: vi.fn((_opts?: unknown) => ({
+      agentId: "agent-1",
+      sessionKey: "discord:g1:c1",
+    })),
     agentCommandMock: vi.fn(
       async (
         _opts?: unknown,
