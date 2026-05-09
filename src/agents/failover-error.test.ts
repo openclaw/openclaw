@@ -843,13 +843,13 @@ describe("failover-error", () => {
         "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
     });
 
-    expect(describeFailoverError(err)).toMatchObject({
-      message: "LLM request failed: provider rejected the request schema.",
-      rawError:
-        "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
-      reason: "format",
-      status: 400,
-    });
+    const description = describeFailoverError(err);
+    expect(description.message).toBe("LLM request failed: provider rejected the request schema.");
+    expect(description.rawError).toBe(
+      "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
+    );
+    expect(description.reason).toBe("format");
+    expect(description.status).toBe(400);
   });
 
   it("coerces JSON-wrapped OpenRouter stealth-model 404s into FailoverError", () => {
@@ -985,15 +985,14 @@ describe("failover-error", () => {
     });
     expect(err.sessionId).toBe("session:browser-abcd");
     expect(err.lane).toBe("answer");
-    expect(describeFailoverError(err)).toMatchObject({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      profileId: "profile-2",
-      sessionId: "session:browser-abcd",
-      lane: "answer",
-      reason: "rate_limit",
-      status: 429,
-    });
+    const description = describeFailoverError(err);
+    expect(description.provider).toBe("anthropic");
+    expect(description.model).toBe("claude-opus-4-6");
+    expect(description.profileId).toBe("profile-2");
+    expect(description.sessionId).toBe("session:browser-abcd");
+    expect(description.lane).toBe("answer");
+    expect(description.reason).toBe("rate_limit");
+    expect(description.status).toBe(429);
   });
 
   it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {

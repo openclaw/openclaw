@@ -388,6 +388,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "skills.load.watch": "Watch Skills",
   "skills.load.watchDebounceMs": "Skills Watch Debounce (ms)",
   "agents.defaults.skills": "Skills",
+  "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
+  "agents.list[].subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.defaults.workspace": "Workspace",
   "agents.defaults.repoRoot": "Repo Root",
   "agents.defaults.promptOverlays": "Prompt Overlays",

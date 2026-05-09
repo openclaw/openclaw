@@ -46,7 +46,7 @@ import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
-import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
+import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import {
   buildCliSessionHistoryPrompt,
@@ -334,7 +334,7 @@ export async function prepareCliRunContext(
       config: params.config,
       agentId: sessionAgentId,
     }) ??
-    buildSystemPrompt({
+    buildCliAgentSystemPrompt({
       workspaceDir,
       config: params.config,
       defaultThinkLevel: params.thinkLevel,

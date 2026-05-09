@@ -31,7 +31,6 @@ import {
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
-import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -69,7 +68,6 @@ import {
 import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
-import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
 import { ensureSessionHeader } from "../pi-embedded-helpers.js";
@@ -140,7 +138,7 @@ import { log } from "./logger.js";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
 import { readPiModelContextTokens } from "./model-context-tokens.js";
-import { buildModelAliasLines, resolveModelAsync } from "./model.js";
+import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
@@ -859,10 +857,6 @@ async function compactEmbeddedPiSessionDirectOnce(
       cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
-    const ttsHint = params.config
-      ? buildTtsSystemPromptHint(params.config, sessionAgentId)
-      : undefined;
-    const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const promptContributionContext: Parameters<
       AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]
     >[0] = {
@@ -885,13 +879,13 @@ async function compactEmbeddedPiSessionDirectOnce(
           agentId: sessionAgentId,
         }) ??
         buildEmbeddedSystemPrompt({
+          config: params.config,
+          agentId: sessionAgentId,
           workspaceDir: effectiveWorkspace,
           defaultThinkLevel,
           reasoningLevel: params.reasoningLevel ?? "off",
           extraSystemPrompt: params.extraSystemPrompt,
           ownerNumbers: params.ownerNumbers,
-          ownerDisplay: ownerDisplay.ownerDisplay,
-          ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
           reasoningTagHint,
           heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
             config: params.config,
@@ -901,7 +895,6 @@ async function compactEmbeddedPiSessionDirectOnce(
           skillsPrompt,
           docsPath: openClawReferences.docsPath ?? undefined,
           sourcePath: openClawReferences.sourcePath ?? undefined,
-          ttsHint,
           promptMode,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           acpEnabled: isAcpRuntimeSpawnAvailable({
@@ -913,12 +906,10 @@ async function compactEmbeddedPiSessionDirectOnce(
           messageToolHints,
           sandboxInfo,
           tools: effectiveTools,
-          modelAliasLines: buildModelAliasLines(params.config),
           userTimezone,
           userTime,
           userTimeFormat,
           contextFiles,
-          memoryCitationsMode: params.config?.memory?.citations,
           promptContribution,
         });
       return createSystemPromptOverride(
