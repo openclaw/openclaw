@@ -27,7 +27,10 @@ const hoisted = await vi.hoisted(async () => {
 });
 
 vi.mock("../../config/sessions/store.js", () => ({
-  getSessionEntry: (params: { sessionKey: string }) => hoisted.sessionRowsMock()[params.sessionKey],
+  getSessionEntry: (params: { agentId?: string; sessionKey: string }) => {
+    const rows = hoisted.sessionRowsMock();
+    return rows[`${params.agentId ?? "main"}:${params.sessionKey}`] ?? rows[params.sessionKey];
+  },
   listSessionEntries: () =>
     Object.entries(hoisted.sessionRowsMock()).map(([sessionKey, entry]) => ({
       sessionKey,
@@ -176,6 +179,33 @@ describe("buildExportSessionReply", () => {
     expect(hoisted.hasSqliteSessionTranscriptEventsMock).toHaveBeenCalledWith({
       agentId: "target",
       sessionId: "session-1",
+    });
+  });
+
+  it("prefers the prepared agent id over a session-key-derived agent", async () => {
+    hoisted.sessionRowsMock.mockReturnValue({
+      "explicit:agent:target:session": {
+        sessionId: "session-from-explicit-agent",
+        updatedAt: 2,
+      },
+      "agent:target:session": {
+        sessionId: "session-from-session-key-agent",
+        updatedAt: 1,
+      },
+    });
+
+    await buildExportSessionReply({
+      ...makeParams(),
+      agentId: "explicit",
+    });
+
+    expect(hoisted.hasSqliteSessionTranscriptEventsMock).toHaveBeenCalledWith({
+      agentId: "explicit",
+      sessionId: "session-from-explicit-agent",
+    });
+    expect(hoisted.exportSqliteSessionTranscriptJsonlMock).toHaveBeenCalledWith({
+      agentId: "explicit",
+      sessionId: "session-from-explicit-agent",
     });
   });
 

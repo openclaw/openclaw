@@ -148,11 +148,9 @@ example:
 agent-db:<agentId>:trajectory_runtime_events:<sessionId>
 ```
 
-For compatibility with older captures, `/export-trajectory` can still read a
-legacy `<session>.trajectory.jsonl` sidecar or pointer file when no SQLite
-runtime events exist for the session. New runtime captures do not create those
-files. `OPENCLAW_TRAJECTORY_DIR` is therefore only useful for legacy/debug
-captures and is not the normal durable store.
+`/export-trajectory` reads runtime events from SQLite and materializes
+`events.jsonl` only inside the explicit support bundle. New runtime captures do
+not create legacy `<session>.trajectory.jsonl` sidecars or pointer files.
 
 ## Disable capture
 
@@ -179,8 +177,8 @@ OpenClaw redacts sensitive values before writing export files:
 
 The exporter also bounds input size:
 
-- runtime sidecar files: live capture stops at 10 MiB and records a truncation event when space remains; export accepts existing runtime sidecars up to 50 MiB
-- session files: 50 MiB
+- runtime capture: live capture stops at 10 MiB and records a truncation event when space remains
+- transcript branch export: 50 MiB
 - runtime events: 200,000
 - total exported events: 250,000
 - individual runtime event lines are truncated above 256 KiB
@@ -193,7 +191,6 @@ and cannot know every application-specific secret.
 If the export has no runtime events:
 
 - confirm OpenClaw was started without `OPENCLAW_TRAJECTORY=0`
-- check whether `OPENCLAW_TRAJECTORY_DIR` points to a writable directory
 - run another message in the session, then export again
 - inspect `manifest.json` for `runtimeEventCount`
 
@@ -203,8 +200,9 @@ If the command rejects the output path:
 - do not pass `/tmp/...` or `~/...`
 - keep the export inside `.openclaw/trajectory-exports/`
 
-If the export fails with a size error, the session or sidecar exceeded the
-export safety limits. Start a new session or export a smaller reproduction.
+If the export fails with a size error, the transcript branch or runtime capture
+exceeded the export safety limits. Start a new session or export a smaller
+reproduction.
 
 ## Related
 

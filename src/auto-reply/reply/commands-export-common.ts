@@ -37,7 +37,7 @@ export function parseExportCommandOutputPath(
 export function resolveExportCommandSessionTarget(
   params: HandleCommandsParams,
 ): ExportCommandSessionTarget | ReplyPayload {
-  const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId || "main";
+  const targetAgentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey) ?? "main";
   const entry = getSessionEntry({
     agentId: targetAgentId,
     sessionKey: params.sessionKey,

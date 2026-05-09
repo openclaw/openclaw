@@ -1290,7 +1290,7 @@ keeps only the version-1 schema plus doctor file-to-database import.
 Add a repo check that fails new runtime writes to legacy state paths:
 
 - `sessions.json`
-- `*.trajectory.jsonl` except explicit export/debug paths
+- `*.trajectory.jsonl` except materialized support-bundle outputs
 - `.acp-stream.jsonl`
 - `acp/event-ledger.json`
 - `cache/*.json` runtime cache files
