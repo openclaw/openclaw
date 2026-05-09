@@ -1205,7 +1205,7 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.sessions.enabled":
     "Indexes session transcripts into QMD so recall can include prior conversation content (experimental, default: false). Enable only when transcript memory is required and you accept larger index churn.",
   "memory.qmd.sessions.exportDir":
-    "Overrides where the optional QMD markdown export cache is written before QMD indexing. Use this only for QMD adapter storage; it is not the canonical session store and sessions remain SQLite-backed.",
+    "Overrides where the optional QMD markdown export cache is written before QMD indexing. Use this only for QMD adapter storage; it is not canonical session storage and sessions remain SQLite-backed.",
   "memory.qmd.sessions.retentionDays":
     "Defines how long optional QMD markdown export-cache files are kept, in days (default: unlimited). Session retention itself is SQLite-backed and not controlled by this setting.",
   "memory.qmd.update.interval":
