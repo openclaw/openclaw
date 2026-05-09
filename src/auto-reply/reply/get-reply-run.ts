@@ -351,6 +351,18 @@ type RunPreparedReplyParams = {
 function resolveCurrentTurnPromptContext(
   ctx: TemplateContext,
 ): CurrentTurnPromptContext | undefined {
+  const replyChain = Array.isArray(ctx.ReplyChain)
+    ? ctx.ReplyChain.filter(
+        (entry) =>
+          entry.body?.trim() ||
+          entry.mediaType?.trim() ||
+          entry.mediaPath?.trim() ||
+          entry.mediaRef?.trim(),
+      )
+    : undefined;
+  if (replyChain && replyChain.length > 0) {
+    return { replyChain };
+  }
   const replyBody = normalizeOptionalString(ctx.ReplyToBody);
   if (!replyBody) {
     return undefined;

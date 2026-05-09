@@ -36,9 +36,14 @@ describe("collectTelegramStatusIssues", () => {
         }),
       ]),
     );
-    expect(issues.some((issue) => issue.message.includes("privacy mode"))).toBe(true);
-    expect(issues.some((issue) => issue.message.includes('uses "*"'))).toBe(true);
-    expect(issues.some((issue) => issue.message.includes("unresolvedGroups=2"))).toBe(true);
+    const issueMessages = issues.map((issue) => issue.message);
+    expect(issueMessages).toEqual(
+      expect.arrayContaining([expect.stringContaining("privacy mode")]),
+    );
+    expect(issueMessages).toEqual(expect.arrayContaining([expect.stringContaining('uses "*"')]));
+    expect(issueMessages).toEqual(
+      expect.arrayContaining([expect.stringContaining("unresolvedGroups=2")]),
+    );
   });
 
   it("reports unreachable groups with match metadata", () => {
@@ -112,7 +117,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("reports stale polling transport activity after successful getUpdates stops refreshing", () => {
@@ -153,7 +158,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("reports webhook runtime state that never completed setWebhook after startup grace", () => {
@@ -195,7 +200,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("does not report an advertised webhook just because no user updates arrived", () => {
@@ -211,7 +216,7 @@ describe("collectTelegramStatusIssues", () => {
       } as ChannelAccountSnapshot,
     ]);
 
-    expect(issues).toEqual([]);
+    expect(issues).toStrictEqual([]);
   });
 
   it("ignores accounts that are not both enabled and configured", () => {
@@ -223,7 +228,7 @@ describe("collectTelegramStatusIssues", () => {
           configured: true,
         } as ChannelAccountSnapshot,
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 

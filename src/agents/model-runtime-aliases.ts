@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -72,7 +73,8 @@ export function migrateLegacyRuntimeModelRef(raw: string): {
   if (!alias) {
     return null;
   }
-  const model = trimmed.slice(slash + 1).trim();
+  const rawModel = trimmed.slice(slash + 1).trim();
+  const model = normalizeStaticProviderModelId(alias.provider, rawModel);
   if (!model) {
     return null;
   }

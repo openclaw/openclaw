@@ -47,6 +47,22 @@ async function reservePort(): Promise<number> {
   return port;
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 async function createFakeGateway(port = 0): Promise<FakeGateway> {
   const server = new WebSocketServer({ host: "127.0.0.1", port });
   servers.push(server);
@@ -381,12 +397,9 @@ describe("OpenClaw SDK websocket e2e", () => {
 
         return seen;
       })();
-      const timeoutPromise = new Promise<never>((_resolve, reject) => {
-        setTimeout(() => reject(new Error("timed out waiting for SDK run events")), 2_000);
-      });
 
       const [seen, result] = await Promise.all([
-        Promise.race([seenPromise, timeoutPromise]),
+        withTimeout(seenPromise, 2_000, "timed out waiting for SDK run events"),
         run.wait({ timeoutMs: 2_000 }),
       ]);
 
@@ -521,7 +534,9 @@ describe("OpenClaw SDK websocket e2e", () => {
       requestTimeoutMs: 500,
     });
 
-    await expect(transport.connect()).rejects.toThrow();
+    const initialConnectError = await transport.connect().catch((error: unknown) => error);
+    expect(initialConnectError).toBeInstanceOf(Error);
+    expect(String(initialConnectError)).toMatch(/ECONNREFUSED/);
 
     const gateway = await createFakeGateway(port);
     try {
@@ -569,9 +584,6 @@ describe("OpenClaw SDK real Gateway e2e", () => {
         }
         return { seen, sessionKeys };
       })();
-      const eventsTimeout = new Promise<never>((_resolve, reject) => {
-        setTimeout(() => reject(new Error("timed out waiting for real Gateway SDK events")), 2_000);
-      });
 
       emitAgentEvent({
         runId,
@@ -589,7 +601,11 @@ describe("OpenClaw SDK real Gateway e2e", () => {
         data: { phase: "end", endedAt: 222 },
       });
 
-      const { seen, sessionKeys } = await Promise.race([eventsPromise, eventsTimeout]);
+      const { seen, sessionKeys } = await withTimeout(
+        eventsPromise,
+        2_000,
+        "timed out waiting for real Gateway SDK events",
+      );
       expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
       expect(sessionKeys).toEqual([
         "agent:main:dashboard:sdk-real-gateway",
@@ -622,6 +638,11 @@ function readLiveTextDelta(data: unknown): string {
   return "";
 }
 
+function expectArrayProperty(value: unknown, property: string): void {
+  expect(value).toEqual(expect.objectContaining({ [property]: expect.arrayContaining([]) }));
+  expect(Array.isArray((value as Record<string, unknown>)[property])).toBe(true);
+}
+
 liveGatewayDescribe("OpenClaw SDK live Gateway e2e", () => {
   it("connects to a configured Gateway, streams a real run, and waits for completion", async () => {
     const oc = new OpenClaw({
@@ -632,12 +653,8 @@ liveGatewayDescribe("OpenClaw SDK live Gateway e2e", () => {
 
     try {
       await oc.connect();
-      await expect(oc.agents.list()).resolves.toEqual(
-        expect.objectContaining({ agents: expect.any(Array) }),
-      );
-      await expect(oc.models.status({ probe: false })).resolves.toEqual(
-        expect.objectContaining({ providers: expect.any(Array) }),
-      );
+      expectArrayProperty(await oc.agents.list(), "agents");
+      expectArrayProperty(await oc.models.status({ probe: false }), "providers");
 
       const agent = await oc.agents.get(process.env.OPENCLAW_SDK_LIVE_AGENT_ID ?? "main");
       const run = await agent.run({
@@ -669,12 +686,11 @@ liveGatewayDescribe("OpenClaw SDK live Gateway e2e", () => {
       })();
 
       const result = await run.wait({ timeoutMs: 180_000 });
-      const events = await Promise.race([
+      const events = await withTimeout(
         eventsPromise,
-        new Promise<never>((_resolve, reject) => {
-          setTimeout(() => reject(new Error("timed out waiting for live SDK run events")), 5_000);
-        }),
-      ]);
+        5_000,
+        "timed out waiting for live SDK run events",
+      );
 
       expect(result.status).toBe("completed");
       expect(events.terminal).toBe("run.completed");

@@ -1302,7 +1302,7 @@ describe("readSessionMessages", () => {
       pluginId: "hitl-test-hooks",
     });
 
-    expect(messageId).toEqual(expect.any(String));
+    expect(messageId).toBeTypeOf("string");
     expect(messageId.length).toBeGreaterThan(0);
     const out = readSessionMessages(sessionId, storePath, sessionFile);
     expect(
@@ -1793,7 +1793,7 @@ describe("resolveSessionTranscriptCandidates safety", () => {
       "/tmp/openclaw/agents/main/sessions/sessions.json",
     );
 
-    expect(candidates).toEqual([]);
+    expect(candidates).toStrictEqual([]);
   });
 
   test("drops unsafe sessionFile candidates and keeps safe fallbacks", () => {
@@ -1806,7 +1806,7 @@ describe("resolveSessionTranscriptCandidates safety", () => {
     const normalizedCandidates = candidates.map((value) => path.resolve(value));
     const expectedFallback = path.resolve(path.dirname(storePath), "sess-safe.jsonl");
 
-    expect(candidates.some((value) => value.includes("etc/passwd"))).toBe(false);
+    expect(candidates).not.toEqual(expect.arrayContaining([expect.stringContaining("etc/passwd")]));
     expect(normalizedCandidates).toContain(expectedFallback);
   });
 
@@ -1937,7 +1937,7 @@ describe("archiveSessionTranscripts", () => {
       reason: "reset",
     });
 
-    expect(archived).toEqual([]);
+    expect(archived).toStrictEqual([]);
   });
 
   test("skips files that do not exist and archives only existing ones", () => {
@@ -2056,9 +2056,7 @@ describe("oversized transcript line guards", () => {
       512 * 1024,
     );
 
-    expect(usage).not.toBeNull();
-    expect(usage?.modelProvider).not.toBe("oversized-provider");
-    expect(usage?.modelProvider).toBe("test-provider");
+    expect(usage).toMatchObject({ modelProvider: "test-provider" });
   });
 
   test("readSessionTitleFieldsFromTranscriptAsync delegates to bounded sync reader", async () => {

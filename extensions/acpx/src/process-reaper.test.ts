@@ -28,6 +28,20 @@ function cleanupDeps(processes: AcpxProcessInfo[]) {
   };
 }
 
+function collectMatching<T, U>(
+  items: readonly T[],
+  predicate: (item: T) => boolean,
+  map: (item: T) => U,
+): U[] {
+  const matches: U[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(map(item));
+    }
+  }
+  return matches;
+}
+
 describe("process reaper", () => {
   it("recognizes generated Codex and Claude wrappers only under the configured root", () => {
     expect(
@@ -135,7 +149,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "not-openclaw-owned",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("skips recorded pid cleanup when process listing is unavailable", async () => {
@@ -160,7 +174,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "unverified-root",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("does not kill a reused pid when the live command is not OpenClaw-owned", async () => {
@@ -178,7 +192,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "not-openclaw-owned",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("does not kill a reused adapter pid when the stored root was a generated wrapper", async () => {
@@ -202,7 +216,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "not-openclaw-owned",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("skips non-owned recorded process trees", async () => {
@@ -216,7 +230,7 @@ describe("process reaper", () => {
     });
 
     expect(result.skippedReason).toBe("not-openclaw-owned");
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("reaps stale OpenClaw-owned wrapper and adapter orphans on startup", async () => {
@@ -237,9 +251,13 @@ describe("process reaper", () => {
 
     expect(result.skippedReason).toBeUndefined();
     expect(result.inspectedPids).toEqual([400, 401, 402, 403, 404, 405]);
-    expect(killed.filter((entry) => entry.signal === "SIGTERM").map((entry) => entry.pid)).toEqual([
-      402, 401, 400, 404, 403, 405,
-    ]);
+    expect(
+      collectMatching(
+        killed,
+        (entry) => entry.signal === "SIGTERM",
+        (entry) => entry.pid,
+      ),
+    ).toEqual([402, 401, 400, 404, 403, 405]);
   });
 
   it("keeps startup scans quiet when process listing is unavailable", async () => {

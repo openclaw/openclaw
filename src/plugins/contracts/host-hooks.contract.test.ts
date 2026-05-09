@@ -60,6 +60,16 @@ function requireFirstCommandRegistration(
   return registration;
 }
 
+function joinContextFragments(...fragments: Array<string | undefined>): string {
+  const present: string[] = [];
+  for (const fragment of fragments) {
+    if (fragment) {
+      present.push(fragment);
+    }
+  }
+  return present.join("\n\n");
+}
+
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -730,7 +740,7 @@ describe("host-hook fixture plugin contract", () => {
     );
     await expect(
       projectPluginSessionExtensions({ sessionKey: "agent:main:main", entry }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 
   it("skips throwing session extension projectors without losing other projections", () => {
@@ -960,9 +970,11 @@ describe("host-hook fixture plugin contract", () => {
     );
 
     expect(
-      [queuedContext.prependContext, queuedContext.appendContext, hookContext?.prependContext]
-        .filter(Boolean)
-        .join("\n\n"),
+      joinContextFragments(
+        queuedContext.prependContext,
+        queuedContext.appendContext,
+        hookContext?.prependContext,
+      ),
     ).toContain("approval workflow resumed");
     expect(hookContext?.prependContext).toBe("fixture turn context");
   });
@@ -1842,7 +1854,7 @@ describe("host-hook fixture plugin contract", () => {
       "session:disable:",
       "runtime:disable:",
     ]);
-    expect(listPluginSessionSchedulerJobs("cleanup-fixture")).toEqual([]);
+    expect(listPluginSessionSchedulerJobs("cleanup-fixture")).toStrictEqual([]);
   });
 
   it("keeps scheduler job records when cleanup fails so cleanup can retry", async () => {
@@ -1963,7 +1975,7 @@ describe("host-hook fixture plugin contract", () => {
         nextRegistry: next,
       }),
     ).resolves.toMatchObject({ failures: [] });
-    expect(cleanupEvents).toEqual([]);
+    expect(cleanupEvents).toStrictEqual([]);
     expect(listPluginSessionSchedulerJobs("restart-fixture")).toEqual([
       {
         id: "shared-job",
@@ -1976,7 +1988,7 @@ describe("host-hook fixture plugin contract", () => {
 
   it("does not let stale scheduler cleanup delete a newer job generation", async () => {
     let releaseCleanup: (() => void) | undefined;
-    let markCleanupStarted!: () => void;
+    let markCleanupStarted: (() => void) | undefined;
     const cleanupStartedPromise = new Promise<void>((resolve) => {
       markCleanupStarted = resolve;
     });
@@ -1994,6 +2006,9 @@ describe("host-hook fixture plugin contract", () => {
           sessionKey: "agent:main:main",
           kind: "monitor",
           cleanup: async () => {
+            if (!markCleanupStarted) {
+              throw new Error("Expected scheduler cleanup start callback to be initialized");
+            }
             markCleanupStarted();
             await new Promise<void>((resolve) => {
               releaseCleanup = resolve;
@@ -2027,7 +2042,10 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    releaseCleanup?.();
+    if (!releaseCleanup) {
+      throw new Error("Expected scheduler cleanup release callback to be initialized");
+    }
+    releaseCleanup();
     await expect(cleanupPromise).resolves.toMatchObject({ failures: [] });
     expect(listPluginSessionSchedulerJobs("scheduler-race")).toEqual([
       {
@@ -2091,7 +2109,7 @@ describe("host-hook fixture plugin contract", () => {
         }),
       }),
     ]);
-    expect(listPluginSessionSchedulerJobs("snapshot-fixture")).toEqual([]);
+    expect(listPluginSessionSchedulerJobs("snapshot-fixture")).toStrictEqual([]);
   });
 
   it("removes persistent plugin-owned session state and pending injections during cleanup", async () => {

@@ -143,8 +143,8 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("exposes assertSupportedRuntimeSessionMode as a typed guard", () => {
-    expect(() => __testing.assertSupportedRuntimeSessionMode("persistent")).not.toThrow();
-    expect(() => __testing.assertSupportedRuntimeSessionMode("oneshot")).not.toThrow();
+    expect(__testing.assertSupportedRuntimeSessionMode("persistent")).toBeUndefined();
+    expect(__testing.assertSupportedRuntimeSessionMode("oneshot")).toBeUndefined();
     expect(() => __testing.assertSupportedRuntimeSessionMode("run" as never)).toThrow(
       AcpRuntimeError,
     );
@@ -976,7 +976,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       reason: "user-close",
     });
 
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("does not tear down reusable ACPX sessions after cancel", async () => {
@@ -1019,7 +1019,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
     expect(cancel).toHaveBeenCalledWith(input);
     expect(listProcesses).not.toHaveBeenCalled();
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("routes openclaw ensureSession through the bridge-safe delegate when MCP servers are configured", async () => {

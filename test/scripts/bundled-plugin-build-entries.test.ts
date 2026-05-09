@@ -8,11 +8,11 @@ import {
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 
 function expectNoPrefixMatches(values: string[], prefix: string) {
-  expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
+  expect(values.some((value) => value.startsWith(prefix))).toBe(false);
 }
 
 function expectSomePrefixMatch(values: string[], prefix: string) {
-  expect(values.filter((value) => value.startsWith(prefix)).length).toBeGreaterThan(0);
+  expect(values.some((value) => value.startsWith(prefix))).toBe(true);
 }
 
 describe("bundled plugin build entries", () => {
@@ -119,7 +119,7 @@ describe("bundled plugin build entries", () => {
       expect(entry).toContain('specifier: "./secret-contract-api.js"');
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
 
     for (const pluginId of [...secretBackedPluginIds].toSorted()) {
       if (excludedPackageDirs.has(pluginId)) {
@@ -146,6 +146,6 @@ describe("bundled plugin build entries", () => {
       }
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 });

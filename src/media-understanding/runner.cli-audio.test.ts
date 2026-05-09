@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 
 const runExecMock = vi.hoisted(() => vi.fn());
@@ -58,10 +59,14 @@ describe("media-understanding CLI audio entry", () => {
       });
     });
 
-    expect(runExecMock).toHaveBeenCalledWith(
-      "mock-transcriber",
+    const [command, args, options] = runExecMock.mock.calls[0] ?? [];
+    expect(command).toBe("mock-transcriber");
+    expect(args).toEqual(
       expect.arrayContaining(["--prompt", "Focus on names", "--language", "en"]),
-      expect.any(Object),
     );
+    expect(options).toEqual({
+      timeoutMs: 60_000,
+      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+    });
   });
 });

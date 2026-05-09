@@ -1110,8 +1110,8 @@ describe("buildAgentBootstrapSystemContext", () => {
   });
 
   it("returns nothing when bootstrap is not pending", () => {
-    expect(buildAgentBootstrapSystemContext({ bootstrapMode: "none" })).toEqual([]);
-    expect(buildAgentBootstrapSystemContext({})).toEqual([]);
+    expect(buildAgentBootstrapSystemContext({ bootstrapMode: "none" })).toStrictEqual([]);
+    expect(buildAgentBootstrapSystemContext({})).toStrictEqual([]);
   });
 });
 

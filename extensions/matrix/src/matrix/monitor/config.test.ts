@@ -124,9 +124,9 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result.allowFrom).toEqual([]);
+    expect(result.allowFrom).toStrictEqual([]);
     expect(result.groupAllowFrom).toEqual(["@known:example.org"]);
-    expect(result.roomsConfig).toEqual({});
+    expect(result.roomsConfig).toStrictEqual({});
     expect(resolveTargets).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({

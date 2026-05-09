@@ -225,7 +225,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         },
       });
 
-      expect(peekSystemEventEntries(baseSessionKey)).toEqual([]);
+      expect(peekSystemEventEntries(baseSessionKey)).toStrictEqual([]);
 
       await runHeartbeatOnce({
         cfg,

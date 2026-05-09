@@ -430,12 +430,12 @@ describe("gateway hot reload", () => {
   }) {
     await expect(params.applyReload()).rejects.toThrow(params.expectedError);
     const degradedEvents = drainSystemEvents(params.sessionKey);
-    expect(degradedEvents.some((event) => event.includes("[SECRETS_RELOADER_DEGRADED]"))).toBe(
-      true,
+    expect(degradedEvents).toEqual(
+      expect.arrayContaining([expect.stringContaining("[SECRETS_RELOADER_DEGRADED]")]),
     );
 
     await expect(params.applyReload()).rejects.toThrow(params.expectedError);
-    expect(drainSystemEvents(params.sessionKey)).toEqual([]);
+    expect(drainSystemEvents(params.sessionKey)).toStrictEqual([]);
   }
 
   async function expectSecretReloadRecovered(params: {
@@ -444,8 +444,8 @@ describe("gateway hot reload", () => {
   }) {
     await expect(params.applyReload()).resolves.toBeUndefined();
     const recoveredEvents = drainSystemEvents(params.sessionKey);
-    expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
-      true,
+    expect(recoveredEvents).toEqual(
+      expect.arrayContaining([expect.stringContaining("[SECRETS_RELOADER_RECOVERED]")]),
     );
   }
 

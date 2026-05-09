@@ -313,7 +313,7 @@ describe("modelsStatusCommand auth overview", () => {
     expect(payload.auth.storePath).toBe("/tmp/openclaw-agent/auth-profiles.json");
     expect(payload.auth.shellEnvFallback.enabled).toBe(true);
     expect(payload.auth.shellEnvFallback.appliedKeys).toContain("OPENAI_API_KEY");
-    expect(payload.auth.missingProvidersInUse).toEqual([]);
+    expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
     expect(payload.auth.oauth.warnAfterMs).toBeGreaterThan(0);
     expect(payload.auth.oauth.profiles.length).toBeGreaterThan(0);
 
@@ -446,7 +446,7 @@ describe("modelsStatusCommand auth overview", () => {
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
       const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
-      expect(payload.auth.missingProvidersInUse).toEqual([]);
+      expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
       expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;
@@ -560,7 +560,7 @@ describe("modelsStatusCommand auth overview", () => {
       await modelsStatusCommand({ json: true }, localRuntime as never);
       const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
       expect(payload.defaultModel).toBe("claude-cli/claude-sonnet-4-6");
-      expect(payload.auth.missingProvidersInUse).toEqual([]);
+      expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
 
       const aliasRuntime = createRuntime();
       mocks.loadConfig.mockReturnValue({
@@ -585,8 +585,10 @@ describe("modelsStatusCommand auth overview", () => {
       await modelsStatusCommand({ json: true }, aliasRuntime as never);
       const aliasPayload = JSON.parse(String((aliasRuntime.log as Mock).mock.calls[0]?.[0]));
       const providers = aliasPayload.auth.providers as Array<{ provider: string }>;
-      expect(providers.filter((provider) => provider.provider === "zai")).toHaveLength(1);
-      expect(providers.some((provider) => provider.provider === "z.ai")).toBe(false);
+      expect(
+        providers.reduce((count, provider) => count + (provider.provider === "zai" ? 1 : 0), 0),
+      ).toBe(1);
+      expect(providers.map((provider) => provider.provider)).not.toContain("z.ai");
     } finally {
       if (originalLoadConfig) {
         mocks.loadConfig.mockImplementation(originalLoadConfig);
@@ -641,7 +643,7 @@ describe("modelsStatusCommand auth overview", () => {
         syntheticAuth?: { value: string; source: string };
         effective?: { kind: string; detail?: string };
       }>;
-      expect(payload.auth.missingProvidersInUse).toEqual([]);
+      expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
       expect(providers).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -657,7 +659,7 @@ describe("modelsStatusCommand auth overview", () => {
           }),
         ]),
       );
-      expect(providers.some((entry) => entry.provider === "unused-synthetic")).toBe(false);
+      expect(providers.map((entry) => entry.provider)).not.toContain("unused-synthetic");
     } finally {
       if (originalLoadConfig) {
         mocks.loadConfig.mockImplementation(originalLoadConfig);

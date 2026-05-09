@@ -327,7 +327,7 @@ describe("session MCP runtime", () => {
   });
 
   it("disposes catalog startup in-flight without leaving cached runtimes", async () => {
-    let notifyCatalogStarted!: () => void;
+    let notifyCatalogStarted: (() => void) | undefined;
     const catalogStarted = new Promise<void>((resolve) => {
       notifyCatalogStarted = resolve;
     });
@@ -339,6 +339,9 @@ describe("session MCP runtime", () => {
       workspaceDir: params.workspaceDir,
       configFingerprint: params.configFingerprint ?? "fingerprint",
       getCatalog: async () => {
+        if (!notifyCatalogStarted) {
+          throw new Error("Expected bundle MCP catalog start callback to be initialized");
+        }
         notifyCatalogStarted();
         return await new Promise((_, reject) => {
           rejectCatalog = reject;
@@ -464,7 +467,7 @@ describe("session MCP runtime", () => {
     await expect(manager.sweepIdleRuntimes()).resolves.toBe(1);
 
     expect(disposed).toEqual(["session-idle"]);
-    expect(manager.listSessionIds()).toEqual([]);
+    expect(manager.listSessionIds()).toStrictEqual([]);
     expect(manager.resolveSessionId("agent:test:session-idle")).toBeUndefined();
   });
 
@@ -495,6 +498,6 @@ describe("session MCP runtime", () => {
     now += 60_000_000;
     await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
     expect(manager.listSessionIds()).toEqual(["session-no-ttl"]);
-    expect(disposed).toEqual([]);
+    expect(disposed).toStrictEqual([]);
   });
 });

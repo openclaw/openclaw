@@ -205,7 +205,7 @@ describe("native hook relay registry", () => {
         },
       }),
     ).rejects.toThrow("native hook relay bridge target mismatch");
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
+    expect(__testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
   });
 
   it("rejects oversized direct bridge responses", async () => {
@@ -357,7 +357,7 @@ describe("native hook relay registry", () => {
     relay.unregister();
 
     expect(__testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
+    expect(__testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
   });
 
   it("keeps only a bounded history of retained invocations", async () => {
@@ -384,7 +384,7 @@ describe("native hook relay registry", () => {
 
     const invocations = __testing.getNativeHookRelayInvocationsForTests();
     expect(invocations).toHaveLength(200);
-    expect(invocations.some((invocation) => invocation.toolUseId === "call-0")).toBe(false);
+    expect(invocations.map((invocation) => invocation.toolUseId)).not.toContain("call-0");
     expect(invocations.at(-1)).toEqual(expect.objectContaining({ toolUseId: "call-209" }));
   });
 

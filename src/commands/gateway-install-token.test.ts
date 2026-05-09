@@ -323,7 +323,7 @@ describe("resolveGatewayInstallToken", () => {
 
     expect(resolveSecretRefValuesMock).not.toHaveBeenCalled();
     expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(result.token).toBeUndefined();
     expect(result.tokenRefConfigured).toBe(true);
   });

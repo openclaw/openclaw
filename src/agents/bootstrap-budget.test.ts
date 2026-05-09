@@ -102,7 +102,7 @@ describe("analyzeBootstrapBudget", () => {
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
-    expect(analysis.truncatedFiles[0]?.causes).toEqual([]);
+    expect(analysis.truncatedFiles[0]?.causes).toStrictEqual([]);
   });
 });
 
@@ -167,7 +167,7 @@ describe("bootstrap prompt warnings", () => {
       }),
     ).toEqual(["legacy-only"]);
 
-    expect(resolveBootstrapWarningSignaturesSeen(undefined)).toEqual([]);
+    expect(resolveBootstrapWarningSignaturesSeen(undefined)).toStrictEqual([]);
   });
 
   it("ignores single-signature fallback when warning mode is off", () => {
@@ -178,7 +178,7 @@ describe("bootstrap prompt warnings", () => {
           promptWarningSignature: "off-mode-signature",
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       resolveBootstrapWarningSignaturesSeen({
@@ -211,7 +211,8 @@ describe("bootstrap prompt warnings", () => {
       mode: "once",
     });
     expect(first.warningShown).toBe(true);
-    expect(first.signature).toEqual(expect.any(String));
+    expect(first.signature).toBeTypeOf("string");
+    expect(first.signature).not.toBe("");
     expect(JSON.parse(first.signature ?? "{}")).toMatchObject({
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
@@ -232,7 +233,7 @@ describe("bootstrap prompt warnings", () => {
       seenSignatures: first.warningSignaturesSeen,
     });
     expect(second.warningShown).toBe(false);
-    expect(second.lines).toEqual([]);
+    expect(second.lines).toStrictEqual([]);
   });
 
   it("dedupes once mode across non-consecutive repeated signatures", () => {
@@ -374,7 +375,7 @@ describe("bootstrap prompt warnings", () => {
       previousSignature: signature,
     });
     expect(off.warningShown).toBe(false);
-    expect(off.lines).toEqual([]);
+    expect(off.lines).toStrictEqual([]);
 
     const always = buildBootstrapPromptWarning({
       analysis,
@@ -474,7 +475,12 @@ describe("bootstrap prompt warnings", () => {
       injectLegacyWarning(optimizedTurns[2] ?? "", warningLines),
     ];
     const cacheHitRate = (turns: string[]) => {
-      const hits = turns.slice(1).filter((turn, index) => turn === turns[index]).length;
+      let hits = 0;
+      for (let index = 1; index < turns.length; index++) {
+        if (turns[index] === turns[index - 1]) {
+          hits++;
+        }
+      }
       return hits / Math.max(1, turns.length - 1);
     };
 

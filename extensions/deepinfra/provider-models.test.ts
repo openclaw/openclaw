@@ -66,7 +66,7 @@ describe("discoverDeepInfraModels", () => {
 
     expect(DEEPINFRA_DEFAULT_MODEL_REF).toBe("deepinfra/deepseek-ai/DeepSeek-V3.2");
     expect(modelIds).toContain("deepseek-ai/DeepSeek-V3.2");
-    expect(streamingUsageIncompatibleModelIds).toEqual([]);
+    expect(streamingUsageIncompatibleModelIds).toStrictEqual([]);
   });
 
   it("fetches DeepInfra's curated LLM catalog and parses model metadata", async () => {

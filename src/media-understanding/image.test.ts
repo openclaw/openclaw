@@ -162,9 +162,10 @@ describe("describeImageWithModel", () => {
           prompt: "Describe the image.",
           image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
         }),
-        signal: expect.any(AbortSignal),
       }),
     );
+    const [, fetchOptions] = fetchMock.mock.calls[0] ?? [];
+    expect(fetchOptions?.signal).toBeInstanceOf(AbortSignal);
     expect(timeoutSpy).toHaveBeenCalledWith(1000);
     expect(completeMock).not.toHaveBeenCalled();
   });
@@ -380,10 +381,25 @@ describe("describeImageWithModel", () => {
           }),
         ],
       }),
-      expect.any(Object),
+      expect.objectContaining({
+        apiKey: "oauth-test",
+        maxTokens: 512,
+      }),
     );
-    const [, context] = completeMock.mock.calls[0] ?? [];
-    expect(context?.messages?.[0]?.content).toHaveLength(1);
+    const firstCall = completeMock.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("Expected image completion call");
+    }
+    const [, context, options] = firstCall;
+    expect(Object.keys(options).toSorted()).toEqual(["apiKey", "maxTokens", "signal", "timeoutMs"]);
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(options.timeoutMs).toBeGreaterThan(0);
+    expect(options.timeoutMs).toBeLessThanOrEqual(1000);
+    const userMessage = context.messages[0];
+    if (!userMessage) {
+      throw new Error("expected image completion user message");
+    }
+    expect(userMessage.content).toHaveLength(1);
   });
 
   it("places OpenRouter image prompts in user content before images", async () => {
@@ -422,9 +438,17 @@ describe("describeImageWithModel", () => {
       text: "openrouter ok",
       model: "google/gemini-2.5-flash",
     });
-    const [, context] = completeMock.mock.calls[0] ?? [];
-    expect(context?.systemPrompt).toBeUndefined();
-    expect(context?.messages?.[0]?.content).toEqual([
+    const firstCall = completeMock.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("Expected OpenRouter image completion call");
+    }
+    const [, context] = firstCall;
+    expect(context.systemPrompt).toBeUndefined();
+    const userMessage = context.messages[0];
+    if (!userMessage) {
+      throw new Error("expected OpenRouter image completion user message");
+    }
+    expect(userMessage.content).toEqual([
       { type: "text", text: "Describe the image." },
       expect.objectContaining({
         type: "image",
@@ -536,7 +560,11 @@ describe("describeImageWithModel", () => {
         model: model.id,
       });
       expect(completeMock).toHaveBeenCalledTimes(2);
-      const [, , retryOptions] = completeMock.mock.calls[1] ?? [];
+      const retryCall = completeMock.mock.calls[1];
+      if (!retryCall) {
+        throw new Error("Expected retry image completion call");
+      }
+      const [retryModel, , retryOptions] = retryCall;
       if (!retryOptions?.onPayload) {
         throw new Error("expected retry payload mapper");
       }
@@ -546,7 +574,7 @@ describe("describeImageWithModel", () => {
           reasoning_effort: "high",
           include: ["reasoning.encrypted_content"],
         },
-        completeMock.mock.calls[1]?.[0],
+        retryModel,
       );
       expect(retryPayload).toEqual(expectedRetryPayload);
     },
@@ -580,9 +608,16 @@ describe("describeImageWithModel", () => {
     const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
-    const [, , options] = completeMock.mock.calls[0] ?? [];
-    expect(options?.signal?.aborted).toBe(true);
-    expect(options?.timeoutMs).toBe(25);
+    const firstCall = completeMock.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("Expected timed image completion call");
+    }
+    const [, , options] = firstCall;
+    if (!options?.signal) {
+      throw new Error("Expected image completion abort signal");
+    }
+    expect(options.signal.aborted).toBe(true);
+    expect(options.timeoutMs).toBe(25);
   });
 
   it("rejects when image runtime setup exceeds the request timeout", async () => {

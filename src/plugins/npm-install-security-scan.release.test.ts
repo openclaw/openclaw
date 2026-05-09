@@ -238,7 +238,7 @@ describe("publishable plugin npm package install security scan", () => {
       unexpectedCriticalFindings.push(...result.unexpectedCriticalFindings);
     }
 
-    expect(unexpectedCriticalFindings.toSorted()).toEqual([]);
+    expect(unexpectedCriticalFindings.toSorted()).toStrictEqual([]);
     expect([...reviewedCriticalFindings].toSorted()).toEqual(
       [...expectedReviewedCriticalFindings].toSorted(),
     );

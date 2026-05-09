@@ -52,6 +52,6 @@ describe("doctor startup channel maintenance", () => {
       shouldRepair: false,
     });
 
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
   });
 });

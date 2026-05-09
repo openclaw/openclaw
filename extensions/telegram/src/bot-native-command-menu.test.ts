@@ -69,8 +69,8 @@ describe("bot-native-command-menu", () => {
       0,
     );
     expect(totalText).toBeLessThanOrEqual(TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET);
-    expect(result.commandsToRegister.every((command) => command.description.length <= 56)).toBe(
-      true,
+    expect(result.commandsToRegister.filter((command) => command.description.length > 56)).toEqual(
+      [],
     );
   });
 
@@ -126,7 +126,7 @@ describe("bot-native-command-menu", () => {
     });
 
     expect(result.commands).toEqual([{ command: "agent_run", description: "Run agent" }]);
-    expect(result.issues).toEqual([]);
+    expect(result.issues).toStrictEqual([]);
   });
 
   it("ignores malformed plugin specs without crashing", () => {

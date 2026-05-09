@@ -63,6 +63,14 @@ const pluginRegistryMocks = vi.hoisted(() => {
   };
 });
 
+function requireLastMetadataSnapshotCall(): unknown[] {
+  const call = pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls.at(-1);
+  if (!call) {
+    throw new Error("expected plugin metadata snapshot call");
+  }
+  return call;
+}
+
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: pluginRegistryMocks.getCurrentPluginMetadataSnapshot,
 }));
@@ -180,7 +188,7 @@ describe("provider env vars dynamic manifest metadata", () => {
         source: "external cloud credentials",
       },
     ]);
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({
+    expect(requireLastMetadataSnapshotCall()[0]).toMatchObject({
       preferPersisted: false,
     });
   });
@@ -474,13 +482,13 @@ describe("provider env vars dynamic manifest metadata", () => {
         config: { plugins: {} },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       mod.getProviderEnvVars("workspace-setup", {
         config: { plugins: {} },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       mod.listKnownProviderAuthEnvVarNames({
         config: { plugins: {} },
@@ -550,7 +558,7 @@ describe("provider env vars dynamic manifest metadata", () => {
         },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps selected workspace context engine env vars when requested", async () => {

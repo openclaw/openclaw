@@ -635,7 +635,7 @@ describe("loadGatewayPlugins", () => {
 
     expect(clearActivatedPluginRuntimeState).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPlugins).not.toHaveBeenCalled();
-    expect(result.pluginRegistry.plugins).toEqual([]);
+    expect(result.pluginRegistry.plugins).toStrictEqual([]);
     expect(result.gatewayMethods).toEqual(["sessions.get"]);
   });
 
@@ -765,7 +765,7 @@ describe("loadGatewayPlugins", () => {
     });
     const result = await runtime.nodes.list({ connected: true });
 
-    expect(getLastDispatchedParams()).toEqual({});
+    expect(getLastDispatchedParams()).toStrictEqual({});
     expect(result.nodes).toEqual([{ nodeId: "connected", connected: true }]);
   });
 

@@ -117,11 +117,9 @@ describe("vllm provider discovery contract", () => {
     expect(buildVllmProviderMock).toHaveBeenCalledWith({
       apiKey: "env-vllm-key",
     });
-    expect(discoverOpenAICompatibleSelfHostedProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerId: "vllm",
-        buildProvider: expect.any(Function),
-      }),
-    );
+    expect(discoverOpenAICompatibleSelfHostedProviderMock).toHaveBeenCalledTimes(1);
+    const [discoveryParams] = discoverOpenAICompatibleSelfHostedProviderMock.mock.calls[0];
+    expect(discoveryParams.providerId).toBe("vllm");
+    expect(discoveryParams.buildProvider).toBeTypeOf("function");
   });
 });
