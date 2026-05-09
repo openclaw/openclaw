@@ -45,7 +45,7 @@ describe("loadIncludePatternsFromEnv", () => {
 
 describe("loadExtraExcludePatternsFromEnv", () => {
   it("returns an empty list when no extra exclude file is configured", () => {
-    expect(loadExtraExcludePatternsFromEnv({})).toEqual([]);
+    expect(loadExtraExcludePatternsFromEnv({})).toStrictEqual([]);
   });
 
   it("loads extra exclude patterns from a JSON file", () => {
