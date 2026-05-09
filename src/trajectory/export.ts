@@ -1,4 +1,3 @@
-import fsp from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "../agents/agent-core-contract.js";
 import { exportSqliteToolArtifacts } from "../agents/filesystem/tool-artifact-store.sqlite.js";
@@ -28,11 +27,7 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import {
-  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-  resolveTrajectoryFilePath,
-  safeTrajectorySessionFileName,
-} from "./paths.js";
+import { safeTrajectorySessionFileName } from "./paths.js";
 import { listTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type {
   TrajectoryBundleManifest,
@@ -46,7 +41,6 @@ type BuildTrajectoryBundleParams = {
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
-  runtimeFile?: string;
   systemPrompt?: string;
   tools?: TrajectoryToolDefinition[];
   maxTotalEvents?: number;
@@ -149,55 +143,6 @@ function readSessionBranch(params: { agentId?: string; sessionId: string; sessio
   return { header, leafId, branchEntries };
 }
 
-async function parseJsonlFile<T>(
-  filePath: string,
-  params: {
-    maxBytes: number;
-    maxEvents: number;
-    validate?: (value: unknown) => value is T;
-  },
-): Promise<T[]> {
-  let stat;
-  try {
-    stat = await fsp.stat(filePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-  if (!stat.isFile()) {
-    return [];
-  }
-  if (stat.size > params.maxBytes) {
-    throw new Error(
-      `Trajectory runtime file is too large to export (${stat.size} bytes; limit ${params.maxBytes})`,
-    );
-  }
-  const content = await fsp.readFile(filePath, "utf8");
-  const rows = content
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const parsed: T[] = [];
-  for (const row of rows) {
-    if (parsed.length >= params.maxEvents) {
-      throw new Error(
-        `Trajectory runtime file has too many events to export (limit ${params.maxEvents})`,
-      );
-    }
-    try {
-      const value = JSON.parse(row) as unknown;
-      if (!params.validate || params.validate(value)) {
-        parsed.push(value as T);
-      }
-    } catch {
-      // Keep exports resilient even if a single debug line is malformed.
-    }
-  }
-  return parsed;
-}
-
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -224,38 +169,6 @@ function isRuntimeTrajectoryEventForSession(
     value.sessionId === sessionId &&
     (!("data" in value) || value.data === undefined || isRecord(value.data))
   );
-}
-
-async function isRegularNonSymlinkFile(filePath: string): Promise<boolean> {
-  try {
-    const linkStat = await fsp.lstat(filePath);
-    if (linkStat.isSymbolicLink() || !linkStat.isFile()) {
-      return false;
-    }
-    const stat = await fsp.stat(filePath);
-    return stat.isFile() && stat.dev === linkStat.dev && stat.ino === linkStat.ino;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveTrajectoryRuntimeFile(params: {
-  runtimeFile?: string;
-  sessionId: string;
-}): Promise<string | undefined> {
-  if (params.runtimeFile) {
-    return params.runtimeFile;
-  }
-  const candidates = [
-    resolveTrajectoryFilePath({ env: {}, sessionId: params.sessionId }),
-    resolveTrajectoryFilePath({ sessionId: params.sessionId }),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-  for (const candidate of candidates) {
-    if (await isRegularNonSymlinkFile(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
 }
 
 function loadSqliteRuntimeTrajectoryEvents(params: {
@@ -847,7 +760,6 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   outputDir: string;
   events: TrajectoryEvent[];
   header: SessionHeader | null;
-  runtimeFile?: string;
   supplementalFiles: string[];
 }> {
   const redaction = buildTrajectoryExportRedaction({
@@ -858,24 +770,11 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
-  const runtimeFile = await resolveTrajectoryRuntimeFile({
-    runtimeFile: params.runtimeFile,
-    sessionId: params.sessionId,
-  });
   const sqliteRuntimeEvents = loadSqliteRuntimeTrajectoryEvents({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
-  const legacyRuntimeEvents =
-    sqliteRuntimeEvents.length === 0 && runtimeFile
-      ? await parseJsonlFile<TrajectoryEvent>(runtimeFile, {
-          maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-          maxEvents: MAX_TRAJECTORY_RUNTIME_EVENTS,
-          validate: (value): value is TrajectoryEvent =>
-            isRuntimeTrajectoryEventForSession(value, params.sessionId),
-        })
-      : [];
-  const runtimeEvents = sqliteRuntimeEvents.length > 0 ? sqliteRuntimeEvents : legacyRuntimeEvents;
+  const runtimeEvents = sqliteRuntimeEvents;
   const transcriptEvents = buildTranscriptEvents({
     entries: branchEntries,
     sessionId: params.sessionId,
@@ -909,9 +808,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
       runtime:
         sqliteRuntimeEvents.length > 0
           ? `agent-db:${resolveAgentIdFromSessionKey(params.sessionKey)}:trajectory_runtime_events:${params.sessionId}`
-          : runtimeFile && (await isRegularNonSymlinkFile(runtimeFile))
-            ? maybeRedactPathString(runtimeFile, redaction)
-            : undefined,
+          : undefined,
     },
   };
 
@@ -1003,8 +900,6 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     outputDir: params.outputDir,
     events,
     header,
-    runtimeFile:
-      runtimeFile && (await isRegularNonSymlinkFile(runtimeFile)) ? runtimeFile : undefined,
     supplementalFiles,
   };
 }

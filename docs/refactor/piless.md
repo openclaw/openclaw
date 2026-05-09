@@ -98,11 +98,12 @@ This plan has started landing in slices:
   allowed; process stays unavailable because background sessions still require a
   real process registry and follow-up polling path.
 - `tool_artifacts` has a SQLite store primitive for generated artifact staging,
-  export, and per-run cleanup. Runtime trajectory capture now mirrors the
-  bounded `*.trajectory.jsonl` sidecar into run-scoped SQLite artifacts while
-  retaining the disk sidecar for compatibility. Tool execution now records
-  media-result manifests for generated or captured tool media in the same
-  run-scoped artifact store while keeping delivery files on disk.
+  export, and per-run cleanup. Runtime trajectory capture writes
+  `trajectory_runtime_events` rows directly and mirrors a bounded JSONL debug
+  blob into run-scoped SQLite artifacts; there is no runtime
+  `*.trajectory.jsonl` sidecar. Tool execution now records media-result
+  manifests for generated or captured tool media in the same run-scoped artifact
+  store while keeping delivery files on disk.
 - Managed outgoing image attachment metadata now uses the shared SQLite `kv`
   store as the primary record path. Older per-attachment JSON files are imported
   and removed by `openclaw doctor --fix`; runtime media reads only SQLite.

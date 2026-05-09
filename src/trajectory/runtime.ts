@@ -294,7 +294,7 @@ export function createTrajectoryRuntimeRecorder(
     flush: async () => {
       if (droppedEvents > 0) {
         const line = buildEventLine("trace.truncated", {
-          reason: "trajectory-runtime-file-size-limit",
+          reason: "trajectory-runtime-size-limit",
           droppedEvents,
           droppedEventBytes,
           limitBytes: maxRuntimeFileBytes,
