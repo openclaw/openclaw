@@ -1237,6 +1237,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           childSessionKey: "agent:openclaw:subagent:child-123",
           childSessionId: "child-123",
           announceType: "subagent task",
+          taskLabel: "channel completion smoke",
           status: "ok",
           statusLabel: "completed successfully",
           result: "Raw child result that should stay internal.",

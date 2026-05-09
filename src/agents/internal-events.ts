@@ -25,6 +25,8 @@ type AgentTaskCompletionInternalEvent = {
   replyInstruction: string;
 };
 
+const MAX_CHILD_RESULT_PROMPT_CHARS = 4_000;
+
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
 export { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END };
@@ -41,11 +43,23 @@ function sanitizeMultilineField(value: string, fallback: string): string {
   return sanitized || fallback;
 }
 
+function truncateChildResultForPrompt(value: string): string {
+  if (value.length <= MAX_CHILD_RESULT_PROMPT_CHARS) {
+    return value;
+  }
+  return [
+    value.slice(0, MAX_CHILD_RESULT_PROMPT_CHARS).trimEnd(),
+    "",
+    `[child result truncated: ${value.length - MAX_CHILD_RESULT_PROMPT_CHARS} additional characters omitted]`,
+  ].join("\n");
+}
+
 function formatChildResultDataBlock(value: string): string {
+  const safeValue = truncateChildResultForPrompt(value);
   return (
     wrapPromptDataBlock({
       label: "Child result",
-      text: value,
+      text: safeValue,
     }) || "Child result: (no output)"
   );
 }

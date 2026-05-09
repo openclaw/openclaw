@@ -300,7 +300,7 @@ export const registerTelegramHandlers = ({
         if (!isMultiToggleButton(button) || !isSelectedMultiButton(button)) {
           return [];
         }
-        return [button.callback_data!.slice(`${MULTI_SELECT_PREFIX}toggle|`.length)];
+        return [button.callback_data.slice(`${MULTI_SELECT_PREFIX}toggle|`.length)];
       }),
     );
   const updateMultiSelectKeyboard = (
@@ -313,7 +313,7 @@ export const registerTelegramHandlers = ({
         if (!isMultiToggleButton(button)) {
           return button;
         }
-        const buttonValue = button.callback_data!.slice(`${MULTI_SELECT_PREFIX}toggle|`.length);
+        const buttonValue = button.callback_data.slice(`${MULTI_SELECT_PREFIX}toggle|`.length);
         const baseText = stripMultiSelectPrefix(button.text);
         const selected =
           action === "clear"
