@@ -500,12 +500,13 @@ describe("applyMediaUnderstanding", () => {
     expect(transcribeAudio).not.toHaveBeenCalled();
     expect(result.appliedAudio).toBe(true);
     expect(result.outputs).toEqual([
-      expect.objectContaining({
+      {
         kind: "audio.transcription",
+        attachmentIndex: 0,
         text: "[Voice note could not be transcribed because the audio attachment was too small]",
         provider: "openclaw",
         model: "synthetic-empty-audio",
-      }),
+      },
     ]);
     expect(ctx.Transcript).toBe(
       "[Voice note could not be transcribed because the audio attachment was too small]",
@@ -545,12 +546,13 @@ describe("applyMediaUnderstanding", () => {
     expect(transcribeAudio).not.toHaveBeenCalled();
     expect(result.appliedAudio).toBe(true);
     expect(result.outputs).toEqual([
-      expect.objectContaining({
+      {
         kind: "audio.transcription",
+        attachmentIndex: 0,
         text: "[Voice note could not be transcribed because the audio attachment was too small]",
         provider: "openclaw",
         model: "synthetic-empty-audio",
-      }),
+      },
     ]);
     expect(ctx.Transcript).toBe(
       "[Voice note could not be transcribed because the audio attachment was too small]",
@@ -1021,12 +1023,12 @@ describe("applyMediaUnderstanding", () => {
     expect(transcribeAudio).not.toHaveBeenCalled();
     expect(result.appliedAudio).toBe(false);
     expect(ctx.Transcript).toBe("preflight transcript");
-    expect(result.decisions).toContainEqual(
-      expect.objectContaining({
-        capability: "audio",
-        outcome: "no-attachment",
-      }),
-    );
+    const audioDecision = result.decisions.find((decision) => decision.capability === "audio");
+    expect(audioDecision).toEqual({
+      capability: "audio",
+      outcome: "no-attachment",
+      attachments: [],
+    });
   });
 
   it("handles multiple audio attachments when attachment mode is all", async () => {
