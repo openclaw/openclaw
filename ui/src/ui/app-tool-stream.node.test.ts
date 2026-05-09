@@ -10,6 +10,7 @@ type MutableHost = ToolStreamHost & {
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
 };
+const TOOL_STREAM_TEST_NOW = new Date("2026-05-09T00:00:00.000Z").getTime();
 
 function createHost(overrides?: Partial<MutableHost>): MutableHost {
   return {
@@ -51,14 +52,17 @@ function expectCompactionCompleteAndAutoClears(host: MutableHost) {
   expect(host.compactionStatus).toEqual({
     phase: "complete",
     runId: "run-1",
-    startedAt: expect.any(Number),
-    completedAt: expect.any(Number),
+    startedAt: TOOL_STREAM_TEST_NOW,
+    completedAt: TOOL_STREAM_TEST_NOW,
   });
-  expect(host.compactionClearTimer).toMatchObject({
-    hasRef: expect.any(Function),
-    ref: expect.any(Function),
-    unref: expect.any(Function),
-  });
+  const clearTimer = host.compactionClearTimer as unknown as {
+    hasRef?: unknown;
+    ref?: unknown;
+    unref?: unknown;
+  };
+  expect(typeof clearTimer.hasRef).toBe("function");
+  expect(typeof clearTimer.ref).toBe("function");
+  expect(typeof clearTimer.unref).toBe("function");
 
   vi.advanceTimersByTime(5_000);
   expect(host.compactionStatus).toBeNull();
@@ -74,6 +78,7 @@ function requireFallbackStatus(host: MutableHost): FallbackStatus {
 
 function useToolStreamFakeTimers(): void {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.setSystemTime(TOOL_STREAM_TEST_NOW);
 }
 
 describe("app-tool-stream fallback lifecycle handling", () => {
@@ -215,7 +220,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionStatus).toEqual({
       phase: "active",
       runId: "run-1",
-      startedAt: expect.any(Number),
+      startedAt: TOOL_STREAM_TEST_NOW,
       completedAt: null,
     });
 
@@ -231,7 +236,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionStatus).toEqual({
       phase: "retrying",
       runId: "run-1",
-      startedAt: expect.any(Number),
+      startedAt: TOOL_STREAM_TEST_NOW,
       completedAt: null,
     });
     expect(host.compactionClearTimer).toBeNull();
@@ -241,7 +246,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionStatus).toEqual({
       phase: "retrying",
       runId: "run-1",
-      startedAt: expect.any(Number),
+      startedAt: TOOL_STREAM_TEST_NOW,
       completedAt: null,
     });
 
@@ -270,7 +275,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionStatus).toEqual({
       phase: "retrying",
       runId: "run-1",
-      startedAt: expect.any(Number),
+      startedAt: TOOL_STREAM_TEST_NOW,
       completedAt: null,
     });
 
