@@ -335,7 +335,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       query: params.query,
       maxResults: params.maxResults,
       minScore: params.minScore,
-      sources: [...params.sourceFilterList].sort(),
+      sources: params.sourceFilterList.toSorted(),
       provider: this.provider
         ? { id: this.provider.id, model: this.provider.model }
         : { id: "none", model: "fts-only" },
