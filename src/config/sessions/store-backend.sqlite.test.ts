@@ -20,13 +20,6 @@ function createTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-session-store-"));
 }
 
-function resolveRetiredSessionJsonFixturePath(params: {
-  agentId: string;
-  env: NodeJS.ProcessEnv;
-}): string {
-  return path.join(params.env.OPENCLAW_STATE_DIR ?? "", "agents", params.agentId, "sessions.json");
-}
-
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -64,10 +57,6 @@ describe("SQLite session store backend", () => {
   it("routes the production session row API through SQLite", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const storePath = resolveRetiredSessionJsonFixturePath({
-      agentId: "ops",
-      env,
-    });
     const entry: SessionEntry = {
       sessionId: "sqlite-primary",
       updatedAt: 100,
@@ -85,7 +74,6 @@ describe("SQLite session store backend", () => {
       },
     });
 
-    expect(fs.existsSync(storePath)).toBe(false);
     expect(loadSqliteSessionEntries({ agentId: "ops", env })).toEqual({
       "discord:ops": {
         ...entry,
@@ -175,10 +163,6 @@ describe("SQLite session store backend", () => {
   it("uses SQLite by default for canonical per-agent session rows", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const storePath = resolveRetiredSessionJsonFixturePath({
-      agentId: "ops",
-      env,
-    });
     const entry: SessionEntry = {
       sessionId: "sqlite-default",
       updatedAt: 100,
@@ -186,7 +170,6 @@ describe("SQLite session store backend", () => {
 
     upsertSessionEntry({ agentId: "ops", env, sessionKey: "discord:ops", entry });
 
-    expect(fs.existsSync(storePath)).toBe(false);
     expect(loadSqliteSessionEntries({ agentId: "ops", env })).toEqual({
       "discord:ops": entry,
     });

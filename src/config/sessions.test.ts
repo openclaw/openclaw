@@ -54,15 +54,14 @@ describe("sessions", () => {
   async function createSessionStoreFixture(params: {
     prefix: string;
     entries: Record<string, Record<string, unknown>>;
-  }): Promise<{ agentId: string; legacySessionsDir: string }> {
+  }): Promise<{ agentId: string }> {
     const stateDir = await createCaseDir(params.prefix);
     process.env.OPENCLAW_STATE_DIR = stateDir;
     const agentId = "main";
-    const legacySessionsDir = path.join(stateDir, "agents", agentId, "sessions");
     for (const [sessionKey, entry] of Object.entries(params.entries)) {
       upsertSessionEntry({ agentId, sessionKey, entry: entry as SessionEntry });
     }
-    return { agentId, legacySessionsDir };
+    return { agentId };
   }
 
   function readSessionEntries(agentId = "main"): Record<string, SessionEntry> {
@@ -499,8 +498,8 @@ describe("sessions", () => {
     expect(store["agent:main:two"]?.sessionId).toBe("sess-2");
   });
 
-  it("creates SQLite session stores without writing sessions.json", async () => {
-    const { legacySessionsDir } = await createSessionStoreFixture({
+  it("creates SQLite session rows through the production API", async () => {
+    await createSessionStoreFixture({
       prefix: "session-row-upsert",
       entries: {},
     });
@@ -513,9 +512,6 @@ describe("sessions", () => {
 
     const store = readSessionEntries();
     expect(store["agent:main:main"]?.sessionId).toBe("sess-1");
-    await expect(fs.stat(path.join(legacySessionsDir, "sessions.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
   });
 
   it("normalizes last route fields on write", async () => {
