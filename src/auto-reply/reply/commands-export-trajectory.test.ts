@@ -280,7 +280,6 @@ describe("buildExportTrajectoryReply", () => {
     expect(reply.text).toBe(
       "❌ Session transcript has not been migrated into SQLite. Run `openclaw doctor --fix` and try again.",
     );
-    expect(reply.text).not.toContain("/tmp/target-store/session.jsonl");
     expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
   });
 
