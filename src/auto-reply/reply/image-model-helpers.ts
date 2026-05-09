@@ -295,9 +295,26 @@ export async function resolveModelSupportsVision(
     cfg,
     loadModelCatalog: loadCatalog,
   } = params;
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
 
+  // Always validate against the catalog first — a model being in imageModel
+  // config does not guarantee it actually supports vision input.
+  try {
+    const { findModelInCatalog, loadModelCatalog, modelSupportsVision } =
+      await import("../../agents/model-catalog.js");
+    const catalog = await (loadCatalog ?? loadModelCatalog)({ config: cfg });
+    const catalogEntry = findModelInCatalog(catalog, provider, model);
+    if (modelSupportsVision(catalogEntry)) {
+      return true;
+    }
+  } catch {
+    // Catalog lookup failed; fall through to imageModel config as a lenient
+    // signal for environments where the catalog is unavailable.
+  }
+
+  // Catalog did not confirm vision support; check imageModel config as a
+  // configuration-level signal that the user intends this model for images.
   if (imageModelConfig) {
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
     const { keys: imageModelKeys } = collectImageModelKeys({
       imageModelConfig,
       aliasIndex,
@@ -308,13 +325,5 @@ export async function resolveModelSupportsVision(
     }
   }
 
-  try {
-    const { findModelInCatalog, loadModelCatalog, modelSupportsVision } =
-      await import("../../agents/model-catalog.js");
-    const catalog = await (loadCatalog ?? loadModelCatalog)({ config: cfg });
-    const catalogEntry = findModelInCatalog(catalog, provider, model);
-    return modelSupportsVision(catalogEntry);
-  } catch {
-    return false;
-  }
+  return false;
 }

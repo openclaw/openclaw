@@ -2232,7 +2232,9 @@ export const chatHandlers: GatewayRequestHandlers = {
 
       if (hasInboundImageAttachments) {
         // Image model override: switch to a configured vision-capable model only
-        // when the inbound attachment set includes images.
+        // when the inbound attachment set includes images AND the session model
+        // does not already support images. Per the models docs, imageModel is used
+        // "only when the primary model can't accept images."
         const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: modelRef.provider });
         const imageModelConfig = cfg.agents?.defaults?.imageModel;
         const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
@@ -2241,30 +2243,41 @@ export const chatHandlers: GatewayRequestHandlers = {
         let parseModel = modelRef.model;
         let imageModelProvider: string | undefined;
 
-        if (imageModelPrimary) {
-          modelOverride = imageModelPrimary;
-        } else if (imageModelFallbacks.length > 0) {
-          modelOverride = imageModelFallbacks[0];
-        }
+        // First check if the session model already supports images — if so, skip
+        // the override entirely and let the session model handle images natively.
+        const sessionModelSupportsImages = await resolveGatewayModelSupportsImages({
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+          provider: modelRef.provider,
+          model: modelRef.model,
+        });
 
-        if (modelOverride) {
-          const overrideRef = resolveModelRefFromString({
-            raw: modelOverride,
-            defaultProvider: modelRef.provider,
-            aliasIndex,
-          });
-          if (overrideRef) {
-            parseProvider = overrideRef.ref.provider;
-            parseModel = overrideRef.ref.model;
-            imageModelProvider = overrideRef.ref.provider;
-          } else {
-            // Alias resolution failed; use the raw modelOverride string as parseModel
-            // so that resolveModelSupportsVision can still match it against imageModelConfig.
-            parseModel = modelOverride;
+        if (!sessionModelSupportsImages && (imageModelPrimary || imageModelFallbacks.length > 0)) {
+          // Session model is text-only; apply imageModel override.
+          if (imageModelPrimary) {
+            modelOverride = imageModelPrimary;
+          } else if (imageModelFallbacks.length > 0) {
+            modelOverride = imageModelFallbacks[0];
+          }
+
+          if (modelOverride) {
+            const overrideRef = resolveModelRefFromString({
+              raw: modelOverride,
+              defaultProvider: modelRef.provider,
+              aliasIndex,
+            });
+            if (overrideRef) {
+              parseProvider = overrideRef.ref.provider;
+              parseModel = overrideRef.ref.model;
+              imageModelProvider = overrideRef.ref.provider;
+            } else {
+              // Alias resolution failed; use the raw modelOverride string as parseModel
+              // so that resolveModelSupportsVision can still match it against imageModelConfig.
+              parseModel = modelOverride;
+            }
           }
         }
 
-        if (imageModelFallbacks.length > 0) {
+        if (imageModelFallbacks.length > 0 && modelOverride) {
           // When imageModelPrimary is not configured, the first fallback was already
           // used as modelOverride — skip it to avoid redundant resolution.
           const fallbacksForOverride = imageModelPrimary
@@ -2291,11 +2304,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 cfg,
                 loadModelCatalog: () => context.loadGatewayModelCatalog(),
               })
-            : await resolveGatewayModelSupportsImages({
-                loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-                provider: modelRef.provider,
-                model: modelRef.model,
-              });
+            : sessionModelSupportsImages;
         // Bound plugin sessions own the real recipient model, so keep image
         // attachments even when the parent OpenClaw session model is text-only.
         supportsImages ||= imageModelSupportsImages;
