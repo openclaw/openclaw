@@ -442,7 +442,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
 });
 
 describe("truncateOversizedToolResultsInSession", () => {
-  it("readably truncates aggregate medium tool results in a transcript locator", async () => {
+  it("readably truncates aggregate medium tool results in a SQLite transcript", async () => {
     const dir = await createTmpDir();
     const sm = SessionManager.create(dir);
     sm.appendMessage(makeUserMessage("hello"));
