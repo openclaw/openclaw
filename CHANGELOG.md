@@ -312,6 +312,10 @@ Docs: https://docs.openclaw.ai
 - Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
 - Mattermost/setup: prompt for and persist the server base URL after the bot token in `openclaw setup --wizard`, instead of failing validation before `--http-url` is collected. Fixes #76670. Thanks @jacobtomlinson.
 - Gate Slack startup user allowlist resolution [AI]. (#77898) Thanks @pgondhi987.
+- CI/Security: harden GitHub Actions workflows against template injection by hoisting dynamic outputs into environment variables. Thanks @voidsidd
+- Sandbox/Security: add regex validation to Docker container label reads in `src/agents/sandbox/docker.ts` to prevent command injection. Thanks @voidsidd
+- Slack/Security: sanitize thread and message IDs using `encodeURIComponent` in the thread-ownership extension to prevent path traversal. Thanks @voidsidd
+- Gateway/Watchdog: restore the `tls` keyword to fingerprint mismatch errors in `src/gateway/client.ts` to satisfy regression test contracts. Thanks @voidsidd
 - OpenAI/Codex: suppress stale `openai-codex` GPT-5.1/5.2/5.3 model refs that ChatGPT/Codex OAuth accounts now reject, keeping model lists, config validation, and forward-compat resolution on current 5.4/5.5 routes. Fixes #67158. Thanks @drpau.
 - CLI/update: keep pnpm package updates on the running custom global install root and pass pnpm's `--global-dir` so `openclaw update` does not create a second default-prefix install when `OPENCLAW_HOME` or the shell points at a custom OpenClaw directory. Fixes #78377. Thanks @amknight.
 - Google Meet/Voice Call: wait longer before playing PIN-derived Twilio DTMF for Meet dial-in prompts and retire stale delegated phone sessions instead of reusing completed calls.

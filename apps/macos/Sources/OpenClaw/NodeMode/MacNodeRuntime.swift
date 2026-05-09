@@ -296,7 +296,8 @@ actor MacNodeRuntime {
                 desiredAccuracy: desired,
                 maxAgeMs: params.maxAgeMs,
                 timeoutMs: params.timeoutMs)
-            let isPrecise = await services.locationAccuracyAuthorization() == .fullAccuracy
+            let auth = await services.locationAccuracyAuthorization()
+            let isPrecise = auth == .fullAccuracy
             let payload = OpenClawLocationPayload(
                 lat: location.coordinate.latitude,
                 lon: location.coordinate.longitude,
@@ -906,8 +907,8 @@ extension MacNodeRuntime {
         displayCommand: String) async -> BridgeInvokeResponse?
     {
         guard needsScreenRecording == true else { return nil }
-        let authorized = await PermissionManager
-            .status([.screenRecording])[.screenRecording] ?? false
+        let statusDict = await PermissionManager.status([.screenRecording])
+        let authorized = statusDict[.screenRecording] ?? false
         if authorized {
             return nil
         }
