@@ -1,5 +1,4 @@
 import { expect, test, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { rpcReq, testState, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
@@ -77,10 +76,6 @@ function expectChangedBroadcast(
   const payloadRecord = requireRecord(payload, "broadcast payload");
   expectFields(payloadRecord, expected);
   return payloadRecord;
-}
-
-function sqliteTranscript(sessionId: string): string {
-  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
 }
 
 test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {

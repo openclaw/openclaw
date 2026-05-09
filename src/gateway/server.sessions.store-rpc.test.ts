@@ -1,6 +1,5 @@
 import { expect, test, vi } from "vitest";
 import { getSessionEntry } from "../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
@@ -13,10 +12,6 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionFixtureDir, openClient } = setupGatewaySessionsTestHarness();
-
-function sqliteTranscript(sessionId: string): string {
-  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
-}
 
 test("lists and patches session entries via sessions.* RPC", async () => {
   await createSessionFixtureDir();
