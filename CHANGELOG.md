@@ -205,6 +205,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Markdown/Telegram: trim trailing paragraph separator from blockquote style span so `<blockquote>` elements no longer include an extra blank line on Telegram. (#79646)
 - Gateway/maintenance: prune dedupe overflow against a stable excess count and keep active agent retries from starting duplicate runs after cache eviction. (#73841) Thanks @thesomewhatyou.
 - Control UI/subagents: suppress internal `subagent_announce` handoff prompts from requester transcripts and hide legacy inter-session wrapper rows so completed subagent results no longer surface runtime context in WebChat history. (#79618) Thanks @joshavant.
 - Discord: preserve username target resolution for Discord outbound sends. (#79076) Thanks @vincentkoc.

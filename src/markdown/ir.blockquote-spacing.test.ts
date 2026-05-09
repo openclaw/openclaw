@@ -174,6 +174,43 @@ describe("blockquote spacing", () => {
   });
 });
 
+describe("blockquote style span boundaries (#79646)", () => {
+  it("should not include trailing paragraph separator in blockquote style span", () => {
+    const input = "> `gpt`\n\nbody";
+    const result = markdownToIR(input);
+
+    // Text should be correct
+    expect(result.text).toBe("gpt\n\nbody");
+
+    // The blockquote style span should NOT include the \n\n
+    const bqStyle = result.styles.find((s) => s.style === "blockquote");
+    expect(bqStyle).toBeDefined();
+    // Blockquote span should end at "gpt" (position 3), not at "gpt\n\n" (position 5)
+    expect(bqStyle!.end).toBe(3);
+  });
+
+  it("should not include trailing separator in multi-paragraph blockquote style span", () => {
+    const input = "> first\n>\n> second\n\nfollowing";
+    const result = markdownToIR(input);
+
+    const bqStyle = result.styles.find((s) => s.style === "blockquote");
+    expect(bqStyle).toBeDefined();
+    // Blockquote should cover "first\n\nsecond" but not the trailing \n\n
+    const bqText = result.text.slice(bqStyle!.start, bqStyle!.end);
+    expect(bqText).not.toMatch(/\n\n$/);
+  });
+
+  it("should handle blockquote at end of document without trailing separator", () => {
+    const input = "paragraph\n\n> quote";
+    const result = markdownToIR(input);
+
+    const bqStyle = result.styles.find((s) => s.style === "blockquote");
+    expect(bqStyle).toBeDefined();
+    const bqText = result.text.slice(bqStyle!.start, bqStyle!.end);
+    expect(bqText).toBe("quote");
+  });
+});
+
 describe("comparison with other block elements (control group)", () => {
   it("paragraphs should have double newline separation", () => {
     const input = "paragraph 1\n\nparagraph 2";

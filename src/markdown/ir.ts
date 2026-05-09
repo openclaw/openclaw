@@ -679,9 +679,17 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         }
         openStyle(state, "blockquote");
         break;
-      case "blockquote_close":
+      case "blockquote_close": {
+        // Trim trailing paragraph separator before closing the style so the
+        // blockquote span boundary does not include the \n\n, which would
+        // cause an extra blank line inside <blockquote> on Telegram (#79646).
+        const target = resolveRenderTarget(state);
+        const hadTrailingSep = target.text.endsWith("\n\n");
+        if (hadTrailingSep) target.text = target.text.slice(0, -2);
         closeStyle(state, "blockquote");
+        if (hadTrailingSep) target.text += "\n\n";
         break;
+      }
       case "bullet_list_open":
         // Add newline before nested list starts (so nested items appear on new line)
         if (state.env.listStack.length > 0) {
