@@ -15,7 +15,8 @@
  */
 
 import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
-import type { OcPath } from "./oc-path.js";
+import { formatOcPath, type OcPath } from "./oc-path.js";
+import { guardSentinel } from "./sentinel.js";
 
 export type MdEditResult =
   | { readonly ok: true; readonly ast: MdAst }
@@ -27,8 +28,16 @@ export type MdEditResult =
 /**
  * Replace the value at `path` with `newValue`. The new AST has fresh
  * `raw` re-rendered from the structural fields.
+ *
+ * Sentinel guard at the substrate boundary — `setJsoncOcPath` and the
+ * jsonl `finalize`-via-render path both reject sentinel-bearing values
+ * before they reach the AST. The md path was deferring entirely to
+ * round-trip echo through `emitMd`, which `acceptPreExistingSentinel`
+ * by default skips. Closing the gap here keeps F9 (formatter sentinel
+ * guard) symmetric across all three kinds.
  */
 export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdEditResult {
+  guardSentinel(newValue, formatOcPath(path));
   // Frontmatter address: oc://FILE/[frontmatter]/<key>
   if (path.section === "[frontmatter]") {
     const key = path.item ?? path.field;

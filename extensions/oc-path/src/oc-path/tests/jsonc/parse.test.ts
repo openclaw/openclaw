@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseJsonc } from "../../jsonc/parse.js";
+import { MAX_JSONC_INPUT_BYTES, parseJsonc } from "../../jsonc/parse.js";
 
 describe("parseJsonc — basic shapes", () => {
   it("parses an empty object", () => {
@@ -140,5 +140,25 @@ describe("parseJsonc — soft errors", () => {
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.severity).toBe("warning");
     expect(diagnostics[0]?.code).toBe("OC_JSONC_TRAILING_INPUT");
+  });
+
+  it("rejects input larger than MAX_JSONC_INPUT_BYTES with a typed diagnostic", () => {
+    // Construct an input one byte over the cap. We don't allocate the
+    // full 16 MiB+ string in memory; `String#repeat` on a one-byte unit
+    // is enough to push past the threshold without exercising the
+    // expensive `parseTree` path (the cap fires before parse runs).
+    const oversized = "a".repeat(MAX_JSONC_INPUT_BYTES + 1);
+    const { ast, diagnostics } = parseJsonc(oversized);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.severity).toBe("error");
+    expect(diagnostics[0]?.code).toBe("OC_JSONC_INPUT_TOO_LARGE");
+    expect(ast.root).toBeNull();
+  });
+
+  it("accepts input up to the cap", () => {
+    // Reasonable-shape JSON well within the cap parses normally.
+    const { diagnostics, ast } = parseJsonc('{"key": "value"}');
+    expect(diagnostics).toEqual([]);
+    expect(ast.root?.kind).toBe("object");
   });
 });
