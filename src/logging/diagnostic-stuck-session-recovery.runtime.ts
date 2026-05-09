@@ -112,10 +112,10 @@ export async function recoverStuckDiagnosticSession(
           activeSessionId,
           activeWorkKind: "embedded_run",
         };
-        diag.warn(
+        diag.debug(
           `stuck session recovery skipped: ${formatRecoveryContext(params, { activeSessionId })}`,
         );
-        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+        diag.debug(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
         return outcome;
       }
       const result = await abortAndDrainEmbeddedPiRun({
