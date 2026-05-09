@@ -31,6 +31,13 @@ function resolveLiveXaiModel() {
   return getModel("xai", "grok-4.3" as never) ?? getModel("xai", "grok-4");
 }
 
+function requireLiveValue<T>(value: T | null | undefined, label: string): T {
+  if (value == null) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<void> {
   try {
     await run();
@@ -57,15 +64,13 @@ async function collectDoneMessage(
       doneMessage = event.message;
     }
   }
-  expect(doneMessage).toBeDefined();
-  return doneMessage!;
+  return requireLiveValue(doneMessage, "done message");
 }
 
 describeLive("xai live", () => {
   it("returns assistant text for Grok 4.3", async () => {
     await runXaiLiveCase("complete", async () => {
-      const model = resolveLiveXaiModel();
-      expect(model).toBeDefined();
+      const model = requireLiveValue(resolveLiveXaiModel(), "xAI model");
       const res = await completeSimple(
         model,
         {
@@ -83,8 +88,7 @@ describeLive("xai live", () => {
 
   it("sends wrapped xAI tool payloads live", async () => {
     await runXaiLiveCase("tool-call", async () => {
-      const model = resolveLiveXaiModel();
-      expect(model).toBeDefined();
+      const model = requireLiveValue(resolveLiveXaiModel(), "xAI model");
       const agent = { streamFn: streamSimple };
       applyExtraParamsToAgent(agent, undefined, "xai", model.id);
 
@@ -115,18 +119,20 @@ describeLive("xai live", () => {
       const doneMessage = await collectDoneMessage(
         stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
       );
-      expect(doneMessage).toBeDefined();
-      expect(capturedPayload).toBeDefined();
-      if ("tool_stream" in (capturedPayload ?? {})) {
-        expect(capturedPayload?.tool_stream).toBe(true);
+      expect(Array.isArray(doneMessage.content)).toBe(true);
+      const payload = requireLiveValue(capturedPayload, "captured xAI payload");
+      if ("tool_stream" in payload) {
+        expect(payload.tool_stream).toBe(true);
       }
 
-      const payloadTools = Array.isArray(capturedPayload?.tools)
-        ? (capturedPayload.tools as Array<Record<string, unknown>>)
+      const payloadTools = Array.isArray(payload.tools)
+        ? (payload.tools as Array<Record<string, unknown>>)
         : [];
       expect(payloadTools.length).toBeGreaterThan(0);
       const firstFunction = payloadTools[0]?.function;
-      expect(firstFunction && typeof firstFunction === "object").toBe(true);
+      expect(firstFunction).not.toBeNull();
+      expect(typeof firstFunction).toBe("object");
+      expect(Array.isArray(firstFunction)).toBe(false);
       expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
     });
   }, 90_000);
@@ -149,8 +155,8 @@ describeLive("xai live", () => {
         },
       });
 
-      expect(tool).toBeTruthy();
-      const result = await tool!.execute("web-search:grok-live", {
+      const webSearchTool = requireLiveValue(tool, "grok web search tool");
+      const result = await webSearchTool.execute("web-search:grok-live", {
         query: "OpenClaw GitHub",
         count: 3,
       });
@@ -164,7 +170,10 @@ describeLive("xai live", () => {
         message?: string;
       };
 
-      const errorMessage = [details.error, details.message].filter(Boolean).join(" ");
+      const errorMessage =
+        details.error && details.message
+          ? `${details.error} ${details.message}`
+          : details.error || details.message || "";
       if (isBillingErrorMessage(errorMessage)) {
         console.warn(`[xai:live] skip web-search: billing drift: ${errorMessage}`);
         return;

@@ -4,8 +4,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
-  isCloudflareOrHtmlErrorPage,
-  parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -37,17 +35,14 @@ import {
   matchesProviderContextOverflow,
 } from "./provider-error-patterns.js";
 import {
-  BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatDiskSpaceErrorCopy,
   formatRateLimitOrOverloadedErrorCopy,
   formatTransportErrorCopy,
-  getApiErrorPayloadFingerprint,
   isInvalidStreamingEventOrderError,
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
   isStreamingJsonParseError,
-  sanitizeUserFacingText,
 } from "./sanitize-user-facing-text.js";
 import type { FailoverReason } from "./types.js";
 
@@ -702,6 +697,9 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification("timeout");
   }
   if (status === 500 || status === 502 || status === 504) {
+    if (messageReason === "server_error") {
+      return messageClassification;
+    }
     return toReasonClassification("timeout");
   }
   if (status === 529) {
@@ -711,7 +709,7 @@ function classifyFailoverClassificationFromHttpStatus(
     // 400/422 are ambiguous: inspect the payload first so provider-specific
     // rate limits, auth failures, model-not-found errors, and billing signals
     // are not collapsed into generic "format" failures.
-    if (messageClassification) {
+    if (messageClassification && messageReason !== "server_error") {
       return messageClassification;
     }
     // When the response has no body at all, or only surfaces as an HTTP wrapper
@@ -819,6 +817,14 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isOverloadedErrorMessage(raw)) {
     return toReasonClassification("overloaded");
+  }
+  if (
+    isStructuredServerErrorMessage(raw) &&
+    !isBillingErrorMessage(raw) &&
+    !isAuthPermanentErrorMessage(raw) &&
+    !isAuthErrorMessage(raw)
+  ) {
+    return toReasonClassification("server_error");
   }
   if (isTransientHttpError(raw)) {
     const status = extractLeadingHttpStatus(raw.trim());
@@ -1210,6 +1216,14 @@ function isJsonApiInternalServerError(raw: string): boolean {
   // with non-transient messages (e.g. context overflow, schema validation) should
   // fall through to more specific classifiers or remain unclassified.
   return API_ERROR_TRANSIENT_SIGNALS_RE.test(raw);
+}
+
+function isStructuredServerErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const value = normalizeLowercaseStringOrEmpty(raw);
+  return value.includes('"type":"server_error"') || value.includes('"code":"server_error"');
 }
 
 export function parseImageDimensionError(raw: string): {

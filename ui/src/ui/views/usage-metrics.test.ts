@@ -84,9 +84,8 @@ describe("buildPeakErrorHours", () => {
     // formatHourLabel uses Date.setHours so labels depend on locale,
     // but we can verify error rates and sub info.
     const highestRate = result[0];
-    expect(highestRate).toBeDefined();
     // hour 0: 5/10 = 50%, hour 23: 4/8 = 50%, hour 9: 3/15 = 20%, hour 1: 2/20 = 10%
-    expect(highestRate.value).toMatch(/50\.00%/);
+    expect(highestRate?.value).toMatch(/50\.00%/);
   });
 
   it("aggregates multiple quarter-hour buckets into the same hour in UTC mode", () => {
@@ -168,7 +167,7 @@ describe("buildPeakErrorHours", () => {
     ]);
 
     const result = buildPeakErrorHours([session], "utc");
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("returns empty array when sessions have no message counts", () => {
@@ -191,7 +190,7 @@ describe("buildPeakErrorHours", () => {
     } as unknown as UsageSessionEntry;
 
     const result = buildPeakErrorHours([session], "utc");
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("limits results to at most 5 entries sorted by error rate", () => {

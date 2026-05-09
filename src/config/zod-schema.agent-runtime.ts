@@ -847,6 +847,19 @@ export const AgentEntrySchema = z
     agentRuntime: AgentRuntimePolicySchema,
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
+    models: z
+      .record(
+        z.string(),
+        z
+          .object({
+            alias: z.string().optional(),
+            params: z.record(z.string(), z.unknown()).optional(),
+            agentRuntime: AgentRuntimePolicySchema,
+            streaming: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
@@ -866,6 +879,7 @@ export const AgentEntrySchema = z
     groupChat: GroupChatSchema,
     subagents: z
       .object({
+        delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
         model: z
           .union([

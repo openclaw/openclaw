@@ -1,4 +1,5 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -176,6 +177,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         fetchFn: fetch,
         pinDns: false,
         allowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });
 
@@ -193,7 +195,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
               return null;
             }
             const mimeType = inline?.mimeType ?? inline?.mime_type ?? DEFAULT_OUTPUT_MIME;
-            const extension = mimeType.includes("jpeg") ? "jpg" : (mimeType.split("/")[1] ?? "png");
+            const extension = extensionForMime(mimeType)?.slice(1) ?? "png";
             imageIndex += 1;
             return {
               buffer: Buffer.from(data, "base64"),

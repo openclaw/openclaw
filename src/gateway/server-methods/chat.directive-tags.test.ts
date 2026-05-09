@@ -81,6 +81,16 @@ const mockState = vi.hoisted(() => ({
   deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
 }));
 
+function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
+  const entries: Array<Record<string, unknown>> = [];
+  for (const line of fs.readFileSync(transcriptPath, "utf-8").split("\n")) {
+    if (line.length > 0) {
+      entries.push(JSON.parse(line) as Record<string, unknown>);
+    }
+  }
+  return entries;
+}
+
 const bindingMocks = vi.hoisted(() => ({
   resolveByConversation: vi.fn((_ref: unknown) => null as { targetSessionKey?: string } | null),
 }));
@@ -781,18 +791,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     // Agent-run delivery is a live projection; Pi message_end owns persisted
     // assistant transcript entries, including stale media/text final payloads.
-    expect(assistantUpdates).toEqual([]);
-    const transcriptLines = fs
-      .readFileSync(mockState.transcriptPath, "utf-8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(assistantUpdates).toStrictEqual([]);
+    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
     const assistantEntries = transcriptLines.filter(
       (entry) =>
         (entry as { message?: { role?: string } }).message?.role === "assistant" ||
         (entry as { role?: string }).role === "assistant",
     );
-    expect(assistantEntries).toEqual([]);
+    expect(assistantEntries).toStrictEqual([]);
   });
 
   it("does not mirror normal agent-run final text from live delivery", async () => {
@@ -832,18 +838,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     // Normal agent-run final text must not be mirrored into JSONL by WebChat;
     // Pi persists the model-visible assistant turn from message_end.
-    expect(assistantUpdates).toEqual([]);
-    const transcriptLines = fs
-      .readFileSync(mockState.transcriptPath, "utf-8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(assistantUpdates).toStrictEqual([]);
+    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
     const assistantEntries = transcriptLines.filter(
       (entry) =>
         (entry as { message?: { role?: string } }).message?.role === "assistant" ||
         (entry as { role?: string }).role === "assistant",
     );
-    expect(assistantEntries).toEqual([]);
+    expect(assistantEntries).toStrictEqual([]);
   });
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
@@ -927,7 +929,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.dispatchedReplies = [
       {
         kind: "final",
-        payload: { text: "Reasoning:\n_step_", isReasoning: true },
+        payload: { text: "step", isReasoning: true },
       },
       {
         kind: "final",
@@ -2000,7 +2002,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.GatewayClientScopes).toEqual([]);
+    expect(mockState.lastDispatchCtx?.GatewayClientScopes).toStrictEqual([]);
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("/scopecheck");
   });
 
@@ -2230,15 +2232,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             MediaTypes?: string[];
           }
         | undefined;
-      expect(message).toBeDefined();
-      expect(message?.content).toBe("edit these");
-      expect(message?.MediaPath).toBe("/tmp/chat-send-image-a.png");
-      expect(message?.MediaPaths).toEqual([
+      if (!message) {
+        throw new Error("expected user transcript update with media metadata");
+      }
+      expect(message.content).toBe("edit these");
+      expect(message.MediaPath).toBe("/tmp/chat-send-image-a.png");
+      expect(message.MediaPaths).toEqual([
         "/tmp/chat-send-image-a.png",
         "/tmp/chat-send-image-b.jpg",
       ]);
-      expect(message?.MediaType).toBe("image/png");
-      expect(message?.MediaTypes).toEqual(["image/png", "image/jpeg"]);
+      expect(message.MediaType).toBe("image/png");
+      expect(message.MediaTypes).toEqual(["image/png", "image/jpeg"]);
       expect(mockState.lastDispatchCtx?.MediaPath).toBeUndefined();
       expect(mockState.lastDispatchCtx?.MediaPaths).toBeUndefined();
       expect(mockState.lastDispatchImages).toHaveLength(2);
@@ -2421,7 +2425,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           update.message !== null &&
           (update.message as { role?: unknown }).role === "user",
       );
-      expect(mockState.savedMediaCalls).toEqual([]);
+      expect(mockState.savedMediaCalls).toStrictEqual([]);
       expect(userUpdate).toMatchObject({
         message: {
           role: "user",
@@ -2467,9 +2471,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     await waitForAssertion(() => {
       expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
-      expect(
-        mockState.emittedTranscriptUpdates.find((update) => update.message !== undefined),
-      ).toBeDefined();
+      expect(mockState.emittedTranscriptUpdates).toEqual(
+        expect.arrayContaining([expect.objectContaining({ message: expect.any(Object) })]),
+      );
     });
   });
 
@@ -3357,7 +3361,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
-    expect(mockState.savedMediaCalls).toEqual([]);
+    expect(mockState.savedMediaCalls).toStrictEqual([]);
     expect(mockState.lastDispatchImages).toBeUndefined();
     expect(respond).toHaveBeenCalledWith(true, {
       ok: true,
@@ -3429,5 +3433,35 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       });
     });
+  });
+});
+
+describe("chat.send operator UI client sender context", () => {
+  it("does not inject sender identity fields for Control UI clients", async () => {
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-control-ui-sender",
+      message: "hello from control ui",
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            version: "dev",
+            platform: "web",
+          },
+          scopes: ["operator.write"],
+        },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.SenderId).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.SenderName).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.SenderUsername).toBeUndefined();
   });
 });

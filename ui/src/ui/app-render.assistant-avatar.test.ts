@@ -241,8 +241,23 @@ describe("renderApp assistant avatar routing", () => {
     expect(shell?.style.getPropertyValue("--chat-message-max-width")).toBe("min(1280px, 82%)");
   });
 
-  it("does not throw when stale cron state contains a job without a payload", () => {
-    expect(() =>
+  it("passes tools.exec.security to Quick Settings", () => {
+    renderApp(
+      createState({
+        configForm: {
+          tools: { exec: { security: "full" } },
+          agents: { defaults: { exec: { security: "deny" } } },
+        },
+      }),
+    );
+
+    expect(quickSettingsProps.current?.security.execPolicy).toBe("full");
+  });
+
+  it("renders stale cron state containing a job without a payload", () => {
+    const container = document.createElement("div");
+
+    render(
       renderApp(
         createState({
           cronJobs: [
@@ -260,6 +275,9 @@ describe("renderApp assistant avatar routing", () => {
           ],
         }),
       ),
-    ).not.toThrow();
+      container,
+    );
+
+    expect(container.querySelector(".shell")).toBeInstanceOf(HTMLElement);
   });
 });

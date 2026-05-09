@@ -473,7 +473,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
   });
 
   it("ignores notifications that omit top-level thread and turn ids", async () => {
@@ -491,7 +491,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
   });
 
@@ -730,6 +730,86 @@ describe("CodexAppServerEventProjector", () => {
         isError: false,
         result: expect.objectContaining({ exitCode: 0, durationMs: 42 }),
       }),
+    });
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+    expect(result.messagesSnapshot[1]).toMatchObject({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "cmd-1",
+          name: "bash",
+          arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+        },
+      ],
+    });
+    expect(result.messagesSnapshot[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "cmd-1",
+      toolName: "bash",
+      isError: false,
+      content: [
+        expect.objectContaining({
+          type: "toolResult",
+          toolCallId: "cmd-1",
+          content: "ok",
+        }),
+      ],
+    });
+  });
+
+  it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-browser-1",
+      tool: "browser",
+      arguments: { action: "open", url: "http://127.0.0.1:3000" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-browser-1",
+      tool: "browser",
+      success: true,
+      contentItems: [{ type: "inputText", text: "opened" }],
+    });
+    await projector.handleNotification(agentMessageDelta("done"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(result.messagesSnapshot[1]).toMatchObject({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call-browser-1",
+          name: "browser",
+          arguments: { action: "open", url: "http://127.0.0.1:3000" },
+        },
+      ],
+    });
+    expect(result.messagesSnapshot[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-browser-1",
+      toolName: "browser",
+      isError: false,
+      content: [
+        expect.objectContaining({
+          type: "toolResult",
+          toolCallId: "call-browser-1",
+          content: "opened",
+        }),
+      ],
     });
   });
 

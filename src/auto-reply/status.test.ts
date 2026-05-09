@@ -34,6 +34,8 @@ vi.mock("../plugins/commands.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  listPluginCommands.mockReset();
+  listPluginCommands.mockImplementation(() => []);
   MODEL_CONTEXT_TOKEN_CACHE.clear();
 });
 
@@ -1169,7 +1171,9 @@ describe("buildStatusMessage", () => {
     });
 
     const optionsLine = text.split("\n").find((line) => line.trim().startsWith("⚙️"));
-    expect(optionsLine).toBeTruthy();
+    if (!optionsLine) {
+      throw new Error("expected status options line");
+    }
     expect(optionsLine).not.toContain("elevated");
   });
 
@@ -2101,7 +2105,7 @@ describe("buildHelpMessage", () => {
   });
 
   it("includes /fast in help output", () => {
-    expect(buildHelpMessage()).toContain("/fast status|on|off");
+    expect(buildHelpMessage()).toContain("/fast status|on|off|default");
   });
 
   it("includes raw trace mode in help output", () => {
@@ -2129,9 +2133,7 @@ describe("buildCommandsMessagePaginated", () => {
     ];
     listPluginCommands.mockImplementation(() => pluginCommands);
     expect(listPluginCommands()).toEqual(pluginCommands);
-    vi.resetModules();
-    const { buildCommandsMessagePaginated: buildPaginatedCommands } = await import("./status.js");
-    const firstPage = buildPaginatedCommands(
+    const firstPage = buildCommandsMessagePaginated(
       {
         commands: { config: false, debug: false },
       } as unknown as OpenClawConfig,
@@ -2139,7 +2141,7 @@ describe("buildCommandsMessagePaginated", () => {
       { surface: "telegram", page: 1, forcePaginatedList: true },
     );
     const pages = Array.from({ length: firstPage.totalPages }, (_, index) =>
-      buildPaginatedCommands(
+      buildCommandsMessagePaginated(
         {
           commands: { config: false, debug: false },
         } as unknown as OpenClawConfig,
@@ -2148,8 +2150,10 @@ describe("buildCommandsMessagePaginated", () => {
       ),
     );
     const pluginPage = pages.find((page) => page.text.includes("/plugin_cmd (demo-plugin)"));
-    expect(pluginPage).toBeTruthy();
-    expect(pluginPage?.text).toContain("Plugins");
-    expect(pluginPage?.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
+    if (!pluginPage) {
+      throw new Error("expected plugin command page");
+    }
+    expect(pluginPage.text).toContain("Plugins");
+    expect(pluginPage.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
   });
 });

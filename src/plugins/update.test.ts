@@ -12,6 +12,24 @@ function appBundledPluginRoot(pluginId: string): string {
   return bundledPluginRootAt(APP_ROOT, pluginId);
 }
 
+function requireExpectedPluginId(params: { expectedPluginId?: string }): string {
+  if (!params.expectedPluginId) {
+    throw new Error("Expected npm install params to include expectedPluginId");
+  }
+  return params.expectedPluginId;
+}
+
+function requirePluginPackageName(
+  plugins: Array<{ pluginId: string; packageName: string }>,
+  pluginId: string,
+): string {
+  const plugin = plugins.find((candidate) => candidate.pluginId === pluginId);
+  if (!plugin) {
+    throw new Error(`Expected plugin fixture ${pluginId}`);
+  }
+  return plugin.packageName;
+}
+
 const installPluginFromNpmSpecMock = vi.fn();
 const installPluginFromMarketplaceMock = vi.fn();
 const installPluginFromClawHubMock = vi.fn();
@@ -872,12 +890,12 @@ describe("updateNpmInstalledPlugins", () => {
     }
     installPluginFromNpmSpecMock.mockImplementation(
       (params: { expectedPluginId?: string; spec: string }) => {
-        const pluginId = params.expectedPluginId!;
+        const pluginId = requireExpectedPluginId(params);
         for (const { pluginId: installedPluginId } of plugins) {
           fs.rmSync(peerLinkPath(installedPluginId), { recursive: true, force: true });
         }
         linkPeer(pluginId);
-        const packageName = plugins.find((plugin) => plugin.pluginId === pluginId)!.packageName;
+        const packageName = requirePluginPackageName(plugins, pluginId);
         return Promise.resolve(
           createSuccessfulNpmUpdateResult({
             pluginId,
@@ -2734,7 +2752,7 @@ describe("syncPluginsForUpdateChannel", () => {
 
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
       expect(result.changed).toBe(expectedChanged);
-      expect(result.summary.switchedToNpm).toEqual([]);
+      expect(result.summary.switchedToNpm).toStrictEqual([]);
       expect(result.config.plugins?.load?.paths).toEqual(expectedLoadPaths);
       expectBundledPathInstall({
         install: result.config.plugins?.installs?.feishu,
@@ -2868,8 +2886,8 @@ describe("syncPluginsForUpdateChannel", () => {
     );
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
-    expect(result.summary.errors).toEqual([]);
-    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.summary.errors).toStrictEqual([]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
     expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
       source: "npm",
       spec: "@openclaw/legacy-chat",
@@ -2981,9 +2999,9 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToClawHub).toEqual(["legacy-chat"]);
-    expect(result.summary.switchedToNpm).toEqual([]);
-    expect(result.summary.errors).toEqual([]);
-    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.summary.switchedToNpm).toStrictEqual([]);
+    expect(result.summary.errors).toStrictEqual([]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
     expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
       source: "clawhub",
       spec: "clawhub:legacy-chat@2026.5.1-beta.2",
@@ -3064,12 +3082,12 @@ describe("syncPluginsForUpdateChannel", () => {
       }),
     );
     expect(result.changed).toBe(true);
-    expect(result.summary.switchedToClawHub).toEqual([]);
+    expect(result.summary.switchedToClawHub).toStrictEqual([]);
     expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
     expect(result.summary.warnings).toEqual([
       "ClawHub clawhub:legacy-chat@2026.5.1-beta.2 unavailable for legacy-chat; falling back to npm @openclaw/legacy-chat.",
     ]);
-    expect(result.summary.errors).toEqual([]);
+    expect(result.summary.errors).toStrictEqual([]);
     expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
       source: "npm",
       spec: "@openclaw/legacy-chat",

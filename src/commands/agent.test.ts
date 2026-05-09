@@ -9,6 +9,7 @@ import * as attemptExecutionRuntime from "../agents/command/attempt-execution.ru
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,7 +19,10 @@ import {
   resetAgentEventsForTest,
   resetAgentRunContextForTest,
 } from "../infra/agent-events.js";
+import type { PluginProviderRegistration } from "../plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -26,11 +30,18 @@ const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
 }));
+const pluginRegistryMocks = vi.hoisted(() => ({
+  ensurePluginRegistryLoaded: vi.fn(),
+}));
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: configIoMocks.loadConfig,
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
+}));
+
+vi.mock("../plugins/runtime/runtime-registry-loader.js", () => ({
+  ensurePluginRegistryLoaded: pluginRegistryMocks.ensurePluginRegistryLoaded,
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => {
@@ -186,12 +197,15 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
   };
   const joinPath = (...parts: string[]): string => {
     const separator = parts.some((part) => part.includes("\\")) ? "\\" : "/";
-    return parts
-      .map((part, index) =>
-        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, ""),
-      )
-      .filter(Boolean)
-      .join(separator);
+    const normalizedParts: string[] = [];
+    for (const [index, part] of parts.entries()) {
+      const normalized =
+        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, "");
+      if (normalized.length > 0) {
+        normalizedParts.push(normalized);
+      }
+    }
+    return normalizedParts.join(separator);
   };
   const resolveSessionFile = (sessionId: string, agentId: string, sessionsDir?: string): string =>
     joinPath(sessionsDir ?? ".openclaw", "agents", agentId, "sessions", `${sessionId}.jsonl`);
@@ -234,7 +248,11 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
 const runtime = createThrowingTestRuntime();
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-agent-", skipSessionCleanup: true });
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-agent-",
+    skipHomeCleanup: true,
+    skipSessionCleanup: true,
+  });
 }
 
 function mockConfig(
@@ -307,8 +325,30 @@ function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalo
   vi.mocked(loadModelCatalog).mockResolvedValueOnce(entries);
 }
 
+function installThinkingTestProviders() {
+  const registry = createTestRegistry();
+  registry.providers = ["anthropic", "codex", "ollama", "openai", "openrouter"].map(
+    (providerId): PluginProviderRegistration => ({
+      pluginId: providerId,
+      source: "test",
+      provider: {
+        id: providerId,
+        label: providerId,
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: BASE_THINKING_LEVELS.map((id) => ({ id })),
+          defaultLevel: "off",
+        }),
+      },
+    }),
+  );
+  setActivePluginRegistry(registry);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  resetPluginRuntimeStateForTest();
+  installThinkingTestProviders();
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest();
   resetAgentRunContextForTest();
@@ -325,6 +365,61 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it("enables the Codex runtime plugin for one-shot OpenAI model overrides", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      mockConfig(home, storePath, { models: undefined });
+
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "main",
+          model: "openai/gpt-5.2",
+          allowModelOverride: true,
+        },
+        runtime,
+      );
+
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+        scope: "all",
+        config: expect.any(Object),
+        activationSourceConfig: expect.any(Object),
+        workspaceDir: path.join(home, "openclaw"),
+        onlyPluginIds: ["codex"],
+      });
+      expectLastRunProviderModel("openai", "gpt-5.2");
+    });
+  });
+
+  it("does not enable Codex for one-shot OpenAI overrides when the provider forces PI", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, storePath, { models: undefined });
+      cfg.models = {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "pi" },
+            models: [],
+          },
+        },
+      };
+
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "main",
+          model: "openai/gpt-5.2",
+          allowModelOverride: true,
+        },
+        runtime,
+      );
+
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+      expectLastRunProviderModel("openai", "gpt-5.2");
+    });
+  });
+
   it("enforces ingress trust flags", async () => {
     await expect(
       // Runtime guard for non-TS callers; TS callsites are statically typed.

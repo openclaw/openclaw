@@ -14,6 +14,7 @@ import { resolveCronCreateSchedule } from "./schedule-options.js";
 import {
   getCronChannelOptions,
   coerceCronDeliveryPreviews,
+  enrichCronJsonWithStatus,
   handleCronCliError,
   parseCronToolsAllow,
   printCronJson,
@@ -58,7 +59,7 @@ export function registerCronListCommand(cron: Command) {
           }
           const res = await callGatewayFromCli("cron.list", opts, listParams);
           if (opts.json) {
-            printCronJson(res);
+            printCronJson(enrichCronJsonWithStatus(res));
             return;
           }
           const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
@@ -231,7 +232,7 @@ export function registerCronAddCommand(cron: Command) {
 
           const name = normalizeOptionalString(opts.name) ?? "";
           if (!name) {
-            throw new Error("--name is required");
+            throw new Error("Cron job name is required. Pass --name <name>.");
           }
 
           const description = normalizeOptionalString(opts.description);

@@ -50,12 +50,18 @@ function restoreDescriptor(name: "showModal" | "close", descriptor?: PropertyDes
 
 async function getRenderedDialog() {
   const modal = container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
-  expect(modal).not.toBeNull();
-  await modal!.updateComplete;
+  expect(modal).toBeInstanceOf(HTMLElement);
+  if (!modal) {
+    throw new Error("Expected openclaw-modal-dialog");
+  }
+  await modal.updateComplete;
   await nextFrame();
-  const dialog = modal!.shadowRoot?.querySelector("dialog");
-  expect(dialog).not.toBeNull();
-  return { modal: modal!, dialog: dialog! };
+  const dialog = modal.shadowRoot?.querySelector("dialog");
+  expect(dialog).toBeInstanceOf(HTMLDialogElement);
+  if (!(dialog instanceof HTMLDialogElement)) {
+    throw new Error("Expected rendered dialog");
+  }
+  return { modal, dialog };
 }
 
 function dispatchEscape(target: EventTarget) {
@@ -141,6 +147,27 @@ describe("approval and confirmation modals", () => {
     );
   });
 
+  it("renders command spans in exec approvals", async () => {
+    const request = createExecRequest();
+    request.request.command = 'ls | grep "stuff" | python -c \'print("hi")\'';
+    request.request.commandSpans = [
+      { startIndex: 0, endIndex: 2 },
+      { startIndex: 5, endIndex: 5 },
+      { startIndex: 8.5, endIndex: 10 },
+      { startIndex: 20, endIndex: 29 },
+      { startIndex: 30, endIndex: 200 },
+    ];
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    const spans = [...container.querySelectorAll(".exec-approval-command-span")].map(
+      (span) => span.textContent,
+    );
+    expect(spans).toEqual(["ls", "python -c"]);
+  });
+
   it("maps Escape to exec denial when approval is idle", async () => {
     const handleExecApprovalDecision = vi.fn(async () => undefined);
     render(renderExecApprovalPrompt(createExecState({ handleExecApprovalDecision })), container);
@@ -221,7 +248,6 @@ describe("approval and confirmation modals", () => {
     );
 
     const { dialog } = await getRenderedDialog();
-    expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
     dispatchEscape(dialog);
 
@@ -242,7 +268,6 @@ describe("approval and confirmation modals", () => {
     );
 
     const { dialog } = await getRenderedDialog();
-    expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
     dispatchEscape(dialog);
 

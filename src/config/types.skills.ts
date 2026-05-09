@@ -13,6 +13,11 @@ export type SkillsLoadConfig = {
    * Each directory should contain skill subfolders with `SKILL.md`.
    */
   extraDirs?: string[];
+  /**
+   * Real target directories that skill symlinks may resolve into even when they
+   * sit outside the configured source root.
+   */
+  allowSymlinkTargets?: string[];
   /** Watch skill folders for changes and refresh the skills snapshot. */
   watch?: boolean;
   /** Debounce for the skills watcher (ms). */

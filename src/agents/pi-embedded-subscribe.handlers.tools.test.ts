@@ -61,6 +61,7 @@ function createTestContext(): {
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
       deterministicApprovalPromptSent: false,
+      toolExecutionSinceLastBlockReply: false,
     },
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -70,6 +71,27 @@ function createTestContext(): {
   };
 
   return { ctx, warn, onBlockReplyFlush, onAgentEvent };
+}
+
+type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
+
+function requireEvent(
+  events: CapturedAgentEvent[],
+  predicate: (event: CapturedAgentEvent) => boolean,
+  label: string,
+): CapturedAgentEvent {
+  const event = events.find(predicate);
+  if (!event) {
+    throw new Error(`expected ${label} event`);
+  }
+  return event;
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
 }
 
 describe("handleToolExecutionStart read path checks", () => {
@@ -755,6 +777,119 @@ describe("handleToolExecutionEnd derived tool events", () => {
     );
   });
 
+  it("caps and throttles exec update output before live events", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+    const largeOutput = "x".repeat(9000);
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-update",
+        args: { command: "yes" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-update",
+        partialResult: {
+          details: {
+            status: "running",
+            aggregated: largeOutput,
+          },
+        },
+      } as never,
+    );
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-update",
+        partialResult: {
+          details: {
+            status: "running",
+            aggregated: `${largeOutput}again`,
+          },
+        },
+      } as never,
+    );
+
+    const updateEvents = events.filter(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "update",
+    );
+    expect(updateEvents).toHaveLength(1);
+    const partialResult = updateEvents[0]?.data?.partialResult as
+      | { details?: { aggregated?: string } }
+      | undefined;
+    expect(partialResult?.details?.aggregated).toContain("...(live output truncated)...");
+    expect(partialResult?.details?.aggregated?.length).toBeLessThan(largeOutput.length);
+
+    const commandOutputCalls = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
+    expect(commandOutputCalls).toHaveLength(1);
+    const output = (commandOutputCalls[0] as { data?: { output?: string } }).data?.output;
+    expect(output).toContain("...(live output truncated)...");
+    expect(output?.length).toBeLessThan(largeOutput.length);
+
+    resetAgentEventsForTest();
+  });
+
+  it("caps exec final output before result and command output events", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+    const largeOutput = "z".repeat(9000);
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-large-result",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            aggregated: largeOutput,
+            exitCode: 0,
+          },
+        },
+      } as never,
+    );
+
+    const resultEvent = events.find(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+    );
+    const result = resultEvent?.data?.result as { details?: { aggregated?: string } } | undefined;
+    expect(result?.details?.aggregated).toContain("...(live output truncated)...");
+    expect(result?.details?.aggregated?.length).toBeLessThan(largeOutput.length);
+
+    const commandOutputCalls = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
+    const output = (commandOutputCalls.at(-1) as { data?: { output?: string } } | undefined)?.data
+      ?.output;
+    expect(output).toContain("...(live output truncated)...");
+    expect(output?.length).toBeLessThan(largeOutput.length);
+
+    resetAgentEventsForTest();
+  });
+
   it("emits command output events for exec results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
@@ -1125,11 +1260,12 @@ describe("control UI credential redaction (issue #72283)", () => {
       } as never,
     );
 
-    const startEvent = events.find(
+    const startEvent = requireEvent(
+      events,
       (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "start",
+      "tool start",
     );
-    expect(startEvent).toBeDefined();
-    const emittedArgs = (startEvent?.data as { args?: Record<string, unknown> })?.args ?? {};
+    const emittedArgs = (startEvent.data as { args?: Record<string, unknown> })?.args ?? {};
     const serialized = JSON.stringify(emittedArgs);
     expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
     expect(serialized).not.toContain("abcdef0123456789QWERTY=");
@@ -1174,10 +1310,10 @@ describe("control UI credential redaction (issue #72283)", () => {
       .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
     expect(commandOutputCalls.length).toBeGreaterThan(0);
     const lastOutput = commandOutputCalls.at(-1) as { data?: { output?: string } } | undefined;
-    expect(lastOutput?.data?.output).toBeDefined();
-    expect(lastOutput?.data?.output).not.toContain("sk-or-v1-abcdef0123456789");
-    expect(lastOutput?.data?.output).not.toContain("ghp_abcdefghij1234567890");
-    expect(lastOutput?.data?.output).toContain("OPENROUTER_API_KEY=");
+    const output = requireString(lastOutput?.data?.output, "command output");
+    expect(output).not.toContain("sk-or-v1-abcdef0123456789");
+    expect(output).not.toContain("ghp_abcdefghij1234567890");
+    expect(output).toContain("OPENROUTER_API_KEY=");
   });
 
   it("redacts details-only results before emitting the tool result event", async () => {
@@ -1202,11 +1338,12 @@ describe("control UI credential redaction (issue #72283)", () => {
       } as never,
     );
 
-    const resultEvent = events.find(
+    const resultEvent = requireEvent(
+      events,
       (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+      "tool result",
     );
-    expect(resultEvent).toBeDefined();
-    const serialized = JSON.stringify(resultEvent?.data?.result);
+    const serialized = JSON.stringify(resultEvent.data?.result);
     expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
     expect(serialized).toContain("gpt-4");
   });
@@ -1229,11 +1366,12 @@ describe("control UI credential redaction (issue #72283)", () => {
       } as never,
     );
 
-    const resultEvent = events.find(
+    const resultEvent = requireEvent(
+      events,
       (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+      "tool result",
     );
-    expect(resultEvent).toBeDefined();
-    const emittedResult = resultEvent?.data?.result;
+    const emittedResult = resultEvent.data?.result;
     expect(typeof emittedResult).toBe("string");
     if (typeof emittedResult !== "string") {
       throw new Error("expected string result");

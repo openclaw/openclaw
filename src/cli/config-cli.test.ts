@@ -282,6 +282,39 @@ describe("config cli", () => {
       });
     });
 
+    it("normalizes retired Google Gemini model refs before writing config mutations", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            models: {
+              "google/gemini-3-pro-preview": { alias: "gemini" },
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.defaults.model.primary",
+        "google/gemini-3-pro-preview",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.model).toEqual({
+        primary: "google/gemini-3.1-pro-preview",
+        fallbacks: ["google/gemini-3.1-pro-preview"],
+      });
+      expect(written.agents?.defaults?.models).toEqual({
+        "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+    });
+
     it("rejects plugin install record config updates", async () => {
       await expect(
         runConfigCommand([
@@ -529,7 +562,7 @@ describe("config cli", () => {
 
       await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
 
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config invalid at"));
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("config is invalid"));
       expect(mockError).toHaveBeenCalledWith(
         expect.stringContaining("agents.defaults.suppressToolErrorWarnings"),
       );
@@ -673,7 +706,10 @@ describe("config cli", () => {
         properties?: Record<string, unknown>;
       };
       expect(payload.properties?.$schema).toEqual({ type: "string" });
-      expect(payload.properties?.channels).toBeTruthy();
+      expect(payload.properties?.channels).toMatchObject({
+        type: "object",
+        properties: { telegram: { type: "object" } },
+      });
       expect(payload.properties?.plugins).toBeUndefined();
       expect(mockError).not.toHaveBeenCalled();
     });
@@ -735,7 +771,7 @@ describe("config cli", () => {
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
 
-    it("shows --strict-json and keeps --json as a legacy alias in help", async () => {
+    it("shows --strict-json and keeps --json as a legacy alias in help", () => {
       const program = new Command();
       registerConfigCli(program);
 
@@ -1972,10 +2008,11 @@ describe("config cli", () => {
         errors?: Array<{ kind: string; message: string; ref?: string }>;
       };
       expect(payload.ok).toBe(false);
-      expect(payload.errors?.some((entry) => entry.kind === "resolvability")).toBe(true);
-      expect(
-        payload.errors?.some((entry) => entry.ref?.includes("default:DISCORD_BOT_TOKEN")),
-      ).toBe(true);
+      const errorKinds = (payload.errors ?? []).map((entry) => entry.kind);
+      expect(errorKinds).toContain("resolvability");
+      const errorRefs = (payload.errors ?? []).map((entry) => entry.ref ?? "");
+      const discordTokenRefs = errorRefs.filter((ref) => ref.includes("default:DISCORD_BOT_TOKEN"));
+      expect(discordTokenRefs.length).toBeGreaterThan(0);
     });
 
     it("keeps distinct resolvability failures when messages are identical but refs differ", async () => {
@@ -2048,11 +2085,11 @@ describe("config cli", () => {
         errors?: Array<{ kind: string; message: string; ref?: string }>;
       };
       expect(payload.ok).toBe(false);
-      expect(payload.errors?.some((entry) => entry.kind === "schema")).toBe(true);
-      expect(payload.errors?.some((entry) => entry.kind === "resolvability")).toBe(true);
-      expect(
-        payload.errors?.some((entry) => entry.ref?.includes("default:DISCORD_BOT_TOKEN")),
-      ).toBe(true);
+      const errorKinds = (payload.errors ?? []).map((entry) => entry.kind);
+      expect(errorKinds).toEqual(expect.arrayContaining(["schema", "resolvability"]));
+      const errorRefs = (payload.errors ?? []).map((entry) => entry.ref ?? "");
+      const discordTokenRefs = errorRefs.filter((ref) => ref.includes("default:DISCORD_BOT_TOKEN"));
+      expect(discordTokenRefs.length).toBeGreaterThan(0);
     });
 
     it("fails dry-run when provider updates make existing refs unresolvable", async () => {

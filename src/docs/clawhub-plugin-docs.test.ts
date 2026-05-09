@@ -40,9 +40,11 @@ describe("ClawHub plugin docs", () => {
       ),
     ) as { id?: unknown; configSchema?: unknown };
 
-    expect(validateExternalCodePluginPackageJson(packageJson).issues).toEqual([]);
+    expect(validateExternalCodePluginPackageJson(packageJson).issues).toStrictEqual([]);
     expect(typeof pluginManifest.id).toBe("string");
-    expect(pluginManifest.configSchema).toBeTruthy();
+    expect(pluginManifest.configSchema).not.toBeNull();
+    expect(typeof pluginManifest.configSchema).toBe("object");
+    expect(Array.isArray(pluginManifest.configSchema)).toBe(false);
   });
 
   it("does not tell plugin authors to use bare clawhub publish", async () => {

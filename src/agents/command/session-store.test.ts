@@ -383,8 +383,12 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(persisted?.acp).toBeDefined();
-      expect(staleInMemory[sessionKey]?.acp).toBeDefined();
+      expect(persisted?.acp?.backend).toBe("acpx");
+      expect(persisted?.acp?.agent).toBe("codex");
+      expect(persisted?.acp?.runtimeSessionName).toBe("runtime-1");
+      expect(persisted?.acp?.mode).toBe("persistent");
+      expect(persisted?.acp?.state).toBe("idle");
+      expect(staleInMemory[sessionKey]?.acp).toEqual(persisted?.acp);
     });
   });
 
@@ -433,14 +437,12 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(persisted).toMatchObject({
-        status: "done",
-        startedAt: 1_000,
-        endedAt: 1_900,
-        runtimeMs: 900,
-        modelProvider: "openai",
-        model: "gpt-5.4",
-      });
+      expect(persisted?.status).toBe("done");
+      expect(persisted?.startedAt).toBe(1_000);
+      expect(persisted?.endedAt).toBe(1_900);
+      expect(persisted?.runtimeMs).toBe(900);
+      expect(persisted?.modelProvider).toBe("openai");
+      expect(persisted?.model).toBe("gpt-5.4");
       expect(staleInMemory[sessionKey]?.status).toBe("done");
     });
   });

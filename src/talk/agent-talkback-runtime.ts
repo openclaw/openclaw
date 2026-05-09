@@ -6,7 +6,7 @@ export type RealtimeVoiceAgentTalkbackResult = {
 
 export type RealtimeVoiceAgentTalkbackQueue = {
   close(): void;
-  enqueue(question: string): void;
+  enqueue(question: string, metadata?: unknown): void;
 };
 
 export type RealtimeVoiceAgentTalkbackQueueParams = {
@@ -18,17 +18,23 @@ export type RealtimeVoiceAgentTalkbackQueueParams = {
   fallbackText: string;
   consult: (args: {
     question: string;
+    metadata?: unknown;
     responseStyle: string;
     signal: AbortSignal;
   }) => Promise<RealtimeVoiceAgentTalkbackResult>;
   deliver: (text: string) => void;
 };
 
+type PendingQuestion = {
+  question: string;
+  metadata?: unknown;
+};
+
 export function createRealtimeVoiceAgentTalkbackQueue(
   params: RealtimeVoiceAgentTalkbackQueueParams,
 ): RealtimeVoiceAgentTalkbackQueue {
   let active = false;
-  let pendingQuestion: string | undefined;
+  let pendingQuestions: PendingQuestion[] = [];
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let activeAbortController: AbortController | undefined;
 
@@ -40,38 +46,51 @@ export function createRealtimeVoiceAgentTalkbackQueue(
     debounceTimer = undefined;
   };
 
-  const run = async (question: string): Promise<void> => {
-    const trimmed = question.trim();
+  const run = async (pending: PendingQuestion): Promise<void> => {
+    const trimmed = pending.question.trim();
     if (!trimmed || params.isStopped()) {
       return;
     }
     if (active) {
-      pendingQuestion = appendPendingQuestion(pendingQuestion, trimmed);
+      appendPendingQuestion(pendingQuestions, {
+        question: trimmed,
+        metadata: pending.metadata,
+      });
       return;
     }
 
     active = true;
-    let nextQuestion: string | undefined = trimmed;
+    let nextQuestion: PendingQuestion | undefined = {
+      question: trimmed,
+      metadata: pending.metadata,
+    };
+    let consultStartedAt: number | undefined;
     try {
       while (nextQuestion) {
         if (params.isStopped()) {
           return;
         }
         const currentQuestion = nextQuestion;
-        pendingQuestion = undefined;
-        params.logger.info(`${params.logPrefix} consult: chars=${currentQuestion.length}`);
+        consultStartedAt = Date.now();
+        params.logger.info(
+          `${params.logPrefix} consult: chars=${currentQuestion.question.length} queued=${pendingQuestions.length}`,
+        );
         activeAbortController = new AbortController();
         const result = await params.consult({
-          question: currentQuestion,
+          question: currentQuestion.question,
+          metadata: currentQuestion.metadata,
           responseStyle: params.responseStyle,
           signal: activeAbortController.signal,
         });
         activeAbortController = undefined;
         const text = result.text.trim();
+        params.logger.info(
+          `${params.logPrefix} consult done: elapsedMs=${Date.now() - consultStartedAt} answerChars=${text.length} queued=${pendingQuestions.length}`,
+        );
         if (!params.isStopped() && text) {
           params.deliver(text);
         }
-        nextQuestion = pendingQuestion;
+        nextQuestion = pendingQuestions.shift();
       }
     } catch (error) {
       activeAbortController = undefined;
@@ -79,12 +98,13 @@ export function createRealtimeVoiceAgentTalkbackQueue(
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
-      params.logger.warn(`${params.logPrefix} consult failed: ${message}`);
+      const elapsedDetail =
+        consultStartedAt === undefined ? "" : ` elapsedMs=${Date.now() - consultStartedAt}`;
+      params.logger.warn(`${params.logPrefix} consult failed:${elapsedDetail} ${message}`);
       params.deliver(params.fallbackText);
     } finally {
       active = false;
-      const queuedQuestion = pendingQuestion;
-      pendingQuestion = undefined;
+      const queuedQuestion = pendingQuestions.shift();
       if (queuedQuestion && !params.isStopped()) {
         void run(queuedQuestion);
       }
@@ -94,25 +114,27 @@ export function createRealtimeVoiceAgentTalkbackQueue(
   return {
     close: () => {
       clearDebounceTimer();
-      pendingQuestion = undefined;
+      pendingQuestions = [];
       activeAbortController?.abort();
     },
-    enqueue: (question) => {
+    enqueue: (question, metadata) => {
       const trimmed = question.trim();
       if (!trimmed || params.isStopped()) {
         return;
       }
       if (active) {
-        pendingQuestion = appendPendingQuestion(pendingQuestion, trimmed);
+        appendPendingQuestion(pendingQuestions, { question: trimmed, metadata });
+        params.logger.info(
+          `${params.logPrefix} consult queued: chars=${trimmed.length} queued=${pendingQuestions.length}`,
+        );
         clearDebounceTimer();
         return;
       }
-      pendingQuestion = appendPendingQuestion(pendingQuestion, trimmed);
+      appendPendingQuestion(pendingQuestions, { question: trimmed, metadata });
       clearDebounceTimer();
       debounceTimer = setTimeout(() => {
         debounceTimer = undefined;
-        const queuedQuestion = pendingQuestion;
-        pendingQuestion = undefined;
+        const queuedQuestion = pendingQuestions.shift();
         if (queuedQuestion && !params.isStopped()) {
           void run(queuedQuestion);
         }
@@ -122,8 +144,13 @@ export function createRealtimeVoiceAgentTalkbackQueue(
   };
 }
 
-function appendPendingQuestion(current: string | undefined, next: string): string {
-  return current ? `${current}\n${next}` : next;
+function appendPendingQuestion(queue: PendingQuestion[], next: PendingQuestion): void {
+  const current = queue.at(-1);
+  if (current && Object.is(current.metadata, next.metadata)) {
+    current.question = `${current.question}\n${next.question}`;
+    return;
+  }
+  queue.push(next);
 }
 
 function isAbortError(error: unknown): boolean {

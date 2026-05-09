@@ -10,6 +10,7 @@ import {
   collectMissingPluginInstallPayloads,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
+  resolvePostCoreUpdateChildStdio,
   resolvePostInstallDoctorEnv,
   shouldPrepareUpdatedInstallRestart,
   resolveUpdatedGatewayRestartPort,
@@ -248,7 +249,7 @@ describe("collectMissingPluginInstallPayloads", () => {
             },
           },
         }),
-      ).resolves.toEqual([]);
+      ).resolves.toStrictEqual([]);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -542,5 +543,19 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       health: { healthy: false, waitOutcome: "timeout" },
       launchAgentRecovery: { attempted: true, recovered: true },
     });
+  });
+});
+
+describe("resolvePostCoreUpdateChildStdio", () => {
+  it('returns "pipe" on Windows so the child never inherits the parent console handles', () => {
+    // On Windows, stdio:"inherit" passes the parent's console HANDLE to the child process.
+    // PowerShell/CMD will not return the prompt until every holder of those handles exits,
+    // causing the terminal to hang after `openclaw update` completes (#78445).
+    expect(resolvePostCoreUpdateChildStdio("win32")).toBe("pipe");
+  });
+
+  it('returns "inherit" on non-Windows platforms', () => {
+    expect(resolvePostCoreUpdateChildStdio("linux")).toBe("inherit");
+    expect(resolvePostCoreUpdateChildStdio("darwin")).toBe("inherit");
   });
 });

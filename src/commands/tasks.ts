@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -46,6 +47,10 @@ const ID_PAD = 10;
 const RUN_PAD = 10;
 
 const info = theme.info;
+
+function formatTaskLookupMiss(lookup: string): string {
+  return `Task not found: ${lookup}. Run ${formatCliCommand("openclaw tasks list")} to see recent task ids.`;
+}
 
 async function loadTaskCancelConfig() {
   return getRuntimeConfig();
@@ -228,7 +233,7 @@ function toSystemAuditFindings(params: {
   severityFilter?: TaskSystemAuditSeverity;
   codeFilter?: TaskSystemAuditCode;
 }) {
-  const taskFindings = listTaskAuditFindings();
+  const taskFindings = listTaskAuditFindings({ tasks: reconcileInspectableTasks() });
   const flowFindings = listTaskFlowAuditFindings();
   const allFindings: TaskSystemAuditFinding[] = [
     ...taskFindings.map((finding) => ({
@@ -320,7 +325,9 @@ export async function tasksListCommand(
     runtime.log(info(`Status filter: ${statusFilter}`));
   }
   if (tasks.length === 0) {
-    runtime.log("No background tasks found.");
+    runtime.log(
+      `No background tasks found. Run ${formatCliCommand("openclaw tasks audit")} to check for stale task state.`,
+    );
     return;
   }
   const rich = isRich();
@@ -335,7 +342,7 @@ export async function tasksShowCommand(
 ) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
-    runtime.error(`Task not found: ${opts.lookup}`);
+    runtime.error(formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
@@ -381,7 +388,7 @@ export async function tasksNotifyCommand(
 ) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
-    runtime.error(`Task not found: ${opts.lookup}`);
+    runtime.error(formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
@@ -390,7 +397,7 @@ export async function tasksNotifyCommand(
     notifyPolicy: opts.notify,
   });
   if (!updated) {
-    runtime.error(`Task not found: ${opts.lookup}`);
+    runtime.error(formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
@@ -400,7 +407,7 @@ export async function tasksNotifyCommand(
 export async function tasksCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
-    runtime.error(`Task not found: ${opts.lookup}`);
+    runtime.error(formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
@@ -409,7 +416,7 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     taskId: task.taskId,
   });
   if (!result.found) {
-    runtime.error(result.reason ?? `Task not found: ${opts.lookup}`);
+    runtime.error(result.reason ?? formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }

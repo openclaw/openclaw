@@ -248,7 +248,7 @@ describe("mattermostPlugin", () => {
       };
 
       const actions = getDescribedActions(cfg);
-      expect(actions).toEqual([]);
+      expect(actions).toStrictEqual([]);
     });
 
     it("declares presentation capability for message sends", () => {
@@ -367,7 +367,7 @@ describe("mattermostPlugin", () => {
       const result = await runReactAction({ messageId: "POST1", emoji: "thumbsup" }, "add");
 
       expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
-      expect(result?.details).toEqual({});
+      expect(result?.details).toStrictEqual({});
     });
 
     it("only treats boolean remove flag as removal", async () => {
@@ -388,7 +388,7 @@ describe("mattermostPlugin", () => {
       expect(result?.content).toEqual([
         { type: "text", text: "Removed reaction :thumbsup: from POST1" },
       ]);
-      expect(result?.details).toEqual({});
+      expect(result?.details).toStrictEqual({});
     });
 
     it("maps replyTo to replyToId for send actions", async () => {
@@ -449,7 +449,6 @@ describe("mattermostPlugin", () => {
     it("chunks outbound text without requiring Mattermost runtime initialization", () => {
       const chunker = requireMattermostChunker();
 
-      expect(() => chunker("hello world", 5)).not.toThrow();
       expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
     });
 

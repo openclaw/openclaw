@@ -336,7 +336,14 @@ describe("subagent registry archive behavior", () => {
 
     expect(replaced).toBe(true);
     await vi.waitFor(async () => {
-      await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
+      let err: unknown;
+      try {
+        await fs.access(attachmentsDir);
+      } catch (caught) {
+        err = caught;
+      }
+      expect(err).toBeInstanceOf(Error);
+      expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
     });
   });
 

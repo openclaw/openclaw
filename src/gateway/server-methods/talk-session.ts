@@ -646,6 +646,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         connId,
         callId: params.callId,
         result: params.result,
+        options: params.options,
       });
       respond(true, { ok: true }, undefined);
     } catch (err) {

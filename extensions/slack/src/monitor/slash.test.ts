@@ -287,10 +287,13 @@ function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
 }
 
 function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
   const promise = new Promise<T>((res) => {
     resolve = res;
   });
+  if (!resolve) {
+    throw new Error("Expected Slack slash deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -409,7 +412,11 @@ function expectArgMenuLayout(respond: ReturnType<typeof vi.fn>): {
   expect(payload.blocks?.[0]?.type).toBe("header");
   expect(payload.blocks?.[1]?.type).toBe("section");
   expect(payload.blocks?.[2]?.type).toBe("context");
-  return findFirstActionsBlock(payload) ?? { type: "actions", elements: [] };
+  const actions = findFirstActionsBlock(payload);
+  if (!actions) {
+    throw new Error("actions block missing");
+  }
+  return actions;
 }
 
 function expectSingleDispatchedSlashBody(expectedBody: string) {
@@ -440,7 +447,11 @@ async function getFirstActionElementFromCommand(handler: (args: unknown) => Prom
   expect(respond).toHaveBeenCalledTimes(1);
   const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
   const actions = findFirstActionsBlock(payload);
-  return actions?.elements?.[0];
+  const element = actions?.elements?.[0];
+  if (!element) {
+    throw new Error("first action element missing");
+  }
+  return element;
 }
 
 async function runArgMenuAction(
@@ -596,11 +607,10 @@ describe("Slack native command argument menus", () => {
 
     // The /reportexternal command (140 choices) should fall back to static_select
     // instead of external_select since options registration failed
-    const handler = commands.get("/reportexternal");
-    expect(handler).toBeDefined();
+    const handler = requireHandler(commands, "/reportexternal", "/reportexternal");
     const respond = vi.fn().mockResolvedValue(undefined);
     const ack = vi.fn().mockResolvedValue(undefined);
-    await handler!({
+    await handler({
       command: createSlashCommand(),
       ack,
       respond,
@@ -619,7 +629,7 @@ describe("Slack native command argument menus", () => {
     expect(elementType).toBe("button");
     expect(actions?.elements?.[0]?.action_id).toBe("openclaw_cmdarg_0_0");
     expect(actions?.elements?.[1]?.action_id).toBe("openclaw_cmdarg_0_1");
-    expect(actions?.elements?.[0]?.confirm).toBeTruthy();
+    expect(actions?.elements?.[0]).toHaveProperty("confirm");
   });
 
   it("shows a static_select menu when choices exceed button row size", async () => {
@@ -628,7 +638,7 @@ describe("Slack native command argument menus", () => {
     const element = actions?.elements?.[0];
     expect(element?.type).toBe("static_select");
     expect(element?.action_id).toBe("openclaw_cmdarg");
-    expect(element?.confirm).toBeTruthy();
+    expect(element).toHaveProperty("confirm");
   });
 
   it("uses static_select when encoded values fit Slack option limits", async () => {
@@ -643,7 +653,7 @@ describe("Slack native command argument menus", () => {
     const longOption = firstElement?.options?.find((option) => option.value?.includes("xxx"));
     expect(longOption?.value?.length).toBeGreaterThan(75);
     expect(longOption?.value?.length).toBeLessThanOrEqual(150);
-    expect(firstElement?.confirm).toBeTruthy();
+    expect(firstElement).toHaveProperty("confirm");
   });
 
   it("truncates button labels when static_select value limit would be exceeded", async () => {
@@ -654,7 +664,7 @@ describe("Slack native command argument menus", () => {
     expect(firstElement?.text?.text).toHaveLength(75);
     expect(firstElement?.text?.text?.endsWith("…")).toBe(true);
     expect(firstElement?.value?.length).toBeGreaterThan(75);
-    expect(firstElement?.confirm).toBeTruthy();
+    expect(firstElement).toHaveProperty("confirm");
   });
 
   it("caps large button fallback menus to Slack's block limit", async () => {
@@ -691,7 +701,7 @@ describe("Slack native command argument menus", () => {
     const element = await getFirstActionElementFromCommand(reportCompactHandler);
     expect(element?.type).toBe("overflow");
     expect(element?.action_id).toBe("openclaw_cmdarg");
-    expect(element?.confirm).toBeTruthy();
+    expect(element).toHaveProperty("confirm");
   });
 
   it("escapes mrkdwn characters in confirm dialog text", async () => {
@@ -803,7 +813,7 @@ describe("Slack native command argument menus", () => {
       options?: Array<{ text?: { text?: string }; value?: string }>;
     };
     const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
-    expect(optionTexts.some((text) => text.includes("Period 12"))).toBe(true);
+    expect(optionTexts).toEqual(expect.arrayContaining([expect.stringContaining("Period 12")]));
   });
 
   it("tracks accepted external_select option requests", async () => {
@@ -903,7 +913,7 @@ describe("Slack native command argument menus", () => {
     );
   });
 
-  it("treats malformed percent-encoding as an invalid button (no throw)", async () => {
+  it("treats malformed percent-encoding as an invalid button", async () => {
     await runArgMenuAction(argMenuHandler, {
       action: { value: "cmdarg|%E0%A4%A|mode|on|U1" },
       includeRespond: false,
@@ -1219,7 +1229,8 @@ describe("slack slash command session metadata", () => {
     };
     expect(call.ctx?.OriginatingChannel).toBe("slack");
     expect(call.ctx?.GroupSpace).toBe("T1");
-    expect(call.sessionKey).toBeDefined();
+    expect(call.sessionKey).toBeTypeOf("string");
+    expect(call.sessionKey).not.toBe("");
   });
 
   it("awaits session metadata persistence before dispatch", async () => {
