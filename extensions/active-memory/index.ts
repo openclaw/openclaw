@@ -1427,13 +1427,17 @@ function formatElapsedMsCompact(elapsedMs: number): string {
   return `${Math.round(elapsedMs)}ms`;
 }
 
+function formatUserVisibleRecallStatus(status: ActiveRecallResult["status"]): string {
+  return status === "empty" ? "none" : status;
+}
+
 function buildPluginStatusLine(params: {
   result: ActiveRecallResult;
   config: ResolvedActiveRecallPluginConfig;
 }): string {
   const parts = [
     ACTIVE_MEMORY_STATUS_PREFIX,
-    `status=${params.result.status}`,
+    `status=${formatUserVisibleRecallStatus(params.result.status)}`,
     `elapsed=${formatElapsedMsCompact(params.result.elapsedMs)}`,
     `query=${params.config.queryMode}`,
   ];

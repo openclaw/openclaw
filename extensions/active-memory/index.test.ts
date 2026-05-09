@@ -2031,7 +2031,7 @@ describe("active-memory plugin", () => {
       { pluginId: "other-plugin", lines: ["Other Plugin: keep me"] },
       {
         pluginId: "active-memory",
-        lines: [expect.stringContaining("🧩 Active Memory: status=empty")],
+        lines: [expect.stringContaining("🧩 Active Memory: status=none")],
       },
     ]);
   });
@@ -2073,7 +2073,7 @@ describe("active-memory plugin", () => {
     expect(hasDebugLine("no configured memory tools available")).toBe(true);
     expect(hasWarnLine("No callable tools remain")).toBe(false);
     const lines = getActiveMemoryLines(sessionKey);
-    expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=empty")]);
+    expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=none")]);
     expect(lines.join("\n")).not.toContain("status=unavailable");
   });
 
@@ -2099,7 +2099,7 @@ describe("active-memory plugin", () => {
     expect(hasDebugLine("no configured memory tools available")).toBe(true);
     expect(hasWarnLine("No callable tools remain")).toBe(false);
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=none"),
     ]);
   });
 
@@ -2131,7 +2131,7 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
     expect(hasDebugLine("no configured memory tools available")).toBe(true);
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=none"),
     ]);
   });
 
@@ -2157,7 +2157,7 @@ describe("active-memory plugin", () => {
     expect(hasDebugLine("no configured memory tools available")).toBe(true);
     expect(hasWarnLine("No callable tools remain")).toBe(false);
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=none"),
     ]);
   });
 
@@ -2185,7 +2185,7 @@ describe("active-memory plugin", () => {
       expect(hasDebugLine("no configured memory tools available")).toBe(false);
       expect(hasWarnLine(reason)).toBe(true);
       expect(getActiveMemoryLines(sessionKey)).toEqual([
-        expect.stringContaining("🧩 Active Memory: status=empty"),
+        expect.stringContaining("🧩 Active Memory: status=none"),
       ]);
     },
   );
@@ -2521,7 +2521,7 @@ describe("active-memory plugin", () => {
 
     expect(result).toBeUndefined();
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=none"),
     ]);
     expect(getActiveMemoryLines(sessionKey).join("\n")).not.toContain(
       "must not be surfaced from generic errors",
@@ -2950,7 +2950,7 @@ describe("active-memory plugin", () => {
     expectLinesToContain(infoLines, "done status=empty");
     expectLinesNotToContain(infoLines, "done status=timeout");
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=none"),
       expect.stringContaining("🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0"),
     ]);
   });
@@ -3042,7 +3042,7 @@ describe("active-memory plugin", () => {
     expectLinesToContain(infoLines, "done status=empty");
     expectLinesNotToContain(infoLines, "done status=timeout");
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=none"),
       expect.stringContaining(
         "🔎 Active Memory Debug: Memory search is unavailable due to an embedding/provider error. Check the embedding provider configuration, then retry memory_search.",
       ),
@@ -3301,7 +3301,7 @@ describe("active-memory plugin", () => {
       {
         pluginId: "active-memory",
         lines: [
-          expect.stringContaining("🧩 Active Memory: status=empty"),
+          expect.stringContaining("🧩 Active Memory: status=none"),
           expect.stringContaining(
             "🔎 Active Memory Debug: Memory search is unavailable because the embedding provider quota is exhausted. Top up or switch embedding provider, then retry memory_search.",
           ),
