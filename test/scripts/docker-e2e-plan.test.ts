@@ -279,7 +279,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       )
       .filter(({ script }) => !scripts[script]);
 
-    expect(missing).toEqual([]);
+    expect(missing).toStrictEqual([]);
   });
 
   it("keeps legacy release chunk names as aggregate aliases", () => {
