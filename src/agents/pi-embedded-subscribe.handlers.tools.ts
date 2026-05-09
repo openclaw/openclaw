@@ -49,7 +49,6 @@ import { normalizeToolName } from "./tool-policy.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
-type MediaParseModule = typeof import("../media/parse.js");
 type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
 
 const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyModule>(
@@ -57,9 +56,6 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 );
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
-);
-const mediaParseModuleLoader = createLazyImportLoader<MediaParseModule>(
-  () => import("../media/parse.js"),
 );
 const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
   () => import("./pi-tools.before-tool-call.js"),
@@ -73,10 +69,6 @@ function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
 
 function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   return hookRunnerGlobalModuleLoader.load();
-}
-
-function loadMediaParse(): Promise<MediaParseModule> {
-  return mediaParseModuleLoader.load();
 }
 
 function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
@@ -411,19 +403,6 @@ function queuePendingToolMedia(
   }
 }
 
-async function collectEmittedToolOutputMediaUrls(
-  toolName: string,
-  outputText: string,
-  result: unknown,
-): Promise<string[]> {
-  const { splitMediaFromOutput } = await loadMediaParse();
-  const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
-  if (mediaUrls.length === 0) {
-    return [];
-  }
-  return filterToolResultMediaUrls(toolName, mediaUrls, result);
-}
-
 function readExecApprovalPendingDetails(result: unknown): {
   approvalId: string;
   approvalSlug: string;
@@ -530,7 +509,6 @@ async function emitToolResultOutput(params: {
     !Array.isArray((result as { details?: { media?: unknown } }).details?.media),
   );
   const approvalPending = readExecApprovalPendingDetails(result);
-  let emittedToolOutputMediaUrls: string[] = [];
   if (!isToolError && approvalPending) {
     if (!ctx.params.onToolResult) {
       return;
@@ -603,13 +581,6 @@ async function emitToolResultOutput(params: {
   if (shouldEmitOutput) {
     if (outputText) {
       ctx.emitToolOutput(rawToolName, meta, outputText, result);
-      if (ctx.params.toolResultFormat === "plain") {
-        emittedToolOutputMediaUrls = await collectEmittedToolOutputMediaUrls(
-          rawToolName,
-          outputText,
-          result,
-        );
-      }
     }
     if (!hasStructuredMedia) {
       return;
@@ -623,10 +594,13 @@ async function emitToolResultOutput(params: {
   if (!mediaReply) {
     return;
   }
-  const pendingMediaUrls =
-    emittedToolOutputMediaUrls.length === 0
-      ? mediaUrls
-      : mediaUrls.filter((url) => !emittedToolOutputMediaUrls.includes(url));
+  // Keep structured tool media queued for the final outbound reply even when the
+  // tool text itself contained a MEDIA: directive. Plain external channels may
+  // strip tool-output MEDIA from the transcript without actually delivering the
+  // attachment, so treating emitted tool-output media as already sent can drop
+  // generated images before the channel adapter sees them. Downstream reply
+  // merging still de-duplicates identical media URLs.
+  const pendingMediaUrls = mediaUrls;
   if (pendingMediaUrls.length === 0) {
     return;
   }

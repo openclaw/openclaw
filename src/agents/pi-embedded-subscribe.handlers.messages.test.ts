@@ -359,6 +359,43 @@ describe("handleMessageUpdate text signatures", () => {
       replyToCurrent: true,
     });
   });
+
+  it("extracts phase-aware final media when text_end only carries it in partial content", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    const ctx = createMessageUpdateContext({
+      consumePartialReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
+        accumulator.consume(text, options),
+      ),
+      state: {
+        blockReplyBreak: "message_end",
+      },
+    });
+    const replyText = "Done.\nMEDIA:/tmp/final-only.png";
+
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: "",
+        partial: createOpenAiResponsesPartial({
+          text: replyText,
+          id: "item-final",
+          signaturePhase: "final_answer",
+          partialPhase: "final_answer",
+        }),
+      }),
+    );
+
+    expect(ctx.state.blockBuffer).toBe("Done.");
+    expect(
+      consumePendingAssistantReplyDirectivesIntoReply(ctx.state, {
+        text: "Done.",
+      }),
+    ).toEqual({
+      text: "Done.",
+      mediaUrls: ["/tmp/final-only.png"],
+    });
+  });
 });
 
 describe("consumePendingToolMediaIntoReply", () => {

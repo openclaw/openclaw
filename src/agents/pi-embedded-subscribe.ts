@@ -714,6 +714,43 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       stripBlockTags(text, state.blockState, { final: options?.final === true }),
     ).trimEnd();
     if (!chunk) {
+      // Final empty flushes are used to close the streaming directive accumulator.
+      // Do not return before consuming: a trailing MEDIA:/path line may have been
+      // held in pendingTail by a previous non-final chunk to avoid sending partial
+      // directives. Without this, final-line media is stripped from text but never
+      // delivered to channel adapters.
+      if (options?.final === true && params.onBlockReply) {
+        const splitResult = replyDirectiveAccumulator.consume("", { final: true });
+        if (
+          splitResult ||
+          state.pendingAssistantReplyDirectives ||
+          state.pendingToolMediaUrls.length > 0 ||
+          state.pendingToolAudioAsVoice
+        ) {
+          const {
+            text: cleanedText,
+            mediaUrls,
+            audioAsVoice,
+            replyToId,
+            replyToTag,
+            replyToCurrent,
+          } = splitResult ?? {};
+          emitBlockReply(
+            {
+              text: cleanedText,
+              mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+              audioAsVoice,
+              replyToId,
+              replyToTag,
+              replyToCurrent,
+            },
+            {
+              assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
+              consumePendingToolMedia: true,
+            },
+          );
+        }
+      }
       return;
     }
     if (chunk === state.lastBlockReplyText) {

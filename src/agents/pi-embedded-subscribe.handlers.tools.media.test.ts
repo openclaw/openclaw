@@ -448,11 +448,11 @@ describe("handleToolExecutionEnd media emission", () => {
     return ctx;
   }
 
-  it("does not queue structured media already emitted in plain verbose output", async () => {
+  it("keeps structured media queued after plain verbose output", async () => {
     const ctx = await handleVerboseGeneratedImage("plain");
 
     expect(ctx.emitToolOutput).toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
   });
 
   it("queues structured media once for markdown verbose output", async () => {

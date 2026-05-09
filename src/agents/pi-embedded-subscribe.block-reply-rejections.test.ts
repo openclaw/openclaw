@@ -54,4 +54,23 @@ describe("subscribeEmbeddedPiSession block reply rejections", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(unhandledRejections).toHaveLength(0);
   });
+
+  it("flushes trailing MEDIA directives held until final text_end", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+    });
+
+    emitAssistantTextDelta({ emit, delta: "Here is the image.\nMEDIA:/tmp/final.png" });
+    emitAssistantTextEnd({ emit });
+    await waitForAsyncCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrls: ["/tmp/final.png"],
+      }),
+    );
+  });
 });

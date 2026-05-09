@@ -557,13 +557,27 @@ export function handleMessageUpdate(
     const finalParsedDelta =
       evtType === "text_end" ? ctx.consumePartialReplyDirectives("", { final: true }) : null;
     const parsedStreamDirectives = mergeReplyDirectiveResults(parsedDelta, finalParsedDelta);
+    // Some phase-aware providers surface the complete final_answer text only at
+    // text_end, without replaying it through visibleDelta. In that case the
+    // partial directive accumulator never sees trailing MEDIA: lines, so parse the
+    // complete visible text once at finalization and merge any reply metadata.
+    const phaseAwareFinalDirectives =
+      shouldUsePhaseAwareBlockReply && evtType === "text_end" && next
+        ? parseReplyDirectives(next)
+        : null;
+    const mergedStreamDirectives = mergeReplyDirectiveResults(
+      parsedStreamDirectives,
+      phaseAwareFinalDirectives,
+    );
     if (shouldUsePhaseAwareBlockReply) {
-      recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
+      recordPendingAssistantReplyDirectives(ctx.state, mergedStreamDirectives);
     }
     const parsedFull = parseReplyDirectives(splitTrailingDirective(next).text);
     const cleanedText = parsedFull.text;
-    const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
-    const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
+    const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(
+      mergedStreamDirectives ?? {},
+    );
+    const hasAudio = Boolean(mergedStreamDirectives?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
 
     let shouldEmit = false;
