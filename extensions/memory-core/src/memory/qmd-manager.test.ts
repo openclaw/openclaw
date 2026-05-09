@@ -182,6 +182,10 @@ describe("QmdMemoryManager", () => {
     return value;
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
   async function createManager(params?: {
     mode?: "full" | "status" | "cli";
     cfg?: OpenClawConfig;
