@@ -60,9 +60,15 @@ function normalizeConfigRequirementList(input: unknown): string[] {
     return normalizeStringList(input);
   }
   return input.flatMap((entry) => {
-    if (entry && typeof entry === "object" && "path" in entry) {
-      const pathVal = (entry as Record<string, unknown>).path;
-      return typeof pathVal === "string" && pathVal.trim() ? [pathVal.trim()] : [];
+    if (entry && typeof entry === "object") {
+      // Object-format config requirements are not yet supported; skip with a warning
+      // so skills that use {path, access, purpose} shapes degrade gracefully instead
+      // of producing an unresolvable "[object Object]" config key lookup.
+      process.emitWarning(
+        `Skill config requirement entry is an object; only string keys are supported. Skipping: ${JSON.stringify(entry)}`,
+        { type: "UnsupportedSkillConfigRequirement", code: "OPENCLAW_SKILL_CONFIG_REQ_OBJECT" },
+      );
+      return [];
     }
     return typeof entry === "string" && entry.trim() ? [entry.trim()] : [];
   });
