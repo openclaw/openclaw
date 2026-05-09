@@ -809,6 +809,68 @@ describe("google transport stream", () => {
     });
   });
 
+  it("does not replay tool-call thought signatures from a different provider route", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    // Prior turn came from an Anthropic route — its signature looks valid base64
+    // but must NOT be replayed into a Gemini request.
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "anthropic",
+          api: "anthropic",
+          model: "claude-sonnet-4",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_foreign",
+              name: "lookup",
+              arguments: { q: "hello" },
+              // Plausible-looking base64 from a non-Gemini provider
+              thoughtSignature: "msg_01XFDUDYJgAACcnSM2TTgQsA",
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          timestamp: 1,
+          content: [
+            {
+              type: "toolResult",
+              toolCallId: "call_foreign",
+              content: [{ type: "text", text: "ok" }],
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Continue." }],
+        },
+      ],
+    } as never);
+
+    // The foreign signature should be omitted from the Gemini outbound payload
+    const modelTurns = params.contents.filter((c: { role: string }) => c.role === "model");
+    expect(modelTurns[0]).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+    // Confirm thoughtSignature is absent — not replayed from a foreign route
+    expect(
+      (modelTurns[0] as { parts: Array<Record<string, unknown>> }).parts[0].thoughtSignature,
+    ).toBeUndefined();
+  });
+
   it("drops non-base64 Gemini tool-call thought signatures like reasoning", () => {
     const model = buildGeminiModel({
       id: "gemini-3.1-pro-preview",

@@ -205,10 +205,23 @@ function sanitizeGeminiToolCallThoughtSignature(
   return trimmed;
 }
 
-function collectToolCallThoughtSignatures(context: Context): Map<string, string> {
+function collectToolCallThoughtSignatures(
+  context: Context,
+  model: GoogleTransportModel,
+): Map<string, string> {
   const sigById = new Map<string, string>();
   for (const msg of context.messages ?? []) {
     if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+      continue;
+    }
+    // Only trust thought signatures from the same Google route. Signatures
+    // from other providers (e.g. Anthropic, OpenAI) may pass the base64
+    // sanitizer but are not valid Gemini-issued values and must not be
+    // replayed. Gemini requires its own signatures returned exactly as issued.
+    const source = msg as { api?: string; provider?: string; model?: string };
+    const isSameRoute =
+      source.provider === model.provider && source.api === model.api && source.model === model.id;
+    if (!isSameRoute) {
       continue;
     }
     for (const block of msg.content) {
@@ -445,7 +458,7 @@ function normalizeGoogleThinkingConfig(
 function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
   const contents: Array<Record<string, unknown>> = [];
   const replayToolCallThoughtSignatures = requiresToolCallThoughtSignature(model.id)
-    ? collectToolCallThoughtSignatures(context)
+    ? collectToolCallThoughtSignatures(context, model)
     : new Map<string, string>();
   const transformedMessages = transformTransportMessages(
     context.messages,
@@ -516,8 +529,13 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
         }
         if (block.type === "toolCall") {
           const replayedThoughtSignature = replayToolCallThoughtSignatures.get(block.id);
+          // Use stored signature only when it came from the same Google route;
+          // otherwise fall back to a same-route replayed value from context.
+          // Never replay signatures from foreign providers — Gemini requires
+          // its own signatures returned exactly as issued.
+          const ownSignature = isSameProviderAndModel ? block.thoughtSignature : undefined;
           const thoughtSignature = sanitizeGeminiToolCallThoughtSignature(
-            retainThoughtSignature(block.thoughtSignature, replayedThoughtSignature) ??
+            retainThoughtSignature(ownSignature, replayedThoughtSignature) ??
               (requiresToolCallThoughtSignature(model.id)
                 ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
                 : undefined),
