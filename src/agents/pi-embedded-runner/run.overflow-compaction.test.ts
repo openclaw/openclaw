@@ -276,6 +276,19 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     });
     mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+    const codexAuthStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:work": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(codexAuthStore);
 
     try {
       await runEmbeddedPiAgent({
@@ -320,6 +333,10 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     );
     const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
+    expect(harnessParams?.authProfileStore).toBe(codexAuthStore);
+    expect(harnessParams?.authProfileStore.profiles["openai-codex:work"]).toMatchObject({
+      provider: "openai-codex",
+    });
   });
 
   it("forwards OpenAI Codex auth profiles when openai/* is forced through codex", async () => {

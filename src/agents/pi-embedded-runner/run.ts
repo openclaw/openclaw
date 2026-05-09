@@ -575,6 +575,11 @@ export async function runEmbeddedPiAgent(
         : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
             allowKeychainPrompt: false,
           });
+      const attemptAuthProfileStore = pluginHarnessOwnsTransport
+        ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+            allowKeychainPrompt: false,
+          })
+        : authStore;
       const requestedProfileId = params.authProfileId?.trim();
       const resolvePluginHarnessPreferredProfileId = (): string | undefined => {
         if (requestedProfileId) {
@@ -595,12 +600,9 @@ export async function runEmbeddedPiAgent(
         if (!harnessAuthProvider) {
           return undefined;
         }
-        const harnessAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-          allowKeychainPrompt: false,
-        });
         return resolveAuthProfileOrder({
           cfg: params.config,
-          store: harnessAuthStore,
+          store: attemptAuthProfileStore,
           provider: harnessAuthProvider,
         })[0]?.trim();
       };
@@ -1211,7 +1213,7 @@ export async function runEmbeddedPiAgent(
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             initialReplayState: accumulatedReplayState,
             authStorage,
-            authProfileStore: authStore,
+            authProfileStore: attemptAuthProfileStore,
             modelRegistry,
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
