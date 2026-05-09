@@ -701,7 +701,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       buildSessionsListCacheKey({ cfg, storePath, opts: p }),
       async () => {
         const listStore =
-          p.configuredAgentsOnly === true ? filterSessionStoreToConfiguredAgents(cfg, store) : store;
+          p.configuredAgentsOnly === true
+            ? filterSessionStoreToConfiguredAgents(cfg, store)
+            : store;
         const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
         return await listSessionsFromStoreAsync({
           cfg,

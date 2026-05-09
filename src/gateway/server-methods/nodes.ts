@@ -136,7 +136,6 @@ async function loadNodePairingListsCached(): Promise<NodePairingListCacheEntry> 
   return promise;
 }
 
-
 type NodeWakeNudgeAttempt = {
   sent: boolean;
   throttled: boolean;
