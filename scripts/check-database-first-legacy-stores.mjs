@@ -163,6 +163,7 @@ const legacyStoreMarkers = [
     pattern: /\bqqbot[/\\]sessions[/\\]session-[A-Za-z0-9_-]+\.json\b/u,
   },
   { label: "sandbox registry JSON", pattern: /\b(?:containers|browsers)\.json\b/u },
+  { label: "native hook relay bridge JSON", pattern: /\bopenclaw-native-hook-relays\b/u },
   { label: "plugin-state sidecar SQLite", pattern: /\bplugin-state[/\\]state\.sqlite\b/u },
   { label: "task registry sidecar SQLite", pattern: /\btasks[/\\]runs\.sqlite\b/u },
   {

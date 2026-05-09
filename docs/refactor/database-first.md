@@ -1323,6 +1323,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - Matrix `storage-meta.json`
 - Matrix `crypto-idb-snapshot.json`
 - sandbox registry shard JSON files
+- native hook relay `/tmp` bridge JSON files
 - `plugin-state/state.sqlite`
 - `tasks/runs.sqlite`
 - `tasks/flows/registry.sqlite`
