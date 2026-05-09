@@ -15,6 +15,7 @@ import {
 
 const MATRIX_OPENCLAW_PRESENTATION_KEY = "com.openclaw.presentation" as const;
 const MATRIX_OPENCLAW_PRESENTATION_TYPE = "message.presentation" as const;
+const MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT = "---";
 
 type MatrixChannelData = {
   extraContent?: MatrixExtraContentFields;
@@ -59,12 +60,13 @@ function renderMatrixPresentationPayload(params: {
   presentation: MessagePresentation;
 }): ReplyPayload {
   const matrixData = resolveMatrixChannelData(params.payload);
+  const fallbackText = renderMessagePresentationFallbackText({
+    text: params.payload.text,
+    presentation: params.presentation,
+  });
   return {
     ...params.payload,
-    text: renderMessagePresentationFallbackText({
-      text: params.payload.text,
-      presentation: params.presentation,
-    }),
+    text: fallbackText.trim() ? fallbackText : MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT,
     channelData: {
       ...params.payload.channelData,
       matrix: {
@@ -75,6 +77,14 @@ function renderMatrixPresentationPayload(params: {
       },
     },
   };
+}
+
+function resolveMatrixPayloadText(payload: ReplyPayload): string {
+  const text = payload.text ?? "";
+  if (text.trim() || !resolveMatrixPresentationContent(payload)) {
+    return text;
+  }
+  return MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT;
 }
 
 function resolveMatrixExtraContent(payload: ReplyPayload): MatrixExtraContentFields | undefined {
@@ -121,11 +131,12 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       ...(replyToMode !== undefined ? { replyToMode } : {}),
     });
     const urls = resolvePayloadMediaUrls(payload);
+    const payloadText = resolveMatrixPayloadText(payload);
     if (urls.length > 0) {
       let lastResult: Awaited<ReturnType<typeof send>> | undefined;
       for (let i = 0; i < urls.length; i++) {
         const isFirst = i === 0;
-        lastResult = await send(to, isFirst ? (payload.text ?? "") : "", {
+        lastResult = await send(to, isFirst ? payloadText : "", {
           cfg,
           mediaUrl: urls[i],
           mediaAccess,
@@ -144,7 +155,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
         roomId: lastResult!.roomId,
       };
     }
-    const result = await send(to, payload.text ?? "", {
+    const result = await send(to, payloadText, {
       cfg,
       mediaUrl: payload.mediaUrl,
       mediaAccess,
