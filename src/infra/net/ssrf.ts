@@ -156,16 +156,11 @@ function shouldSkipPrivateNetworkChecks(hostname: string, policy?: SsrFPolicy): 
   if (isPrivateNetworkAllowedByPolicy(policy)) {
     return true;
   }
-  if (normalizeHostnameSet(policy?.allowedHostnames).has(hostname)) {
-    return true;
-  }
-  // hostnameAllowlist from SSRF policy (e.g. auto-generated from baseUrl) should
-  // also skip private network checks so that resolved private IPs are allowed
   const allowlist = normalizeHostnameAllowlist(policy?.hostnameAllowlist);
   if (allowlist.length > 0 && matchesHostnameAllowlist(hostname, allowlist)) {
     return true;
   }
-  return false;
+  return normalizeHostnameSet(policy?.allowedHostnames).has(hostname);
 }
 
 function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseBlockOptions {
