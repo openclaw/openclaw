@@ -238,7 +238,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/dedupe-runtime` | In-memory dedupe cache helpers |
     | `plugin-sdk/delivery-queue-runtime` | Outbound pending-delivery drain helper |
     | `plugin-sdk/file-access-runtime` | Safe local-file and media-source path helpers |
-    | `plugin-sdk/heartbeat-runtime` | Heartbeat event and visibility helpers |
+    | `plugin-sdk/heartbeat-runtime` | Heartbeat wake, event, and visibility helpers |
     | `plugin-sdk/number-runtime` | Numeric coercion helper |
     | `plugin-sdk/secure-random-runtime` | Secure token/UUID helpers |
     | `plugin-sdk/system-event-runtime` | System event queue helpers |
