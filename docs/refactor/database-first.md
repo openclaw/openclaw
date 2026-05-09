@@ -41,17 +41,14 @@ This migration has one canonical runtime shape:
   pruning metadata, or file-era compatibility pointers.
 - Transcript identity is always SQLite identity: `{agentId, sessionId}` plus
   optional topic metadata where the protocol needs it.
-- `sqlite-transcript://...` is never runtime identity. It is a temporary
-  external handle derived from SQLite identity for protocol, hook, export,
-  diagnostics, plugin, or compatibility tests that still need a string. Runtime
-  helpers must accept `{agentId, sessionId}` directly, not accept a locator and
-  parse it back into identity.
+- `sqlite-transcript://...` is not a runtime or protocol identity. New code must
+  not derive, persist, pass, parse, or migrate transcript locators. Remaining
+  uses are cleanup debt in tests or explicit export/debug materialization only.
 - Legacy `sessions.json`, transcript JSONL, `.jsonl.lock`, pruning, truncation,
   and old session-path logic belong only to the doctor migration/import path.
 - Runtime startup, hot reply paths, compaction, reset, recovery, diagnostics,
-  TTS, memory hooks, subagents, and plugin command routing must pass
-  `{agentId, sessionId}` through the runtime. Any string transcript handle is a
-  boundary artifact, not runtime identity.
+  TTS, memory hooks, subagents, plugin command routing, protocol boundaries, and
+  hooks must pass `{agentId, sessionId}` through the runtime.
 - Tests should seed and assert SQLite transcript rows through
   `{agentId, sessionId}`. Tests that only prove JSONL path forwarding, caller-supplied
   locator preservation, or transcript-file compatibility should be deleted
@@ -87,9 +84,9 @@ proceed with these assumptions:
   database-upgrade paths.
 - Runtime must not migrate, normalize, or bridge transcript locators. Active
   transcript identity is `{agentId, sessionId}` in SQLite. File paths are
-  legacy doctor inputs only, and `sqlite-transcript://...` strings are external
-  handles derived from row identity when a protocol, hook, export, or plugin
-  boundary still needs a string.
+  legacy doctor inputs only, and `sqlite-transcript://...` must disappear from
+  runtime, protocol, hook, and plugin surfaces instead of being treated as a
+  boundary handle.
 - Codex app-server bindings use the OpenClaw `sessionId` as the canonical
   SQLite key. `sessionKey` is metadata for routing/display and must not replace
   the durable session id or resurrect transcript-file identity.
@@ -259,31 +256,29 @@ The remaining cleanup is mostly consolidation and deletion:
 - Runtime transcript store APIs resolve SQLite scope, not filesystem paths. The
   old `resolve...ForPath` helper and unused `transcriptPath` write options are
   gone from runtime callers.
-- Runtime session resolution now uses `{agentId, sessionId}`. It may derive a
-  `sqlite-transcript://<agent>/<session>` handle for external boundaries, but it
-  must not store that derived value in active session rows. Legacy absolute
-  JSONL paths are doctor migration inputs only.
+- Runtime session resolution now uses `{agentId, sessionId}` and must not derive
+  `sqlite-transcript://<agent>/<session>` handles for external boundaries.
+  Legacy absolute JSONL paths are doctor migration inputs only.
 - `runEmbeddedPiAgent(...)` no longer has a transcript-locator parameter.
   Prepared worker descriptors also omit transcript locators. Runtime session
   state and queued follow-up runs carry `{agentId, sessionId}` instead of
   derived transcript handles.
 - Embedded compaction now takes SQLite scope from `agentId` and `sessionId`.
-  Compaction hooks, context-engine calls, CLI delegation, export/debug, and
-  protocol replies may still receive a derived `sqlite-transcript://...` handle
-  at their boundary, but the runtime helper APIs do not accept that handle as
-  identity. Persistence starts from the resolved agent id and session id, then
-  opens the SQLite session manager directly.
+  Compaction hooks, context-engine calls, CLI delegation, and protocol replies
+  must not receive derived `sqlite-transcript://...` handles. Export/debug code
+  can materialize files from rows explicitly, but it does not feed those names
+  back into runtime identity.
 - Context-engine delegation no longer parses a transcript locator to recover
   agent identity. The prepared runtime context carries the resolved `agentId`
   into the built-in compaction bridge.
 - Transcript rewrite and live tool-result truncation now read and persist
-  transcript state by `{agentId, sessionId}`. They only derive a temporary
-  locator for transcript-update event payloads.
+  transcript state by `{agentId, sessionId}` and do not derive temporary
+  locators for transcript-update event payloads.
 - The transcript-state helper surface no longer has locator-based
   `readTranscriptState`, `replaceTranscriptStateEvents`, or
   `persistTranscriptStateMutation` variants. Runtime callers must use the
-  `{agentId, sessionId}` APIs; locator-to-scope parsing is confined to doctor
-  and transcript-repair migration boundaries.
+  `{agentId, sessionId}` APIs. Doctor import reads legacy files by explicit file
+  path and writes SQLite rows; it does not migrate locator strings.
 - The runtime session-manager contract no longer exposes `open(locator)`,
   `forkFrom(locator)`, or `setTranscriptLocator(...)`. Persisted session
   managers open and fork by `{agentId, sessionId}` only.
@@ -292,10 +287,8 @@ The remaining cleanup is mostly consolidation and deletion:
   could accidentally become runtime identity. Locator parsing is explicit and
   limited to boundary adapters.
 - Transcript update events are also scope-first. `emitSessionTranscriptUpdate`
-  no longer accepts a bare locator string, listeners can route by
-  `{agentId, sessionId}` without parsing a handle, and any
-  `sqlite-transcript://...` field is optional boundary metadata for legacy
-  clients, export/debug, or UI compatibility.
+  no longer accepts a bare locator string, and listeners route by
+  `{agentId, sessionId}` without parsing a handle.
 - Gateway session-message broadcast resolves session keys from agent/session
   scope, not from a transcript locator. The old transcript-locator-to-session
   key resolver/cache is gone.
@@ -324,18 +317,15 @@ The remaining cleanup is mostly consolidation and deletion:
   session entry, and leaves transcript access to scope-aware readers.
 - Embedded run and compaction results no longer surface transcript locators for
   session accounting. Automatic compaction updates only the active `sessionId`,
-  compaction counters, and token metadata; transcript handles stay internal to
-  boundary adapters that still need them for diagnostics or protocol metadata.
+  compaction counters, and token metadata.
 - Embedded attempt results no longer return `transcriptLocatorUsed`, and
   context-engine `compact()` results no longer return transcript locators.
-  Runtime retry loops only accept a successor `sessionId`; any boundary handle
-  is derived from `{agentId, sessionId}` at the last possible edge.
+  Runtime retry loops only accept a successor `sessionId`.
 - Delivery-mirror transcript append results no longer return transcript
-  locators. Callers get the appended `messageId`; any transcript update signal
-  derives its optional string handle internally from SQLite identity.
+  locators. Callers get the appended `messageId`; transcript update signals use
+  SQLite scope.
 - Parent-session fork helpers return only the forked `sessionId`. Subagent
-  preparation derives the optional context-engine boundary handle from the child
-  agent/session scope when that still has to be passed to an engine.
+  preparation passes the child agent/session scope to engines.
 - CLI runner params and history reseeding no longer accept transcript locators.
   CLI history reads resolve the SQLite transcript scope from `{agentId,
 sessionId}` and session key context.
@@ -348,8 +338,8 @@ sessionId}` and session key context.
 - BTW and compaction-checkpoint helpers now read and fork transcript rows by
   SQLite scope. Checkpoint metadata now stores session ids and leaf/entry ids
   only; derived locators are no longer written into checkpoint payloads.
-- Gateway transcript-key lookup compares derived SQLite transcript handles at
-  protocol boundaries and no longer realpaths or stats transcript filenames.
+- Gateway transcript-key lookup uses SQLite transcript scope at protocol
+  boundaries and no longer realpaths or stats transcript filenames.
 - Automatic compaction transcript rotation writes successor transcript rows
   directly through the SQLite transcript store. Session rows keep only the
   successor session identity, not a durable JSONL path or persisted locator.
@@ -391,17 +381,14 @@ sessionId}` and session key context.
 - Silent session-rotation replay copies recent user/assistant turns by
   `{agentId, sessionId}` from SQLite transcript rows. It no longer accepts
   source or target transcript locators.
-- Fresh runtime session rows no longer store transcript locators. When a caller
-  still needs a string handle, it is derived from `{agentId, sessionId}` as
-  `sqlite-transcript://<agent>/<session>` and discarded at the boundary. The
-  old path builders remain for doctor imports and explicit debug/export
-  artifacts.
-- Starting a new persisted transcript session now always allocates a fresh
-  SQLite locator. The session manager no longer reuses a previous file-era
-  transcript path as the identity for the new session.
+- Fresh runtime session rows no longer store transcript locators. Callers use
+  `{agentId, sessionId}` directly; export/debug commands can choose output file
+  names when they materialize rows.
+- Starting a new persisted transcript session now always opens SQLite rows by
+  scope. The session manager no longer reuses a previous file-era transcript
+  path or locator as the identity for the new session.
 - Plugin runtime no longer exposes `api.runtime.agent.session.resolveTranscriptLocatorPath`;
-  plugin code uses SQLite row helpers. Any `sqlite-transcript://...` value is a
-  temporary protocol handle derived from session identity.
+  plugin code uses SQLite row helpers and scope values.
 - The public `session-store-runtime` SDK surface no longer exports database
   close/reset test helpers; plugin tests import those through the testing SDK
   surface instead.
@@ -422,8 +409,7 @@ sessionId}` and session key context.
 - Memory-host no longer exports no-op session-directory transcript
   classification helpers; transcript filtering now derives from SQLite row
   metadata during entry construction.
-- Memory-host and QMD session-export tests default to virtual
-  `sqlite-transcript://<agent>/<session>` locators. Old
+- Memory-host and QMD session-export tests use SQLite transcript scopes. Old
   `agents/<agentId>/sessions/*.jsonl` paths stay covered only where a test is
   intentionally proving doctor/import/export compatibility.
 - QA-lab raw session inspection now uses `sessions.list` through the gateway
@@ -436,10 +422,10 @@ sessionId}` and session key context.
   Twitch, and QQBot recording paths now read updated-at metadata and record
   inbound session rows through SQLite identity.
 - Transcript locator persistence is removed from active session rows.
-  `resolveSessionTranscriptTarget` derives any temporary boundary handle from
-  `agentId`, `sessionId`, and optional topic metadata; doctor is the only code
-  that imports legacy transcript file names.
-- Embedded PI runs canonicalize any incoming transcript handle to the SQLite
+  `resolveSessionTranscriptTarget` returns `agentId`, `sessionId`, and optional
+  topic metadata; doctor is the only code that imports legacy transcript file
+  names.
+- Embedded PI runs reject incoming transcript handles. They use the SQLite
   `{agentId, sessionId}` identity before worker launch and again before the
   attempt touches transcript state. A stale `/tmp/*.jsonl` input cannot select a
   runtime write target.
@@ -474,8 +460,8 @@ sessionId}` and session key context.
   `locator` field are gone.
 - Transcript repair runtime now exposes only
   `repairTranscriptSessionStateIfNeeded({agentId, sessionId})`. The old
-  locator-based repair helper is deleted; locator parsing remains only in
-  doctor/debug boundary code that explicitly receives an external handle.
+  locator-based repair helper is deleted; doctor/debug code reads explicit
+  source file paths and never migrates locator strings.
 - ACP replay ledger runtime now stores per-session replay rows in the shared
   SQLite state database instead of `acp/event-ledger.json`; doctor imports and
   removes the legacy file.
@@ -483,15 +469,14 @@ sessionId}` and session key context.
   `src/gateway/session-transcript-readers.ts` instead of the old
   `session-utils.fs` module name. The fallback retry history check is named for
   SQLite transcript content instead of the old file-helper surface.
-- Gateway injected-chat and compaction helpers now pass SQLite transcript
-  locators through internal helper APIs instead of naming them transcript paths
-  or source files.
+- Gateway injected-chat and compaction helpers now pass SQLite transcript scope
+  through internal helper APIs instead of naming values transcript paths or
+  source files.
 - Bootstrap continuation detection now checks SQLite transcript rows through
   `hasCompletedBootstrapTranscriptTurn`; it no longer exposes a file-shaped
   helper name.
 - Embedded-runner tests now use SQLite transcript identity, and opening a new
-  transcript handle without a duplicate `sessionId` uses the handle's session id
-  as the database row identity.
+  transcript manager always requires an explicit `sessionId`.
 - Memory indexing helpers now use SQLite transcript terminology end to end:
   host exports list/build session transcript entries, targeted sync queues
   `sessionTranscripts`, and QMD/builtin indexers no longer expose file-shaped
@@ -907,8 +892,7 @@ Move these into agent databases:
 - Compaction checkpoints and transcript snapshots. Done for runtime writes:
   checkpoint transcript copies are SQLite transcript rows and checkpoint
   metadata is recorded in `transcript_snapshots`. Gateway checkpoint helpers
-  now name these values as transcript locators rather than source/snapshot
-  files.
+  now name these values as transcript snapshots rather than source files.
 - Agent VFS scratch/workspace namespaces. Done for runtime VFS writes.
 - Tool artifacts. Done for runtime writes.
 - Run artifacts. Done for worker runtime writes through the per-agent
@@ -924,8 +908,8 @@ Move these into agent databases:
   writes: trajectory capture writes agent-database `trajectory_runtime_events`
   rows and mirrors run-scoped artifacts into SQLite. Legacy sidecars remain
   readable only as export/migration compatibility input. Runtime trajectory
-  capture exposes a SQLite runtime locator; JSONL path helpers are isolated to
-  legacy export/debug support and are not re-exported from the runtime module.
+  capture exposes SQLite scope; JSONL path helpers are isolated to legacy
+  export/debug support and are not re-exported from the runtime module.
   Embedded-runner trajectory metadata records `{agentId, sessionId, sessionKey}`
   identity instead of persisting a transcript locator.
 
@@ -1214,7 +1198,7 @@ keeps only the version-1 schema plus doctor file-to-database import.
   preview, lifecycle, command session-entry updates, auto-reply reset/trace, and
   memory-core dreaming fixtures, approval target routing, session transcript
   repair, security permission repair, trajectory export, and session export.
-  Active-memory transcript tests now assert SQLite locators and no temporary or
+  Active-memory transcript tests now assert SQLite scopes and no temporary or
   persisted JSONL file creation.
   The old heartbeat transcript-pruning regression was removed because
   runtime no longer truncates JSONL transcripts.
