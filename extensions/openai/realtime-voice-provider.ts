@@ -82,6 +82,8 @@ const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2";
 const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
   "Conversation already has an active response in progress:";
+const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
+  "Cancellation failed: no active response found";
 
 type RealtimeEvent = {
   type: string;
@@ -791,6 +793,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           this.responseCreatePending = true;
           return;
         }
+        if (detail === OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR) {
+          this.responseActive = false;
+          this.responseCancelInFlight = false;
+          this.flushPendingResponseCreate();
+          return;
+        }
         this.config.onError?.(new Error(detail));
         return;
       }
@@ -807,18 +815,26 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       responseStartTimestamp !== null &&
       assistantItemId !== null &&
       (this.markQueue.length > 0 || options?.audioPlaybackActive === true);
-    if (options?.audioPlaybackActive === true && this.responseActive) {
-      this.sendEvent({ type: "response.cancel" });
+    if (
+      options?.audioPlaybackActive === true &&
+      this.responseActive &&
+      !this.responseCancelInFlight
+    ) {
+      this.sendEvent({ type: "response.cancel" }, "reason=barge-in");
       this.responseCancelInFlight = true;
     }
     if (shouldInterruptProvider) {
       const elapsedMs = this.latestMediaTimestamp - responseStartTimestamp;
-      this.sendEvent({
-        type: "conversation.item.truncate",
-        item_id: assistantItemId,
-        content_index: 0,
-        audio_end_ms: Math.max(0, elapsedMs),
-      });
+      const audioEndMs = Math.max(0, elapsedMs);
+      this.sendEvent(
+        {
+          type: "conversation.item.truncate",
+          item_id: assistantItemId,
+          content_index: 0,
+          audio_end_ms: audioEndMs,
+        },
+        `reason=barge-in audioEndMs=${audioEndMs}`,
+      );
       this.config.onClearAudio();
       this.markQueue = [];
       this.lastAssistantItemId = null;
@@ -862,13 +878,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.config.onMark?.(markName);
   }
 
-  private sendEvent(event: unknown): void {
+  private sendEvent(event: unknown, detail?: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       const type =
         event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
           ? (event as { type: string }).type
           : "unknown";
-      this.config.onEvent?.({ direction: "client", type });
+      this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
       const payload = JSON.stringify(event);
       captureWsEvent({
         url: this.resolveConnectionParams().url,
