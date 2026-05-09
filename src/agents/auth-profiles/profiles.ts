@@ -2,6 +2,7 @@ import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { findNormalizedProviderKey, normalizeProviderId } from "../provider-id.js";
+import { log } from "./constants.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
@@ -165,25 +166,42 @@ export async function markAuthProfileGood(params: {
 }): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
   const providerKey = resolveProviderIdForAuth(provider);
-  const updated = await updateAuthProfileStoreWithLock({
-    agentDir,
-    updater: (freshStore) => {
-      const profile = freshStore.profiles[profileId];
-      if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
-        return false;
-      }
-      freshStore.lastGood = { ...freshStore.lastGood, [providerKey]: profileId };
-      return true;
-    },
-  });
-  if (updated) {
-    store.lastGood = updated.lastGood;
-    return;
+  // Post-success bookkeeping. Save failures (e.g. Windows EPERM on a ReadOnly
+  // auth-profiles.json during concurrent hot-reload) must not propagate and
+  // fail an LLM request that has already completed.
+  try {
+    const updated = await updateAuthProfileStoreWithLock({
+      agentDir,
+      updater: (freshStore) => {
+        const profile = freshStore.profiles[profileId];
+        if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
+          return false;
+        }
+        freshStore.lastGood = { ...freshStore.lastGood, [providerKey]: profileId };
+        return true;
+      },
+    });
+    if (updated) {
+      store.lastGood = updated.lastGood;
+      return;
+    }
+    const profile = store.profiles[profileId];
+    if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
+      return;
+    }
+    store.lastGood = { ...store.lastGood, [providerKey]: profileId };
+    saveAuthProfileStore(store, agentDir);
+  } catch (err) {
+    const errorCode = (err as NodeJS.ErrnoException | null)?.code ?? "UNKNOWN";
+    log.warn("markAuthProfileGood: failed to persist last-good profile; continuing", {
+      provider,
+      profileId,
+      code: errorCode,
+    });
+    log.debug("markAuthProfileGood: persist error detail", {
+      provider,
+      profileId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
-  const profile = store.profiles[profileId];
-  if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
-    return;
-  }
-  store.lastGood = { ...store.lastGood, [providerKey]: profileId };
-  saveAuthProfileStore(store, agentDir);
 }
