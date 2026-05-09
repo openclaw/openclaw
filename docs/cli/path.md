@@ -87,10 +87,10 @@ Non-canonical query parameters are ignored except for the first non-empty
 
 ## Addressing by file kind
 
-| Kind       | Addressing model                                                                 |
-| ---------- | -------------------------------------------------------------------------------- |
-| Markdown   | H2 sections by slug, bullet items by slug or `#N`, frontmatter via `[frontmatter]`. |
-| JSONC/JSON | Object keys and array indexes; dots split nested sub-segments unless quoted.      |
+| Kind       | Addressing model                                                                          |
+| ---------- | ----------------------------------------------------------------------------------------- |
+| Markdown   | H2 sections by slug, bullet items by slug or `#N`, frontmatter via `[frontmatter]`.       |
+| JSONC/JSON | Object keys and array indexes; dots split nested sub-segments unless quoted.              |
 | JSONL      | Top-level line addresses (`L1`, `L2`, `$last`), then JSONC-style descent inside the line. |
 
 `resolve` returns a structured match: `root`, `node`, `leaf`, or
