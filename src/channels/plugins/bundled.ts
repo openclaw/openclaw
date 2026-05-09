@@ -729,11 +729,7 @@ export function listBundledChannelLegacySessionSurfaces(
     if (surface) {
       return [surface];
     }
-    if (!hasSetupEntryFeature(setupEntry, "legacySessionSurfaces")) {
-      return [];
-    }
-    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
-    return plugin?.messaging ? [plugin.messaging] : [];
+    return [];
   });
 }
 

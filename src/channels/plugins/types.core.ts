@@ -515,13 +515,7 @@ export type ChannelMessagingAdapter = {
     sessionKey: string;
     ctx: MsgContext;
   }) => string | undefined;
-  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
-  isLegacyGroupSessionKey?: (key: string) => boolean;
-  canonicalizeLegacySessionKey?: (params: {
-    key: string;
-    agentId: string;
-  }) => string | null | undefined;
-  resolveLegacyGroupSessionKey?: (ctx: MsgContext) => {
+  resolveGroupSessionKey?: (ctx: MsgContext) => {
     key: string;
     channel: string;
     id: string;
