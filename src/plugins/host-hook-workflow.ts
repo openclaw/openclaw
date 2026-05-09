@@ -5,7 +5,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   deletePluginSessionSchedulerJob,
-  getPluginSessionSchedulerJobGeneration,
   registerPluginSessionSchedulerJob,
 } from "./host-hook-runtime.js";
 import type {
@@ -18,8 +17,6 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginRegistry } from "./registry-types.js";
 
 const log = createSubsystemLogger("plugins/host-workflow");
-const ONE_SHOT_SCHEDULER_RECORD_PRUNE_GRACE_MS = 60_000;
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 type CallGatewayTool = typeof import("../agents/tools/gateway.js").callGatewayTool;
 let callGatewayToolPromise: Promise<CallGatewayTool> | undefined;
@@ -175,6 +172,21 @@ function extractCronJobId(value: unknown): string | undefined {
 
 const PLUGIN_CRON_NAME_PREFIX = "plugin:";
 const PLUGIN_CRON_TAG_MARKER = ":tag:";
+const PLUGIN_CRON_RESERVED_DELIMITER = ":";
+
+function resolvePluginSessionTurnTag(value: unknown): {
+  tag?: string;
+  invalid: boolean;
+} {
+  const tag = normalizeOptionalString(value);
+  if (!tag) {
+    return { invalid: false };
+  }
+  if (tag.includes(PLUGIN_CRON_RESERVED_DELIMITER)) {
+    return { invalid: true };
+  }
+  return { tag, invalid: false };
+}
 
 export function buildPluginSchedulerCronName(params: {
   pluginId: string;
@@ -292,11 +304,31 @@ export async function schedulePluginSessionTurn(params: {
     );
     return undefined;
   }
+  if (schedule.kind === "cron" && params.schedule.deleteAfterRun === true) {
+    log.warn(
+      `plugin session turn scheduling failed (${formatScheduleLogContext({
+        pluginId: params.pluginId,
+        sessionKey,
+        ...(scheduleName ? { name: scheduleName } : {}),
+      })}): deleteAfterRun requires a one-shot schedule`,
+    );
+    return undefined;
+  }
+  const { tag, invalid: invalidTag } = resolvePluginSessionTurnTag(params.schedule.tag);
+  if (invalidTag) {
+    log.warn(
+      `plugin session turn scheduling failed (${formatScheduleLogContext({
+        pluginId: params.pluginId,
+        sessionKey,
+        ...(scheduleName ? { name: scheduleName } : {}),
+      })}): tag contains reserved delimiter ":"`,
+    );
+    return undefined;
+  }
   const cronDeliveryMode = deliveryMode ?? "announce";
   if (params.shouldCommit && !params.shouldCommit()) {
     return undefined;
   }
-  const tag = normalizeOptionalString(params.schedule.tag);
   const name = buildPluginSchedulerCronName({
     pluginId: params.pluginId,
     sessionKey,
@@ -381,61 +413,7 @@ export async function schedulePluginSessionTurn(params: {
       },
     },
   });
-  if (
-    handle &&
-    (params.schedule.deleteAfterRun ?? schedule.kind === "at") &&
-    schedule.kind === "at"
-  ) {
-    pruneOneShotSchedulerRecordAfterRun({
-      pluginId: params.pluginId,
-      jobId,
-      sessionKey,
-      runAt: schedule.at,
-    });
-  }
   return handle;
-}
-
-function pruneOneShotSchedulerRecordAfterRun(params: {
-  pluginId: string;
-  jobId: string;
-  sessionKey: string;
-  runAt: string;
-}): void {
-  const runAtMs = Date.parse(params.runAt);
-  if (!Number.isFinite(runAtMs)) {
-    return;
-  }
-  const expectedGeneration = getPluginSessionSchedulerJobGeneration({
-    pluginId: params.pluginId,
-    jobId: params.jobId,
-    sessionKey: params.sessionKey,
-  });
-  if (expectedGeneration === undefined) {
-    return;
-  }
-  const delayMs = Math.max(0, runAtMs - Date.now()) + ONE_SHOT_SCHEDULER_RECORD_PRUNE_GRACE_MS;
-  scheduleUnrefTimeout(() => {
-    deletePluginSessionSchedulerJob({
-      pluginId: params.pluginId,
-      jobId: params.jobId,
-      sessionKey: params.sessionKey,
-      expectedGeneration,
-    });
-  }, delayMs);
-}
-
-function scheduleUnrefTimeout(callback: () => void, delayMs: number): void {
-  const boundedDelayMs = Math.min(Math.max(0, delayMs), MAX_TIMER_DELAY_MS);
-  const timer = setTimeout(() => {
-    const remainingDelayMs = delayMs - boundedDelayMs;
-    if (remainingDelayMs > 0) {
-      scheduleUnrefTimeout(callback, remainingDelayMs);
-      return;
-    }
-    callback();
-  }, boundedDelayMs);
-  timer.unref?.();
 }
 
 export async function unschedulePluginSessionTurnsByTag(params: {
@@ -447,8 +425,8 @@ export async function unschedulePluginSessionTurnsByTag(params: {
     return { removed: 0, failed: 0 };
   }
   const sessionKey = normalizeOptionalString(params.request.sessionKey);
-  const tag = normalizeOptionalString(params.request.tag);
-  if (!sessionKey || !tag) {
+  const { tag, invalid: invalidTag } = resolvePluginSessionTurnTag(params.request.tag);
+  if (!sessionKey || !tag || invalidTag) {
     return { removed: 0, failed: 0 };
   }
   const namePrefix = buildPluginSchedulerTagPrefix({

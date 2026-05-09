@@ -173,15 +173,30 @@ export type PluginSessionTurnSchedule =
   | { delayMs: number }
   | { cron: string; tz?: string };
 
-export type PluginSessionTurnScheduleParams = PluginSessionTurnSchedule & {
+type PluginSessionTurnScheduleCommonParams = {
   sessionKey: string;
   message: string;
   agentId?: string;
-  deleteAfterRun?: boolean;
   deliveryMode?: "none" | "announce";
   name?: string;
+  /** Optional cleanup tag. Reserved cron-name delimiters like `:` are rejected. */
   tag?: string;
 };
+
+export type PluginSessionTurnScheduleParams =
+  | ({
+      at: string | number | Date;
+      deleteAfterRun?: boolean;
+    } & PluginSessionTurnScheduleCommonParams)
+  | ({
+      delayMs: number;
+      deleteAfterRun?: boolean;
+    } & PluginSessionTurnScheduleCommonParams)
+  | ({
+      cron: string;
+      tz?: string;
+      deleteAfterRun?: false;
+    } & PluginSessionTurnScheduleCommonParams);
 
 export type PluginSessionTurnUnscheduleByTagParams = {
   sessionKey: string;
