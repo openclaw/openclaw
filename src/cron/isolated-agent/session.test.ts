@@ -173,23 +173,6 @@ describe("resolveCronSession", () => {
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
-    it("clears stale transcriptLocator when forceNew rolls to a fresh session", () => {
-      const result = resolveWithStoredEntry({
-        entry: {
-          sessionId: "existing-session-id-456",
-          updatedAt: NOW_MS - 1000,
-          modelOverride: "sonnet-4",
-        },
-        fresh: true,
-        forceNew: true,
-      });
-
-      expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-456");
-      expect(result.isNewSession).toBe(true);
-      expect(result.sessionEntry).not.toHaveProperty("transcriptLocator");
-      expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
-    });
-
     it("clears delivery routing metadata and deliveryContext when forceNew is true", () => {
       const result = resolveWithStoredEntry({
         entry: {
