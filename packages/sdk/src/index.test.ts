@@ -327,7 +327,7 @@ describe("OpenClaw SDK", () => {
     await expect(oc.artifacts.download("artifact_123", undefined as never)).rejects.toThrow(
       "oc.artifacts.download requires one of sessionKey, runId, or taskId",
     );
-    expect(transport.calls).toEqual([]);
+    expect(transport.calls).toStrictEqual([]);
   });
 
   it("throws explicit unsupported errors for SDK namespaces without Gateway RPCs", async () => {
@@ -349,7 +349,7 @@ describe("OpenClaw SDK", () => {
     await expect(oc.environments.delete("environment_123")).rejects.toThrow(
       "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
     );
-    expect(transport.calls).toEqual([]);
+    expect(transport.calls).toStrictEqual([]);
   });
 
   it("invokes tools through the Gateway tools.invoke method", async () => {
