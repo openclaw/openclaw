@@ -1404,6 +1404,7 @@
                   "providers/mistral",
                   "providers/moonshot",
                   "providers/nvidia",
+                  "providers/novita",
                   "providers/ollama",
                   "providers/openai",
                   "providers/opencode",

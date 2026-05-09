@@ -1109,6 +1109,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/novita:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/nvidia:
     devDependencies:
       '@openclaw/plugin-sdk':

@@ -53,6 +53,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Mistral](/providers/mistral)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [NVIDIA](/providers/nvidia)
+- [Novita AI](/providers/novita)
 - [Ollama (cloud + local models)](/providers/ollama)
 - [OpenAI (API + Codex)](/providers/openai)
 - [OpenCode](/providers/opencode)

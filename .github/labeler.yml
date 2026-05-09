@@ -396,6 +396,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/nvidia/**"
+"extensions: novita":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/novita/**"
+          - "docs/providers/novita.md"
 "extensions: phone-control":
   - changed-files:
       - any-glob-to-any-file:
