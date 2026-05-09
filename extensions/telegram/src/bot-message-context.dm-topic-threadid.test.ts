@@ -84,6 +84,22 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expectRecordedRoute({ to: "telegram:1234" });
   });
 
+  it("persists regular group last route without forcing replies back to a prior DM", async () => {
+    const ctx = await buildCtx({
+      message: {
+        chat: { id: -5167418353, type: "supergroup", title: "Test Group", is_forum: false },
+        text: "@bot hello",
+      },
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(recordInboundSessionMock).toHaveBeenCalled();
+
+    expectRecordedRoute({ to: "telegram:-5167418353" });
+  });
+
   it("passes threadId to updateLastRoute for forum topic group messages", async () => {
     const ctx = await buildCtx({
       message: {

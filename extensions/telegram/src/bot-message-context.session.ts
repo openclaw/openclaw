@@ -416,9 +416,9 @@ export async function buildTelegramInboundContextPayload(params: {
     route,
     sessionKey: route.sessionKey,
   });
-  const shouldPersistGroupLastRouteThread = isGroup && route.matchedBy !== "binding.channel";
+  const shouldPersistGroupLastRoute = isGroup && route.matchedBy !== "binding.channel";
   const updateLastRouteThreadId = isGroup
-    ? shouldPersistGroupLastRouteThread && resolvedThreadId != null
+    ? shouldPersistGroupLastRoute && resolvedThreadId != null
       ? String(resolvedThreadId)
       : undefined
     : dmThreadId != null
@@ -426,7 +426,7 @@ export async function buildTelegramInboundContextPayload(params: {
       : undefined;
 
   const updateLastRoute =
-    !isGroup || updateLastRouteThreadId != null
+    !isGroup || shouldPersistGroupLastRoute
       ? {
           sessionKey: updateLastRouteSessionKey,
           channel: "telegram" as const,
