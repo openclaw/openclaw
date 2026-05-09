@@ -121,7 +121,7 @@ export type RunEmbeddedPiAgentParams = {
   /**
    * OpenClaw-owned filesystem capabilities for this run. Worker-backed runs
    * inject this from the runtime context; inline runs can omit it and use the
-   * normal host-disk workspace tools.
+   * legacy disk-backed compatibility paths.
    */
   agentFilesystem?: AgentFilesystem;
   /** Files to seed into the worker SQLite VFS before tools start. */
