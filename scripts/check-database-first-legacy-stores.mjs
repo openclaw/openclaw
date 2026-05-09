@@ -6,6 +6,7 @@ import { resolveRepoRoot, runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = ["src", "extensions", "packages"];
+const bridgeContractRoots = [...sourceRoots, "test"];
 const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".js", ".mjs"]);
 
 const legacyStoreMarkers = [
@@ -266,7 +267,7 @@ function isAllowedPath(relativePath) {
   );
 }
 
-async function collectSourceFiles(root) {
+async function collectSourceFiles(root, options = {}) {
   let entries;
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
@@ -291,7 +292,11 @@ async function collectSourceFiles(root) {
       continue;
     }
     const relativePath = toPosixPath(path.relative(repoRoot, entryPath));
-    if (isGeneratedPath(relativePath) || isTestPath(relativePath) || isAllowedPath(relativePath)) {
+    if (
+      isGeneratedPath(relativePath) ||
+      (!options.includeTests && isTestPath(relativePath)) ||
+      isAllowedPath(relativePath)
+    ) {
       continue;
     }
     files.push({ absolutePath: entryPath, relativePath });
@@ -337,14 +342,41 @@ function findViolations(content, relativePath) {
   return violations;
 }
 
+function findBridgeContractViolations(content, relativePath) {
+  const violations = [];
+  for (const marker of forbiddenRuntimeLocatorContractMarkers) {
+    for (const match of content.matchAll(new RegExp(marker.pattern, "gu"))) {
+      violations.push({
+        path: relativePath,
+        line: lineForIndex(content, match.index ?? 0),
+        label: marker.label,
+      });
+    }
+  }
+  return violations;
+}
+
 async function main() {
-  const files = (
+  const runtimeFiles = (
     await Promise.all(sourceRoots.map((root) => collectSourceFiles(path.join(repoRoot, root))))
   ).flat();
   const violations = [];
-  for (const file of files) {
+  for (const file of runtimeFiles) {
     const content = await fs.readFile(file.absolutePath, "utf8");
     violations.push(...findViolations(content, file.relativePath));
+  }
+  const testFiles = (
+    await Promise.all(
+      bridgeContractRoots.map((root) =>
+        collectSourceFiles(path.join(repoRoot, root), { includeTests: true }),
+      ),
+    )
+  )
+    .flat()
+    .filter((file) => isTestPath(file.relativePath) || file.relativePath.startsWith("test/"));
+  for (const file of testFiles) {
+    const content = await fs.readFile(file.absolutePath, "utf8");
+    violations.push(...findBridgeContractViolations(content, file.relativePath));
   }
 
   if (violations.length === 0) {
