@@ -663,6 +663,9 @@ sessionId}` and session key context.
   lives in the Matrix plugin setup/doctor migration surface. Matrix recovery
   keys remain explicit Matrix client files until a separate credential/secret
   export design exists.
+- Matrix startup maintenance no longer moves legacy Matrix files. Startup only
+  reports pending migration state and tells the operator to run
+  `openclaw doctor --fix`; the snapshot/import/delete step remains doctor-owned.
 - Nostr bus cursors and profile publish state now use shared SQLite plugin
   state. Their legacy JSON import plan lives in the Nostr plugin setup/doctor
   migration surface.

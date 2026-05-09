@@ -52,28 +52,8 @@ async function seedLegacyMatrixCrypto(home: string) {
   );
 }
 
-function createSuccessfulMatrixMigrationDeps() {
-  return {
-    maybeCreateMatrixMigrationSnapshot: vi.fn(async () => ({
-      created: true,
-      archivePath: "/tmp/snapshot.tar.gz",
-      markerPath: "/tmp/migration-snapshot.json",
-    })),
-    autoMigrateLegacyMatrixState: vi.fn(async () => ({
-      migrated: true,
-      changes: [],
-      warnings: [],
-    })),
-  };
-}
-
 function createWarningOnlyMaintenanceHarness() {
   return {
-    deps: {
-      maybeCreateMatrixMigrationSnapshot: vi.fn(),
-      autoMigrateLegacyMatrixState: vi.fn(),
-      autoPrepareLegacyMatrixCrypto: vi.fn(),
-    },
     log: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -84,9 +64,6 @@ function createWarningOnlyMaintenanceHarness() {
 function expectWarningOnlyMaintenanceSkipped(
   harness: ReturnType<typeof createWarningOnlyMaintenanceHarness>,
 ) {
-  expect(harness.deps.maybeCreateMatrixMigrationSnapshot).not.toHaveBeenCalled();
-  expect(harness.deps.autoMigrateLegacyMatrixState).not.toHaveBeenCalled();
-  expect(harness.deps.autoPrepareLegacyMatrixCrypto).not.toHaveBeenCalled();
   expect(harness.log.info).toHaveBeenCalledWith(
     "matrix: migration remains in a warning-only state; no pre-migration snapshot was needed yet",
   );
@@ -97,34 +74,23 @@ describe("runMatrixStartupMaintenance", () => {
     legacyCryptoInspectorAvailability.available = true;
   });
 
-  it("creates a snapshot before actionable startup migration", async () => {
+  it("warns instead of migrating actionable legacy state during startup", async () => {
     await withTempHome(async (home) => {
       await seedLegacyMatrixState(home);
-      const deps = createSuccessfulMatrixMigrationDeps();
-      const autoPrepareLegacyMatrixCryptoMock = vi.fn(async () => ({
-        migrated: false,
-        changes: [],
-        warnings: [],
-      }));
+      const warn = vi.fn();
 
       await runMatrixStartupMaintenance({
         cfg: makeMatrixStartupConfig(),
         env: process.env,
-        deps: {
-          maybeCreateMatrixMigrationSnapshot: deps.maybeCreateMatrixMigrationSnapshot,
-          autoMigrateLegacyMatrixState: deps.autoMigrateLegacyMatrixState,
-          autoPrepareLegacyMatrixCrypto: autoPrepareLegacyMatrixCryptoMock,
-        },
-        log: {},
+        log: { warn },
       });
 
-      expect(deps.maybeCreateMatrixMigrationSnapshot).toHaveBeenCalledWith({
-        trigger: "gateway-startup",
-        env: process.env,
-        log: {},
-      });
-      expect(deps.autoMigrateLegacyMatrixState).toHaveBeenCalledOnce();
-      expect(autoPrepareLegacyMatrixCryptoMock).toHaveBeenCalledOnce();
+      await expect(
+        fs.stat(path.join(home, ".openclaw", "matrix", "bot-storage.json")),
+      ).resolves.toBeTruthy();
+      expect(warn).toHaveBeenCalledWith(
+        'gateway: legacy Matrix state needs migration. Run "openclaw doctor --fix" to create a migration snapshot and move legacy files; startup will not mutate legacy state.',
+      );
     });
   });
 
@@ -136,7 +102,6 @@ describe("runMatrixStartupMaintenance", () => {
       await runMatrixStartupMaintenance({
         cfg: makeMatrixStartupConfig(false),
         env: process.env,
-        deps: harness.deps as never,
         log: harness.log,
       });
 
@@ -157,7 +122,6 @@ describe("runMatrixStartupMaintenance", () => {
       await runMatrixStartupMaintenance({
         cfg: makeMatrixStartupConfig(),
         env: process.env,
-        deps: harness.deps as never,
         log: harness.log,
       });
 
@@ -168,62 +132,22 @@ describe("runMatrixStartupMaintenance", () => {
     });
   });
 
-  it("skips startup migration when snapshot creation fails", async () => {
+  it("does not create snapshots during startup", async () => {
     await withTempHome(async (home) => {
       await seedLegacyMatrixState(home);
-      const maybeCreateMatrixMigrationSnapshotMock = vi.fn(async () => {
-        throw new Error("backup failed");
-      });
-      const autoMigrateLegacyMatrixStateMock = vi.fn();
-      const autoPrepareLegacyMatrixCryptoMock = vi.fn();
       const warn = vi.fn();
 
       await runMatrixStartupMaintenance({
         cfg: makeMatrixStartupConfig(),
         env: process.env,
-        deps: {
-          maybeCreateMatrixMigrationSnapshot: maybeCreateMatrixMigrationSnapshotMock,
-          autoMigrateLegacyMatrixState: autoMigrateLegacyMatrixStateMock as never,
-          autoPrepareLegacyMatrixCrypto: autoPrepareLegacyMatrixCryptoMock as never,
-        },
         log: { warn },
       });
 
-      expect(autoMigrateLegacyMatrixStateMock).not.toHaveBeenCalled();
-      expect(autoPrepareLegacyMatrixCryptoMock).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledWith(
-        "gateway: failed creating a Matrix migration snapshot; skipping Matrix migration for now: Error: backup failed",
-      );
-    });
-  });
-
-  it("downgrades migration step failures to warnings so startup can continue", async () => {
-    await withTempHome(async (home) => {
-      await seedLegacyMatrixState(home);
-      const deps = createSuccessfulMatrixMigrationDeps();
-      const autoPrepareLegacyMatrixCryptoMock = vi.fn(async () => {
-        throw new Error("disk full");
-      });
-      const warn = vi.fn();
-
       await expect(
-        runMatrixStartupMaintenance({
-          cfg: makeMatrixStartupConfig(),
-          env: process.env,
-          deps: {
-            maybeCreateMatrixMigrationSnapshot: deps.maybeCreateMatrixMigrationSnapshot,
-            autoMigrateLegacyMatrixState: deps.autoMigrateLegacyMatrixState,
-            autoPrepareLegacyMatrixCrypto: autoPrepareLegacyMatrixCryptoMock,
-          },
-          log: { warn },
-        }),
-      ).resolves.toBeUndefined();
-
-      expect(deps.maybeCreateMatrixMigrationSnapshot).toHaveBeenCalledOnce();
-      expect(deps.autoMigrateLegacyMatrixState).toHaveBeenCalledOnce();
-      expect(autoPrepareLegacyMatrixCryptoMock).toHaveBeenCalledOnce();
+        fs.stat(path.join(home, ".openclaw", "matrix-migration-snapshot.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
       expect(warn).toHaveBeenCalledWith(
-        "gateway: legacy Matrix encrypted-state preparation failed during Matrix migration; continuing startup: Error: disk full",
+        'gateway: legacy Matrix state needs migration. Run "openclaw doctor --fix" to create a migration snapshot and move legacy files; startup will not mutate legacy state.',
       );
     });
   });

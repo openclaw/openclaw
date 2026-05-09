@@ -206,14 +206,14 @@ export function resolveLegacyMatrixFlatStoreTarget(params: {
     return {
       warning:
         `Legacy Matrix ${params.detectedKind} detected at ${params.detectedPath}, but channels.matrix is not configured yet. ` +
-        'Configure Matrix, then rerun "openclaw doctor --fix" or restart the gateway.',
+        'Configure Matrix, then rerun "openclaw doctor --fix".',
     };
   }
   if (requiresExplicitMatrixDefaultAccount(params.cfg)) {
     return {
       warning:
         `Legacy Matrix ${params.detectedKind} detected at ${params.detectedPath}, but multiple Matrix accounts are configured and channels.matrix.defaultAccount is not set. ` +
-        'Set "channels.matrix.defaultAccount" to the intended target account before rerunning "openclaw doctor --fix" or restarting the gateway.',
+        'Set "channels.matrix.defaultAccount" to the intended target account before rerunning "openclaw doctor --fix".',
     };
   }
 

@@ -1,8 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  autoMigrateLegacyMatrixState,
-  autoPrepareLegacyMatrixCrypto,
-  maybeCreateMatrixMigrationSnapshot,
   resolveMatrixMigrationStatus,
   type MatrixMigrationStatus,
 } from "./matrix-migration.runtime.js";
@@ -27,41 +24,14 @@ function logWarningOnlyMatrixMigrationReasons(params: {
   }
 }
 
-async function runBestEffortMatrixMigrationStep(params: {
-  label: string;
-  log: MatrixStartupLogger;
-  logPrefix?: string;
-  run: () => Promise<unknown>;
-}): Promise<void> {
-  try {
-    await params.run();
-  } catch (err) {
-    params.log.warn?.(
-      `${params.logPrefix?.trim() || "gateway"}: ${params.label} failed during Matrix migration; continuing startup: ${String(err)}`,
-    );
-  }
-}
-
 export async function runMatrixStartupMaintenance(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   log: MatrixStartupLogger;
   trigger?: string;
   logPrefix?: string;
-  deps?: {
-    maybeCreateMatrixMigrationSnapshot?: typeof maybeCreateMatrixMigrationSnapshot;
-    autoMigrateLegacyMatrixState?: typeof autoMigrateLegacyMatrixState;
-    autoPrepareLegacyMatrixCrypto?: typeof autoPrepareLegacyMatrixCrypto;
-  };
 }): Promise<void> {
   const env = params.env ?? process.env;
-  const createSnapshot =
-    params.deps?.maybeCreateMatrixMigrationSnapshot ?? maybeCreateMatrixMigrationSnapshot;
-  const migrateLegacyState =
-    params.deps?.autoMigrateLegacyMatrixState ?? autoMigrateLegacyMatrixState;
-  const prepareLegacyCrypto =
-    params.deps?.autoPrepareLegacyMatrixCrypto ?? autoPrepareLegacyMatrixCrypto;
-  const trigger = params.trigger?.trim() || "gateway-startup";
   const logPrefix = params.logPrefix?.trim() || "gateway";
   const migrationStatus = resolveMatrixMigrationStatus({ cfg: params.cfg, env });
 
@@ -76,39 +46,8 @@ export async function runMatrixStartupMaintenance(params: {
     return;
   }
 
-  try {
-    await createSnapshot({
-      trigger,
-      env,
-      log: params.log,
-    });
-  } catch (err) {
-    params.log.warn?.(
-      `${logPrefix}: failed creating a Matrix migration snapshot; skipping Matrix migration for now: ${String(err)}`,
-    );
-    return;
-  }
-
-  await runBestEffortMatrixMigrationStep({
-    label: "legacy Matrix state migration",
-    log: params.log,
-    logPrefix,
-    run: () =>
-      migrateLegacyState({
-        cfg: params.cfg,
-        env,
-        log: params.log,
-      }),
-  });
-  await runBestEffortMatrixMigrationStep({
-    label: "legacy Matrix encrypted-state preparation",
-    log: params.log,
-    logPrefix,
-    run: () =>
-      prepareLegacyCrypto({
-        cfg: params.cfg,
-        env,
-        log: params.log,
-      }),
-  });
+  params.log.warn?.(
+    `${logPrefix}: legacy Matrix state needs migration. Run "openclaw doctor --fix" to create a migration snapshot and move legacy files; startup will not mutate legacy state.`,
+  );
+  logWarningOnlyMatrixMigrationReasons({ status: migrationStatus, log: params.log });
 }
