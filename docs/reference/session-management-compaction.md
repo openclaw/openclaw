@@ -155,7 +155,8 @@ The canonical rules are documented at [/concepts/session](/concepts/session).
 
 ## Session ids (`sessionId`)
 
-Each `sessionKey` points at a current `sessionId` (the transcript file that continues the conversation).
+Each `sessionKey` points at a current `sessionId` (the SQLite transcript identity
+that continues the conversation).
 
 Rules of thumb:
 
@@ -175,7 +176,7 @@ The store's value type is `SessionEntry` in `src/config/sessions/types.ts`.
 
 Key fields (not exhaustive):
 
-- `sessionId`: current transcript id (filename is derived from this unless `sessionFile` is set)
+- `sessionId`: current SQLite transcript id for the session row
 - `sessionStartedAt`: start timestamp for the current `sessionId`; daily reset
   freshness uses this. Legacy rows may derive it from the JSONL session header.
 - `lastInteractionAt`: last real user/channel interaction timestamp; idle reset
@@ -290,10 +291,10 @@ These are Pi runtime semantics (OpenClaw consumes the events, but Pi decides whe
 
 OpenClaw can also trigger a preflight local compaction before opening the next
 run when `agents.defaults.compaction.maxActiveTranscriptBytes` is set and the
-active transcript file reaches that size. This is a file-size guard for local
-reopen cost, not raw archival: OpenClaw still runs normal semantic compaction,
-and it requires `truncateAfterCompaction` so the compacted summary can become a
-new successor transcript.
+active SQLite transcript reaches that size. This is a transcript-size guard for
+local reopen cost, not raw archival: OpenClaw still runs normal semantic
+compaction, and it requires `truncateAfterCompaction` so the compacted summary
+can become a new successor transcript.
 
 For embedded Pi runs, `agents.defaults.compaction.midTurnPrecheck.enabled: true`
 adds an opt-in tool-loop guard. After a tool result is appended and before the
