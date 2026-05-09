@@ -1,6 +1,6 @@
-import path from "node:path";
 import { expect, test } from "vitest";
 import { listSessionEntries, type SessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -14,6 +14,10 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+
+function sqliteTranscript(sessionId: string, agentId = "main"): string {
+  return createSqliteSessionTranscriptLocator({ agentId, sessionId });
+}
 
 function seedTranscript(params: {
   sessionId: string;
@@ -68,9 +72,9 @@ function seedRawSessionStore(store: Record<string, unknown>) {
 }
 
 test("sessions.preview returns transcript previews", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionStoreDir();
   const sessionId = "sess-preview";
-  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+  const transcriptPath = sqliteTranscript(sessionId);
   const lines = createToolSummaryPreviewTranscriptLines(sessionId);
   seedTranscriptLines(sessionId, transcriptPath, lines);
 
@@ -96,11 +100,11 @@ test("sessions.preview returns transcript previews", async () => {
 });
 
 test("sessions.resolve and mutators use canonical main key without cleaning legacy ghost keys", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionStoreDir();
   testState.agentsConfig = { list: [{ id: "ops", default: true }] };
   testState.sessionConfig = { mainKey: "work" };
   const sessionId = "sess-alias-cleanup";
-  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+  const transcriptPath = sqliteTranscript(sessionId, "ops");
   seedTranscript({
     sessionId,
     transcriptPath,
