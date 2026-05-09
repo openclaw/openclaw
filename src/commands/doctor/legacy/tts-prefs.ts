@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
-import {
-  resolveLegacyDefaultTtsPrefsPath,
-  writeTtsUserPrefsForMigration,
-  type TtsUserPrefs,
-} from "../../../tts/tts-prefs-store.js";
+import path from "node:path";
+import { type TtsUserPrefs, writeTtsUserPrefsSnapshot } from "../../../tts/tts-prefs-store.js";
+import { resolveConfigDir } from "../../../utils.js";
+
+function resolveLegacyDefaultTtsPrefsPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveConfigDir(env), "settings", "tts.json");
+}
 
 function coerceTtsPrefs(value: unknown): TtsUserPrefs {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as TtsUserPrefs) : {};
@@ -36,7 +38,7 @@ export async function importLegacyTtsPrefsFileToSqlite(
     }
     prefs = {};
   }
-  writeTtsUserPrefsForMigration(prefs, env);
+  writeTtsUserPrefsSnapshot(prefs, env);
   await fs.rm(filePath, { force: true }).catch(() => undefined);
   return { imported: true };
 }

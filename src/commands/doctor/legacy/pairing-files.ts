@@ -1,16 +1,24 @@
 import fs from "node:fs/promises";
+import path from "node:path";
+import { resolveStateDir } from "../../../config/paths.js";
 import { readJsonIfExists } from "../../../infra/json-files.js";
-import {
-  coercePairingStateRecord,
-  resolvePairingPaths,
-  writePairingStateRecord,
-} from "../../../infra/pairing-files.js";
+import { coercePairingStateRecord, writePairingStateRecord } from "../../../infra/pairing-files.js";
+
+export function resolveLegacyPairingPaths(baseDir: string | undefined, subdir: string) {
+  const root = baseDir ?? resolveStateDir();
+  const dir = path.join(root, subdir);
+  return {
+    dir,
+    pendingPath: path.join(dir, "pending.json"),
+    pairedPath: path.join(dir, "paired.json"),
+  };
+}
 
 export async function legacyPairingStateFilesExist(params: {
   baseDir?: string;
   subdir: string;
 }): Promise<boolean> {
-  const { pendingPath, pairedPath } = resolvePairingPaths(params.baseDir, params.subdir);
+  const { pendingPath, pairedPath } = resolveLegacyPairingPaths(params.baseDir, params.subdir);
   const [pendingExists, pairedExists] = await Promise.all([
     fs
       .access(pendingPath)
@@ -32,7 +40,7 @@ export async function importLegacyPairingStateFilesToSqlite(params: {
   paired: number;
   files: number;
 }> {
-  const { pendingPath, pairedPath } = resolvePairingPaths(params.baseDir, params.subdir);
+  const { pendingPath, pairedPath } = resolveLegacyPairingPaths(params.baseDir, params.subdir);
   const [pending, paired] = await Promise.all([
     readJsonIfExists<unknown>(pendingPath),
     readJsonIfExists<unknown>(pairedPath),

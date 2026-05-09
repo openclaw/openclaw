@@ -131,7 +131,8 @@ The branch already has a real shared SQLite base:
   The old TUI JSON file is doctor migration input only.
 - Default TTS prefs now live in shared plugin-state SQLite rows keyed under the
   `speech-core` plugin. The old `settings/tts.json` file is doctor migration
-  input only; runtime no longer reads or writes TTS prefs JSON files.
+  input only; runtime no longer reads or writes TTS prefs JSON files, and the
+  legacy path resolver lives in the doctor migration module.
 - Subagent run recovery and OpenRouter model capability cache runtime modules
   now keep SQLite readers/writers separate from doctor-only legacy JSON import
   helpers.
@@ -154,6 +155,10 @@ The branch already has a real shared SQLite base:
   same split: runtime modules expose SQLite-backed operations and narrow
   migration writers, while doctor imports/removes the old JSON files through
   `src/commands/doctor/legacy/*` modules.
+- Core pairing and cron runtime modules no longer export legacy JSON path
+  builders. Doctor-owned legacy modules construct `pending.json`, `paired.json`,
+  `bootstrap.json`, and `cron/jobs.json` source paths for import tests and
+  migration only.
 - `src/commands/doctor-sqlite-state.ts` already imports several legacy JSON
   state files, including node host config, into SQLite from doctor.
 - `src/commands/doctor/state-migrations.ts` imports legacy `sessions.json` and

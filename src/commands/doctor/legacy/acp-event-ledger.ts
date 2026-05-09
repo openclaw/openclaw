@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   ACP_EVENT_LEDGER_VERSION,
-  normalizeAcpEventLedgerStoreForMigration,
-  writeAcpEventLedgerStoreToSqliteForMigration,
+  normalizeAcpEventLedgerSnapshot,
+  writeAcpEventLedgerSnapshotToSqlite,
 } from "../../../acp/event-ledger.js";
 import { resolveStateDir } from "../../../config/paths.js";
 
@@ -54,8 +54,8 @@ export async function importLegacyAcpEventLedgerFileToSqlite(
   if (!isLegacyAcpEventLedgerShape(parsed)) {
     return { imported: false, sessions: 0, events: 0 };
   }
-  const store = normalizeAcpEventLedgerStoreForMigration(parsed);
-  writeAcpEventLedgerStoreToSqliteForMigration(store, { env });
+  const store = normalizeAcpEventLedgerSnapshot(parsed);
+  writeAcpEventLedgerSnapshotToSqlite(store, { env });
   await fs.rm(filePath, { force: true }).catch(() => undefined);
   return {
     imported: true,

@@ -22,11 +22,16 @@ import {
   type PairedDevice,
   type RotateDeviceTokenResult,
 } from "./device-pairing.js";
-import {
-  readPairingStateRecord,
-  resolvePairingPaths,
-  writePairingStateRecord,
-} from "./pairing-files.js";
+import { readPairingStateRecord, writePairingStateRecord } from "./pairing-files.js";
+
+function resolveLegacyPairingFixturePaths(baseDir: string, subdir: string) {
+  const dir = path.join(baseDir, subdir);
+  return {
+    dir,
+    pendingPath: path.join(dir, "pending.json"),
+    pairedPath: path.join(dir, "paired.json"),
+  };
+}
 
 async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
   const request = await requestDevicePairing(
@@ -175,7 +180,7 @@ describe("device pairing tokens", () => {
 
   test("ignores legacy pairing state files at runtime", async () => {
     const baseDir = await makeDevicePairingDir();
-    const paths = resolvePairingPaths(baseDir, "devices");
+    const paths = resolveLegacyPairingFixturePaths(baseDir, "devices");
     await mkdir(paths.dir, { recursive: true });
     await writeFile(paths.pendingPath, "[]", "utf8");
     await writeFile(paths.pairedPath, "[]", "utf8");
@@ -1425,7 +1430,7 @@ describe("device pairing tokens", () => {
       },
       baseDir,
     );
-    const { pairedPath } = resolvePairingPaths(baseDir, "devices");
+    const { pairedPath } = resolveLegacyPairingFixturePaths(baseDir, "devices");
     await mkdir(path.dirname(pairedPath), { recursive: true });
     await writeFile(pairedPath, "{not-json}", "utf8");
 

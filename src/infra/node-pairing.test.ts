@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
@@ -10,7 +11,16 @@ import {
   updatePairedNodeMetadata,
   verifyNodeToken,
 } from "./node-pairing.js";
-import { readPairingStateRecord, resolvePairingPaths } from "./pairing-files.js";
+import { readPairingStateRecord } from "./pairing-files.js";
+
+function resolveLegacyPairingFixturePaths(baseDir: string, subdir: string) {
+  const dir = path.join(baseDir, subdir);
+  return {
+    dir,
+    pendingPath: path.join(dir, "pending.json"),
+    pairedPath: path.join(dir, "paired.json"),
+  };
+}
 
 async function setupPairedNode(baseDir: string): Promise<string> {
   const request = await requestNodePairing(
@@ -131,7 +141,7 @@ describe("node pairing tokens", () => {
 
   test("ignores legacy pairing state files at runtime", async () => {
     await withNodePairingDir(async (baseDir) => {
-      const paths = resolvePairingPaths(baseDir, "nodes");
+      const paths = resolveLegacyPairingFixturePaths(baseDir, "nodes");
       await fs.mkdir(paths.dir, { recursive: true });
       await fs.writeFile(paths.pendingPath, "[]", "utf8");
       await fs.writeFile(paths.pairedPath, "[]", "utf8");
@@ -268,7 +278,7 @@ describe("node pairing tokens", () => {
 
   test("ignores corrupt legacy paired node state when requesting pairing", async () => {
     await withNodePairingDir(async (baseDir) => {
-      const { dir, pairedPath } = resolvePairingPaths(baseDir, "nodes");
+      const { dir, pairedPath } = resolveLegacyPairingFixturePaths(baseDir, "nodes");
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(pairedPath, "{not-json}", "utf8");
 

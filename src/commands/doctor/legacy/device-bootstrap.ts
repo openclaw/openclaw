@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { type DeviceBootstrapState } from "../../../infra/device-bootstrap.js";
-import { resolvePairingPaths, writePairingStateRecord } from "../../../infra/pairing-files.js";
+import { writePairingStateRecord } from "../../../infra/pairing-files.js";
+import { resolveLegacyPairingPaths } from "./pairing-files.js";
 
 function resolveBootstrapPath(baseDir?: string): string {
-  return path.join(resolvePairingPaths(baseDir, "devices").dir, "bootstrap.json");
+  return path.join(resolveLegacyPairingPaths(baseDir, "devices").dir, "bootstrap.json");
 }
 
 export async function legacyDeviceBootstrapFileExists(baseDir?: string): Promise<boolean> {
