@@ -56,10 +56,6 @@ export async function rotateTranscriptAfterCompaction(params: {
   const compaction = branch[latestCompactionIndex] as CompactionEntry;
   const timestamp = (params.now?.() ?? new Date()).toISOString();
   const sessionId = randomUUID();
-  const sourceTranscriptLocator = createSqliteSessionTranscriptLocator({
-    agentId,
-    sessionId: sourceSessionId,
-  });
   const successorTranscriptLocator = resolveSuccessorTranscriptLocator({
     sessionId,
     agentId,
@@ -78,7 +74,7 @@ export async function rotateTranscriptAfterCompaction(params: {
     sessionId,
     timestamp,
     cwd: params.sessionManager.getCwd(),
-    parentSession: sourceTranscriptLocator,
+    parentSession: formatTranscriptParentReference({ agentId, sessionId: sourceSessionId }),
   });
   replaceSqliteSessionTranscriptEvents({
     agentId,
@@ -326,4 +322,8 @@ function resolveSuccessorTranscriptLocator(params: { sessionId: string; agentId:
     agentId: params.agentId,
     sessionId: params.sessionId,
   });
+}
+
+function formatTranscriptParentReference(params: { agentId: string; sessionId: string }): string {
+  return `agent-db:${params.agentId}:transcript_events:${params.sessionId}`;
 }
