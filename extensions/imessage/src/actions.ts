@@ -240,6 +240,70 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
   return Uint8Array.from(Buffer.from(base64Buffer, "base64"));
 }
 
+// Param names that any caller would reasonably treat as "attach this file
+// to the message". Covers everything the shared message-tool send schema
+// declares (`media`, `buffer`, `path`, `filePath`) plus the plural/url
+// variants that agents and channel adapters tend to reach for. Probed in
+// order so the first non-empty match wins.
+const REPLY_ATTACHMENT_PATH_PARAM_NAMES: readonly string[] = [
+  "filePath",
+  "path",
+  "media",
+  "mediaUrl",
+  "fileUrl",
+] as const;
+
+type ReplyAttachmentSpec =
+  | { kind: "path"; path: string }
+  | { kind: "buffer"; buffer: Uint8Array; filename: string };
+
+// Pull a concrete local-file or buffer attachment off the reply params,
+// normalizing the various aliases agents reach for. Remote URLs and array
+// shapes return the original param name so the caller can surface a
+// targeted error: we deliberately do not try to resolve `https://...`
+// attachments from inside the reply path because that would silently
+// duplicate the outbound media-resolver layer used by `send`.
+function extractReplyAttachment(
+  params: Record<string, unknown>,
+):
+  | { spec: ReplyAttachmentSpec; sourceParam: string }
+  | { spec: null; unsupportedParam: string }
+  | null {
+  for (const name of REPLY_ATTACHMENT_PATH_PARAM_NAMES) {
+    const value = readStringParam(params, name);
+    if (!value) {
+      continue;
+    }
+    if (/^https?:\/\//i.test(value)) {
+      return { spec: null, unsupportedParam: name };
+    }
+    return { spec: { kind: "path", path: value }, sourceParam: name };
+  }
+  const mediaUrls = params.mediaUrls;
+  if (Array.isArray(mediaUrls)) {
+    const first = mediaUrls.find((entry) => typeof entry === "string" && entry.trim().length > 0);
+    if (typeof first === "string") {
+      if (/^https?:\/\//i.test(first)) {
+        return { spec: null, unsupportedParam: "mediaUrls" };
+      }
+      return { spec: { kind: "path", path: first }, sourceParam: "mediaUrls" };
+    }
+  }
+  const buffer = readStringParam(params, "buffer");
+  if (buffer) {
+    const filename = readStringParam(params, "filename") ?? "attachment.bin";
+    return {
+      spec: {
+        kind: "buffer",
+        buffer: Uint8Array.from(Buffer.from(buffer, "base64")),
+        filename,
+      },
+      sourceParam: "buffer",
+    };
+  }
+  return null;
+}
+
 // Whitelist of expressive-send effect IDs the bridge accepts. Restricting
 // to a fixed set lets us return a clear error for typos ("invisible_ink"
 // vs "invisibleink") instead of silently forwarding gibberish to the
@@ -468,6 +532,27 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (!text) {
         throw new Error("iMessage reply requires text or message.");
       }
+      const attachment = extractReplyAttachment(params);
+      if (attachment) {
+        if (attachment.spec === null) {
+          throw new Error(
+            `iMessage reply received \`${attachment.unsupportedParam}\` as an http(s) URL, which the threaded send path cannot fetch. ` +
+              "Pass a local filesystem path, base64 `buffer` + `filename`, or use action 'upload-file'/'send' for remote media.",
+          );
+        }
+        // Reply-with-attachment requires the `imsg send-rich --file` flag
+        // (openclaw/imsg#114). Older imsg builds reject the option, so
+        // refuse loudly here rather than letting send-rich ship the text
+        // alone and silently drop the attachment — the original symptom
+        // of openclaw/openclaw#79822.
+        if (privateApiStatus?.cliCapabilities?.sendRichSupportsAttachment !== true) {
+          throw new Error(
+            "iMessage reply with an attachment needs an imsg build that exposes `send-rich --file` " +
+              "(openclaw/imsg#114). Upgrade imsg, or use action 'upload-file' (with filePath/filename) " +
+              "or action 'send' (with media) to deliver the file plus a separate 'reply' for any text.",
+          );
+        }
+      }
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendRichMessage({
@@ -475,6 +560,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         text,
         replyToMessageId: resolvedMessageId,
         partIndex: typeof partIndex === "number" ? partIndex : undefined,
+        attachment: attachment?.spec ?? undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
       return jsonResult({ ok: true, messageId: result.messageId, repliedTo: resolvedMessageId });

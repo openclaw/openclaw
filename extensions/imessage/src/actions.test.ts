@@ -278,6 +278,153 @@ describe("imessage message actions", () => {
     );
   });
 
+  describe("reply with attachment (openclaw/imsg#114 plumbing)", () => {
+    const stringPath = "/tmp/cute-lobster.png";
+
+    it("threads a path attachment through to sendRichMessage when imsg supports send-rich --file", async () => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: true },
+      });
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+      for (const field of ["filePath", "path", "media", "mediaUrl", "fileUrl"]) {
+        runtimeMock.sendRichMessage.mockClear();
+        await imessageMessageActions.handleAction?.({
+          action: "reply",
+          cfg: cfg(),
+          params: {
+            chatIdentifier: "team-thread",
+            messageId: "message-guid",
+            text: "🦞 here it is",
+            [field]: stringPath,
+          },
+        } as never);
+        expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            replyToMessageId: "message-guid",
+            attachment: { kind: "path", path: stringPath },
+          }),
+        );
+      }
+    });
+
+    it("threads the first usable mediaUrls entry through as a path attachment", async () => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: true },
+      });
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+      await imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "🦞 here it is",
+          mediaUrls: ["", stringPath, "/tmp/extra.png"],
+        },
+      } as never);
+      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachment: { kind: "path", path: stringPath },
+        }),
+      );
+    });
+
+    it("decodes a base64 buffer + filename into a buffer-shaped attachment", async () => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: true },
+      });
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+      const base64 = Buffer.from("PNGDATA").toString("base64");
+      await imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "🦞 here it is",
+          buffer: base64,
+          filename: "card.png",
+        },
+      } as never);
+      const call = runtimeMock.sendRichMessage.mock.calls.at(-1)?.[0] as {
+        attachment?: { kind: string; buffer?: Uint8Array; filename?: string };
+      };
+      expect(call?.attachment?.kind).toBe("buffer");
+      expect(call?.attachment?.filename).toBe("card.png");
+      expect(Buffer.from(call?.attachment?.buffer ?? new Uint8Array()).toString()).toBe("PNGDATA");
+    });
+
+    it("rejects reply + attachment when imsg does not advertise send-rich --file", async () => {
+      // Older imsg builds reject `--file` on send-rich, so refuse loudly
+      // here rather than letting send-rich ship the text alone and silently
+      // drop the attachment (the original openclaw/openclaw#79822 symptom).
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: false },
+      });
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+
+      for (const field of ["filePath", "path", "media", "mediaUrl", "fileUrl", "buffer"]) {
+        runtimeMock.sendRichMessage.mockClear();
+        await expect(
+          imessageMessageActions.handleAction?.({
+            action: "reply",
+            cfg: cfg(),
+            params: {
+              chatIdentifier: "team-thread",
+              messageId: "message-guid",
+              text: "🦞 here it is",
+              [field]: field === "buffer" ? Buffer.from("x").toString("base64") : stringPath,
+              ...(field === "buffer" ? { filename: "x.png" } : {}),
+            },
+          } as never),
+        ).rejects.toThrow(/needs an imsg build that exposes `send-rich --file`/);
+        expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+      }
+    });
+
+    it("rejects reply + http(s) media URL with a targeted error before touching the bridge", async () => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: true },
+      });
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action: "reply",
+          cfg: cfg(),
+          params: {
+            chatIdentifier: "team-thread",
+            messageId: "message-guid",
+            text: "🦞 remote image",
+            media: "https://example.com/cute.png",
+          },
+        } as never),
+      ).rejects.toThrow(/threaded send path cannot fetch/);
+      expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    });
+  });
+
   describe("phone-number target end-to-end (regressions caught the hard way)", () => {
     it("synthesizes iMessage;-;<phone> chat_identifier from a handle target and sends through to sendReaction", async () => {
       // Scenario from prod: agent calls react with `target:"+12069106512"` and a
