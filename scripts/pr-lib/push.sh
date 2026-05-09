@@ -124,9 +124,14 @@ GRAPHQL
     }}')
   rm -f "$additions_file" "$deletions_file"
 
+  local variables_file
+  variables_file=$(mktemp)
+  printf '%s\n' "$variables" >"$variables_file"
+
   local payload
-  payload=$(jq -n --arg query "$query" --argjson variables "$variables" \
-    '{query: $query, variables: $variables}')
+  payload=$(jq -n --arg query "$query" --slurpfile variables "$variables_file" \
+    '{query: $query, variables: $variables[0]}')
+  rm -f "$variables_file"
 
   local result
   result=$(gh api graphql --input - <<< "$payload" 2>&1) || {
