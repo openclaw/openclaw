@@ -137,10 +137,11 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
-import { createEmbeddedPiResourceLoader } from "./resource-loader.js";
+import { shouldUseOpenAIWebSocketTransport } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
+  resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "./stream-resolution.js";
@@ -183,6 +184,8 @@ function createCompactionDiagId(): string {
 function prepareCompactionSessionAgent(params: {
   session: { agent: { streamFn?: unknown } };
   providerStreamFn: unknown;
+  shouldUseWebSocketTransport: boolean;
+  wsApiKey?: string;
   sessionId: string;
   signal: AbortSignal;
   effectiveModel: ProviderRuntimeModel;
@@ -200,6 +203,8 @@ function prepareCompactionSessionAgent(params: {
   params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
     providerStreamFn: params.providerStreamFn as never,
+    shouldUseWebSocketTransport: params.shouldUseWebSocketTransport,
+    wsApiKey: params.wsApiKey,
     sessionId: params.sessionId,
     signal: params.signal,
     model: params.effectiveModel,
@@ -591,7 +596,7 @@ async function compactEmbeddedPiSessionDirectOnce(
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
   await ensureSessionHeader({
-    sessionFile: params.sessionFile,
+    transcriptLocator: params.transcriptLocator,
     sessionId: params.sessionId,
     cwd: effectiveWorkspace,
     agentId: earlyAgentIds.sessionAgentId,
@@ -718,7 +723,6 @@ async function compactEmbeddedPiSessionDirectOnce(
       workspaceDir: effectiveWorkspace,
       config: params.config,
       abortSignal: runAbortController.signal,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       modelProvider: model.provider,
       modelId,
       modelCompat: extractModelCompat(effectiveModel),
@@ -946,14 +950,14 @@ async function compactEmbeddedPiSessionDirectOnce(
 
     try {
       await repairTranscriptStateIfNeeded({
-        transcriptPath: params.sessionFile,
+        transcriptLocator: params.transcriptLocator,
         debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });
       const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
       const sessionManager = guardSessionManager(
         openTranscriptSessionManager({
-          sessionFile: params.sessionFile,
+          transcriptLocator: params.transcriptLocator,
           sessionId: params.sessionId,
           cwd: effectiveWorkspace,
         }),
@@ -976,7 +980,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       checkpointSnapshot = await captureCompactionCheckpointSnapshotAsync({
         agentId: sessionAgentId,
         sessionManager,
-        sessionFile: params.sessionFile,
+        transcriptLocator: params.transcriptLocator,
       });
       compactionSessionManager = sessionManager;
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
@@ -1042,6 +1046,23 @@ async function compactEmbeddedPiSessionDirectOnce(
         agentDir,
         effectiveWorkspace,
       });
+      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
+        provider,
+        modelApi: effectiveModel.api,
+        modelBaseUrl: effectiveModel.baseUrl,
+      });
+      const wsApiKey = shouldUseWebSocketTransport
+        ? await resolveEmbeddedAgentApiKey({
+            provider,
+            resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
+            authStorage,
+          })
+        : undefined;
+      if (shouldUseWebSocketTransport && !wsApiKey) {
+        log.warn(
+          `[ws-stream] no API key for provider=${provider}; keeping compaction HTTP transport`,
+        );
+      }
       while (true) {
         // Rebuild the compaction session on retry so provider wrappers, payload
         // shaping, and the embedded system prompt all reflect the fallback level.
@@ -1069,6 +1090,8 @@ async function compactEmbeddedPiSessionDirectOnce(
           prepareCompactionSessionAgent({
             session,
             providerStreamFn,
+            shouldUseWebSocketTransport,
+            wsApiKey,
             sessionId: params.sessionId,
             signal: runAbortController.signal,
             effectiveModel,
@@ -1225,7 +1248,7 @@ async function compactEmbeddedPiSessionDirectOnce(
           if (params.trigger === "manual") {
             try {
               const hardenedBoundary = await hardenManualCompactionBoundary({
-                sessionFile: params.sessionFile,
+                transcriptLocator: params.transcriptLocator,
                 preserveRecentTail:
                   typeof params.config?.agents?.defaults?.compaction?.keepRecentTokens === "number",
               });
@@ -1258,7 +1281,7 @@ async function compactEmbeddedPiSessionDirectOnce(
               transcriptRotation = await rotateTranscriptAfterCompaction({
                 sessionManager: transcriptRotationSessionManager,
                 agentId: sessionAgentId,
-                sessionFile: params.sessionFile,
+                transcriptLocator: params.transcriptLocator,
               });
             } catch (err) {
               log.warn("[compaction] post-compaction transcript rotation failed", {
@@ -1268,7 +1291,8 @@ async function compactEmbeddedPiSessionDirectOnce(
             }
           }
           const activeSessionId = transcriptRotation.sessionId ?? params.sessionId;
-          const activeSessionFile = transcriptRotation.sessionFile ?? params.sessionFile;
+          const activeTranscriptLocator =
+            transcriptRotation.transcriptLocator ?? params.transcriptLocator;
           const activePostLeafId = transcriptRotation.leafId ?? postCompactionLeafId;
           if (transcriptRotation.rotated) {
             log.info(
@@ -1281,7 +1305,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             agentId: sessionAgentId,
             sessionId: activeSessionId,
             sessionKey: params.sessionKey,
-            sessionFile: activeSessionFile,
+            transcriptLocator: activeTranscriptLocator,
           });
           if (params.config && params.sessionKey && checkpointSnapshot) {
             try {
@@ -1297,7 +1321,7 @@ async function compactEmbeddedPiSessionDirectOnce(
                 firstKeptEntryId: effectiveFirstKeptEntryId,
                 tokensBefore: observedTokenCount ?? result.tokensBefore,
                 tokensAfter,
-                postSessionFile: activeSessionFile,
+                postTranscriptLocator: activeTranscriptLocator,
                 postLeafId: activePostLeafId,
                 postEntryId: activePostLeafId,
                 createdAt: compactStartedAt,
@@ -1337,7 +1361,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             messageCountAfter,
             tokensAfter,
             compactedCount,
-            sessionFile: activeSessionFile,
+            transcriptLocator: activeTranscriptLocator,
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
@@ -1353,7 +1377,7 @@ async function compactEmbeddedPiSessionDirectOnce(
               tokensAfter,
               details: result.details,
               sessionId: transcriptRotation.sessionId,
-              sessionFile: transcriptRotation.sessionFile,
+              transcriptLocator: transcriptRotation.transcriptLocator,
             },
           };
         } catch (err) {
