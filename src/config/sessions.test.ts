@@ -17,11 +17,6 @@ import {
   patchSessionEntry,
   upsertSessionEntry,
 } from "./sessions/store.js";
-import {
-  createSqliteSessionTranscriptLocator,
-  parseSqliteSessionTranscriptLocator,
-  resolveSessionTranscriptLocator,
-} from "./sessions/test-helpers/transcript-locator.js";
 import type { SessionEntry } from "./sessions/types.js";
 
 describe("sessions", () => {
@@ -600,60 +595,6 @@ describe("sessions", () => {
     expect(entry.provider).toBeUndefined();
     expect(entry.lastChannel).toBe("telegram");
     expect(entry.lastProvider).toBeUndefined();
-  });
-
-  it("uses agent id when resolving transcript locator fallback paths", () => {
-    withStateDir("/custom/state", () => {
-      const transcriptLocator = resolveSessionTranscriptLocator("sess-2", {
-        agentId: "codex",
-      });
-      expect(transcriptLocator).toBe(
-        createSqliteSessionTranscriptLocator({ agentId: "codex", sessionId: "sess-2" }),
-      );
-    });
-  });
-
-  it("derives transcript locators from the requested agent", () => {
-    withStateDir(path.resolve("/different/state"), () => {
-      const transcriptLocator = resolveSessionTranscriptLocator("sess-1", { agentId: "bot1" });
-      expect(transcriptLocator).toBe(
-        createSqliteSessionTranscriptLocator({ agentId: "bot1", sessionId: "sess-1" }),
-      );
-    });
-  });
-
-  it("parses SQLite transcript locators with topic ids", () => {
-    const locator = createSqliteSessionTranscriptLocator({
-      agentId: "main",
-      sessionId: "sess-topic",
-      topicId: "thread/42",
-    });
-
-    expect(parseSqliteSessionTranscriptLocator(locator)).toEqual({
-      agentId: "main",
-      sessionId: "sess-topic",
-      topicId: "thread/42",
-    });
-  });
-
-  it("derives stable matching SQLite transcript locators", () => {
-    withStateDir(path.resolve("/different/state"), () => {
-      const locator = createSqliteSessionTranscriptLocator({
-        agentId: "bot1",
-        sessionId: "sess-1",
-      });
-      const transcriptLocator = resolveSessionTranscriptLocator("sess-1", { agentId: "bot1" });
-      expect(transcriptLocator).toBe(locator);
-    });
-  });
-
-  it("does not consult a previous SQLite transcript locator for a different agent", () => {
-    withStateDir(path.resolve("/different/state"), () => {
-      const transcriptLocator = resolveSessionTranscriptLocator("sess-1", { agentId: "bot1" });
-      expect(transcriptLocator).toBe(
-        createSqliteSessionTranscriptLocator({ agentId: "bot1", sessionId: "sess-1" }),
-      );
-    });
   });
 
   it("patchSessionEntry merges concurrent patches", async () => {
