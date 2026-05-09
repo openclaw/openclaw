@@ -11,9 +11,9 @@ metadata:
         "primaryEnv": "SLOTHLEE_API_TOKEN",
         "envVars":
           [
-            { "name": "SLOTHLEE_API_BASE", "label": "Sloth Lee dashboard base URL", "default": "https://slothlee.xyz" },
+            { "name": "SLOTHLEE_API_BASE", "label": "Sloth Lee dashboard base URL — use https://slothlee.xyz when Openclaw runs in a separate Railway project, or http://sloth-lee-web.railway.internal when co-located in the same project (saves a public-internet hop).", "default": "https://slothlee.xyz" },
             { "name": "SLOTHLEE_API_TOKEN", "label": "Bearer token (slot_<id>_<secret>) — mint at /developer/keys", "secret": true },
-            { "name": "OPENCLAW_OPERATOR_DISCORD_ID", "label": "Operator's Discord user ID — only this user can invoke the skill" }
+            { "name": "OPENCLAW_OPERATOR_DISCORD_ID", "label": "Operator's Discord user ID — only this user can invoke the skill (omit when running web-UI-only)" }
           ]
       }
   }
@@ -36,6 +36,7 @@ Calls the Sloth Lee dashboard's public REST API at `${SLOTHLEE_API_BASE}/api/pub
 - The operator wants direct Discord API access — use the `discord` skill instead
 - Editing the dashboard UI / its config — out of scope for the public API
 - Acting on a guild the operator doesn't own — the API will 404, don't loop
+- The operator wants to **change Sloth Lee code** (fix a bug, add a feature, refactor) — use the `slothlee-dev` skill, which pairs with `coding-agent` + `github` + `git` to clone, edit, test, and PR
 
 ## Owner whitelist (mandatory)
 
