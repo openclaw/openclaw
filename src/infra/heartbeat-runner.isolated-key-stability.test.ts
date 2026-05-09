@@ -12,7 +12,8 @@ import {
 } from "./system-events.js";
 
 vi.mock("./outbound/deliver.js", () => ({
-  deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
+  deliverOutboundPayloads: vi.fn().mockResolvedValue([]),
+  deliverOutboundPayloadsInternal: vi.fn().mockResolvedValue([]),
 }));
 
 afterEach(() => {

@@ -19,6 +19,17 @@ vi.mock("openclaw/plugin-sdk/outbound-runtime", async () => {
   };
 });
 
+vi.mock("../../../../src/infra/outbound/deliver.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../../src/infra/outbound/deliver.js")>(
+    "../../../../src/infra/outbound/deliver.js",
+  );
+  return {
+    ...actual,
+    deliverOutboundPayloads: deliverOutboundPayloadsMock,
+    deliverOutboundPayloadsInternal: deliverOutboundPayloadsMock,
+  };
+});
+
 vi.mock("../send.js", async () => {
   const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
   return {

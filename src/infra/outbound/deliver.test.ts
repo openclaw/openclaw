@@ -1447,6 +1447,38 @@ describe("deliverOutboundPayloads", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
+  it("keeps payload outcome indexes tied to original input payload positions", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({
+      messageId: "visible",
+      roomId: "!room:example",
+    });
+    const payloadOutcomes: unknown[] = [];
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "NO_REPLY" }, { text: "visible reply" }],
+      deps: { matrix: sendMatrix },
+      onPayloadDeliveryOutcome: (outcome) => {
+        payloadOutcomes.push(outcome);
+      },
+    });
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        channel: "matrix",
+        messageId: "visible",
+      }),
+    ]);
+    expect(payloadOutcomes).toEqual([
+      expect.objectContaining({
+        index: 1,
+        status: "sent",
+      }),
+    ]);
+  });
+
   it("strips internal runtime scaffolding added by message_sending hooks before delivery", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "message_sending",
