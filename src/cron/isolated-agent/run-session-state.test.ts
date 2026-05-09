@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
+import { createSqliteSessionTranscriptLocator, type SessionEntry } from "../../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -47,7 +47,7 @@ describe("createPersistCronSessionEntry", () => {
   it("persists isolated cron state only under the stable cron session key", async () => {
     const cronSession = makeCronSession(
       makeSessionEntry({
-        sessionFile: await createTranscriptFile(),
+        sessionFile: seedCronTranscript(),
         status: "running",
         startedAt: 900,
         skillsSnapshot: {
@@ -113,7 +113,7 @@ describe("createPersistCronSessionEntry", () => {
   });
 
   it("restores resumable cron fields once the transcript exists", async () => {
-    const transcriptPath = await createTranscriptFile();
+    const transcriptPath = seedCronTranscript();
     const cronSession = makeCronSession(
       makeSessionEntry({
         sessionFile: transcriptPath,
@@ -163,21 +163,23 @@ describe("createPersistCronSessionEntry", () => {
   });
 });
 
-async function createTranscriptFile(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(testStateDir, "openclaw-cron-session-"));
-  const file = path.join(dir, "session.jsonl");
+function seedCronTranscript(): string {
+  const transcriptLocator = createSqliteSessionTranscriptLocator({
+    agentId: "main",
+    sessionId: "run-session-id",
+  });
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "run-session-id",
-    transcriptPath: file,
+    transcriptPath: transcriptLocator,
     events: [
       {
         type: "session",
         id: "run-session-id",
         timestamp: new Date(0).toISOString(),
-        cwd: dir,
+        cwd: testStateDir,
       },
     ],
   });
-  return file;
+  return transcriptLocator;
 }
