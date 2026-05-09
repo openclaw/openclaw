@@ -166,6 +166,7 @@ Docs: https://docs.openclaw.ai
 - Control UI: refresh the model cache after `session_status(model=...)` changes a session model. Fixes #79613.
 - Agents/context-engine: share loop-hook checkpoints with the after-turn finalizer so messages are not replayed. Fixes #79630.
 - Codex app-server: keep native hook relays alive for long-running turns so shell and file approvals stay reachable until the configured run window finishes. (#77533) Thanks @rubencu.
+- Gateway/macOS: clear ignored SIGUSR1 restart state, skip redundant package-update restarts when the refreshed LaunchAgent already serves the expected version, and give launchd a 10s throttle plus 20s shutdown window so update restarts do not leave old gateways alive or fight supervisor recovery. Fixes #79577; refs #78699 and #60885. Thanks @BunsDev.
 - Gateway/agent: pass the session-key agent id into inline image attachment validation so the first image in a fresh per-agent session uses the agent's vision-capable model override instead of the text-only system default. Fixes #79407. Thanks @pandadev66.
 - Gateway/maintenance: prune dedupe overflow against a stable excess count and keep active agent retries from starting duplicate runs after cache eviction. (#73841) Thanks @thesomewhatyou.
 - Control UI/subagents: suppress internal `subagent_announce` handoff prompts from requester transcripts and hide legacy inter-session wrapper rows so completed subagent results no longer surface runtime context in WebChat history. (#79618) Thanks @joshavant.
