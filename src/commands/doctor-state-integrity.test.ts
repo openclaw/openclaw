@@ -99,6 +99,13 @@ function doctorChangesText(): string {
     .join("\n");
 }
 
+function listArchivedOrphanTranscripts(sessionsDir: string, sessionBaseName: string): string[] {
+  return fs
+    .readdirSync(sessionsDir)
+    .filter((name) => name.startsWith(`${sessionBaseName}.deleted.`))
+    .toSorted();
+}
+
 function createAgentDir(agentId: string, includeNestedAgentDir = true) {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {
@@ -396,7 +403,7 @@ describe("doctor state integrity oauth dir checks", () => {
     }
   });
 
-  it("detects orphan transcripts and offers delete remediation", async () => {
+  it("detects orphan transcripts and offers archival remediation", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(process.env, process.env.HOME ?? "");
     const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
@@ -404,26 +411,42 @@ describe("doctor state integrity oauth dir checks", () => {
       process.env,
       () => tempHome,
     );
-    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+    const transcriptFileName = "orphan-session.jsonl";
+    const transcriptPath = path.join(sessionsDir, transcriptFileName);
+    fs.writeFileSync(transcriptPath, '{"type":"session"}\n');
     const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
-      params.message.includes("Delete 1 orphan transcript file"),
+      params.message.includes("This only renames them to *.deleted.<timestamp>."),
     );
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
     expect(stateIntegrityText()).toContain(
       "These legacy .jsonl files are no longer referenced by SQLite session rows",
     );
+    expect(stateIntegrityText()).toContain(
+      "Doctor can archive them safely by renaming each file to *.deleted.<timestamp>.",
+    );
     expect(stateIntegrityText()).toContain("Examples: orphan-session.jsonl");
     expect(confirmRuntimeRepair).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining("Delete 1 orphan transcript file"),
+        message: expect.stringContaining("Archive 1 orphan transcript file in"),
+        requiresInteractiveConfirmation: true,
+      }),
+    );
+    expect(confirmRuntimeRepair).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("This only renames them to *.deleted.<timestamp>."),
         requiresInteractiveConfirmation: true,
       }),
     );
     const files = fs.readdirSync(sessionsDir);
-    expect(files).not.toContain("orphan-session.jsonl");
+    const archived = listArchivedOrphanTranscripts(sessionsDir, transcriptFileName);
+    expect(files).not.toContain(transcriptFileName);
+    expect(archived.length).toBe(1);
+    expect(fs.readFileSync(path.join(sessionsDir, archived[0] ?? ""), "utf8")).toBe(
+      '{"type":"session"}\n',
+    );
   });
 
-  it("does not auto-delete orphan transcripts from non-interactive repair mode", async () => {
+  it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(process.env, process.env.HOME ?? "");
     const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
@@ -446,10 +469,44 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     const files = fs.readdirSync(sessionsDir);
     expect(files).toContain("orphan-session.jsonl");
+    expect(listArchivedOrphanTranscripts(sessionsDir, "orphan-session.jsonl")).toStrictEqual([]);
+  });
+
+  it("archives orphan transcripts instead of deleting the only legacy copy", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
+      "main",
+      process.env,
+      () => tempHome,
+    );
+    const transcriptFileName = "partial-migration.jsonl";
+    const transcriptContents = [
+      JSON.stringify({ type: "session", version: 3, id: "partial-migration" }),
+      JSON.stringify({
+        type: "message",
+        id: "msg-1",
+        message: { role: "user", content: "keep me" },
+      }),
+      "",
+    ].join("\n");
+    fs.writeFileSync(path.join(sessionsDir, transcriptFileName), transcriptContents, "utf8");
+
+    const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
+      params.message.includes("Archive 1 orphan transcript file"),
+    );
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    const archived = listArchivedOrphanTranscripts(sessionsDir, transcriptFileName);
+    expect(archived.length).toBe(1);
+    expect(fs.existsSync(path.join(sessionsDir, transcriptFileName))).toBe(false);
+    expect(fs.readFileSync(path.join(sessionsDir, archived[0] ?? ""), "utf8")).toBe(
+      transcriptContents,
+    );
   });
 
   it.skipIf(process.platform === "win32")(
-    "treats symlinked legacy transcript files as orphan cleanup candidates",
+    "treats symlinked legacy transcript files as orphan archival candidates",
     async () => {
       const cfg: OpenClawConfig = {};
       const originalHome = tempHome;
@@ -479,11 +536,16 @@ describe("doctor state integrity oauth dir checks", () => {
         });
 
         const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
-          params.message.includes("Delete 1 orphan transcript file"),
+          params.message.includes("Archive 1 orphan transcript file"),
         );
         await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
+        const archived = listArchivedOrphanTranscripts(sessionsDir, "linked-session.jsonl");
         expect(fs.existsSync(transcriptPath)).toBe(false);
+        expect(archived.length).toBe(1);
+        expect(fs.readFileSync(path.join(sessionsDir, archived[0] ?? ""), "utf8")).toBe(
+          '{"type":"session"}\n',
+        );
         expect(stateIntegrityText()).toContain(
           "These legacy .jsonl files are no longer referenced by SQLite session rows",
         );

@@ -9,6 +9,7 @@ import {
 } from "../agents/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { formatFilesystemTimestamp } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
 import {
@@ -208,6 +209,10 @@ function hasSessionTranscript(params: { agentId: string; sessionId: string }): b
 function countSessionTranscriptEvents(params: { agentId: string; sessionId: string }): number {
   const scope = resolveTranscriptSqliteScope(params);
   return loadSqliteSessionTranscriptEvents(scope).length;
+}
+
+function formatLegacyTranscriptArchiveTimestamp(nowMs = Date.now()): string {
+  return formatFilesystemTimestamp(nowMs);
 }
 
 function findOtherStateDirs(stateDir: string): string[] {
@@ -959,30 +964,32 @@ export async function noteStateIntegrity(
         [
           `- Found ${orphanCount} in ${displaySessionsDir}.`,
           "  These legacy .jsonl files are no longer referenced by SQLite session rows, so they are not part of any active session history.",
-          "  Doctor can delete them after the session transcript migration/import has run.",
+          "  Doctor can archive them safely by renaming each file to *.deleted.<timestamp>.",
           `  Examples: ${orphanPreview}`,
         ].join("\n"),
       );
-      const deleteOrphans = await prompter.confirmRuntimeRepair({
-        message: `Delete ${orphanCount} in ${displaySessionsDir}?`,
+      const archiveOrphans = await prompter.confirmRuntimeRepair({
+        message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
         initialValue: false,
         requiresInteractiveConfirmation: true,
       });
-      if (deleteOrphans) {
-        let deleted = 0;
+      if (archiveOrphans) {
+        let archived = 0;
+        const archivedAt = formatLegacyTranscriptArchiveTimestamp();
         for (const orphanPath of orphanTranscriptPaths) {
+          const archivedPath = `${orphanPath}.deleted.${archivedAt}`;
           try {
-            fs.rmSync(orphanPath, { force: true });
-            deleted += 1;
+            fs.renameSync(orphanPath, archivedPath);
+            archived += 1;
           } catch (err) {
             warnings.push(
-              `- Failed to delete orphan transcript ${shortenHomePath(orphanPath)}: ${String(err)}`,
+              `- Failed to archive orphan transcript ${shortenHomePath(orphanPath)}: ${String(err)}`,
             );
           }
         }
-        if (deleted > 0) {
+        if (archived > 0) {
           changes.push(
-            `- Deleted ${countLabel(deleted, "orphan transcript file")} in ${displaySessionsDir}.`,
+            `- Archived ${countLabel(archived, "orphan transcript file")} in ${displaySessionsDir} as .deleted timestamped backups.`,
           );
         }
       }
