@@ -1751,6 +1751,7 @@
     "vitest": "^4.1.5"
   },
   "optionalDependencies": {
+    "node-llama-cpp": "^3.18.1",
     "sqlite-vec": "0.1.9"
   },
   "overrides": {
