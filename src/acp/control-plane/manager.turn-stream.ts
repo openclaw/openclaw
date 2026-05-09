@@ -8,7 +8,6 @@ export type AcpTurnEventGate = {
 };
 
 export type AcpTurnStreamOutcome = {
-  sawOutput: boolean;
   sawTerminalEvent: boolean;
 };
 
@@ -22,7 +21,6 @@ export async function consumeAcpTurnStream(params: {
   ) => Promise<void> | void;
 }): Promise<AcpTurnStreamOutcome> {
   let streamError: AcpRuntimeError | null = null;
-  let sawOutput = false;
   let sawTerminalEvent = false;
 
   for await (const event of params.runtime.runTurn(params.turn)) {
@@ -37,7 +35,6 @@ export async function consumeAcpTurnStream(params: {
         normalizeText(event.message) || "ACP turn failed before completion.",
       );
     } else if (event.type === "text_delta" || event.type === "tool_call") {
-      sawOutput = true;
       await params.onOutputEvent?.(event);
     }
     await params.onEvent?.(event);
@@ -48,7 +45,6 @@ export async function consumeAcpTurnStream(params: {
   }
 
   return {
-    sawOutput,
     sawTerminalEvent,
   };
 }

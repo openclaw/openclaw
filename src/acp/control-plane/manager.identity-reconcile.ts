@@ -74,15 +74,21 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
       incoming: eventIdentity,
       now,
     }) ?? currentIdentity;
+  const statusIdentity = createIdentityFromStatus({
+    status: runtimeStatus,
+    now,
+  });
   const nextIdentity =
     mergeSessionIdentity({
       current: identityAfterEvent,
-      incoming: createIdentityFromStatus({
-        status: runtimeStatus,
-        now,
-      }),
+      incoming: statusIdentity,
       now,
     }) ?? identityAfterEvent;
+  if (runtimeStatus && !statusIdentity && currentIdentity?.state === "resolved") {
+    logVerbose(
+      `acp-manager: getStatus returned no session IDs for ${params.sessionKey} despite resolved cached identity; preserving stale identity`,
+    );
+  }
   const handleIdentifiers = resolveRuntimeHandleIdentifiersFromIdentity(nextIdentity);
   const handleChanged =
     handleIdentifiers.backendSessionId !== params.handle.backendSessionId ||
