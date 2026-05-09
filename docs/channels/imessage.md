@@ -271,6 +271,37 @@ If SIP-disabled isn't acceptable for your threat model:
 
     Control commands from authorized senders can bypass mention gating in groups.
 
+    Per-group `systemPrompt`:
+
+    Each entry under `channels.imessage.groups.*` accepts an optional `systemPrompt` string. The value is injected into the agent's system prompt on every turn that handles a message in that group. Resolution mirrors the per-group prompt resolution used by `channels.whatsapp.groups`:
+
+    1. **Group-specific system prompt** (`groups["<chat_id>"].systemPrompt`): used when the specific group entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`) the wildcard is suppressed and no system prompt is applied to that group.
+    2. **Group wildcard system prompt** (`groups["*"].systemPrompt`): used when the specific group entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
+
+    ```json5
+    {
+      channels: {
+        imessage: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15555550123"],
+          groups: {
+            "*": { systemPrompt: "Use British spelling." },
+            "8421": {
+              requireMention: true,
+              systemPrompt: "This is the on-call rotation chat. Keep replies under 3 sentences.",
+            },
+            "9907": {
+              // explicit suppression: the wildcard "Use British spelling." does not apply here
+              systemPrompt: "",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Per-group prompts only apply to group messages — direct messages in this channel are unaffected.
+
   </Tab>
 
   <Tab title="Sessions and deterministic replies">

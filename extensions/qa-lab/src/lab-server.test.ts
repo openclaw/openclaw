@@ -240,6 +240,10 @@ async function waitForFileContent(filePath: string, expected: string, timeoutMs 
   return content;
 }
 
+async function expectFileMissing(filePath: string): Promise<void> {
+  await expect(readFile(filePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 async function createQaLabRepoRootFixture(params?: {
   uiHtml?: string;
   models?: Array<{
@@ -341,7 +345,7 @@ describe("qa-lab server", () => {
     };
     expect(snapshot.messages.map((message) => message.text)).toContain("hello from test");
 
-    await expect(readFile(outputPath, "utf8")).rejects.toThrow();
+    await expectFileMissing(outputPath);
   });
 
   it("returns controlled errors for oversized JSON body reads", async () => {
@@ -610,7 +614,7 @@ describe("qa-lab server", () => {
     });
 
     await sleep(25);
-    await expect(readFile(markerPath, "utf8")).rejects.toThrow();
+    await expectFileMissing(markerPath);
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);

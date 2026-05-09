@@ -220,7 +220,7 @@ describe("exportTrajectoryBundle", () => {
         sessionId: "session-1",
         workspaceDir: tmpDir,
       }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: "EEXIST" });
   });
 
   it("does not synthesize prompt files from export-time fallbacks", async () => {

@@ -65,6 +65,10 @@ async function captureRenameDestinations(action: () => Promise<void>): Promise<s
   return renamedDestinations;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("resolveCronStorePath", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -198,7 +202,7 @@ describe("cron store", () => {
     await saveCronStore(store.storePath, payload);
     await saveCronStore(store.storePath, payload);
 
-    await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
+    await expectPathMissing(`${store.storePath}.bak`);
   });
 
   it("backs up previous content before replacing the store", async () => {
@@ -254,7 +258,7 @@ describe("cron store", () => {
     );
     expect(typeof stateFile.jobs[first.jobs[0].id].scheduleIdentity).toBe("string");
 
-    await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
+    await expectPathMissing(`${store.storePath}.bak`);
   });
 
   it("drops stale split runtime nextRunAtMs when schedule identity changes across restart", async () => {

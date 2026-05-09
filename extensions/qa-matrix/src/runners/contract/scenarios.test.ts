@@ -68,6 +68,10 @@ function requireMatrixQaScenario(id: string): (typeof MATRIX_QA_SCENARIOS)[numbe
   return scenario;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 function matrixQaScenarioContext(): MatrixQaScenarioContext {
   return {
     baseUrl: "http://127.0.0.1:28008/",
@@ -1984,7 +1988,7 @@ describe("matrix live qa scenarios", () => {
         },
       });
 
-      await expect(stat(syncStorePath)).rejects.toThrow();
+      await expectPathMissing(syncStorePath);
       expect(registerWithToken).toHaveBeenCalledWith(
         expect.objectContaining({
           registrationToken: "registration-token",
@@ -4818,8 +4822,8 @@ describe("matrix live qa scenarios", () => {
         startupVerification: "off",
         userId: "@cli-owner:matrix-qa.test",
       });
-      await expect(readFile(configPath, "utf8")).rejects.toThrow();
-      await expect(readdir(String(cliEnv?.OPENCLAW_STATE_DIR))).rejects.toThrow();
+      await expectPathMissing(configPath);
+      await expectPathMissing(String(cliEnv?.OPENCLAW_STATE_DIR));
       expect(acceptVerification).toHaveBeenCalledWith("owner-request");
       expect(confirmVerificationSas).toHaveBeenCalledWith("owner-request");
       expect(deleteOwnDevices).toHaveBeenCalledWith(["CLIDEVICE"]);

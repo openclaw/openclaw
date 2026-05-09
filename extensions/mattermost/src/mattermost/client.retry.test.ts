@@ -144,7 +144,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
         initialDelayMs: 10,
       }),
     );
-    await expect(resolveRetryRun(run)).rejects.toThrow();
+    await expect(resolveRetryRun(run)).rejects.toThrow("Mattermost API 400");
 
     // Should not retry - only called once (400 is a client error, even though message contains "429")
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -299,7 +299,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
         initialDelayMs: 10,
       }),
     );
-    await expect(resolveRetryRun(run)).rejects.toThrow();
+    await expect(resolveRetryRun(run)).rejects.toThrow("Mattermost API 503");
 
     expect(mockFetch).toHaveBeenCalledTimes(3); // initial + 2 retries
   });
@@ -339,7 +339,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
         initialDelayMs: 10,
       }),
     );
-    await expect(resolveRetryRun(run)).rejects.toThrow();
+    await expect(resolveRetryRun(run)).rejects.toThrow("AbortError");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(abortSignal).toBeInstanceOf(AbortSignal);

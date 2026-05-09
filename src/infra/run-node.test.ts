@@ -123,6 +123,10 @@ function resolvePath(tmp: string, relativePath: string) {
   return path.join(tmp, relativePath);
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 async function writeProjectFiles(tmp: string, files: Record<string, string>) {
   for (const [relativePath, contents] of Object.entries(files)) {
     const absolutePath = resolvePath(tmp, relativePath);
@@ -1593,8 +1597,8 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
-      await expect(fs.access(resolvePath(tmp, DIST_EXTENSION_MANIFEST))).rejects.toThrow();
-      await expect(fs.access(resolvePath(tmp, DIST_EXTENSION_PACKAGE))).rejects.toThrow();
+      await expectPathMissing(resolvePath(tmp, DIST_EXTENSION_MANIFEST));
+      await expectPathMissing(resolvePath(tmp, DIST_EXTENSION_PACKAGE));
     });
   });
 

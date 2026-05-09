@@ -145,6 +145,25 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function raceWithMacrotask(
+  promise: Promise<unknown>,
+  delayMs: number,
+): Promise<"resolved" | "pending"> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), delayMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 describe("refreshChat", () => {
   beforeAll(async () => {
     await loadChatHelpers();
@@ -160,10 +179,7 @@ describe("refreshChat", () => {
     });
 
     const refresh = refreshChat(host);
-    const outcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const outcome = await raceWithMacrotask(refresh, 0);
 
     expect(outcome).toBe("resolved");
     expect(host.chatLoading).toBe(true);
@@ -197,10 +213,7 @@ describe("refreshChat", () => {
     });
 
     const refresh = refreshChat(host, { awaitHistory: true, scheduleScroll: false });
-    const pendingOutcome = await Promise.race([
-      refresh.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const pendingOutcome = await raceWithMacrotask(refresh, 0);
 
     expect(pendingOutcome).toBe("pending");
     history.resolve({
@@ -533,10 +546,7 @@ describe("refreshChat", () => {
         sessionKey: "main",
       });
 
-      const outcome = await Promise.race([
-        refreshChat(host).then(() => "resolved" as const),
-        new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 20)),
-      ]);
+      const outcome = await raceWithMacrotask(refreshChat(host), 20);
 
       expect(outcome).toBe("resolved");
       expect(host.chatMessages).toEqual([
