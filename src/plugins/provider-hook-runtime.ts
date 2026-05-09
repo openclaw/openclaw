@@ -332,7 +332,11 @@ export function wrapProviderStreamFn(params: {
   // (e.g. generic openai-compatible proxy providers configured with deepseek-v4-* models).
   // DeepSeek's API requires reasoning_content on assistant messages in follow-up turns
   // regardless of which proxy provider routes the request.
-  if (isDeepSeekV4ModelId(params.context.modelId ?? "")) {
+  // Gate to openai-completions transport — the wrapper mutates an OpenAI-shaped payload.
+  if (
+    params.context.model?.api === "openai-completions" &&
+    isDeepSeekV4ModelId(params.context.modelId ?? "")
+  ) {
     return createDeepSeekV4OpenAICompatibleThinkingWrapper({
       baseStreamFn: params.context.streamFn,
       thinkingLevel: params.context.thinkingLevel,
