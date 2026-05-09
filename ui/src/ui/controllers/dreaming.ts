@@ -67,8 +67,8 @@ export type DreamingStatus = {
   remPhaseHitCount: number;
   promotedTotal: number;
   promotedToday: number;
-  storePath?: string;
-  phaseSignalPath?: string;
+  storeLabel?: string;
+  phaseSignalLabel?: string;
   storeError?: string;
   phaseSignalError?: string;
   shortTermEntries: DreamingEntry[];
@@ -683,8 +683,8 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
         }
       : undefined;
   const timezone = normalizeTrimmedString(record.timezone);
-  const storePath = normalizeTrimmedString(record.storePath);
-  const phaseSignalPath = normalizeTrimmedString(record.phaseSignalPath);
+  const storeLabel = normalizeTrimmedString(record.storeLabel);
+  const phaseSignalLabel = normalizeTrimmedString(record.phaseSignalLabel);
   const storeError = normalizeTrimmedString(record.storeError);
   const phaseSignalError = normalizeTrimmedString(record.phaseSignalError);
 
@@ -704,8 +704,8 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
     remPhaseHitCount: normalizeFiniteInt(record.remPhaseHitCount, 0),
     promotedTotal: normalizeFiniteInt(record.promotedTotal, 0),
     promotedToday: normalizeFiniteInt(record.promotedToday, 0),
-    ...(storePath ? { storePath } : {}),
-    ...(phaseSignalPath ? { phaseSignalPath } : {}),
+    ...(storeLabel ? { storeLabel } : {}),
+    ...(phaseSignalLabel ? { phaseSignalLabel } : {}),
     ...(storeError ? { storeError } : {}),
     ...(phaseSignalError ? { phaseSignalError } : {}),
     shortTermEntries: normalizeDreamingEntries(record.shortTermEntries),
