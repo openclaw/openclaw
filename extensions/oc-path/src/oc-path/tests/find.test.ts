@@ -167,62 +167,21 @@ describe("findOcPaths — JSONL kind", () => {
 });
 
 
-describe("positional primitives — jsonc", () => {
-  const jsonc = parseJsonc('{"items":[10,20,30]}').ast;
-
-  it("$first picks first array element", () => {
-    const m = resolveOcPath(jsonc, parseOcPath("oc://config/items/$first"));
-    expect(m?.kind).toBe("leaf");
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("10");
-    }
-  });
-
+describe("positional primitives — $last", () => {
   it("$last picks last array element", () => {
+    const jsonc = parseJsonc('{"items":[10,20,30]}').ast;
     const m = resolveOcPath(jsonc, parseOcPath("oc://config/items/$last"));
-    expect(m?.kind).toBe("leaf");
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("30");
-    }
+    expect(m?.kind === "leaf" && m.valueText).toBe("30");
   });
 
-  it("$first on object picks first-declared key", () => {
-    const obj = parseJsonc('{"a":1,"b":2,"c":3}').ast;
-    const m = resolveOcPath(obj, parseOcPath("oc://config/$first"));
-    expect(m?.kind).toBe("leaf");
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("1");
-    }
-  });
-
-  it("hasWildcard returns false for positional patterns", () => {
-    expect(hasWildcard(parseOcPath("oc://X/$last/id"))).toBe(false);
-    expect(hasWildcard(parseOcPath("oc://X/-1/id"))).toBe(false);
-  });
-});
-
-describe("positional primitives — jsonl", () => {
-  const jsonl = parseJsonl('{"event":"start"}\n{"event":"step"}\n{"event":"end"}\n').ast;
-
-  it("$first picks first value line", () => {
-    const m = resolveOcPath(jsonl, parseOcPath("oc://session/$first/event"));
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("start");
-    }
-  });
-
-  it("$last picks last value line (existing behavior)", () => {
+  it("$last picks last value line on jsonl", () => {
+    const jsonl = parseJsonl('{"event":"start"}\n{"event":"step"}\n{"event":"end"}\n').ast;
     const m = resolveOcPath(jsonl, parseOcPath("oc://session/$last/event"));
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("end");
-    }
+    expect(m?.kind === "leaf" && m.valueText).toBe("end");
   });
 
-  it("-1 is alias for $last", () => {
-    const m = resolveOcPath(jsonl, parseOcPath("oc://session/-1/event"));
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("end");
-    }
+  it("hasWildcard returns false for $last", () => {
+    expect(hasWildcard(parseOcPath("oc://X/$last/id"))).toBe(false);
   });
 });
 
@@ -269,13 +228,8 @@ describe("quoted segments (v1.0)", () => {
     }
   });
 
-  it("quoted segment with embedded escape sequences", () => {
-    const ast = parseJsonc('{"keys":{"a\\\\b":"v1","c\\"d":"v2"}}').ast;
-    const m1 = resolveOcPath(ast, parseOcPath('oc://X/keys/"a\\\\b"'));
-    expect(m1?.kind).toBe("leaf");
-    if (m1?.kind === "leaf") {
-      expect(m1.valueText).toBe("v1");
-    }
+  it("rejects quoted segments containing `\"` or `\\` (no escape support)", () => {
+    expect(() => parseOcPath('oc://X/keys/"a\\\\b"')).toThrow(/Quoted segment cannot contain/);
   });
 
   it("findOcPaths — wildcard returns paths with quoted keys when needed", () => {

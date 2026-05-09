@@ -1126,9 +1126,6 @@ importers:
       markdown-it:
         specifier: 14.1.1
         version: 14.1.1
-      yaml:
-        specifier: ^2.8.4
-        version: 2.8.4
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

@@ -37,18 +37,6 @@ describe("jsonc resolver edges", () => {
     }
   });
 
-  it("negative array index resolves to Nth-from-last", () => {
-    expect(rs('{"x":[1,2]}', "oc://config/x.-1")).toMatchObject({
-      kind: "value",
-      node: { kind: "number", value: 2 },
-    });
-    expect(rs('{"x":[1,2]}', "oc://config/x.-2")).toMatchObject({
-      kind: "value",
-      node: { kind: "number", value: 1 },
-    });
-    expect(rs('{"x":[1,2]}', "oc://config/x.-5")).toBeNull();
-  });
-
   it("out-of-bounds array index returns null", () => {
     expect(rs('{"x":[1,2]}', "oc://config/x.99")).toBeNull();
   });

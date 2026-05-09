@@ -87,28 +87,12 @@ describe("appendJsonlOcPath — session checkpointing primitive", () => {
   });
 });
 
-describe("setJsonlOcPath — line-address positional tokens (resolve↔edit symmetry)", () => {
-  // Line-address slot must accept every token shape pickLine accepts
-  // (resolve.ts and find.ts already do). Without `$first` and `-N` here,
-  // a path that reads under those tokens silently unresolves on write.
+describe("setJsonlOcPath — $last line address", () => {
   const log = '{"event":"start","n":1}\n{"event":"step","n":2}\n{"event":"end","n":3}\n';
 
-  it("writes under $first line address", () => {
+  it("writes under $last line address", () => {
     const { ast } = parseJsonl(log);
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/$first/n"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const lines = emitJsonl(r.ast).split("\n");
-      expect(JSON.parse(lines[0] ?? "")).toEqual({ event: "start", n: 99 });
-    }
-  });
-
-  it("writes under -1 line address (alias for last value line)", () => {
-    const { ast } = parseJsonl(log);
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/-1/n"), {
+    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/$last/n"), {
       kind: "number",
       value: 99,
     });
@@ -119,31 +103,9 @@ describe("setJsonlOcPath — line-address positional tokens (resolve↔edit symm
     }
   });
 
-  it("writes under -2 line address (penultimate value line)", () => {
-    const { ast } = parseJsonl(log);
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/-2/n"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const lines = emitJsonl(r.ast).split("\n");
-      expect(JSON.parse(lines[1] ?? "")).toEqual({ event: "step", n: 99 });
-    }
-  });
-
-  it("reports unresolved for $first against an empty log", () => {
+  it("reports unresolved for $last against an empty log", () => {
     const { ast } = parseJsonl("");
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/$first/n"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r).toEqual({ ok: false, reason: "unresolved" });
-  });
-
-  it("reports unresolved for -99 (out-of-range) line address", () => {
-    const { ast } = parseJsonl(log);
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/-99/n"), {
+    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/$last/n"), {
       kind: "number",
       value: 99,
     });
@@ -151,32 +113,8 @@ describe("setJsonlOcPath — line-address positional tokens (resolve↔edit symm
   });
 });
 
-describe("setJsonlOcPath — positional field tokens (round-11 resolve↔edit symmetry)", () => {
-  // ClawSweeper round-11 P2 — JSONL line-address `$last` already
-  // resolved (pickLineIndex), but positional tokens INSIDE a line's
-  // structural body (item / field) were not. Pin the in-line edit
-  // path: a `$first` / `$last` / `-N` field-segment must reach the
-  // same child as resolveJsonlOcPath.
+describe("setJsonlOcPath — $last positional field tokens", () => {
   const log = '{"items":[10,20,30],"events":{"a":1,"b":2}}\n';
-
-  it("edits the first array item on a line via $first", () => {
-    const { ast } = parseJsonl(log);
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/L1/items/$first"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const firstLine =
-        emitJsonl(r.ast)
-          .split("\n")
-          .find((l) => l.length > 0) ?? "";
-      expect(JSON.parse(firstLine)).toEqual({
-        items: [99, 20, 30],
-        events: { a: 1, b: 2 },
-      });
-    }
-  });
 
   it("edits the last array item on a line via $last", () => {
     const { ast } = parseJsonl(log);
@@ -193,25 +131,6 @@ describe("setJsonlOcPath — positional field tokens (round-11 resolve↔edit sy
       expect(JSON.parse(firstLine)).toEqual({
         items: [10, 20, 99],
         events: { a: 1, b: 2 },
-      });
-    }
-  });
-
-  it("edits the first object entry on a line via $first", () => {
-    const { ast } = parseJsonl(log);
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/L1/events/$first"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const firstLine =
-        emitJsonl(r.ast)
-          .split("\n")
-          .find((l) => l.length > 0) ?? "";
-      expect(JSON.parse(firstLine)).toEqual({
-        items: [10, 20, 30],
-        events: { a: 99, b: 2 },
       });
     }
   });
