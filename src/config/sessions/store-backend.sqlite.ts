@@ -95,7 +95,7 @@ function upsertSessionEntries(
 
 function countSessionEntryRows(database: OpenClawAgentDatabase): number {
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync<{ count?: number | bigint }>(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db.selectFrom("session_entries").select((eb) => eb.fn.countAll<number | bigint>().as("count")),
   );
@@ -108,7 +108,7 @@ function readSqliteSessionEntryJson(
   sessionKey: string,
 ): string | null {
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync<{ entry_json?: string }>(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db.selectFrom("session_entries").select(["entry_json"]).where("session_key", "=", sessionKey),
   );
@@ -187,7 +187,7 @@ export function readSqliteSessionEntry(
 ): SessionEntry | undefined {
   const database = openOpenClawAgentDatabase(options);
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync<SessionEntryRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
       .selectFrom("session_entries")
@@ -215,7 +215,7 @@ export function listSqliteSessionEntries(
 ): Array<{ sessionKey: string; entry: SessionEntry }> {
   const database = openOpenClawAgentDatabase(options);
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
-  const rows = executeSqliteQuerySync<SessionEntryRow>(
+  const rows = executeSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_entries")
@@ -234,7 +234,7 @@ export function loadSqliteSessionEntries(
 ): Record<string, SessionEntry> {
   const database = openOpenClawAgentDatabase(options);
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
-  const rows = executeSqliteQuerySync<SessionEntryRow>(
+  const rows = executeSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_entries")

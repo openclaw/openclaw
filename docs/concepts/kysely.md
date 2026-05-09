@@ -140,6 +140,10 @@ Keep helpers composable:
 - Let Kysely carry selected row shapes through builder queries. Avoid passing a
   broad row generic to a sync execution helper when the builder already knows
   the result type; use exact boundary types or a mapper instead.
+- Do not call `executeSqliteQuerySync<Row>(db, builder)` or
+  `executeSqliteQueryTakeFirstSync<Row>(db, builder)` for normal builders. The
+  generic can widen or lie about selected columns. Let the builder's
+  `CompiledQuery<Row>` type flow into the sync helper.
 - For finite public query presets, prefer a preset-to-row type map and exported
   union over a generic `Record<string, ...>` row shape.
 
@@ -165,6 +169,26 @@ Rules:
   or a `keyof` generated table type first.
 - Raw snippets are fine for SQLite pragmas, virtual tables, FTS, JSON functions,
   and migrations, but wrap repeated raw expressions in typed helpers.
+- Prefer `eb.fn.countAll`, `eb.fn.count`, `eb.fn.max`, `eb.fn.coalesce`,
+  `eb.lit`, expression callbacks, and `eb.ref` substitutions before raw SQL for
+  scalar expressions and constant selections.
+- Run `pnpm lint:kysely` after touching Kysely-backed stores. It rejects raw
+  identifier helpers, unreviewed typed raw SQL, `db.dynamic`, and sync-helper
+  row generics at builder call sites.
+
+## Helper Extraction
+
+Extract helpers when they protect a boundary or carry a reusable typed concept:
+
+- closed-set PRAGMA readers for tests, for example
+  `readSqliteNumberPragma(db, "busy_timeout")`
+- raw SQLite expression helpers that take Kysely expressions or `eb.ref(...)`
+  values, not loose column strings
+- public preset-to-row maps for finite query APIs
+- JSON/BLOB/timestamp mappers at store boundaries
+
+Avoid helpers that hide a single clear builder chain, replace every checked
+literal with a constant, or accept generic table/column/order strings.
 
 ## Transactions
 

@@ -20,7 +20,7 @@ You do not need to rename config keys or reinstall the plugin under a new name.
 
 ## What the migration does automatically
 
-When you run [`openclaw doctor --fix`](/gateway/doctor), OpenClaw imports or repairs old Matrix state through the migration system. Runtime startup does not move legacy Matrix files; startup reads the SQLite-backed state created by doctor/migrate.
+When you run [`openclaw doctor --fix`](/gateway/doctor), OpenClaw imports or repairs old Matrix state through the migration system. Runtime startup does not move legacy Matrix files; startup reads the SQLite-backed state created by doctor.
 Before any actionable Matrix migration step mutates on-disk state, OpenClaw creates or reuses a focused recovery snapshot.
 
 When you use `openclaw update`, the exact trigger depends on how OpenClaw is installed:
@@ -44,7 +44,7 @@ Automatic migration covers:
 
 Snapshot details:
 
-- OpenClaw writes a marker file at `~/.openclaw/matrix/migration-snapshot.json` after a successful snapshot so later doctor/migration passes can reuse the same archive.
+- OpenClaw writes a marker file at `~/.openclaw/matrix/migration-snapshot.json` after a successful snapshot so later doctor passes can reuse the same archive.
 - These automatic Matrix migration snapshots back up config + state only (`includeWorkspace: false`).
 - If Matrix only has warning-only migration state, for example because `userId` or `accessToken` is still missing, OpenClaw does not create the snapshot yet because no Matrix mutation is actionable.
 - If the snapshot step fails, OpenClaw skips Matrix migration for that run instead of mutating state without a recovery point.

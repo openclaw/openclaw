@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Insertable } from "kysely";
-import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -278,8 +277,10 @@ function rememberTranscriptFile(params: {
         )
         .onConflict((conflict) =>
           conflict.columns(["agent_id", "session_id", "path"]).doUpdateSet({
-            imported_at: () => sql`COALESCE(excluded.imported_at, transcript_files.imported_at)`,
-            exported_at: () => sql`COALESCE(excluded.exported_at, transcript_files.exported_at)`,
+            imported_at: (eb) =>
+              eb.fn.coalesce("excluded.imported_at", "transcript_files.imported_at"),
+            exported_at: (eb) =>
+              eb.fn.coalesce("excluded.exported_at", "transcript_files.exported_at"),
           }),
         ),
     );
@@ -295,13 +296,13 @@ export function resolveSqliteSessionTranscriptScopeForPath(
   }
   const transcriptPath = path.resolve(options.transcriptPath);
   const database = openOpenClawStateDatabase(options);
-  const row = executeSqliteQueryTakeFirstSync<{ agent_id?: unknown; session_id?: unknown }>(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getStateTranscriptKysely(database.db)
       .selectFrom("transcript_files")
       .select(["agent_id", "session_id"])
       .where("path", "=", transcriptPath)
-      .orderBy(sql`COALESCE(imported_at, exported_at, 0)`, "desc")
+      .orderBy((eb) => eb.fn.coalesce("imported_at", "exported_at", eb.lit(0)), "desc")
       .limit(1),
   );
   if (typeof row?.agent_id !== "string" || typeof row.session_id !== "string") {
@@ -352,22 +353,20 @@ export function listSqliteSessionTranscriptFiles(
   options: OpenClawStateDatabaseOptions = {},
 ): SqliteSessionTranscriptFile[] {
   const database = openOpenClawStateDatabase(options);
-  return executeSqliteQuerySync<{
-    agent_id?: unknown;
-    session_id?: unknown;
-    path?: unknown;
-    updated_at?: unknown;
-  }>(
+  return executeSqliteQuerySync(
     database.db,
     getStateTranscriptKysely(database.db)
       .selectFrom("transcript_files as files")
-      .select([
+      .select((eb) => [
         "files.agent_id",
         "files.session_id",
         "files.path",
-        sql<
-          number | bigint
-        >`MAX(COALESCE(files.imported_at, 0), COALESCE(files.exported_at, 0))`.as("updated_at"),
+        eb
+          .fn<number | bigint>("MAX", [
+            eb.fn.coalesce("files.imported_at", eb.lit(0)),
+            eb.fn.coalesce("files.exported_at", eb.lit(0)),
+          ])
+          .as("updated_at"),
       ])
       .groupBy(["files.agent_id", "files.session_id", "files.path"])
       .orderBy("updated_at", "desc")
@@ -416,14 +415,14 @@ export function listSqliteSessionTranscripts(
       ...(agentDatabase.path ? { path: agentDatabase.path } : {}),
     });
     const transcriptPaths = new Map<string, string>();
-    for (const row of executeSqliteQuerySync<{ session_id?: unknown; path?: unknown }>(
+    for (const row of executeSqliteQuerySync(
       stateDatabase.db,
       getStateTranscriptKysely(stateDatabase.db)
         .selectFrom("transcript_files")
         .select(["session_id", "path"])
         .where("agent_id", "=", agentDatabase.agentId)
         .orderBy("session_id", "asc")
-        .orderBy(sql`COALESCE(imported_at, exported_at, 0)`, "desc")
+        .orderBy((eb) => eb.fn.coalesce("imported_at", "exported_at", eb.lit(0)), "desc")
         .orderBy("path", "asc"),
     ).rows) {
       if (
@@ -435,11 +434,7 @@ export function listSqliteSessionTranscripts(
       }
     }
     transcripts.push(
-      ...executeSqliteQuerySync<{
-        session_id?: unknown;
-        updated_at?: unknown;
-        event_count?: unknown;
-      }>(
+      ...executeSqliteQuerySync(
         database.db,
         getAgentTranscriptKysely(database.db)
           .selectFrom("transcript_events as events")
@@ -490,7 +485,7 @@ export function getSqliteSessionTranscriptStats(
 ): Pick<SqliteSessionTranscript, "sessionId" | "updatedAt" | "eventCount"> | null {
   const { sessionId } = normalizeTranscriptScope(options);
   const database = openOpenClawAgentDatabase(options);
-  const row = executeSqliteQueryTakeFirstSync<{ updated_at?: unknown; event_count?: unknown }>(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getAgentTranscriptKysely(database.db)
       .selectFrom("transcript_events")
@@ -520,11 +515,15 @@ export function appendSqliteSessionTranscriptEvent(
   const { agentId, sessionId } = normalizeTranscriptScope(options);
   const now = options.now?.() ?? Date.now();
   const seq = runOpenClawAgentWriteTransaction((database) => {
-    const row = executeSqliteQueryTakeFirstSync<{ next_seq?: number | bigint }>(
+    const row = executeSqliteQueryTakeFirstSync(
       database.db,
       getAgentTranscriptKysely(database.db)
         .selectFrom("transcript_events")
-        .select(sql<number | bigint>`COALESCE(MAX(seq), -1) + 1`.as("next_seq"))
+        .select((eb) =>
+          eb(eb.fn.coalesce(eb.fn.max<number | bigint>("seq"), eb.lit(-1)), "+", eb.lit(1)).as(
+            "next_seq",
+          ),
+        )
         .where("session_id", "=", sessionId),
     );
     const nextSeq = typeof row?.next_seq === "bigint" ? Number(row.next_seq) : (row?.next_seq ?? 0);
@@ -556,11 +555,15 @@ export function appendSqliteSessionTranscriptMessage(
   const idempotencyKey = readMessageIdempotencyKey(options.message);
   const messageId = runOpenClawAgentWriteTransaction((database) => {
     const db = getAgentTranscriptKysely(database.db);
-    const nextSeqRow = executeSqliteQueryTakeFirstSync<{ next_seq?: number | bigint }>(
+    const nextSeqRow = executeSqliteQueryTakeFirstSync(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select(sql<number | bigint>`COALESCE(MAX(seq), -1) + 1`.as("next_seq"))
+        .select((eb) =>
+          eb(eb.fn.coalesce(eb.fn.max<number | bigint>("seq"), eb.lit(-1)), "+", eb.lit(1)).as(
+            "next_seq",
+          ),
+        )
         .where("session_id", "=", sessionId),
     );
     let nextSeq =
@@ -586,7 +589,7 @@ export function appendSqliteSessionTranscriptMessage(
     }
 
     if (idempotencyKey) {
-      const existing = executeSqliteQueryTakeFirstSync<{ event_id?: unknown }>(
+      const existing = executeSqliteQueryTakeFirstSync(
         database.db,
         db
           .selectFrom("transcript_event_identities")
@@ -600,7 +603,7 @@ export function appendSqliteSessionTranscriptMessage(
       }
     }
 
-    const tail = executeSqliteQueryTakeFirstSync<{ event_id?: unknown }>(
+    const tail = executeSqliteQueryTakeFirstSync(
       database.db,
       db
         .selectFrom("transcript_event_identities")
@@ -670,7 +673,7 @@ export function loadSqliteSessionTranscriptEvents(
 ): SqliteSessionTranscriptEvent[] {
   const { sessionId } = normalizeTranscriptScope(options);
   const database = openOpenClawAgentDatabase(options);
-  return executeSqliteQuerySync<{ seq: number | bigint; event_json: unknown; created_at: unknown }>(
+  return executeSqliteQuerySync(
     database.db,
     getAgentTranscriptKysely(database.db)
       .selectFrom("transcript_events")
@@ -693,11 +696,11 @@ export function hasSqliteSessionTranscriptEvents(
 ): boolean {
   const { sessionId } = normalizeTranscriptScope(options);
   const database = openOpenClawAgentDatabase(options);
-  const row = executeSqliteQueryTakeFirstSync<{ found?: number | bigint }>(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getAgentTranscriptKysely(database.db)
       .selectFrom("transcript_events")
-      .select(sql<number>`1`.as("found"))
+      .select((eb) => eb.lit(1).as("found"))
       .where("session_id", "=", sessionId)
       .limit(1),
   );
@@ -749,11 +752,11 @@ export function hasSqliteSessionTranscriptSnapshot(
   const { sessionId } = normalizeTranscriptScope(options);
   const snapshotId = normalizeSessionId(options.snapshotId);
   const database = openOpenClawAgentDatabase(options);
-  const row = executeSqliteQueryTakeFirstSync<{ found?: number | bigint }>(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getAgentTranscriptKysely(database.db)
       .selectFrom("transcript_snapshots")
-      .select(sql<number>`1`.as("found"))
+      .select((eb) => eb.lit(1).as("found"))
       .where("session_id", "=", sessionId)
       .where("snapshot_id", "=", snapshotId)
       .limit(1),

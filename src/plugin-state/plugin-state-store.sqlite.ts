@@ -171,7 +171,7 @@ function selectPluginStateEntry(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; key: string; now: number },
 ): PluginStateRow | undefined {
-  return executeSqliteQueryTakeFirstSync<PluginStateRow>(
+  return executeSqliteQueryTakeFirstSync(
     db,
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")
@@ -187,7 +187,7 @@ function selectPluginStateEntries(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; now: number },
 ): PluginStateRow[] {
-  return executeSqliteQuerySync<PluginStateRow>(
+  return executeSqliteQuerySync(
     db,
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")
@@ -234,7 +234,7 @@ function countLivePluginStateNamespaceEntries(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; now: number },
 ): number {
-  const row = executeSqliteQueryTakeFirstSync<CountRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     db,
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")
@@ -250,7 +250,7 @@ function deleteOldestPluginStateNamespaceEntries(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; protectedKey: string; now: number; limit: number },
 ): void {
-  const keys = executeSqliteQuerySync<{ entry_key: string }>(
+  const keys = executeSqliteQuerySync(
     db,
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")

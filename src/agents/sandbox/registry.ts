@@ -124,7 +124,7 @@ function getRegistryEntry(
   kind: LegacyRegistryKind,
   containerName: string,
 ): RegistryEntry | null {
-  const row = executeSqliteQueryTakeFirstSync<SandboxRegistryRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getSandboxRegistryKysely(database)
       .selectFrom("sandbox_registry_entries")
@@ -148,7 +148,7 @@ function readRegistryEntryByKind(
 
 function readRegistryEntries<T extends RegistryEntry>(kind: LegacyRegistryKind): T[] {
   const database = openOpenClawStateDatabase(sandboxRegistryDbOptions());
-  const rows = executeSqliteQuerySync<SandboxRegistryRow>(
+  const rows = executeSqliteQuerySync(
     database.db,
     getSandboxRegistryKysely(database)
       .selectFrom("sandbox_registry_entries")

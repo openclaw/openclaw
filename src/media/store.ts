@@ -6,7 +6,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable } from "kysely";
+import type { Insertable, Selectable } from "kysely";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import {
   executeSqliteQuerySync,
@@ -112,9 +112,16 @@ function getMediaKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<MediaKyselyDatabase>(db);
 }
 
+function mediaBlobRowFromDb(row: Selectable<MediaKyselyDatabase["media_blobs"]>): MediaBlobRow {
+  return {
+    ...row,
+    blob: Buffer.from(row.blob),
+  };
+}
+
 function getMediaBlobRow(params: { subdir: string; id: string }): MediaBlobRow | undefined {
   const database = openOpenClawStateDatabase();
-  return executeSqliteQueryTakeFirstSync<MediaBlobRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getMediaKysely(database.db)
       .selectFrom("media_blobs")
@@ -122,6 +129,7 @@ function getMediaBlobRow(params: { subdir: string; id: string }): MediaBlobRow |
       .where("subdir", "=", params.subdir)
       .where("id", "=", params.id),
   );
+  return row ? mediaBlobRowFromDb(row) : undefined;
 }
 
 async function legacyMediaFileCandidates(

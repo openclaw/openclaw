@@ -358,7 +358,7 @@ export function loadSubagentRegistryFromSqlite(
     .selectAll()
     .orderBy("created_at", "asc")
     .orderBy("run_id", "asc");
-  const rows = executeSqliteQuerySync<SubagentRunRow>(database.db, query).rows;
+  const rows = executeSqliteQuerySync(database.db, query).rows;
   if (rows.length === 0) {
     return null;
   }
@@ -438,7 +438,7 @@ export function importLegacySubagentRegistryFileToSqlite(env: NodeJS.ProcessEnv 
 export function saveSubagentRegistryToState(runs: Map<string, SubagentRunRecord>) {
   runOpenClawStateWriteTransaction((database) => {
     const kysely = getSubagentRegistryKysely(database.db);
-    const existing = executeSqliteQuerySync<{ run_id: string }>(
+    const existing = executeSqliteQuerySync(
       database.db,
       kysely.selectFrom("subagent_runs").select("run_id"),
     ).rows;

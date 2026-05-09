@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -15,22 +16,6 @@ import {
 
 function createTempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-db-"));
-}
-
-type StateDatabasePragma =
-  | "busy_timeout"
-  | "foreign_keys"
-  | "synchronous"
-  | "user_version"
-  | "wal_autocheckpoint";
-
-function readPragmaNumber(
-  db: import("node:sqlite").DatabaseSync,
-  pragma: StateDatabasePragma,
-): number {
-  const row = db.prepare(`PRAGMA ${pragma}`).get() as Record<string, unknown> | undefined;
-  const value = row?.[pragma] ?? row?.timeout;
-  return typeof value === "bigint" ? Number(value) : Number(value);
 }
 
 afterEach(() => {
@@ -64,11 +49,11 @@ describe("openclaw state database", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(readPragmaNumber(database.db, "busy_timeout")).toBe(30_000);
-    expect(readPragmaNumber(database.db, "foreign_keys")).toBe(1);
-    expect(readPragmaNumber(database.db, "synchronous")).toBe(1);
-    expect(readPragmaNumber(database.db, "user_version")).toBe(1);
-    expect(readPragmaNumber(database.db, "wal_autocheckpoint")).toBe(1000);
+    expect(readSqliteNumberPragma(database.db, "busy_timeout")).toBe(30_000);
+    expect(readSqliteNumberPragma(database.db, "foreign_keys")).toBe(1);
+    expect(readSqliteNumberPragma(database.db, "synchronous")).toBe(1);
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(1);
+    expect(readSqliteNumberPragma(database.db, "wal_autocheckpoint")).toBe(1000);
     const journalMode = database.db.prepare("PRAGMA journal_mode").get() as
       | { journal_mode?: string }
       | undefined;

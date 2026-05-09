@@ -56,7 +56,7 @@ function parseEventRow(row: AcpParentStreamEventSqlRow): AcpParentStreamEventRow
 export function recordAcpParentStreamEvent(options: RecordAcpParentStreamEventOptions): number {
   return runOpenClawAgentWriteTransaction((database) => {
     const db = getNodeSqliteKysely<AcpParentStreamDatabase>(database.db);
-    const current = executeSqliteQueryTakeFirstSync<{ seq?: number | bigint }>(
+    const current = executeSqliteQueryTakeFirstSync(
       database.db,
       db
         .selectFrom("acp_parent_stream_events")
@@ -85,7 +85,7 @@ export function listAcpParentStreamEvents(
 ): AcpParentStreamEventRow[] {
   const database = openOpenClawAgentDatabase(options);
   const db = getNodeSqliteKysely<AcpParentStreamDatabase>(database.db);
-  const rows = executeSqliteQuerySync<AcpParentStreamEventSqlRow>(
+  const rows = executeSqliteQuerySync(
     database.db,
     db
       .selectFrom("acp_parent_stream_events")

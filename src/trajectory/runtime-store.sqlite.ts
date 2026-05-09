@@ -61,7 +61,7 @@ export function listTrajectoryRuntimeEvents(
     .$if(Boolean(normalizedRunId), (qb) => qb.where("run_id", "=", normalizedRunId))
     .orderBy("event_id", "asc")
     .limit(limit);
-  const rows = executeSqliteQuerySync<TrajectoryRuntimeEventSqlRow>(database.db, query).rows;
+  const rows = executeSqliteQuerySync(database.db, query).rows;
   return rows.flatMap((row) => {
     try {
       const parsed = JSON.parse(row.event_json) as unknown;

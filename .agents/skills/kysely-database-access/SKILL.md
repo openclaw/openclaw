@@ -31,7 +31,9 @@ patching:
 - Raw SQL: the `sql` tag can execute full raw SQL and embed snippets into
   builders. Prefer typed builders/helpers when they express the same thing.
 - Reusable helpers: take `Expression<T>` or an `ExpressionBuilder` when wrapping
-  SQL expressions; alias helper expressions explicitly in `select`.
+  SQL expressions; alias helper expressions explicitly in `select`. Extract a
+  helper only when it quarantines raw SQL, removes meaningful duplication, or
+  preserves a tricky inferred type.
 - Split build/execute only at deliberate boundaries. Compiled-query execution
   is useful for native sync adapters, but keep plugin/result-transform behavior
   in mind.
@@ -60,6 +62,10 @@ patching:
      type-checked by Kysely.
    - Let Kysely infer selected row shapes. Do not pass broad row generics to
      sync helpers for normal builder queries.
+   - Treat `executeSqliteQuerySync<Row>(db, builder)` and
+     `executeSqliteQueryTakeFirstSync<Row>(db, builder)` as a smell: the generic
+     can lie about selected columns. Use no generic for builders; use an exact
+     raw boundary helper for raw SQL.
    - For finite public query presets, use a preset-to-row type map plus a union
      boundary type instead of `Record<string, ...>`.
 4. Keep raw SQL deliberate:
@@ -71,6 +77,8 @@ patching:
    - Do not feed unconstrained runtime `string` values into table/column/group/
      order/identifier positions. Narrow them to local unions or generated table
      keys first.
+   - Prefer `eb.fn`, `eb.lit`, `eb.ref`, and expression callbacks for scalar
+     SQL such as `count`, `coalesce`, `max`, `exists`, and constant selections.
 5. Align TypeScript with real driver values:
    - Kysely does not coerce runtime values.
    - Native `node:sqlite` returns BLOB columns as `Uint8Array`; convert with
@@ -119,6 +127,7 @@ Pick the smallest proof that covers the touched surface:
 
 ```bash
 pnpm db:kysely:check
+pnpm lint:kysely
 pnpm test src/infra/kysely-node-sqlite.test.ts
 pnpm test <owning-store>.test.ts
 pnpm tsgo:core
@@ -135,6 +144,23 @@ Add or update focused tests for:
 - negative type contracts with `@ts-expect-error` for important column/preset
   mistakes
 - public store behavior, not just private SQL shape
+
+## Helper Extraction
+
+Good helpers:
+
+- `readSqliteNumberPragma(db, pragma)` style helpers with a closed union for
+  PRAGMA names.
+- Raw-expression helpers that accept Kysely expressions/refs instead of raw
+  column strings.
+- Public query preset maps that preserve exact row types at the API boundary.
+
+Avoid helpers that:
+
+- Wrap obvious Kysely literals just to avoid strings.
+- Take generic `string` table/column/order names.
+- Return heavily generic query builders that are harder to type than the query
+  they hide.
 
 ## Avoid
 

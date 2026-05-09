@@ -238,7 +238,7 @@ export function createPluginBlobSyncStore<TMetadata = Record<string, unknown>>(
             .where("expires_at", "<=", createdAt),
         );
 
-        const countRow = executeSqliteQueryTakeFirstSync<{ count?: number | bigint }>(
+        const countRow = executeSqliteQueryTakeFirstSync(
           database.db,
           db
             .selectFrom("plugin_blob_entries")
@@ -250,7 +250,7 @@ export function createPluginBlobSyncStore<TMetadata = Record<string, unknown>>(
         const count = Number(countRow?.count ?? 0);
         const overflow = count - maxEntries;
         if (overflow > 0) {
-          const overflowRows = executeSqliteQuerySync<{ entry_key: string }>(
+          const overflowRows = executeSqliteQuerySync(
             database.db,
             db
               .selectFrom("plugin_blob_entries")
@@ -285,7 +285,7 @@ export function createPluginBlobSyncStore<TMetadata = Record<string, unknown>>(
     lookup(key) {
       const normalizedKey = validateKey(key);
       const database = openOpenClawStateDatabase();
-      const row = executeSqliteQueryTakeFirstSync<BlobRow>(
+      const row = executeSqliteQueryTakeFirstSync(
         database.db,
         getPluginBlobKysely(database.db)
           .selectFrom("plugin_blob_entries")
@@ -301,7 +301,7 @@ export function createPluginBlobSyncStore<TMetadata = Record<string, unknown>>(
       const normalizedKey = validateKey(key);
       const row = runOpenClawStateWriteTransaction((database) => {
         const db = getPluginBlobKysely(database.db);
-        const found = executeSqliteQueryTakeFirstSync<BlobRow>(
+        const found = executeSqliteQueryTakeFirstSync(
           database.db,
           db
             .selectFrom("plugin_blob_entries")
@@ -339,7 +339,7 @@ export function createPluginBlobSyncStore<TMetadata = Record<string, unknown>>(
     },
     entries() {
       const database = openOpenClawStateDatabase();
-      const rows = executeSqliteQuerySync<BlobRow>(
+      const rows = executeSqliteQuerySync(
         database.db,
         getPluginBlobKysely(database.db)
           .selectFrom("plugin_blob_entries")

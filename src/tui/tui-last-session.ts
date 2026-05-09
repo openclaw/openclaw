@@ -202,7 +202,7 @@ export async function readTuiLastSessionKey(params: {
 }): Promise<string | null> {
   const stateDatabase = openOpenClawStateDatabase(sqliteOptionsForStateDir(params.stateDir));
   const db = getTuiLastSessionKysely(stateDatabase.db);
-  const row = executeSqliteQuerySync<TuiLastSessionRow>(
+  const row = executeSqliteQuerySync(
     stateDatabase.db,
     db.selectFrom("tui_last_sessions").selectAll().where("scope_key", "=", params.scopeKey),
   ).rows[0];
