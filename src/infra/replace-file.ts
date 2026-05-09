@@ -3,9 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   movePathWithCopyFallback as movePathWithCopyFallbackBase,
-  replaceDirectoryAtomic,
-  replaceFileAtomic,
-  replaceFileAtomicSync,
   type MovePathWithCopyFallbackOptions as BaseMovePathWithCopyFallbackOptions,
 } from "@openclaw/fs-safe/atomic";
 

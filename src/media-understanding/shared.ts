@@ -7,9 +7,7 @@ import type {
 } from "../agents/provider-attribution.js";
 import {
   buildProviderRequestDispatcherPolicy,
-  normalizeBaseUrl,
   resolveProviderRequestPolicyConfig,
-  sanitizeConfiguredModelProviderRequest,
   type ProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";

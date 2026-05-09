@@ -455,9 +455,9 @@ afterEach(() => {
 
 describe("applyExtraParamsToAgent", () => {
   function createOptionsCaptureAgent() {
-    const calls: Array<(SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined> = [];
+    const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      calls.push(options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined);
+      calls.push(options);
       return {} as ReturnType<StreamFn>;
     };
     return {
@@ -1882,7 +1882,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("defaults OpenAI transport to auto without websocket warm-up", () => {
+  it("defaults OpenAI transport to auto", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -1897,7 +1897,6 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
-    expect(calls[0]?.openaiWsWarmup).toBe(false);
   });
 
   it("injects GPT-5 default parallel tool calls and low verbosity for OpenAI Responses payloads", () => {
@@ -2047,68 +2046,6 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("sse");
-  });
-
-  it("allows disabling OpenAI websocket warm-up via model params", () => {
-    const { calls, agent } = createOptionsCaptureAgent();
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5": {
-              params: {
-                openaiWsWarmup: false,
-              },
-            },
-          },
-        },
-      },
-    };
-
-    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5");
-
-    const model = {
-      api: "openai-responses",
-      provider: "openai",
-      id: "gpt-5",
-    } as Model<"openai-responses">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.openaiWsWarmup).toBe(false);
-  });
-
-  it("lets runtime options override configured OpenAI websocket warm-up", () => {
-    const { calls, agent } = createOptionsCaptureAgent();
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5": {
-              params: {
-                openaiWsWarmup: false,
-              },
-            },
-          },
-        },
-      },
-    };
-
-    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5");
-
-    const model = {
-      api: "openai-responses",
-      provider: "openai",
-      id: "gpt-5",
-    } as Model<"openai-responses">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {
-      openaiWsWarmup: true,
-    } as unknown as SimpleStreamOptions);
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.openaiWsWarmup).toBe(true);
   });
 
   it("allows forcing Codex transport to SSE", () => {

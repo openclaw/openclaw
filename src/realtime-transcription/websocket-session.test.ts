@@ -164,7 +164,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     expect(onError).toHaveBeenCalledTimes(1);
     const setupError = onError.mock.calls[0]?.[0];
     expect(setupError).toBeInstanceOf(Error);
-    expect(setupError).toMatchObject({ message: "nope" });
+    expect(setupError.message).toBe("nope");
   });
 
   it("reports pre-ready closes separately from connection timeouts", async () => {
@@ -187,8 +187,6 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     expect(onError).toHaveBeenCalledTimes(1);
     const closeError = onError.mock.calls[0]?.[0];
     expect(closeError).toBeInstanceOf(Error);
-    expect(closeError).toMatchObject({
-      message: "test realtime transcription connection closed before ready",
-    });
+    expect(closeError.message).toBe("test realtime transcription connection closed before ready");
   });
 });

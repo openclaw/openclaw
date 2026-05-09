@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { Context, Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GPT_PARALLEL_TOOL_CALLS_PAYLOAD_APIS,
@@ -55,7 +55,6 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
                 parallelToolCalls: false,
                 textVerbosity: "medium",
                 cached_content: "conversation-cache",
-                openaiWsWarmup: true,
               },
             },
           },
@@ -67,7 +66,6 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
       parallel_tool_calls: false,
       text_verbosity: "medium",
       cachedContent: "conversation-cache",
-      openaiWsWarmup: true,
     });
   });
 
@@ -97,27 +95,6 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
     });
 
     expect(payload.parallel_tool_calls).toBe(true);
-  });
-
-  it("propagates OpenAI GPT-5 warmup default through stream options", () => {
-    const { agent, calls } = createOptionsCaptureAgent();
-    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4");
-
-    void agent.streamFn?.(
-      {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as Model<"openai-responses">,
-      { messages: [] },
-      {},
-    );
-
-    expect(calls).toEqual([
-      expect.objectContaining({
-        openaiWsWarmup: false,
-      }),
-    ]);
   });
 
   it("maps OpenAI GPT-5 thinking level into Responses reasoning effort payloads", () => {
@@ -214,7 +191,7 @@ function runPayloadMutation(params: {
     params.thinkingLevel,
   );
   const context: Context = { messages: [] };
-  void agent.streamFn?.(params.model, context, {} as SimpleStreamOptions);
+  void agent.streamFn?.(params.model, context, {});
   return payload;
 }
 
@@ -224,16 +201,4 @@ function installNoopProviderRuntimeDeps() {
     resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: (params) => params.context.streamFn,
   });
-}
-
-function createOptionsCaptureAgent() {
-  const calls: Array<(SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined> = [];
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
-    calls.push(options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined);
-    return {} as ReturnType<StreamFn>;
-  };
-  return {
-    calls,
-    agent: { streamFn: baseStreamFn },
-  };
 }

@@ -587,7 +587,7 @@ describe("DiscordVoiceManager", () => {
     ).handleSpeakingStart(entry, "u1");
 
     expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalled();
-    expect(player.stop).toHaveBeenCalledWith(true);
+    expect(player.stop).not.toHaveBeenCalled();
     expect(connection.receiver.subscribe).toHaveBeenCalledWith(
       "u1",
       expect.objectContaining({ end: expect.any(Object) }),
@@ -642,7 +642,7 @@ describe("DiscordVoiceManager", () => {
     turn?.sendInputAudio(Buffer.alloc(3840));
 
     expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalled();
-    expect(player.stop).toHaveBeenCalledWith(true);
+    expect(player.stop).not.toHaveBeenCalled();
     expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
   });
 
@@ -684,7 +684,7 @@ describe("DiscordVoiceManager", () => {
     turn?.sendInputAudio(Buffer.alloc(3840));
 
     expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalled();
-    expect(player.stop).toHaveBeenCalledWith(true);
+    expect(player.stop).not.toHaveBeenCalled();
     expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
   });
 
@@ -964,6 +964,7 @@ describe("DiscordVoiceManager", () => {
         realtime: {
           model: "gpt-realtime-2",
           voice: "cedar",
+          minBargeInAudioEndMs: 500,
           providers: {
             openai: { model: "provider-default", voice: "marin" },
           },
@@ -981,7 +982,11 @@ describe("DiscordVoiceManager", () => {
         providerConfigs: expect.objectContaining({
           openai: { model: "provider-default", voice: "marin" },
         }),
-        providerConfigOverrides: { model: "gpt-realtime-2", voice: "cedar" },
+        providerConfigOverrides: {
+          model: "gpt-realtime-2",
+          voice: "cedar",
+          minBargeInAudioEndMs: 500,
+        },
       }),
     );
   });

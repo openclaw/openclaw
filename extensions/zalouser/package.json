@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "typebox": "1.1.37",
+    "typebox": "1.1.38",
     "zca-js": "2.1.2"
   },
   "devDependencies": {

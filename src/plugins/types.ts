@@ -84,26 +84,13 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
-import type {
-  CliBackendAuthEpochMode,
-  CliBackendNormalizeConfigContext,
-  CliBackendPreparedExecution,
-  CliBackendPrepareExecutionContext,
-  CliBackendResolveExecutionArgs,
-  CliBackendResolveExecutionArgsContext,
-  CliBackendThinkingLevel,
-  CliBackendPlugin,
-  CliBundleMcpMode,
-  PluginTextReplacement,
-  PluginTextTransforms,
-} from "./cli-backend.types.js";
+import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingRequestParams,
   PluginConversationBindingRequestResult,
   PluginConversationBindingResolvedEvent,
-  PluginConversationBindingResolutionDecision,
 } from "./conversation-binding.types.js";
 import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import type {
@@ -112,7 +99,6 @@ import type {
   PluginJsonValue,
   PluginNextTurnInjection,
   PluginNextTurnInjectionEnqueueResult,
-  PluginNextTurnInjectionRecord,
   PluginRunContextGetParams,
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
@@ -122,14 +108,8 @@ import type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
-import type {
-  PluginBundleFormat,
-  PluginConfigUiHint,
-  PluginDiagnostic,
-  PluginFormat,
-} from "./manifest-types.js";
+import type { PluginConfigUiHint } from "./manifest-types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
-import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type {
   ProviderApplyConfigDefaultsContext,
@@ -154,7 +134,6 @@ import type {
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   OpenClawPluginHookOptions,
-  OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   OpenClawPluginToolOptions,
 } from "./tool-types.js";
