@@ -357,6 +357,7 @@ Docs: https://docs.openclaw.ai
 - Agents/failover: rotate auth profiles before deferred cooldown marking on rate-limit failures, so file-lock contention cannot stall profile failover. Fixes #57281. (#57283) Thanks @jeremyknows.
 - Gateway/sessions: when `session.dmScope: "main"` is configured, route a bare webchat `/new` against the agent's main session (`sessions.create` with `emitCommandHooks=true`) to an in-place reset instead of creating a parallel `dashboard:` child, matching `/new` behavior on Telegram/Discord. Fixes #77434. (#71170) Thanks @statxc.
 - Scripts/UI/Windows: launch `.cmd` and `.bat` UI runners through the shared cmd.exe escaping path with shell mode disabled, avoiding Node.js v24 DEP0190 warnings while preserving argument boundaries. (#62910) Thanks @nandanadileep.
+- Agents/CLI runner: disable supervisor stdout/stderr capture for prepared CLI runs while keeping bounded diagnostics and incremental JSONL output parsing, preventing long CLI output from being retained in memory. (#79617) Thanks @samzong.
 - Telegram: treat a DM binding that carries the chat id in both `conversationId` and `parentConversationId` as a direct conversation instead of a topic, so reverse delivery for Telegram DMs is not misrouted through a topic-shaped target. (#79700) Thanks @TSHOGX.
 
 ## 2026.5.7

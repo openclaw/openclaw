@@ -150,6 +150,52 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.sessionId).toBe("session-jsonl-large");
   });
 
+  it("parses oversized resume JSONL output from the effective resume output mode", async () => {
+    const largeToolEvent = `${JSON.stringify({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: { type: "tool_delta", text: "x".repeat(2 * 1024 * 1024) },
+      },
+    })}\n`;
+    const resultEvent = `${JSON.stringify({
+      type: "result",
+      session_id: "resume-jsonl-session",
+      result: "resumed answer",
+    })}\n`;
+    const context = buildPreparedCliRunContext({
+      output: "text",
+      provider: "resume-jsonl-cli",
+    });
+    Object.assign(context.preparedBackend.backend, {
+      jsonlDialect: "claude-stream-json" as const,
+      resumeArgs: ["resume", "{sessionId}"],
+      resumeOutput: "jsonl" as const,
+      sessionMode: "existing" as const,
+    });
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(largeToolEvent);
+      input.onStdout?.(resultEvent);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : `${largeToolEvent}${resultEvent}`,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const result = await executePreparedCliRun(context, "resume-jsonl-session");
+
+    expect(result.text).toBe("resumed answer");
+    expect(result.sessionId).toBe("resume-jsonl-session");
+  });
+
   it("classifies failed stdout from the retained parse buffer before the diagnostic tail", async () => {
     const errorPrefix = `${JSON.stringify({
       type: "result",

@@ -442,7 +442,8 @@ export async function executePreparedCliRun(
           useResume,
           trigger: params.trigger,
         });
-        const hasJsonlOutput = backend.output === "jsonl";
+        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+        const hasJsonlOutput = outputMode === "jsonl";
         if (shouldUseClaudeLiveSession(context)) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
@@ -688,7 +689,6 @@ export async function executePreparedCliRun(
           });
         }
 
-        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
         const streamedJsonlOutput =
           outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
 
