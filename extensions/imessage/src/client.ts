@@ -5,6 +5,13 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
+// Matches benign stderr lines emitted by Apple frameworks (AddressBook, CoreData)
+// linked into the imsg process — not produced by imsg's own code. These appear
+// routinely on macOS when the OS reconciles contact/group change records and do
+// not indicate any iMessage functionality loss.
+const IMSG_APPLE_FRAMEWORK_STDERR_PATTERN =
+  /\bCould not fetch (?:group|record) for change type\b|\bABGroup\b|\bAddressBook\b|\bCoreData\b/u;
+
 export type IMessageRpcError = {
   code?: number;
   message?: string;
@@ -96,10 +103,18 @@ export class IMessageRpcClient {
     child.stderr?.on("data", (chunk) => {
       const lines = chunk.toString().split(/\r?\n/);
       for (const line of lines) {
-        if (!line.trim()) {
+        const trimmed = line.trim();
+        if (!trimmed) {
           continue;
         }
-        this.runtime?.error?.(`imsg rpc: ${line.trim()}`);
+        // Apple framework code linked into imsg (AddressBook, CoreData) writes
+        // benign reconciliation notes to stderr. Route them to debug so they
+        // don't inflate ERROR counts in dashboards or watchdog signals.
+        if (IMSG_APPLE_FRAMEWORK_STDERR_PATTERN.test(trimmed)) {
+          this.runtime?.log?.(`[debug] imsg rpc: ${trimmed}`);
+        } else {
+          this.runtime?.error?.(`imsg rpc: ${trimmed}`);
+        }
       }
     });
 
