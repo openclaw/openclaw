@@ -15,10 +15,13 @@ import {
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { RequestClient } from "../internal/discord.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
+
+const replyDeliveryLogger = createSubsystemLogger("discord/reply-delivery");
 
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
@@ -178,6 +181,9 @@ export async function deliverDiscordReply(params: {
   const delivery = resolveDiscordDeliveryOptions(params);
   const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies);
   if (payloads.length === 0) {
+    replyDeliveryLogger.warn(
+      `dropping discord reply: no sendable payloads after sanitization (input=${params.replies.length}, sessionKey=${params.sessionKey ?? "?"}, target=${params.target})`,
+    );
     return;
   }
 

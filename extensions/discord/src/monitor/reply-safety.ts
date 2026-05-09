@@ -1,6 +1,9 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-runtime";
+
+const replySafetyLogger = createSubsystemLogger("discord/reply-safety");
 
 const DISCORD_INTERNAL_TRACE_LINE_RE =
   /^(?:>\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
@@ -81,6 +84,9 @@ export function sanitizeDiscordFrontChannelReplyPayloads(
         : ({ ...payload, text: safeText || undefined } as ReplyPayload);
     const nextParts = resolveSendableOutboundReplyParts(nextPayload);
     if (!nextParts.hasContent && !hasNonTextReplyPayloadContent(nextPayload)) {
+      replySafetyLogger.warn(
+        `skipping discord reply payload: no sendable content after sanitization (originalLen=${typeof payload.text === "string" ? payload.text.length : 0}, sanitizedLen=${typeof safeText === "string" ? safeText.length : 0})`,
+      );
       continue;
     }
     safePayloads.push(nextPayload);
