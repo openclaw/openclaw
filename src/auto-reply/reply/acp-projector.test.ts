@@ -221,6 +221,8 @@ describe("createAcpReplyProjector", () => {
     });
     await projector.flush(true);
 
+    // final_only mode flushes accumulated text as "final" kind so TTS mode
+    // "final" is applied correctly (was "block" before, which skipped TTS).
     expect(deliveries).toEqual([{ kind: "final", text: "a".repeat(70) }]);
   });
 
@@ -370,6 +372,8 @@ describe("createAcpReplyProjector", () => {
       text: prefixSystemMessage("available commands updated (7)"),
     });
     expectToolCallSummary(deliveries[1]);
+    // final_only mode flushes accumulated text as "final" kind (not "block") so
+    // TTS mode "final" is applied correctly.
     expect(deliveries[2]).toEqual({ kind: "final", text: "What now?" });
   });
 

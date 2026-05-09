@@ -297,6 +297,11 @@ export function createAcpReplyProjector(params: {
       if (force && finalOnlyOutputText.trim().length > 0) {
         const text = finalOnlyOutputText;
         finalOnlyOutputText = "";
+        // Deliver accumulated final-only output as "final" to preserve TTS mode
+        // semantics: maybeApplyAcpTts skips non-final payloads when the configured
+        // TTS mode is "final", so delivering as "block" would silence TTS for users
+        // with final-only TTS configured. The bind-aware fallback in the delivery
+        // coordinator operates on all kinds, so the "final" kind is fine here.
         await params.deliver("final", { text });
       }
     } else {
