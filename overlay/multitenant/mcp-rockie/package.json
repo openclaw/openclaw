@@ -1,0 +1,14 @@
+{
+  "name": "mcp-rockie",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Rockie artifact-ops MCP server. Lets claude/codex call list_labs / get_lab / search / submit_experiment / etc. against the platform-context API.",
+  "main": "server.js",
+  "bin": {
+    "mcp-rockie": "./server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

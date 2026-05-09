@@ -220,6 +220,20 @@ RUN chmod 755 /usr/local/bin/entrypoint.sh
 COPY --from=broker-build /out/broker /usr/local/bin/broker
 RUN chmod 755 /usr/local/bin/broker
 
+# Drop in the mcp-rockie MCP server (Phase 5 h.3) so claude/codex can
+# call list_labs / get_lab / search / submit_experiment / etc. against
+# platform-context.
+COPY --chown=runtime:runtime overlay/multitenant/mcp-rockie /home/runtime/mcp-rockie
+RUN cd /home/runtime/mcp-rockie && npm install --omit=dev && chown -R runtime:runtime /home/runtime/mcp-rockie
+
+# Register mcp-rockie in claude + codex MCP configs so each binary
+# auto-loads the tools at session start. Both CLIs read mcp.json from
+# their respective ~/.claude/ and ~/.codex/ dirs.
+RUN install -d -m 0755 -o runtime -g runtime /home/runtime/.claude /home/runtime/.codex && \
+    printf '%s\n' '{"mcpServers":{"rockie":{"command":"node","args":["/home/runtime/mcp-rockie/server.js"]}}}' \
+      | tee /home/runtime/.claude/mcp.json /home/runtime/.codex/mcp.json >/dev/null && \
+    chown runtime:runtime /home/runtime/.claude/mcp.json /home/runtime/.codex/mcp.json
+
 # A reasonable default settings.json so `claude` doesn't trip on first run.
 # Tenant orchestration replaces this from settings.json.j2 at machine boot.
 RUN install -m 0644 -o runtime -g runtime /dev/null /home/runtime/.claude/settings.json && \
