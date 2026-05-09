@@ -32,6 +32,27 @@ artifacts, run artifacts, and searchable/indexable agent-local cache data.
 This gives one durable global view without forcing large agent workspaces,
 transcripts, and binary scratch data into the shared gateway write lane.
 
+## Hard Contract
+
+This migration has one canonical runtime shape:
+
+- Session rows persist session metadata only. They must not persist
+  `transcriptLocator`, transcript file paths, sibling JSONL paths, lock paths,
+  pruning metadata, or file-era compatibility pointers.
+- Transcript identity is always SQLite identity: `{agentId, sessionId}` plus
+  optional topic metadata where the protocol needs it.
+- `sqlite-transcript://...` is not stored runtime state. It is a temporary
+  external handle derived from SQLite identity for protocol, hook, export,
+  diagnostics, plugin, or test boundaries that still need a string.
+- Legacy `sessions.json`, transcript JSONL, `.jsonl.lock`, pruning, truncation,
+  and old session-path logic belong only to the doctor migration/import path.
+- Runtime startup, hot reply paths, compaction, reset, recovery, diagnostics,
+  TTS, memory hooks, subagents, and plugin command routing must derive transcript
+  handles from SQLite identity or pass `{agentId, sessionId}` directly.
+
+Implementation work should keep deleting code until these statements are true
+without exceptions outside doctor/import/export/debug boundaries.
+
 ## Code-Read Assumptions
 
 No follow-up product decisions are blocking this plan. The implementation should
