@@ -289,6 +289,13 @@ function resolveSessionActionLeastPrivilegeScopes(params: unknown): OperatorScop
   const registration = getPluginRegistryState()?.activeRegistry?.sessionActions?.find(
     (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
   );
+  if (!registration) {
+    // A standalone CLI/tool caller may be talking to a gateway whose live
+    // plugin registry is not present in this local process. Avoid under-scoping
+    // valid dynamic actions when we cannot determine the exact requirement
+    // locally.
+    return [...CLI_DEFAULT_OPERATOR_SCOPES];
+  }
   const requiredScopes = registration?.action.requiredScopes;
   return requiredScopes && requiredScopes.length > 0 ? [...requiredScopes] : [WRITE_SCOPE];
 }

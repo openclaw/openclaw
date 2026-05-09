@@ -136,7 +136,30 @@ describe("method scope resolution", () => {
         pluginId: "scope-plugin",
         actionId: "missing",
       }),
-    ).toEqual(["operator.write"]);
+    ).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
+  });
+
+  it("falls back to broad operator scopes when a dynamic session action is not locally registered", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "remote-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
   });
 
   it("returns empty scopes for unknown methods", () => {

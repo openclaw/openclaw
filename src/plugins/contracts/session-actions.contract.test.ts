@@ -379,6 +379,31 @@ describe("plugin session actions", () => {
           handler: () => ({ continueAgent: "yes" as never }),
         });
         api.registerSessionAction({
+          id: "wire-shaped-success",
+          handler: () =>
+            ({
+              result: { accepted: true },
+            }) as never,
+        });
+        api.registerSessionAction({
+          id: "mixed-branch-fields",
+          handler: () =>
+            ({
+              ok: false,
+              error: "stop",
+              continueAgent: true,
+              result: { leaked: true },
+            }) as never,
+        });
+        api.registerSessionAction({
+          id: "unknown-success-field",
+          handler: () =>
+            ({
+              data: { accepted: true },
+              extra: "unexpected",
+            }) as never,
+        });
+        api.registerSessionAction({
           id: "throws-secret",
           handler: () => {
             throw new Error("fixture action failed");
@@ -501,6 +526,49 @@ describe("plugin session actions", () => {
       error: {
         code: "INVALID_REQUEST",
         message: "plugin session action continueAgent must be a boolean",
+      },
+    });
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
+          actionId: "wire-shaped-success",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugin session action result contains unsupported fields: result",
+      },
+    });
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
+          actionId: "mixed-branch-fields",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message:
+          "plugin session action failure result contains unsupported fields: continueAgent, result",
+      },
+    });
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
+          actionId: "unknown-success-field",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugin session action result contains unsupported fields: extra",
       },
     });
     await expect(

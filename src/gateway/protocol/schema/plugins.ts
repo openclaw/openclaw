@@ -43,15 +43,27 @@ export const PluginsSessionActionParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const PluginsSessionActionResultSchema = Type.Object(
+export const PluginsSessionActionSuccessResultSchema = Type.Object(
   {
-    ok: Type.Boolean(),
+    ok: Type.Literal(true),
     result: Type.Optional(PluginJsonValueSchema),
     continueAgent: Type.Optional(Type.Boolean()),
     reply: Type.Optional(PluginJsonValueSchema),
-    error: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const PluginsSessionActionFailureResultSchema = Type.Object(
+  {
+    ok: Type.Literal(false),
+    error: Type.String(),
     code: Type.Optional(Type.String()),
     details: Type.Optional(PluginJsonValueSchema),
   },
   { additionalProperties: false },
 );
+
+export const PluginsSessionActionResultSchema = Type.Union([
+  PluginsSessionActionSuccessResultSchema,
+  PluginsSessionActionFailureResultSchema,
+]);

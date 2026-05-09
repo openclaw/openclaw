@@ -204,6 +204,34 @@ describe("gateway tool defaults", () => {
     );
   });
 
+  it("falls back to broad scopes when a plugin session action is not locally registered", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "plugins.sessionAction",
+      {},
+      {
+        pluginId: "remote-plugin",
+        actionId: "approve",
+      },
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugins.sessionAction",
+        scopes: [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ],
+      }),
+    );
+  });
+
   it("allows explicit scope overrides for dynamic callers", async () => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
     await callGatewayTool(
