@@ -236,7 +236,7 @@ function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean 
   return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
 }
 
-function stripCommentsForHeuristics(source: string): string {
+export function stripCommentsForHeuristics(source: string): string {
   let stripped = "";
   let quote: "'" | '"' | "`" | null = null;
   let escaped = false;

@@ -15,6 +15,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { collectSkillMarkdownSensitiveNetworkFinding } from "./audit-skill-markdown-context.js";
 import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import type { SkillScanFinding } from "./skill-scanner.js";
@@ -873,6 +874,15 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       });
       if (!summary) {
         continue;
+      }
+
+      const markdownSensitiveNetworkFinding = await collectSkillMarkdownSensitiveNetworkFinding({
+        skillDir,
+        skillFilePath: entry.skill.filePath,
+        skillName,
+      }).catch(() => null);
+      if (markdownSensitiveNetworkFinding) {
+        findings.push(markdownSensitiveNetworkFinding);
       }
 
       if (summary.critical > 0) {
