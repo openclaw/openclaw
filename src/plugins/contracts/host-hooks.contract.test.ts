@@ -740,7 +740,7 @@ describe("host-hook fixture plugin contract", () => {
     );
     await expect(
       projectPluginSessionExtensions({ sessionKey: "agent:main:main", entry }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 
   it("skips throwing session extension projectors without losing other projections", () => {
@@ -1854,7 +1854,7 @@ describe("host-hook fixture plugin contract", () => {
       "session:disable:",
       "runtime:disable:",
     ]);
-    expect(listPluginSessionSchedulerJobs("cleanup-fixture")).toEqual([]);
+    expect(listPluginSessionSchedulerJobs("cleanup-fixture")).toStrictEqual([]);
   });
 
   it("keeps scheduler job records when cleanup fails so cleanup can retry", async () => {
@@ -1975,7 +1975,7 @@ describe("host-hook fixture plugin contract", () => {
         nextRegistry: next,
       }),
     ).resolves.toMatchObject({ failures: [] });
-    expect(cleanupEvents).toEqual([]);
+    expect(cleanupEvents).toStrictEqual([]);
     expect(listPluginSessionSchedulerJobs("restart-fixture")).toEqual([
       {
         id: "shared-job",
@@ -2109,7 +2109,7 @@ describe("host-hook fixture plugin contract", () => {
         }),
       }),
     ]);
-    expect(listPluginSessionSchedulerJobs("snapshot-fixture")).toEqual([]);
+    expect(listPluginSessionSchedulerJobs("snapshot-fixture")).toStrictEqual([]);
   });
 
   it("removes persistent plugin-owned session state and pending injections during cleanup", async () => {
