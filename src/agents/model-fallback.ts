@@ -598,7 +598,10 @@ function resolveFallbackCandidates(params: {
     (!providerSpecified || resolvedModelAlias.ref.provider === providerRaw)
       ? resolvedModelAlias.ref
       : null) ??
-    (resolvedProviderModelAlias?.alias ? resolvedProviderModelAlias.ref : null) ??
+    (resolvedProviderModelAlias?.alias &&
+    (!providerSpecified || resolvedProviderModelAlias.ref.provider === providerRaw)
+      ? resolvedProviderModelAlias.ref
+      : null) ??
     normalizedPrimary;
   const effectivePrimary = normalizeModelRef(resolvedPrimary.provider, resolvedPrimary.model);
 

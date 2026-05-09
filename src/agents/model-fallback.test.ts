@@ -542,6 +542,38 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("does not let provider-qualified alias string override explicit provider when alias resolves to different provider", () => {
+    // Edge case: someone creates alias "opencode-go/deepseek-v4-pro" pointing to openrouter.
+    // Even the provider-qualified alias path must not override an explicit provider.
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: [],
+          },
+          models: {
+            "openrouter/deepseek/deepseek-v4-pro": {
+              alias: "opencode-go/deepseek-v4-pro",
+            },
+            "opencode-go/deepseek-v4-pro": {},
+          },
+        },
+      },
+    });
+
+    const candidates = __testing.resolveFallbackCandidates({
+      cfg,
+      provider: "opencode-go",
+      model: "deepseek-v4-pro",
+    });
+
+    expect(candidates[0]).toEqual({
+      provider: "opencode-go",
+      model: "deepseek-v4-pro",
+    });
+  });
+
   it("falls back on unrecognized errors when candidates remain", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");
