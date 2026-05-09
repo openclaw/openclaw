@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 
 const hoisted = vi.hoisted(() => ({
   loadConfigMock: vi.fn<() => OpenClawConfig>(),
@@ -115,6 +115,41 @@ describe("resolveSessionKeyForRun", () => {
       requestSessionKeys: ["acp:first", "ops:second"],
     });
     expect(resolveSessionKeyForRun("run-ambiguous")).toBeUndefined();
+  });
+
+  it("prefers the active run context for rich selection without changing direct run resolution", () => {
+    registerAgentRunContext("run-live-store", {
+      sessionKey: "agent:retired:acp:run-live-store",
+    });
+    hoisted.loadConfigMock.mockReturnValue({});
+    hoisted.loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
+      databasePath: "(multiple)",
+      entries: {
+        "agent:retired:acp:stale": { sessionId: "run-live-store", updatedAt: 100 },
+      },
+    });
+
+    expect(resolveSessionKeySelectionForRun("run-live-store")).toEqual({
+      kind: "selected",
+      storeSessionKey: "agent:retired:acp:run-live-store",
+      requestSessionKey: "acp:run-live-store",
+    });
+    expect(resolveSessionKeyForRun("run-live-store")).toBe("agent:retired:acp:run-live-store");
+    expect(hoisted.loadCombinedSessionEntriesForGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("returns both selection keys for active request-session context without store lookup", () => {
+    registerAgentRunContext("run-live-request", {
+      sessionKey: "acp:run-live-request",
+    });
+
+    expect(resolveSessionKeySelectionForRun("run-live-request")).toEqual({
+      kind: "selected",
+      storeSessionKey: "acp:run-live-request",
+      requestSessionKey: "acp:run-live-request",
+    });
+    expect(resolveSessionKeyForRun("run-live-request")).toBe("acp:run-live-request");
+    expect(hoisted.loadCombinedSessionEntriesForGatewayMock).not.toHaveBeenCalled();
   });
 
   it("refuses ambiguous duplicate session ids without a clear best match", () => {

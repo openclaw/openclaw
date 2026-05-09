@@ -108,8 +108,20 @@ function resolveRunSelectionFromStore(runId: string): RunSessionKeySelection {
   }
 }
 
+function resolveRunSelectionFromActiveContext(runId: string): RunSessionKeySelection | undefined {
+  const sessionKey = getAgentRunContext(runId)?.sessionKey;
+  if (!sessionKey) {
+    return undefined;
+  }
+  return {
+    kind: "selected",
+    storeSessionKey: sessionKey,
+    requestSessionKey: normalizeRequestSessionKey(sessionKey),
+  };
+}
+
 export function resolveSessionKeySelectionForRun(runId: string): RunSessionKeySelection {
-  return resolveRunSelectionFromStore(runId);
+  return resolveRunSelectionFromActiveContext(runId) ?? resolveRunSelectionFromStore(runId);
 }
 
 export function resolveSessionKeyForRun(runId: string) {
