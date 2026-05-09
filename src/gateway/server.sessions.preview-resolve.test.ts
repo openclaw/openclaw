@@ -1,6 +1,5 @@
 import { expect, test } from "vitest";
 import { listSessionEntries, type SessionEntry } from "../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -14,10 +13,6 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
-
-function sqliteTranscript(sessionId: string, agentId = "main"): string {
-  return createSqliteSessionTranscriptLocator({ agentId, sessionId });
-}
 
 function seedTranscript(params: { sessionId: string; events: unknown[]; agentId?: string }) {
   replaceSqliteSessionTranscriptEvents({
