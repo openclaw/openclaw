@@ -163,7 +163,7 @@ describe("ensureAuthProfileStore", () => {
     }
   }
 
-  it("migrates legacy auth.json and deletes it (PR #368)", () => {
+  it("does not import legacy auth.json at runtime", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-profiles-"));
     try {
       const legacyPath = path.join(agentDir, "auth.json");
@@ -186,19 +186,9 @@ describe("ensureAuthProfileStore", () => {
       );
 
       const store = ensureAuthProfileStore(agentDir);
-      expectRecordFields(store.profiles["anthropic:default"], {
-        type: "oauth",
-        provider: "anthropic",
-      });
-
-      const migratedPath = path.join(agentDir, "auth-profiles.json");
-      expect(fs.existsSync(migratedPath)).toBe(true);
-      expect(fs.existsSync(legacyPath)).toBe(false);
-
-      // idempotent
-      const store2 = ensureAuthProfileStore(agentDir);
-      expect(store2.profiles).toHaveProperty("anthropic:default");
-      expect(fs.existsSync(legacyPath)).toBe(false);
+      expect(store.profiles["anthropic:default"]).toBeUndefined();
+      expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+      expect(fs.existsSync(legacyPath)).toBe(true);
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
@@ -725,10 +715,11 @@ describe("ensureAuthProfileStore", () => {
     },
   );
 
-  it("normalizes mode/apiKey aliases while migrating legacy auth.json", () => {
+  it("does not normalize legacy auth.json aliases at runtime", () => {
     withTempAgentDir("openclaw-auth-legacy-alias-", (agentDir) => {
+      const legacyPath = path.join(agentDir, "auth.json");
       fs.writeFileSync(
-        path.join(agentDir, "auth.json"),
+        legacyPath,
         `${JSON.stringify(
           {
             anthropic: {
@@ -744,11 +735,8 @@ describe("ensureAuthProfileStore", () => {
       );
 
       const store = ensureAuthProfileStore(agentDir);
-      expectRecordFields(store.profiles["anthropic:default"], {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-ant-legacy",
-      });
+      expect(store.profiles["anthropic:default"]).toBeUndefined();
+      expect(fs.existsSync(legacyPath)).toBe(true);
     });
   });
 
@@ -773,7 +761,7 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
-  it("merges legacy oauth.json into auth-profiles.json", () => {
+  it("does not import legacy oauth.json at runtime", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-migrate-"));
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
@@ -806,32 +794,9 @@ describe("ensureAuthProfileStore", () => {
       clearRuntimeAuthProfileStoreSnapshots();
 
       const store = ensureAuthProfileStore(agentDir);
-      expectRecordFields(store.profiles["openai-codex:default"], {
-        type: "oauth",
-        provider: "openai-codex",
-        access: "access-token",
-        refresh: "refresh-token",
-      });
-
-      const persisted = JSON.parse(
-        fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8"),
-      ) as {
-        profiles: Record<string, Record<string, unknown>>;
-      };
-      const persistedProfile = persisted.profiles["openai-codex:default"];
-      expect(persistedProfile?.type).toBe("oauth");
-      expect(persistedProfile?.provider).toBe("openai-codex");
-      const oauthRef = persistedProfile?.oauthRef as
-        | { source?: string; provider?: string; id?: unknown }
-        | undefined;
-      expect(oauthRef?.source).toBe("openclaw-credentials");
-      expect(oauthRef?.provider).toBe("openai-codex");
-      expect(typeof oauthRef?.id).toBe("string");
-      expect(persistedProfile).not.toHaveProperty("access");
-      expect(persistedProfile).not.toHaveProperty("refresh");
-      expect(persistedProfile).not.toHaveProperty("idToken");
-      expect(JSON.stringify(persisted)).not.toContain("access-token");
-      expect(JSON.stringify(persisted)).not.toContain("refresh-token");
+      expect(store.profiles["openai-codex:default"]).toBeUndefined();
+      expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+      expect(fs.existsSync(path.join(oauthDir, "oauth.json"))).toBe(true);
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
       restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);

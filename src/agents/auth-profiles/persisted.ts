@@ -1,9 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { resolveOAuthDir, resolveOAuthPath, resolveStateDir } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { normalizeProviderId } from "../provider-id.js";
@@ -15,7 +9,7 @@ import {
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-shared.js";
-import { resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
+import { resolveAuthStorePath } from "./paths.js";
 import {
   coerceAuthProfileState,
   loadPersistedAuthProfileState,
@@ -27,12 +21,8 @@ import type {
   AuthProfileSecretsStore,
   AuthProfileStore,
   OAuthCredential,
-  OAuthCredentialRef,
-  OAuthCredentials,
   ProfileUsageStats,
 } from "./types.js";
-
-export type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
 type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
 type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
@@ -563,28 +553,6 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
   });
 }
 
-function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const record = raw as Record<string, unknown>;
-  if ("profiles" in record) {
-    return null;
-  }
-  const entries: LegacyAuthStore = {};
-  const rejected: RejectedCredentialEntry[] = [];
-  for (const [key, value] of Object.entries(record)) {
-    const parsed = parseCredentialEntry(value, key);
-    if (!parsed.ok) {
-      rejected.push({ key, reason: parsed.reason });
-      continue;
-    }
-    entries[key] = parsed.credential;
-  }
-  warnRejectedCredentialEntries("auth.json", rejected);
-  return Object.keys(entries).length > 0 ? entries : null;
-}
-
 export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -997,311 +965,7 @@ export function buildPersistedAuthProfileSecretsStore(
   };
 }
 
-export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuthStore): void {
-  for (const [provider, cred] of Object.entries(legacy)) {
-    const profileId = `${provider}:default`;
-    const credentialProvider = cred.provider ?? provider;
-    if (cred.type === "api_key") {
-      store.profiles[profileId] = {
-        type: "api_key",
-        provider: credentialProvider,
-        key: cred.key,
-        ...(cred.email ? { email: cred.email } : {}),
-      };
-      continue;
-    }
-    if (cred.type === "token") {
-      store.profiles[profileId] = {
-        type: "token",
-        provider: credentialProvider,
-        token: cred.token,
-        ...(typeof cred.expires === "number" ? { expires: cred.expires } : {}),
-        ...(cred.email ? { email: cred.email } : {}),
-      };
-      continue;
-    }
-    store.profiles[profileId] = {
-      type: "oauth",
-      provider: credentialProvider,
-      access: cred.access,
-      refresh: cred.refresh,
-      expires: cred.expires,
-      ...(cred.enterpriseUrl ? { enterpriseUrl: cred.enterpriseUrl } : {}),
-      ...(cred.projectId ? { projectId: cred.projectId } : {}),
-      ...(cred.accountId ? { accountId: cred.accountId } : {}),
-      ...(cred.email ? { email: cred.email } : {}),
-    };
-  }
-}
-
-export function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
-  const oauthPath = resolveOAuthPath();
-  const oauthRaw = loadJsonFile(oauthPath);
-  if (!oauthRaw || typeof oauthRaw !== "object") {
-    return false;
-  }
-  const oauthEntries = oauthRaw as Record<string, OAuthCredentials>;
-  let mutated = false;
-  for (const [provider, creds] of Object.entries(oauthEntries)) {
-    if (!creds || typeof creds !== "object") {
-      continue;
-    }
-    const profileId = `${provider}:default`;
-    if (store.profiles[profileId]) {
-      continue;
-    }
-    store.profiles[profileId] = {
-      type: "oauth",
-      provider,
-      ...creds,
-    };
-    mutated = true;
-  }
-  return mutated;
-}
-
-function coerceOAuthProfileEncryptedSecretPayload(
-  raw: unknown,
-): OAuthProfileEncryptedSecretPayload | null {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const record = raw as Partial<OAuthProfileEncryptedSecretPayload>;
-  return record.algorithm === OAUTH_PROFILE_SECRET_ALGORITHM &&
-    typeof record.iv === "string" &&
-    typeof record.tag === "string" &&
-    typeof record.ciphertext === "string"
-    ? {
-        algorithm: record.algorithm,
-        iv: record.iv,
-        tag: record.tag,
-        ciphertext: record.ciphertext,
-      }
-    : null;
-}
-
-function hasEncryptedOAuthProfileSecretPayload(raw: unknown): boolean {
-  return (
-    !!raw &&
-    typeof raw === "object" &&
-    coerceOAuthProfileEncryptedSecretPayload(
-      (raw as Partial<OAuthProfileSecretPayload>).encrypted,
-    ) !== null
-  );
-}
-
-function coerceOAuthProfileSecretPayload(params: {
-  raw: unknown;
-  ref: OAuthCredentialRef;
-  profileId: string;
-  provider: string;
-}): OAuthProfileSecretMaterial | null {
-  const { raw, ref, profileId, provider } = params;
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const record = raw as Partial<OAuthProfileSecretPayload>;
-  if (
-    record.version !== OAUTH_PROFILE_SECRET_VERSION ||
-    record.profileId !== profileId ||
-    record.provider !== provider
-  ) {
-    return null;
-  }
-  const encrypted = coerceOAuthProfileEncryptedSecretPayload(record.encrypted);
-  if (encrypted) {
-    return decryptOAuthProfileSecretMaterial({
-      ref,
-      profileId,
-      provider,
-      encrypted,
-    });
-  }
-  return normalizeOAuthProfileSecretMaterial(record);
-}
-
-function resolvePersistedOAuthSecrets(
-  credential: OAuthCredential,
-  profileId: string,
-  options?: { repairOAuthSecretPayloads?: boolean },
-): OAuthCredential {
-  if (!isOAuthProfileSecretRef(credential.oauthRef)) {
-    return credential;
-  }
-  const secretPath = resolveOAuthProfileSecretPath(credential.oauthRef);
-  const raw = loadJsonFile(secretPath);
-  const secret = coerceOAuthProfileSecretPayload({
-    raw,
-    ref: credential.oauthRef,
-    profileId,
-    provider: credential.provider,
-  });
-  if (!secret) {
-    return credential;
-  }
-  if (options?.repairOAuthSecretPayloads === true && !hasEncryptedOAuthProfileSecretPayload(raw)) {
-    writeOAuthProfileSecretMaterial({
-      ref: credential.oauthRef,
-      profileId,
-      provider: credential.provider,
-      material: secret,
-    });
-  }
-  return {
-    ...credential,
-    ...(secret.access ? { access: secret.access } : {}),
-    ...(secret.refresh ? { refresh: secret.refresh } : {}),
-    ...(secret.idToken ? { idToken: secret.idToken } : {}),
-  } as OAuthCredential;
-}
-
-function resolvePersistedOAuthProfileSecrets(
-  store: AuthProfileStore,
-  options?: { repairOAuthSecretPayloads?: boolean },
-): AuthProfileStore {
-  const profiles = Object.fromEntries(
-    Object.entries(store.profiles).map(([profileId, credential]) => [
-      profileId,
-      credential.type === "oauth"
-        ? resolvePersistedOAuthSecrets(credential, profileId, options)
-        : credential,
-    ]),
-  ) as AuthProfileStore["profiles"];
-  return {
-    ...store,
-    profiles,
-  };
-}
-
-function collectPersistedOAuthProfileSecretIds(
-  store: AuthProfileStore | AuthProfileSecretsStore,
-): Set<string> {
-  const ids = new Set<string>();
-  for (const credential of Object.values(store.profiles)) {
-    if (credential.type === "oauth" && isOAuthProfileSecretRef(credential.oauthRef)) {
-      ids.add(credential.oauthRef.id);
-    }
-  }
-  return ids;
-}
-
-export function removeDetachedOAuthProfileSecrets(params: {
-  previousRaw: unknown;
-  nextStore: AuthProfileSecretsStore;
-}): void {
-  const previousStore = coercePersistedAuthProfileStore(params.previousRaw);
-  if (!previousStore) {
-    return;
-  }
-  const previousIds = collectPersistedOAuthProfileSecretIds(previousStore);
-  if (previousIds.size === 0) {
-    return;
-  }
-  const nextIds = collectPersistedOAuthProfileSecretIds(params.nextStore);
-  for (const id of previousIds) {
-    if (nextIds.has(id)) {
-      continue;
-    }
-    fs.rmSync(
-      resolveOAuthProfileSecretPath({
-        source: OAUTH_PROFILE_SECRET_REF_SOURCE,
-        provider: "openai-codex",
-        id,
-      }),
-      { force: true },
-    );
-  }
-}
-
-function buildPersistedAuthProfileFilePayload(params: {
-  store: AuthProfileStore;
-  raw: unknown;
-  agentDir?: string;
-}): AuthProfileSecretsStore & Partial<AuthProfileStore> {
-  const payload = buildPersistedAuthProfileSecretsStore(params.store, undefined, {
-    agentDir: params.agentDir,
-  }) as AuthProfileSecretsStore & Partial<AuthProfileStore>;
-  const state = coerceAuthProfileState(params.raw);
-  return {
-    ...payload,
-    ...(state.order ? { order: state.order } : {}),
-    ...(state.lastGood ? { lastGood: state.lastGood } : {}),
-    ...(state.usageStats ? { usageStats: state.usageStats } : {}),
-  };
-}
-
-function resolveAuthStoreLockPathSync(authPath: string): string {
-  const resolved = path.resolve(authPath);
-  const dir = path.dirname(resolved);
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    return `${path.join(fs.realpathSync(dir), path.basename(resolved))}.lock`;
-  } catch {
-    return `${resolved}.lock`;
-  }
-}
-
-function withAuthStoreRewriteLockSync(authPath: string, fn: () => void): boolean {
-  const lockPath = resolveAuthStoreLockPathSync(authPath);
-  let fd: number | undefined;
-  try {
-    fd = fs.openSync(lockPath, "wx", 0o600);
-    fs.writeFileSync(
-      fd,
-      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2)}\n`,
-      "utf8",
-    );
-    fn();
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === "EEXIST") {
-      return false;
-    }
-    throw err;
-  } finally {
-    if (fd !== undefined) {
-      try {
-        fs.closeSync(fd);
-      } catch {
-        // Best effort only.
-      }
-      try {
-        fs.rmSync(lockPath, { force: true });
-      } catch {
-        // Best effort only.
-      }
-    }
-  }
-}
-
-function rewritePersistedInlineOAuthSecrets(params: { authPath: string; agentDir?: string }): void {
-  withAuthStoreRewriteLockSync(params.authPath, () => {
-    const raw = loadJsonFile(params.authPath);
-    const store = coercePersistedAuthProfileStore(raw);
-    if (!store) {
-      return;
-    }
-    const merged = {
-      ...store,
-      ...mergeAuthProfileState(
-        coerceAuthProfileState(raw),
-        loadPersistedAuthProfileState(params.agentDir),
-      ),
-    };
-    if (!Object.values(merged.profiles).some(hasInlinePersistableOAuthSecrets)) {
-      return;
-    }
-    saveJsonFile(
-      params.authPath,
-      buildPersistedAuthProfileFilePayload({ store: merged, raw, agentDir: params.agentDir }),
-    );
-  });
-}
-
-export function loadPersistedAuthProfileStore(
-  agentDir?: string,
-  options?: LoadPersistedAuthProfileStoreOptions,
-): AuthProfileStore | null {
+export function loadPersistedAuthProfileStore(agentDir?: string): AuthProfileStore | null {
   const authPath = resolveAuthStorePath(agentDir);
   const raw = loadJsonFile(authPath);
   const store = coercePersistedAuthProfileStore(raw);
@@ -1328,8 +992,4 @@ export function loadPersistedAuthProfileStore(
     repairOAuthSecretPayloads:
       options?.repairOAuthSecretPayloads === true || canRepairPersistedSecrets,
   });
-}
-
-export function loadLegacyAuthProfileStore(agentDir?: string): LegacyAuthStore | null {
-  return coerceLegacyAuthStore(loadJsonFile(resolveLegacyAuthStorePath(agentDir)));
 }

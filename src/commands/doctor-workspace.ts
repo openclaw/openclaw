@@ -8,7 +8,6 @@ import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   LEGACY_ROOT_MEMORY_FILENAME,
   resolveCanonicalRootMemoryPath,
-  resolveLegacyRootMemoryPath,
   resolveRootMemoryRepairDir,
 } from "../memory/root-memory-files.js";
 import { note } from "../terminal/note.js";
@@ -118,7 +117,7 @@ export async function detectRootMemoryFiles(
 ): Promise<RootMemoryFilesDetection> {
   const resolvedWorkspace = path.resolve(workspaceDir);
   const canonicalPath = resolveCanonicalRootMemoryPath(resolvedWorkspace);
-  const legacyPath = resolveLegacyRootMemoryPath(resolvedWorkspace);
+  const legacyPath = path.join(resolvedWorkspace, LEGACY_ROOT_MEMORY_FILENAME);
   const entries = await listWorkspaceEntries(resolvedWorkspace);
   const [canonical, legacy] = await Promise.all([
     entries.has(CANONICAL_ROOT_MEMORY_FILENAME)

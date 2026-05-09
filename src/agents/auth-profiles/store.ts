@@ -9,7 +9,6 @@ import {
   AUTH_STORE_LOCK_OPTIONS,
   AUTH_STORE_VERSION,
   EXTERNAL_CLI_SYNC_TTL_MS,
-  log,
 } from "./constants.js";
 import {
   overlayExternalAuthProfiles,
@@ -18,20 +17,11 @@ import {
 } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import { isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
+import { ensureAuthStoreFile, resolveAuthStatePath, resolveAuthStorePath } from "./paths.js";
 import {
-  ensureAuthStoreFile,
-  resolveAuthStatePath,
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "./paths.js";
-import {
-  applyLegacyAuthStore,
   buildPersistedAuthProfileSecretsStore,
-  loadLegacyAuthProfileStore,
   loadPersistedAuthProfileStore,
   mergeAuthProfileStores,
-  mergeOAuthFileIntoStore,
-  removeDetachedOAuthProfileSecrets,
 } from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
@@ -485,15 +475,6 @@ export function loadAuthProfileStore(): AuthProfileStore {
   if (asStore) {
     return overlayExternalAuthProfiles(asStore);
   }
-  const legacy = loadLegacyAuthProfileStore();
-  if (legacy) {
-    const store: AuthProfileStore = {
-      version: AUTH_STORE_VERSION,
-      profiles: {},
-    };
-    applyLegacyAuthStore(store, legacy);
-    return overlayExternalAuthProfiles(store);
-  }
 
   const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
   return overlayExternalAuthProfiles(store);
@@ -538,38 +519,10 @@ function loadAuthProfileStoreForAgent(
     return synced.store;
   }
 
-  const legacy = loadLegacyAuthProfileStore(agentDir);
   const store: AuthProfileStore = {
     version: AUTH_STORE_VERSION,
     profiles: {},
   };
-  if (legacy) {
-    applyLegacyAuthStore(store, legacy);
-  }
-
-  const mergedOAuth = mergeOAuthFileIntoStore(store);
-  const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
-  const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth);
-  if (shouldWrite) {
-    saveAuthProfileStore(store, agentDir);
-  }
-
-  // PR #368: legacy auth.json could get re-migrated from other agent dirs,
-  // overwriting fresh OAuth creds with stale tokens (fixes #363). Delete only
-  // after we've successfully written auth-profiles.json.
-  if (shouldWrite && legacy !== null) {
-    const legacyPath = resolveLegacyAuthStorePath(agentDir);
-    try {
-      fs.unlinkSync(legacyPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        log.warn("failed to delete legacy auth.json after migration", {
-          err,
-          legacyPath,
-        });
-      }
-    }
-  }
 
   const synced = maybeSyncPersistedExternalCliAuthProfiles({
     store,

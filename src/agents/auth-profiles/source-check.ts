@@ -1,16 +1,10 @@
 import fs from "node:fs";
-import {
-  resolveAuthStatePath,
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "./path-resolve.js";
+import { resolveAuthStatePath, resolveAuthStorePath } from "./path-resolve.js";
 import { hasAnyRuntimeAuthProfileStoreSource } from "./runtime-snapshots.js";
 
 function hasStoredAuthProfileFiles(agentDir?: string): boolean {
   return (
-    fs.existsSync(resolveAuthStorePath(agentDir)) ||
-    fs.existsSync(resolveAuthStatePath(agentDir)) ||
-    fs.existsSync(resolveLegacyAuthStorePath(agentDir))
+    fs.existsSync(resolveAuthStorePath(agentDir)) || fs.existsSync(resolveAuthStatePath(agentDir))
   );
 }
 

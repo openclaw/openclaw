@@ -4,12 +4,20 @@ import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import {
+  loadPersistedAuthProfileStore,
+  mergeAuthProfileStores,
+} from "../agents/auth-profiles/persisted.js";
+import {
   clearRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
-import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredentials,
+} from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveOAuthPath, resolveStateDir } from "../config/paths.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadJsonFile } from "../infra/json-file.js";
@@ -25,6 +33,20 @@ type AuthProfileRepairCandidate = {
 type LegacyFlatAuthProfileStore = {
   agentDir?: string;
   authPath: string;
+  store: AuthProfileStore;
+};
+
+type LegacyAuthJsonStore = {
+  agentDir?: string;
+  authPath: string;
+  legacyPath: string;
+  store: AuthProfileStore;
+};
+
+type LegacyOAuthJsonStore = {
+  agentDir?: string;
+  authPath: string;
+  legacyPath: string;
   store: AuthProfileStore;
 };
 
@@ -228,9 +250,93 @@ function resolveLegacyFlatStore(
   };
 }
 
+function resolveLegacyAuthJsonStore(
+  candidate: AuthProfileRepairCandidate,
+): LegacyAuthJsonStore | null {
+  const legacyPath = path.join(path.dirname(candidate.authPath), "auth.json");
+  if (!fs.existsSync(legacyPath)) {
+    return null;
+  }
+  const raw = loadJsonFile(legacyPath);
+  const store = coerceLegacyFlatAuthProfileStore(raw);
+  if (!store || Object.keys(store.profiles).length === 0) {
+    return null;
+  }
+  return {
+    ...candidate,
+    legacyPath,
+    store,
+  };
+}
+
+function coerceLegacyOAuthJsonStore(raw: unknown): AuthProfileStore | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const store: AuthProfileStore = {
+    version: AUTH_STORE_VERSION,
+    profiles: {},
+  };
+  for (const [provider, value] of Object.entries(raw)) {
+    if (!isRecord(value) || !isSafeLegacyProviderKey(provider)) {
+      continue;
+    }
+    const creds = value as OAuthCredentials;
+    if (
+      !readNonEmptyString(creds.access) ||
+      !readNonEmptyString(creds.refresh) ||
+      typeof creds.expires !== "number"
+    ) {
+      continue;
+    }
+    store.profiles[`${provider}:default`] = {
+      type: "oauth",
+      provider,
+      access: creds.access,
+      refresh: creds.refresh,
+      expires: creds.expires,
+      ...(readNonEmptyString(creds.accountId)
+        ? { accountId: readNonEmptyString(creds.accountId) }
+        : {}),
+      ...(readNonEmptyString(creds.email) ? { email: readNonEmptyString(creds.email) } : {}),
+    };
+  }
+  return Object.keys(store.profiles).length > 0 ? store : null;
+}
+
+function resolveLegacyOAuthJsonStore(cfg: OpenClawConfig): LegacyOAuthJsonStore | null {
+  const legacyPath = resolveOAuthPath();
+  if (!fs.existsSync(legacyPath)) {
+    return null;
+  }
+  const store = coerceLegacyOAuthJsonStore(loadJsonFile(legacyPath));
+  if (!store || Object.keys(store.profiles).length === 0) {
+    return null;
+  }
+  const agentDir = resolveDefaultAgentDir(cfg);
+  return {
+    agentDir,
+    authPath: resolveAuthStorePath(agentDir),
+    legacyPath,
+    store,
+  };
+}
+
 function backupAuthProfileStore(authPath: string, now: () => number): string {
   const backupPath = `${authPath}.legacy-flat.${now()}.bak`;
   fs.copyFileSync(authPath, backupPath);
+  return backupPath;
+}
+
+function backupLegacyAuthJsonStore(legacyPath: string, now: () => number): string {
+  const backupPath = `${legacyPath}.legacy-auth.${now()}.bak`;
+  fs.copyFileSync(legacyPath, backupPath);
+  return backupPath;
+}
+
+function backupLegacyOAuthJsonStore(legacyPath: string, now: () => number): string {
+  const backupPath = `${legacyPath}.legacy-oauth.${now()}.bak`;
+  fs.copyFileSync(legacyPath, backupPath);
   return backupPath;
 }
 
@@ -238,6 +344,25 @@ function backupAwsSdkProfileMarkerStore(authPath: string, now: () => number): st
   const backupPath = `${authPath}.aws-sdk-profile.${now()}.bak`;
   fs.copyFileSync(authPath, backupPath);
   return backupPath;
+}
+
+function mergeMissingAuthProfiles(params: {
+  agentDir?: string;
+  imported: AuthProfileStore;
+}): AuthProfileStore {
+  const existing = loadPersistedAuthProfileStore(params.agentDir);
+  if (!existing) {
+    return params.imported;
+  }
+  const missingOnly: AuthProfileStore = {
+    version: AUTH_STORE_VERSION,
+    profiles: Object.fromEntries(
+      Object.entries(params.imported.profiles).filter(
+        ([profileId]) => !existing.profiles[profileId],
+      ),
+    ),
+  };
+  return mergeAuthProfileStores(existing, missingOnly);
 }
 
 function resolveAwsSdkAuthProfileMarkerStore(
@@ -311,6 +436,10 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
   const legacyStores = listAuthProfileRepairCandidates(params.cfg)
     .map(resolveLegacyFlatStore)
     .filter((entry): entry is LegacyFlatAuthProfileStore => entry !== null);
+  const legacyAuthJsonStores = listAuthProfileRepairCandidates(params.cfg)
+    .map(resolveLegacyAuthJsonStore)
+    .filter((entry): entry is LegacyAuthJsonStore => entry !== null);
+  const legacyOAuthJsonStore = resolveLegacyOAuthJsonStore(params.cfg);
   const awsSdkMarkerStores = listAuthProfileRepairCandidates(params.cfg)
     .map(resolveAwsSdkAuthProfileMarkerStore)
     .filter((entry): entry is AwsSdkAuthProfileMarkerStore => entry !== null);
@@ -318,12 +447,19 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
   const result: LegacyFlatAuthProfileRepairResult = {
     detected: [
       ...legacyStores.map((entry) => entry.authPath),
+      ...legacyAuthJsonStores.map((entry) => entry.legacyPath),
+      ...(legacyOAuthJsonStore ? [legacyOAuthJsonStore.legacyPath] : []),
       ...awsSdkMarkerStores.map((entry) => entry.authPath),
     ],
     changes: [],
     warnings: [],
   };
-  if (legacyStores.length === 0 && awsSdkMarkerStores.length === 0) {
+  if (
+    legacyStores.length === 0 &&
+    legacyAuthJsonStores.length === 0 &&
+    !legacyOAuthJsonStore &&
+    awsSdkMarkerStores.length === 0
+  ) {
     return result;
   }
 
@@ -331,6 +467,15 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
     ...legacyStores.map(
       (entry) => `- ${shortenHomePath(entry.authPath)} uses the legacy flat auth profile format.`,
     ),
+    ...legacyAuthJsonStores.map(
+      (entry) =>
+        `- ${shortenHomePath(entry.legacyPath)} uses the retired auth.json credential format.`,
+    ),
+    ...(legacyOAuthJsonStore
+      ? [
+          `- ${shortenHomePath(legacyOAuthJsonStore.legacyPath)} uses the retired shared OAuth credential format.`,
+        ]
+      : []),
     ...awsSdkMarkerStores.map(
       (entry) =>
         `- ${shortenHomePath(entry.authPath)} contains aws-sdk profile markers that belong in openclaw.json auth.profiles.`,
@@ -339,6 +484,11 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
   if (legacyStores.length > 0) {
     noteLines.push(
       `- The gateway expects the canonical version/profiles store; ${formatCliCommand("openclaw doctor --fix")} rewrites this legacy shape with a backup.`,
+    );
+  }
+  if (legacyAuthJsonStores.length > 0 || legacyOAuthJsonStore) {
+    noteLines.push(
+      `- Runtime no longer imports retired credential JSON files; ${formatCliCommand("openclaw doctor --fix")} imports them into auth-profiles.json and removes the source files.`,
     );
   }
   if (awsSdkMarkerStores.length > 0) {
@@ -365,6 +515,40 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
       );
     } catch (err) {
       result.warnings.push(`Failed to rewrite ${shortenHomePath(entry.authPath)}: ${String(err)}`);
+    }
+  }
+  for (const entry of legacyAuthJsonStores) {
+    try {
+      const backupPath = backupLegacyAuthJsonStore(entry.legacyPath, now);
+      const merged = mergeMissingAuthProfiles({
+        agentDir: entry.agentDir,
+        imported: entry.store,
+      });
+      saveAuthProfileStore(merged, entry.agentDir, { syncExternalCli: false });
+      fs.unlinkSync(entry.legacyPath);
+      result.changes.push(
+        `Imported ${shortenHomePath(entry.legacyPath)} into ${shortenHomePath(entry.authPath)} (backup: ${shortenHomePath(backupPath)}).`,
+      );
+    } catch (err) {
+      result.warnings.push(`Failed to import ${shortenHomePath(entry.legacyPath)}: ${String(err)}`);
+    }
+  }
+  if (legacyOAuthJsonStore) {
+    try {
+      const backupPath = backupLegacyOAuthJsonStore(legacyOAuthJsonStore.legacyPath, now);
+      const merged = mergeMissingAuthProfiles({
+        agentDir: legacyOAuthJsonStore.agentDir,
+        imported: legacyOAuthJsonStore.store,
+      });
+      saveAuthProfileStore(merged, legacyOAuthJsonStore.agentDir, { syncExternalCli: false });
+      fs.unlinkSync(legacyOAuthJsonStore.legacyPath);
+      result.changes.push(
+        `Imported ${shortenHomePath(legacyOAuthJsonStore.legacyPath)} into ${shortenHomePath(legacyOAuthJsonStore.authPath)} (backup: ${shortenHomePath(backupPath)}).`,
+      );
+    } catch (err) {
+      result.warnings.push(
+        `Failed to import ${shortenHomePath(legacyOAuthJsonStore.legacyPath)}: ${String(err)}`,
+      );
     }
   }
   for (const entry of awsSdkMarkerStores) {

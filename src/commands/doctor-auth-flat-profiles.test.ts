@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/store.js";
 import {
@@ -81,6 +82,84 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
       },
     });
     expect(JSON.parse(fs.readFileSync(`${authPath}.legacy-flat.123.bak`, "utf8"))).toEqual(legacy);
+  });
+
+  it("imports retired auth.json stores into auth-profiles.json and removes the source", async () => {
+    const state = await makeTestState();
+    const agentDir = state.agentDir();
+    fs.mkdirSync(agentDir, { recursive: true });
+    const legacyPath = `${agentDir}/auth.json`;
+    const legacy = {
+      anthropic: {
+        mode: "api_key",
+        apiKey: "sk-ant-legacy",
+      },
+    };
+    fs.writeFileSync(legacyPath, `${JSON.stringify(legacy, null, 2)}\n`);
+
+    const result = await maybeRepairLegacyFlatAuthProfileStores({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 234,
+    });
+
+    expect(result.detected).toEqual([legacyPath]);
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(legacyPath)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(`${legacyPath}.legacy-auth.234.bak`, "utf8"))).toEqual(
+      legacy,
+    );
+    expect(JSON.parse(fs.readFileSync(`${agentDir}/auth-profiles.json`, "utf8"))).toEqual({
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-ant-legacy",
+        },
+      },
+    });
+  });
+
+  it("imports retired oauth.json into auth-profiles.json and removes the source", async () => {
+    const state = await makeTestState();
+    const legacyPath = state.statePath("credentials", "oauth.json");
+    const legacy = {
+      "openai-codex": {
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: 1_800_000_000_000,
+        accountId: "acct_123",
+      },
+    };
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(legacyPath, `${JSON.stringify(legacy, null, 2)}\n`);
+
+    const result = await maybeRepairLegacyFlatAuthProfileStores({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 345,
+    });
+
+    expect(result.detected).toEqual([legacyPath]);
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(legacyPath)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(`${legacyPath}.legacy-oauth.345.bak`, "utf8"))).toEqual(
+      legacy,
+    );
+    expect(JSON.parse(fs.readFileSync(`${state.agentDir()}/auth-profiles.json`, "utf8"))).toEqual({
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: 1_800_000_000_000,
+          accountId: "acct_123",
+        },
+      },
+    });
   });
 
   it("reports legacy flat stores without rewriting when repair is declined", async () => {

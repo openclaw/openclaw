@@ -136,7 +136,9 @@ This plan has started landing in slices:
 - Auth profile runtime routing state now uses the shared SQLite `kv` store as
   the primary record path. Older per-agent `auth-state.json` files are imported
   and removed by `openclaw doctor --fix`; `auth-profiles.json` still owns
-  credentials and stays file-backed.
+  credentials and stays file-backed. Retired per-agent `auth.json` and shared
+  `credentials/oauth.json` credential files are doctor migration inputs only;
+  runtime no longer imports them.
 - Device identity, local device auth tokens, bootstrap tokens, device/node
   pairing ledgers, channel pairing requests/allowlists, inferred commitment
   records, subagent run records, TUI restore pointers, auth routing state,
@@ -564,8 +566,9 @@ Add tests before each migration step:
   imported and removed only by doctor.
 - TUI last-session restore pointers read from SQLite without JSON exports,
   import legacy JSON only through doctor, and clear stale pointers from SQLite.
-- Auth profile runtime state reads from SQLite, imports legacy JSON only through
-  doctor, and deletes SQLite state when runtime state is empty.
+- Auth profile runtime state reads from SQLite, imports legacy state/credential
+  JSON only through doctor, and deletes SQLite state when runtime state is
+  empty.
 
 ## Rollout Plan
 

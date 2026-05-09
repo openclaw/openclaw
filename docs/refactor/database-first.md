@@ -83,6 +83,10 @@ proceed with these assumptions:
 - `openclaw doctor --fix` owns the legacy file-to-database migration step.
   Runtime startup and `openclaw migrate` should not carry legacy OpenClaw
   database-upgrade paths.
+- Credential compatibility follows the same rule even though credentials stay
+  file-backed: runtime reads canonical `auth-profiles.json` only. Retired
+  per-agent `auth.json` and shared `credentials/oauth.json` files are doctor
+  migration inputs, then removed after import.
 - Runtime must not migrate, normalize, or bridge transcript locators. Active
   transcript identity is `{agentId, sessionId}` in SQLite. File paths are
   legacy doctor inputs only, and `sqlite-transcript://...` must disappear from
@@ -627,6 +631,10 @@ sessionId}` and session key context.
 - Config health fingerprints now use shared SQLite KV instead of
   `logs/config-health.json`, keeping the normal config file as the only
   non-credential configuration document.
+- Auth profile runtime no longer imports retired credential JSON files. The
+  canonical credential file remains `auth-profiles.json`; per-agent `auth.json`
+  and shared `credentials/oauth.json` are doctor migration inputs that are
+  removed after import.
 - Voice Wake trigger and routing settings now use shared SQLite KV instead of
   `settings/voicewake.json` and `settings/voicewake-routing.json`; doctor imports
   the legacy JSON files and removes them after a successful migration.

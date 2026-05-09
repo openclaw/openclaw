@@ -3,20 +3,11 @@ import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveDefaultAgentDir } from "../agent-scope-config.js";
-import {
-  AUTH_PROFILE_FILENAME,
-  AUTH_STATE_FILENAME,
-  LEGACY_AUTH_FILENAME,
-} from "./path-constants.js";
+import { AUTH_PROFILE_FILENAME, AUTH_STATE_FILENAME } from "./path-constants.js";
 
 export function resolveAuthStorePath(agentDir?: string): string {
   const resolved = resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
   return path.join(resolved, AUTH_PROFILE_FILENAME);
-}
-
-export function resolveLegacyAuthStorePath(agentDir?: string): string {
-  const resolved = resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
-  return path.join(resolved, LEGACY_AUTH_FILENAME);
 }
 
 export function resolveAuthStatePath(agentDir?: string): string {
