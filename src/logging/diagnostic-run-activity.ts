@@ -33,6 +33,23 @@ export type DiagnosticSessionActivitySnapshot = {
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
 
+// Registered by pi-embedded-runner/runs.ts to bridge the handle registry into
+// the activity snapshot without creating a circular import.
+let activeEmbeddedRunHandleChecker: ((sessionKey: string) => boolean) | undefined;
+
+export function registerActiveEmbeddedRunHandleChecker(
+  checker: (sessionKey: string) => boolean,
+): void {
+  activeEmbeddedRunHandleChecker = checker;
+}
+
+export function hasActiveEmbeddedRunHandleForSessionKey(sessionKey: string | undefined): boolean {
+  if (!sessionKey || !activeEmbeddedRunHandleChecker) {
+    return false;
+  }
+  return activeEmbeddedRunHandleChecker(sessionKey);
+}
+
 function sessionRefs(params: { sessionId?: string; sessionKey?: string }): string[] {
   const refs: string[] = [];
   const sessionId = params.sessionId?.trim();
@@ -273,7 +290,10 @@ export function getDiagnosticSessionActivitySnapshot(
     activeWorkKind = "tool_call";
   } else if (activity.activeModelCalls.size > 0) {
     activeWorkKind = "model_call";
-  } else if (activity.activeEmbeddedRun) {
+  } else if (
+    activity.activeEmbeddedRun ||
+    hasActiveEmbeddedRunHandleForSessionKey(params.sessionKey)
+  ) {
     activeWorkKind = "embedded_run";
   }
 

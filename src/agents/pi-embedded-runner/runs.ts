@@ -11,6 +11,7 @@ import {
 import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
+  registerActiveEmbeddedRunHandleChecker,
 } from "../../logging/diagnostic-run-activity.js";
 import {
   diagnosticLogger as diag,
@@ -31,6 +32,10 @@ import {
   type EmbeddedRunModelSwitchRequest,
   type EmbeddedRunWaiter,
 } from "./run-state.js";
+
+registerActiveEmbeddedRunHandleChecker(
+  (sessionKey) => resolveActiveEmbeddedRunHandleSessionId(sessionKey) !== undefined,
+);
 
 export {
   getActiveEmbeddedRunCount,
