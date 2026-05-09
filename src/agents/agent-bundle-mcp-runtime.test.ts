@@ -1654,6 +1654,204 @@ process.on("SIGINT", shutdown);`,
     expect(manager.listSessionIds()).toEqual(["session-no-ttl"]);
     expect(disposed).toStrictEqual([]);
   });
+
+  it("resolves runtime scope from cfg, defaulting to session", () => {
+    expect(testing.resolveSessionMcpRuntimeScope(undefined)).toBe("session");
+    expect(testing.resolveSessionMcpRuntimeScope({})).toBe("session");
+    expect(testing.resolveSessionMcpRuntimeScope({ mcp: { servers: {} } })).toBe("session");
+    expect(
+      testing.resolveSessionMcpRuntimeScope({ mcp: { servers: {}, runtimeScope: "session" } }),
+    ).toBe("session");
+    expect(
+      testing.resolveSessionMcpRuntimeScope({ mcp: { servers: {}, runtimeScope: "shared" } }),
+    ).toBe("shared");
+  });
+
+  it("shares a single runtime across sessions when scope is 'shared'", async () => {
+    const created: string[] = [];
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push(params.sessionId);
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    const cfg = {
+      mcp: {
+        servers: { probe: { command: "node", args: ["probe.mjs"] } },
+        runtimeScope: "shared" as const,
+      },
+    };
+
+    const runtimeA = await manager.getOrCreate({
+      sessionId: "session-shared-a",
+      sessionKey: "agent:test:shared-a",
+      workspaceDir: "/workspace",
+      cfg,
+    });
+    const runtimeB = await manager.getOrCreate({
+      sessionId: "session-shared-b",
+      sessionKey: "agent:test:shared-b",
+      workspaceDir: "/workspace",
+      cfg,
+    });
+
+    expect(runtimeA).toBe(runtimeB);
+    expect(created).toHaveLength(1);
+    // The runtime's internal sessionId is the shared-runtime key, not either caller's sessionId,
+    // so log lines unambiguously identify the shared runtime.
+    expect(runtimeA.sessionId.startsWith("__mcp-shared__::")).toBe(true);
+    expect(manager.listSessionIds().sort()).toEqual(["session-shared-a", "session-shared-b"]);
+
+    // Disposing one attached session must not tear the shared runtime down.
+    await manager.disposeSession("session-shared-a");
+    expect(disposed).toEqual([]);
+    expect(manager.listSessionIds()).toEqual(["session-shared-b"]);
+
+    // Disposing the last attached session disposes the runtime.
+    await manager.disposeSession("session-shared-b");
+    expect(disposed).toHaveLength(1);
+    expect(disposed[0].startsWith("__mcp-shared__::")).toBe(true);
+    expect(manager.listSessionIds()).toEqual([]);
+  });
+
+  it("creates separate shared runtimes per (workspaceDir, fingerprint)", async () => {
+    const created: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push(params.sessionId);
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    const cfgOne = {
+      mcp: {
+        servers: { probe: { command: "node", args: ["one.mjs"] } },
+        runtimeScope: "shared" as const,
+      },
+    };
+    const cfgTwo = {
+      mcp: {
+        servers: { probe: { command: "node", args: ["two.mjs"] } },
+        runtimeScope: "shared" as const,
+      },
+    };
+
+    const runtimeOneA = await manager.getOrCreate({
+      sessionId: "session-one-a",
+      workspaceDir: "/workspace",
+      cfg: cfgOne,
+    });
+    const runtimeOneB = await manager.getOrCreate({
+      sessionId: "session-one-b",
+      workspaceDir: "/workspace",
+      cfg: cfgOne,
+    });
+    const runtimeTwo = await manager.getOrCreate({
+      sessionId: "session-two",
+      workspaceDir: "/workspace",
+      cfg: cfgTwo,
+    });
+    const runtimeAlt = await manager.getOrCreate({
+      sessionId: "session-alt-workspace",
+      workspaceDir: "/other-workspace",
+      cfg: cfgOne,
+    });
+
+    expect(runtimeOneA).toBe(runtimeOneB);
+    expect(runtimeOneA).not.toBe(runtimeTwo);
+    expect(runtimeOneA).not.toBe(runtimeAlt);
+    expect(runtimeTwo).not.toBe(runtimeAlt);
+    // Three distinct runtimes — the duplicate (workspace,/workspace, fingerprint=cfgOne) reused.
+    expect(created).toHaveLength(3);
+  });
+
+  it("idle sweep does not evict a shared runtime while any session is leased", async () => {
+    let now = 1_000;
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      let lastUsedAt = now;
+      let activeLeases = 0;
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        get lastUsedAt() {
+          return lastUsedAt;
+        },
+        get activeLeases() {
+          return activeLeases;
+        },
+        markUsed: () => {
+          lastUsedAt = now;
+        },
+        acquireLease: () => {
+          activeLeases += 1;
+          return () => {
+            activeLeases -= 1;
+            lastUsedAt = now;
+          };
+        },
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
+
+    const cfg = {
+      mcp: {
+        servers: { probe: { command: "node", args: ["probe.mjs"] } },
+        runtimeScope: "shared" as const,
+        sessionIdleTtlMs: 50,
+      },
+    };
+
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-leased",
+      workspaceDir: "/workspace",
+      cfg,
+    });
+    await manager.getOrCreate({
+      sessionId: "session-idle",
+      workspaceDir: "/workspace",
+      cfg,
+    });
+    const releaseLease = runtime.acquireLease?.();
+
+    now += 60;
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
+    expect(manager.listSessionIds().sort()).toEqual(["session-idle", "session-leased"]);
+    expect(disposed).toEqual([]);
+
+    releaseLease?.();
+    now += 60;
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(1);
+    expect(disposed).toHaveLength(1);
+    expect(disposed[0].startsWith("__mcp-shared__::")).toBe(true);
+    // Both sessions are detached when the shared runtime is evicted.
+    expect(manager.listSessionIds()).toEqual([]);
+  });
 });
 
 describe("disposeSession timeout", () => {

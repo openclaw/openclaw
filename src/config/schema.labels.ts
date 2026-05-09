@@ -779,6 +779,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "mcp.servers.*.codex.defaultToolsApprovalMode": "Codex MCP Tool Approval",
   "mcp.servers.*.codex.default_tools_approval_mode": "Codex MCP Tool Approval",
   "mcp.sessionIdleTtlMs": "MCP Runtime Idle TTL",
+  "mcp.runtimeScope": "MCP Runtime Scope",
   ui: "UI",
   "ui.seamColor": "Accent Color",
   "ui.assistant": "Assistant Appearance",
