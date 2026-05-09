@@ -39,7 +39,6 @@ export type OpenClawTestState = {
   path: (...parts: string[]) => string;
   statePath: (...parts: string[]) => string;
   agentDir: (agentId?: string) => string;
-  sessionsDir: (agentId?: string) => string;
   writeConfig: (config: unknown) => Promise<string>;
   writeJson: (relativePath: string, value: unknown) => Promise<string>;
   writeText: (relativePath: string, value: string) => Promise<string>;
@@ -279,8 +278,6 @@ export async function createOpenClawTestState(
   let envApplied = false;
   let cleaned = false;
   const agentDir = (agentId = "main") => path.join(paths.stateDir, "agents", agentId, "agent");
-  const sessionsDir = (agentId = "main") =>
-    path.join(paths.stateDir, "agents", agentId, "sessions");
 
   const state: OpenClawTestState = {
     root,
@@ -290,7 +287,6 @@ export async function createOpenClawTestState(
     path: (...parts) => path.join(root, ...parts),
     statePath: (...parts) => path.join(paths.stateDir, ...parts),
     agentDir,
-    sessionsDir,
     writeConfig: (value) => writeJsonFile(paths.configPath, value),
     writeJson: (relativePath, value) =>
       writeJsonFile(path.join(paths.stateDir, relativePath), value),

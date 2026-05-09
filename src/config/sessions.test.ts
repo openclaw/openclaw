@@ -54,15 +54,15 @@ describe("sessions", () => {
   async function createSessionStoreFixture(params: {
     prefix: string;
     entries: Record<string, Record<string, unknown>>;
-  }): Promise<{ agentId: string; sessionsDir: string }> {
+  }): Promise<{ agentId: string; legacySessionsDir: string }> {
     const stateDir = await createCaseDir(params.prefix);
     process.env.OPENCLAW_STATE_DIR = stateDir;
     const agentId = "main";
-    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    const legacySessionsDir = path.join(stateDir, "agents", agentId, "sessions");
     for (const [sessionKey, entry] of Object.entries(params.entries)) {
       upsertSessionEntry({ agentId, sessionKey, entry: entry as SessionEntry });
     }
-    return { agentId, sessionsDir };
+    return { agentId, legacySessionsDir };
   }
 
   function readSessionEntries(agentId = "main"): Record<string, SessionEntry> {
@@ -500,7 +500,7 @@ describe("sessions", () => {
   });
 
   it("creates SQLite session stores without writing sessions.json", async () => {
-    const { sessionsDir } = await createSessionStoreFixture({
+    const { legacySessionsDir } = await createSessionStoreFixture({
       prefix: "session-row-upsert",
       entries: {},
     });
@@ -513,7 +513,7 @@ describe("sessions", () => {
 
     const store = readSessionEntries();
     expect(store["agent:main:main"]?.sessionId).toBe("sess-1");
-    await expect(fs.stat(path.join(sessionsDir, "sessions.json"))).rejects.toMatchObject({
+    await expect(fs.stat(path.join(legacySessionsDir, "sessions.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
