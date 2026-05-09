@@ -1,14 +1,23 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type { VirtualAgentFsEntry } from "./agent-filesystem.js";
+import { parseVirtualAgentFsEntryKind } from "./agent-filesystem.js";
 import { createSqliteVirtualAgentFs } from "./virtual-agent-fs.sqlite.js";
 
 function createTempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vfs-"));
 }
+
+type VirtualAgentFsTestDatabase = Pick<OpenClawAgentKyselyDatabase, "vfs_entries">;
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -16,6 +25,21 @@ afterEach(() => {
 });
 
 describe("SqliteVirtualAgentFs", () => {
+  it("types public results and rejects invalid persisted entry kinds", () => {
+    const scratch = createSqliteVirtualAgentFs({
+      agentId: "main",
+      namespace: "scratch",
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expectTypeOf(scratch.stat("/tmp")).toEqualTypeOf<VirtualAgentFsEntry | null>();
+    expect(parseVirtualAgentFsEntryKind("file")).toBe("file");
+    expect(parseVirtualAgentFsEntryKind("directory")).toBe("directory");
+    expect(() => parseVirtualAgentFsEntryKind("socket")).toThrow(
+      "Invalid persisted VFS entry kind",
+    );
+  });
+
   it("stores scratch files by agent and namespace", () => {
     const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
     const mainScratch = createSqliteVirtualAgentFs({
@@ -50,6 +74,42 @@ describe("SqliteVirtualAgentFs", () => {
     ]);
   });
 
+  it("preserves significant whitespace in virtual paths", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const scratch = createSqliteVirtualAgentFs({
+      agentId: "main",
+      namespace: "scratch",
+      env,
+    });
+
+    scratch.writeFile("/space ", "trailing");
+    scratch.writeFile("/ leading", "leading");
+
+    expect(scratch.readFile("/space ").toString("utf8")).toBe("trailing");
+    expect(scratch.readFile("/ leading").toString("utf8")).toBe("leading");
+    expect(scratch.stat("/space")).toBeNull();
+    expect(scratch.stat("/leading")).toBeNull();
+  });
+
+  it("rejects file and directory overlap states", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const scratch = createSqliteVirtualAgentFs({
+      agentId: "main",
+      namespace: "scratch",
+      env,
+    });
+
+    scratch.writeFile("/dir/a.txt", "a");
+    expect(() => scratch.writeFile("/dir", "file")).toThrow("VFS path is a directory: /dir");
+
+    scratch.writeFile("/parent", "file");
+    expect(() => scratch.writeFile("/parent/child.txt", "child")).toThrow(
+      "VFS parent is not a directory: /parent",
+    );
+    expect(() => scratch.mkdir("/parent/child")).toThrow("VFS parent is not a directory: /parent");
+    expect(() => scratch.writeFile("/", "root")).toThrow("VFS cannot write a file at root.");
+  });
+
   it("renames and removes directory trees", () => {
     const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
     const scratch = createSqliteVirtualAgentFs({
@@ -69,6 +129,28 @@ describe("SqliteVirtualAgentFs", () => {
     scratch.remove("/archive", { recursive: true });
 
     expect(scratch.stat("/archive/tmp/a.txt")).toBeNull();
+  });
+
+  it("rejects ambiguous or cyclic renames", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const scratch = createSqliteVirtualAgentFs({
+      agentId: "main",
+      namespace: "scratch",
+      env,
+    });
+
+    scratch.writeFile("/tmp/a.txt", "a");
+    scratch.writeFile("/other.txt", "other");
+    scratch.writeFile("/target/existing.txt", "existing");
+
+    expect(() => scratch.rename("/", "/archive")).toThrow("VFS cannot rename root.");
+    expect(() => scratch.rename("/tmp", "/tmp/nested")).toThrow(
+      "VFS cannot move a path into itself: /tmp -> /tmp/nested",
+    );
+    expect(() => scratch.rename("/tmp/a.txt", "/other.txt")).toThrow(
+      "VFS target already exists: /other.txt",
+    );
+    expect(() => scratch.rename("/tmp", "/target")).toThrow("VFS target already exists: /target");
   });
 
   it("lists and exports VFS contents for support bundles", () => {
@@ -128,5 +210,32 @@ describe("SqliteVirtualAgentFs", () => {
         contentBase64: "aGVsbG8=",
       },
     ]);
+  });
+
+  it("rejects corrupt persisted entry kinds from public sqlite methods", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const scratch = createSqliteVirtualAgentFs({
+      agentId: "main",
+      namespace: "scratch",
+      env,
+      now: () => 5000,
+    });
+
+    scratch.writeFile("/reports/summary.txt", "hello");
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const db = getNodeSqliteKysely<VirtualAgentFsTestDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("vfs_entries")
+        .set({ kind: "socket" })
+        .where("namespace", "=", "scratch")
+        .where("path", "=", "/reports/summary.txt"),
+    );
+
+    expect(() => scratch.stat("/reports/summary.txt")).toThrow("Invalid persisted VFS entry kind");
+    expect(() => scratch.readFile("/reports/summary.txt")).toThrow(
+      "Invalid persisted VFS entry kind",
+    );
   });
 });
