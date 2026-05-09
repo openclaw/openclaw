@@ -1515,15 +1515,14 @@ describe("google-meet plugin", () => {
       const result = await tool.execute("id", { action: "setup_status" });
 
       expect(result.details.ok).toBe(false);
-      expect(result.details.checks).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "audio-bridge",
-            ok: false,
-            message: expect.stringContaining("chrome.audioBridgeCommand is bidi-only"),
-          }),
-        ]),
-      );
+      const audioBridgeCheck = result.details.checks
+        ?.map((check) => requireRecord(check, "setup check"))
+        .find((check) => check.id === "audio-bridge");
+      if (!audioBridgeCheck) {
+        throw new Error("Expected audio-bridge setup check");
+      }
+      expect(audioBridgeCheck.ok).toBe(false);
+      expect(String(audioBridgeCheck.message)).toContain("chrome.audioBridgeCommand is bidi-only");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
@@ -1547,7 +1546,8 @@ describe("google-meet plugin", () => {
       pageSize: 3,
     });
 
-    expect(result.details.attendance).toEqual([expect.objectContaining({ displayName: "Alice" })]);
+    expect(result.details.attendance).toHaveLength(1);
+    expect(result.details.attendance?.[0]?.displayName).toBe("Alice");
   });
 
   it("writes export bundles through the tool", async () => {
@@ -1572,22 +1572,37 @@ describe("google-meet plugin", () => {
         zip: true,
       });
 
-      expect(result.details.files).toEqual(
-        expect.arrayContaining([path.join(tempDir, "manifest.json")]),
-      );
+      expect(result.details.files).toContain(path.join(tempDir, "manifest.json"));
       expect(result.details.zipFile).toBe(`${tempDir}.zip`);
-      const manifest = JSON.parse(readFileSync(path.join(tempDir, "manifest.json"), "utf8"));
-      expect(manifest).toMatchObject({
-        request: {
-          conferenceRecord: "rec-1",
-          includeDocumentBodies: true,
-        },
-        counts: {
-          attendanceRows: 1,
-          warnings: 0,
-        },
-        files: expect.arrayContaining(["summary.md", "manifest.json"]),
+      const manifest = requireRecord(
+        JSON.parse(readFileSync(path.join(tempDir, "manifest.json"), "utf8")),
+        "export manifest",
+      );
+      expect(manifest.request).toEqual({
+        conferenceRecord: "rec-1",
+        includeDocumentBodies: true,
+        includeTranscriptEntries: true,
+        allConferenceRecords: false,
+        mergeDuplicateParticipants: true,
       });
+      expect(manifest.counts).toEqual({
+        conferenceRecords: 1,
+        artifacts: 1,
+        recordings: 1,
+        transcripts: 1,
+        transcriptEntries: 1,
+        smartNotes: 1,
+        attendanceRows: 1,
+        warnings: 0,
+      });
+      expect(manifest.files).toEqual([
+        "summary.md",
+        "attendance.csv",
+        "transcript.md",
+        "artifacts.json",
+        "attendance.json",
+        "manifest.json",
+      ]);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(`${tempDir}.zip`, { force: true });
@@ -1616,12 +1631,15 @@ describe("google-meet plugin", () => {
         dryRun: true,
       });
 
-      expect(result.details).toMatchObject({
-        dryRun: true,
-        manifest: {
-          files: expect.arrayContaining(["summary.md", "manifest.json"]),
-        },
-      });
+      expect(result.details.dryRun).toBe(true);
+      expect(result.details.manifest?.files).toEqual([
+        "summary.md",
+        "attendance.csv",
+        "transcript.md",
+        "artifacts.json",
+        "attendance.json",
+        "manifest.json",
+      ]);
       expect(existsSync(outputDir)).toBe(false);
     } finally {
       rmSync(parentDir, { recursive: true, force: true });
@@ -1645,7 +1663,7 @@ describe("google-meet plugin", () => {
       meeting: "abc-defg-hij",
     });
 
-    expect(result.details.conferenceRecord).toMatchObject({ name: "conferenceRecords/rec-1" });
+    expect(result.details.conferenceRecord?.name).toBe("conferenceRecords/rec-1");
   });
 
   it("reports the latest conference record from today's calendar through the tool", async () => {
@@ -1665,9 +1683,7 @@ describe("google-meet plugin", () => {
       today: true,
     });
 
-    expect(result.details.calendarEvent).toMatchObject({
-      meetingUri: "https://meet.google.com/abc-defg-hij",
-    });
+    expect(result.details.calendarEvent?.meetingUri).toBe("https://meet.google.com/abc-defg-hij");
   });
 
   it("reports calendar event previews through the tool", async () => {
@@ -1687,12 +1703,9 @@ describe("google-meet plugin", () => {
       today: true,
     });
 
-    expect(result.details.events).toEqual([
-      expect.objectContaining({
-        selected: true,
-        meetingUri: "https://meet.google.com/abc-defg-hij",
-      }),
-    ]);
+    expect(result.details.events).toHaveLength(1);
+    expect(result.details.events?.[0]?.selected).toBe(true);
+    expect(result.details.events?.[0]?.meetingUri).toBe("https://meet.google.com/abc-defg-hij");
   });
 
   it("fails setup status when the configured Chrome node is not connected", async () => {
