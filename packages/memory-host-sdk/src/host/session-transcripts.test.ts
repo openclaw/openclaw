@@ -8,21 +8,17 @@ import {
 } from "./openclaw-runtime-session.js";
 import {
   buildSessionTranscriptEntry,
-  createSqliteSessionTranscriptRef,
   listSessionTranscriptsForAgent,
   readSessionTranscriptDeltaStats,
   sessionPathForTranscript,
   type SessionTranscriptEntry,
+  type SessionTranscriptScope,
 } from "./session-transcripts.js";
 
 let fixtureRoot: string;
 let tmpDir: string;
 let originalStateDir: string | undefined;
 let fixtureId = 0;
-
-function sqliteTranscriptLocator(agentId: string, sessionId: string): string {
-  return createSqliteSessionTranscriptRef({ agentId, sessionId });
-}
 
 beforeAll(() => {
   fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-"));
@@ -65,7 +61,7 @@ function seedTranscript(params: {
   events: unknown[];
   rememberPath?: boolean;
   now?: number;
-}): string {
+}): SessionTranscriptScope {
   const agentId = params.agentId ?? "main";
   const transcriptPath = params.transcriptPath;
   replaceSqliteSessionTranscriptEvents({
@@ -75,12 +71,12 @@ function seedTranscript(params: {
     events: params.events,
     now: () => params.now ?? 1_770_000_000_000,
   });
-  return sqliteTranscriptLocator(agentId, params.sessionId);
+  return { agentId, sessionId: params.sessionId };
 }
 
 describe("listSessionTranscriptsForAgent", () => {
-  it("lists SQLite transcript handles for an agent", async () => {
-    const includedPath = seedTranscript({
+  it("lists SQLite transcript scopes for an agent", async () => {
+    const includedScope = seedTranscript({
       sessionId: "active",
       events: [{ type: "session", id: "active" }],
     });
@@ -90,23 +86,22 @@ describe("listSessionTranscriptsForAgent", () => {
       events: [{ type: "session", id: "other-active" }],
     });
 
-    const files = await listSessionTranscriptsForAgent("main");
+    const scopes = await listSessionTranscriptsForAgent("main");
 
-    expect(files).toEqual([includedPath]);
+    expect(scopes).toEqual([includedScope]);
   });
 
-  it("uses a virtual SQLite locator when no legacy transcript path is recorded", async () => {
-    seedTranscript({
+  it("reads SQLite-only transcript rows directly by scope", async () => {
+    const scope = seedTranscript({
       sessionId: "sqlite-only",
       events: [{ type: "message", message: { role: "user", content: "Stored only in SQLite" } }],
       rememberPath: false,
     });
 
-    const files = await listSessionTranscriptsForAgent("main");
-    const [locator] = files;
+    const scopes = await listSessionTranscriptsForAgent("main");
 
-    expect(locator).toBe("sqlite-transcript://main/sqlite-only.jsonl");
-    const entry = await buildSessionTranscriptEntry(locator);
+    expect(scopes).toEqual([scope]);
+    const entry = await buildSessionTranscriptEntry(scope);
     expect(entry?.content).toBe("User: Stored only in SQLite");
     expect(entry?.path).toBe("sessions/main/sqlite-only.jsonl");
   });
@@ -120,23 +115,15 @@ describe("listSessionTranscriptsForAgent", () => {
     });
 
     await expect(listSessionTranscriptsForAgent("main")).resolves.toEqual([
-      "sqlite-transcript://main/remembered.jsonl",
+      { agentId: "main", sessionId: "remembered" },
     ]);
   });
 });
 
 describe("sessionPathForTranscript", () => {
-  it("formats canonical SQLite locators as stable session export paths", () => {
-    expect(
-      sessionPathForTranscript(
-        createSqliteSessionTranscriptRef({ agentId: "main", sessionId: "active-session" }),
-      ),
-    ).toBe("sessions/main/active-session.jsonl");
-  });
-
-  it("does not preserve legacy filesystem paths as session export identity", () => {
-    expect(sessionPathForTranscript(path.join(tmpDir, "loose-session.jsonl"))).toBe(
-      "sessions/unknown.jsonl",
+  it("formats SQLite scopes as stable session export paths", () => {
+    expect(sessionPathForTranscript({ agentId: "main", sessionId: "active-session" })).toBe(
+      "sessions/main/active-session.jsonl",
     );
   });
 });

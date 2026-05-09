@@ -1295,14 +1295,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     reason?: string;
     force?: boolean;
     sessionTranscriptScopes?: MemorySessionTranscriptScope[];
-    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     if (
       params?.sessionTranscriptScopes?.some(
         (scope) => scope.agentId.trim() && scope.sessionId.trim(),
-      ) ||
-      params?.sessionTranscripts?.some((sessionTranscript) => sessionTranscript.trim().length > 0)
+      )
     ) {
       log.debug("qmd sync ignoring targeted session transcript hint; running regular update");
     }
@@ -2237,30 +2235,31 @@ export class QmdMemoryManager implements MemorySearchManager {
     const exportDir = this.sessionExporter.dir;
     await fs.mkdir(exportDir, { recursive: true });
     const exportRoot = await root(exportDir);
-    const files = await listSessionTranscriptsForAgent(this.agentId);
+    const scopes = await listSessionTranscriptsForAgent(this.agentId);
     const keep = new Set<string>();
     const tracked = new Set<string>();
     const cutoff = this.sessionExporter.retentionMs
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
-    for (const sessionTranscript of files) {
-      const entry = await buildSessionTranscriptEntry(sessionTranscript);
+    for (const scope of scopes) {
+      const entry = await buildSessionTranscriptEntry(scope);
       if (!entry) {
         continue;
       }
       if (cutoff && entry.mtimeMs < cutoff) {
         continue;
       }
-      const targetName = `${path.basename(sessionTranscript, ".jsonl")}.md`;
+      const targetName = `${scope.sessionId}.md`;
       const target = path.join(exportDir, targetName);
-      tracked.add(sessionTranscript);
-      const state = this.exportedSessionState.get(sessionTranscript);
+      const scopeKey = `${scope.agentId}/${scope.sessionId}`;
+      tracked.add(scopeKey);
+      const state = this.exportedSessionState.get(scopeKey);
       if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
         await exportRoot.write(targetName, this.renderSessionMarkdown(entry), {
           encoding: "utf-8",
         });
       }
-      this.exportedSessionState.set(sessionTranscript, {
+      this.exportedSessionState.set(scopeKey, {
         hash: entry.hash,
         mtimeMs: entry.mtimeMs,
         target,
@@ -2277,15 +2276,15 @@ export class QmdMemoryManager implements MemorySearchManager {
         await exportRoot.remove(name).catch(() => undefined);
       }
     }
-    for (const [sessionTranscript, state] of this.exportedSessionState) {
-      if (!tracked.has(sessionTranscript) || !isPathInside(exportDir, state.target)) {
-        this.exportedSessionState.delete(sessionTranscript);
+    for (const [scopeKey, state] of this.exportedSessionState) {
+      if (!tracked.has(scopeKey) || !isPathInside(exportDir, state.target)) {
+        this.exportedSessionState.delete(scopeKey);
       }
     }
   }
 
   private renderSessionMarkdown(entry: SessionTranscriptEntry): string {
-    const header = `# Session ${path.basename(entry.absPath, path.extname(entry.absPath))}`;
+    const header = `# Session ${entry.scope.sessionId}`;
     const body = entry.content?.trim().length ? entry.content.trim() : "(empty)";
     return `${header}\n\n${body}\n`;
   }

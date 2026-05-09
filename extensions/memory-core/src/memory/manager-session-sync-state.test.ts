@@ -5,14 +5,17 @@ describe("memory session sync state", () => {
   it("tracks active paths and bulk hashes for full scans", () => {
     const plan = resolveMemorySessionSyncPlan({
       needsFullReindex: false,
-      files: ["/tmp/a.jsonl", "/tmp/b.jsonl"],
-      targetSessionTranscripts: null,
+      files: [
+        { agentId: "main", sessionId: "a" },
+        { agentId: "main", sessionId: "b" },
+      ],
+      targetSessionTranscriptKeys: null,
       dirtySessionTranscripts: new Set(),
       existingRows: [
         { path: "sessions/a.jsonl", hash: "hash-a" },
         { path: "sessions/b.jsonl", hash: "hash-b" },
       ],
-      sessionPathForTranscript: (file) => `sessions/${file.split("/").at(-1)}`,
+      sessionPathForTranscript: (scope) => `sessions/${scope.sessionId}.jsonl`,
     });
 
     expect(plan.indexAll).toBe(true);
@@ -32,14 +35,14 @@ describe("memory session sync state", () => {
   it("treats targeted session syncs as refresh-only and skips unrelated pruning", () => {
     const plan = resolveMemorySessionSyncPlan({
       needsFullReindex: false,
-      files: ["/tmp/targeted-first.jsonl"],
-      targetSessionTranscripts: new Set(["/tmp/targeted-first.jsonl"]),
-      dirtySessionTranscripts: new Set(["/tmp/targeted-first.jsonl"]),
+      files: [{ agentId: "main", sessionId: "targeted-first" }],
+      targetSessionTranscriptKeys: new Set(["main\0targeted-first"]),
+      dirtySessionTranscripts: new Set(["main\0targeted-first"]),
       existingRows: [
         { path: "sessions/targeted-first.jsonl", hash: "hash-first" },
         { path: "sessions/targeted-second.jsonl", hash: "hash-second" },
       ],
-      sessionPathForTranscript: (file) => `sessions/${file.split("/").at(-1)}`,
+      sessionPathForTranscript: (scope) => `sessions/${scope.sessionId}.jsonl`,
     });
 
     expect(plan.indexAll).toBe(true);
@@ -51,11 +54,11 @@ describe("memory session sync state", () => {
   it("keeps dirty-only incremental mode when no targeted sync is requested", () => {
     const plan = resolveMemorySessionSyncPlan({
       needsFullReindex: false,
-      files: ["/tmp/incremental.jsonl"],
-      targetSessionTranscripts: null,
-      dirtySessionTranscripts: new Set(["/tmp/incremental.jsonl"]),
+      files: [{ agentId: "main", sessionId: "incremental" }],
+      targetSessionTranscriptKeys: null,
+      dirtySessionTranscripts: new Set(["main\0incremental"]),
       existingRows: [],
-      sessionPathForTranscript: (file) => `sessions/${file.split("/").at(-1)}`,
+      sessionPathForTranscript: (scope) => `sessions/${scope.sessionId}.jsonl`,
     });
 
     expect(plan.indexAll).toBe(false);

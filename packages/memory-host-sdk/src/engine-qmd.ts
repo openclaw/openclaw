@@ -3,14 +3,13 @@
 export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js";
 export {
   buildSessionTranscriptEntry,
-  createSqliteSessionTranscriptRef,
   listSessionTranscriptsForAgent,
   readSessionTranscriptDeltaStats,
-  resolveSessionTranscriptScope,
   sessionPathForTranscript,
   type BuildSessionTranscriptEntryOptions,
   type SessionTranscriptEntry,
   type SessionTranscriptDeltaStats,
+  type SessionTranscriptScope,
 } from "./host/session-transcripts.js";
 export { parseQmdQueryJson, type QmdQueryResult } from "./host/qmd-query-parser.js";
 export {

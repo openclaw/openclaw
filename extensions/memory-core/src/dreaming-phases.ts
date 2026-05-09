@@ -628,8 +628,8 @@ function areStringArraysEqual(a: string[], b: string[]): boolean {
   return true;
 }
 
-function buildSessionStateKey(agentId: string, absolutePath: string): string {
-  return `${agentId}:${sessionPathForTranscript(absolutePath)}`;
+function buildSessionStateKey(agentId: string, sessionPath: string): string {
+  return `${agentId}:${sessionPath}`;
 }
 
 function buildSessionRenderedLine(params: {
@@ -726,16 +726,16 @@ async function collectSessionIngestionBatches(params: {
 
   const sessionTranscripts: Array<{
     agentId: string;
-    absolutePath: string;
+    scope: { agentId: string; sessionId: string };
     sessionPath: string;
   }> = [];
   for (const agentId of agentIds) {
-    const files = await listSessionTranscriptsForAgent(agentId);
-    for (const absolutePath of files) {
+    const scopes = await listSessionTranscriptsForAgent(agentId);
+    for (const scope of scopes) {
       sessionTranscripts.push({
         agentId,
-        absolutePath,
-        sessionPath: sessionPathForTranscript(absolutePath),
+        scope,
+        sessionPath: sessionPathForTranscript(scope),
       });
     }
   }
@@ -761,9 +761,9 @@ async function collectSessionIngestionBatches(params: {
     if (remaining <= 0) {
       break;
     }
-    const stateKey = buildSessionStateKey(file.agentId, file.absolutePath);
+    const stateKey = buildSessionStateKey(file.agentId, file.sessionPath);
     const previous = params.state.files[stateKey];
-    const entry = await buildSessionTranscriptEntry(file.absolutePath);
+    const entry = await buildSessionTranscriptEntry(file.scope);
     if (!entry) {
       if (previous) {
         changed = true;
@@ -819,7 +819,7 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
 
-    const sessionScope = buildSessionScopeKey(file.agentId, file.absolutePath);
+    const sessionScope = buildSessionScopeKey(file.agentId, file.sessionPath);
     const previousSeen = nextSeenMessages[sessionScope] ?? [];
     let seenSet = new Set(previousSeen);
     const newSeenHashes: string[] = [];

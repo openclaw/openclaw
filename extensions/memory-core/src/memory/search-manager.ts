@@ -361,7 +361,6 @@ class BorrowedMemoryManager implements MemorySearchManager {
     reason?: string;
     force?: boolean;
     sessionTranscriptScopes?: MemorySessionTranscriptScope[];
-    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     await this.inner.sync?.(params);
@@ -495,7 +494,6 @@ class FallbackMemoryManager implements MemorySearchManager {
     reason?: string;
     force?: boolean;
     sessionTranscriptScopes?: MemorySessionTranscriptScope[];
-    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     this.ensureOpen();

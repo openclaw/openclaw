@@ -1,4 +1,3 @@
-import path from "node:path";
 import { hashText } from "./hash.js";
 import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
 import {
@@ -22,15 +21,15 @@ const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // This limit applies to content only; the role label adds up to 11 chars.
 const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
-const SQLITE_TRANSCRIPT_REF_PREFIX = "sqlite-transcript://";
 
-function parseUsageCountedSessionIdFromFileName(fileName: string): string {
-  return fileName.replace(/\.usage-counted$/u, "").replace(/\.jsonl$/u, "");
-}
+export type SessionTranscriptScope = {
+  agentId: string;
+  sessionId: string;
+};
 
 export type SessionTranscriptEntry = {
+  scope: SessionTranscriptScope;
   path: string;
-  absPath: string;
   mtimeMs: number;
   size: number;
   messageCount: number;
@@ -145,74 +144,23 @@ function isCronRunGeneratedRecord(record: unknown): boolean {
   return hasCronRunSessionKey(nested.sessionKey);
 }
 
-export function createSqliteSessionTranscriptRef(params: {
-  agentId: string;
-  sessionId: string;
-}): string {
-  return `${SQLITE_TRANSCRIPT_REF_PREFIX}${encodeURIComponent(params.agentId)}/${encodeURIComponent(
-    params.sessionId,
-  )}.jsonl`;
+export async function listSessionTranscriptsForAgent(
+  agentId: string,
+): Promise<SessionTranscriptScope[]> {
+  return listSqliteSessionTranscripts({ agentId }).map((transcript) => ({
+    agentId: transcript.agentId,
+    sessionId: transcript.sessionId,
+  }));
 }
 
-export async function listSessionTranscriptsForAgent(agentId: string): Promise<string[]> {
-  return listSqliteSessionTranscripts({ agentId }).map((transcript) =>
-    createSqliteSessionTranscriptRef({
-      agentId: transcript.agentId,
-      sessionId: transcript.sessionId,
-    }),
-  );
-}
-
-function parseSqliteSessionTranscriptRef(locator: string): {
-  agentId: string;
-  sessionId: string;
-} | null {
-  if (!locator.startsWith(SQLITE_TRANSCRIPT_REF_PREFIX)) {
-    return null;
-  }
-  try {
-    const url = new URL(locator);
-    const agentId = decodeURIComponent(url.hostname).trim();
-    const fileName = decodeURIComponent(url.pathname.replace(/^\/+/u, "")).trim();
-    const sessionId = parseUsageCountedSessionIdFromFileName(fileName);
-    if (!agentId || !sessionId) {
-      return null;
-    }
-    return { agentId, sessionId };
-  } catch {
-    return null;
-  }
-}
-
-export function sessionPathForTranscript(absPath: string): string {
-  const sqliteRef = parseSqliteSessionTranscriptRef(absPath);
-  if (sqliteRef) {
-    return path
-      .join("sessions", sqliteRef.agentId, `${sqliteRef.sessionId}.jsonl`)
-      .replace(/\\/g, "/");
-  }
-  return path.join("sessions", "unknown.jsonl").replace(/\\/g, "/");
-}
-
-export function resolveSessionTranscriptScope(locator: string): {
-  agentId: string;
-  sessionId: string;
-} | null {
-  const sqliteRef = parseSqliteSessionTranscriptRef(locator);
-  if (sqliteRef) {
-    return sqliteRef;
-  }
-  return null;
+export function sessionPathForTranscript(scope: SessionTranscriptScope): string {
+  return `sessions/${scope.agentId}/${scope.sessionId}.jsonl`;
 }
 
 export function readSessionTranscriptDeltaStats(
-  absPath: string,
+  scope: SessionTranscriptScope,
 ): SessionTranscriptDeltaStats | null {
   try {
-    const scope = resolveSessionTranscriptScope(absPath);
-    if (!scope) {
-      return null;
-    }
     const transcriptEvents = loadSqliteSessionTranscriptEvents(scope);
     if (transcriptEvents.length === 0) {
       return null;
@@ -226,14 +174,17 @@ export function readSessionTranscriptDeltaStats(
       updatedAt: Math.max(0, ...transcriptEvents.map((entry) => entry.createdAt)),
     };
   } catch (err) {
-    void logSessionTranscriptReadFailure(absPath, err);
+    void logSessionTranscriptReadFailure(scope, err);
     return null;
   }
 }
 
-async function logSessionTranscriptReadFailure(absPath: string, err: unknown): Promise<void> {
+async function logSessionTranscriptReadFailure(
+  scope: SessionTranscriptScope,
+  err: unknown,
+): Promise<void> {
   createSubsystemLogger("memory").debug(
-    `Failed reading session transcript ${absPath}: ${String(err)}`,
+    `Failed reading session transcript ${scope.agentId}/${scope.sessionId}: ${String(err)}`,
   );
 }
 
@@ -430,14 +381,10 @@ function parseSessionTimestampMs(
 }
 
 export async function buildSessionTranscriptEntry(
-  absPath: string,
+  scope: SessionTranscriptScope,
   opts: BuildSessionTranscriptEntryOptions = {},
 ): Promise<SessionTranscriptEntry | null> {
   try {
-    const scope = resolveSessionTranscriptScope(absPath);
-    if (!scope) {
-      return null;
-    }
     const transcriptEvents = loadSqliteSessionTranscriptEvents(scope);
     if (transcriptEvents.length === 0) {
       return null;
@@ -511,8 +458,8 @@ export async function buildSessionTranscriptEntry(
     }
     const content = collected.join("\n");
     return {
-      path: sessionPathForTranscript(absPath),
-      absPath,
+      scope,
+      path: sessionPathForTranscript(scope),
       mtimeMs,
       size,
       messageCount,
@@ -524,7 +471,7 @@ export async function buildSessionTranscriptEntry(
       ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };
   } catch (err) {
-    void logSessionTranscriptReadFailure(absPath, err);
+    void logSessionTranscriptReadFailure(scope, err);
     return null;
   }
 }

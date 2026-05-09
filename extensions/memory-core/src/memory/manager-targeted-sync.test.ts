@@ -6,15 +6,16 @@ import {
 
 describe("memory targeted session sync", () => {
   it("preserves unrelated dirty sessions after targeted cleanup", () => {
-    const secondSessionPath = "/tmp/targeted-dirty-second.jsonl";
-    const dirtySessionTranscripts = new Set(["/tmp/targeted-dirty-first.jsonl", secondSessionPath]);
+    const firstSessionKey = "main\0targeted-dirty-first";
+    const secondSessionKey = "main\0targeted-dirty-second";
+    const dirtySessionTranscripts = new Set([firstSessionKey, secondSessionKey]);
 
     const sessionsDirty = clearMemorySyncedSessionTranscripts({
       dirtySessionTranscripts,
-      targetSessionTranscripts: ["/tmp/targeted-dirty-first.jsonl"],
+      targetSessionTranscriptKeys: [firstSessionKey],
     });
 
-    expect(dirtySessionTranscripts.has(secondSessionPath)).toBe(true);
+    expect(dirtySessionTranscripts.has(secondSessionKey)).toBe(true);
     expect(sessionsDirty).toBe(true);
   });
 
@@ -25,7 +26,7 @@ describe("memory targeted session sync", () => {
 
     await runMemoryTargetedSessionSync({
       hasSessionSource: true,
-      targetSessionTranscripts: new Set(["/tmp/targeted-fallback.jsonl"]),
+      targetSessionTranscriptKeys: new Set(["main\0targeted-fallback"]),
       reason: "post-compaction",
       progress: undefined,
       useUnsafeReindex: false,
@@ -54,7 +55,7 @@ describe("memory targeted session sync", () => {
 
     await runMemoryTargetedSessionSync({
       hasSessionSource: true,
-      targetSessionTranscripts: new Set(["/tmp/targeted-fallback.jsonl"]),
+      targetSessionTranscriptKeys: new Set(["main\0targeted-fallback"]),
       reason: "post-compaction",
       progress: undefined,
       useUnsafeReindex: true,

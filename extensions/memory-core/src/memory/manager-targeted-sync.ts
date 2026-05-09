@@ -10,12 +10,12 @@ type TargetedSyncProgress = {
 
 export function clearMemorySyncedSessionTranscripts(params: {
   dirtySessionTranscripts: Set<string>;
-  targetSessionTranscripts?: Iterable<string> | null;
+  targetSessionTranscriptKeys?: Iterable<string> | null;
 }): boolean {
-  if (!params.targetSessionTranscripts) {
+  if (!params.targetSessionTranscriptKeys) {
     params.dirtySessionTranscripts.clear();
   } else {
-    for (const targetSessionTranscript of params.targetSessionTranscripts) {
+    for (const targetSessionTranscript of params.targetSessionTranscriptKeys) {
       params.dirtySessionTranscripts.delete(targetSessionTranscript);
     }
   }
@@ -24,14 +24,14 @@ export function clearMemorySyncedSessionTranscripts(params: {
 
 export async function runMemoryTargetedSessionSync(params: {
   hasSessionSource: boolean;
-  targetSessionTranscripts: Set<string> | null;
+  targetSessionTranscriptKeys: Set<string> | null;
   reason?: string;
   progress?: TargetedSyncProgress;
   useUnsafeReindex: boolean;
   dirtySessionTranscripts: Set<string>;
   syncSessionTranscripts: (params: {
     needsFullReindex: boolean;
-    targetSessionTranscripts?: string[];
+    targetSessionTranscriptKeys?: string[];
     progress?: TargetedSyncProgress;
   }) => Promise<void>;
   shouldFallbackOnError: (message: string) => boolean;
@@ -47,7 +47,7 @@ export async function runMemoryTargetedSessionSync(params: {
     progress?: TargetedSyncProgress;
   }) => Promise<void>;
 }): Promise<{ handled: boolean; sessionsDirty: boolean }> {
-  if (!params.hasSessionSource || !params.targetSessionTranscripts) {
+  if (!params.hasSessionSource || !params.targetSessionTranscriptKeys) {
     return {
       handled: false,
       sessionsDirty: params.dirtySessionTranscripts.size > 0,
@@ -57,14 +57,14 @@ export async function runMemoryTargetedSessionSync(params: {
   try {
     await params.syncSessionTranscripts({
       needsFullReindex: false,
-      targetSessionTranscripts: Array.from(params.targetSessionTranscripts),
+      targetSessionTranscriptKeys: Array.from(params.targetSessionTranscriptKeys),
       progress: params.progress,
     });
     return {
       handled: true,
       sessionsDirty: clearMemorySyncedSessionTranscripts({
         dirtySessionTranscripts: params.dirtySessionTranscripts,
-        targetSessionTranscripts: params.targetSessionTranscripts,
+        targetSessionTranscriptKeys: params.targetSessionTranscriptKeys,
       }),
     };
   } catch (err) {

@@ -105,7 +105,6 @@ export interface MemorySearchManager {
     reason?: string;
     force?: boolean;
     sessionTranscriptScopes?: MemorySessionTranscriptScope[];
-    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void>;
   getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;

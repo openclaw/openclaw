@@ -15,11 +15,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionTranscriptEntry,
-  createSqliteSessionTranscriptRef,
   listSessionTranscriptsForAgent,
   readSessionTranscriptDeltaStats,
-  resolveSessionTranscriptScope,
   sessionPathForTranscript,
+  type SessionTranscriptScope,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildFileEntry,
@@ -74,6 +73,18 @@ type MemoryIndexEntry = {
   hash: string;
   content?: string;
 };
+
+function sessionTranscriptScopeKey(scope: Pick<SessionTranscriptScope, "agentId" | "sessionId">) {
+  return `${scope.agentId}\0${scope.sessionId}`;
+}
+
+function sessionTranscriptScopeFromKey(key: string): SessionTranscriptScope | null {
+  const [agentId, sessionId, ...rest] = key.split("\0");
+  if (!agentId || !sessionId || rest.length > 0) {
+    return null;
+  }
+  return { agentId, sessionId };
+}
 
 const META_KEY = "memory_index_meta_v1";
 const VECTOR_TABLE = "chunks_vec";
@@ -472,7 +483,7 @@ export abstract class MemoryManagerSyncOps {
       if (!sessionId) {
         return;
       }
-      const sessionTranscript = createSqliteSessionTranscriptRef({
+      const sessionTranscript = sessionTranscriptScopeKey({
         agentId: updateAgentId || this.agentId,
         sessionId,
       });
@@ -541,7 +552,11 @@ export abstract class MemoryManagerSyncOps {
     if (!thresholds) {
       return null;
     }
-    const stats = readSessionTranscriptDeltaStats(sessionTranscript);
+    const scope = sessionTranscriptScopeFromKey(sessionTranscript);
+    if (!scope) {
+      return null;
+    }
+    const stats = readSessionTranscriptDeltaStats(scope);
     if (!stats) {
       return null;
     }
@@ -593,12 +608,8 @@ export abstract class MemoryManagerSyncOps {
 
   private normalizeTargetSessionTranscripts(params?: {
     sessionTranscriptScopes?: MemorySessionTranscriptScope[];
-    sessionTranscripts?: string[];
   }): Set<string> | null {
-    if (
-      (!params?.sessionTranscriptScopes || params.sessionTranscriptScopes.length === 0) &&
-      (!params?.sessionTranscripts || params.sessionTranscripts.length === 0)
-    ) {
+    if (!params?.sessionTranscriptScopes || params.sessionTranscriptScopes.length === 0) {
       return null;
     }
     const normalized = new Set<string>();
@@ -606,22 +617,7 @@ export abstract class MemoryManagerSyncOps {
       const agentId = scope.agentId.trim();
       const sessionId = scope.sessionId.trim();
       if (agentId === this.agentId && sessionId) {
-        normalized.add(createSqliteSessionTranscriptRef({ agentId, sessionId }));
-      }
-    }
-    for (const sessionTranscript of params?.sessionTranscripts ?? []) {
-      const trimmed = sessionTranscript.trim();
-      if (!trimmed) {
-        continue;
-      }
-      const scope = resolveSessionTranscriptScope(trimmed);
-      if (scope?.agentId === this.agentId) {
-        normalized.add(
-          createSqliteSessionTranscriptRef({
-            agentId: scope.agentId,
-            sessionId: scope.sessionId,
-          }),
-        );
+        normalized.add(sessionTranscriptScopeKey({ agentId, sessionId }));
       }
     }
     return normalized.size > 0 ? normalized : null;
@@ -656,7 +652,6 @@ export abstract class MemoryManagerSyncOps {
       reason?: string;
       force?: boolean;
       sessionTranscriptScopes?: MemorySessionTranscriptScope[];
-      sessionTranscripts?: string[];
     },
     needsFullReindex = false,
   ) {
@@ -769,7 +764,7 @@ export abstract class MemoryManagerSyncOps {
 
   private async syncSessionTranscripts(params: {
     needsFullReindex: boolean;
-    targetSessionTranscripts?: string[];
+    targetSessionTranscriptKeys?: string[];
     progress?: MemorySyncProgressState;
   }) {
     const deleteFileByPathAndSource = this.db.prepare(
@@ -789,20 +784,21 @@ export abstract class MemoryManagerSyncOps {
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
         : null;
 
-    const targetSessionTranscripts = params.needsFullReindex
-      ? null
-      : this.normalizeTargetSessionTranscripts({
-          sessionTranscripts: params.targetSessionTranscripts,
-        });
-    const files = targetSessionTranscripts
-      ? Array.from(targetSessionTranscripts)
+    const targetSessionTranscriptKeys =
+      params.needsFullReindex || !params.targetSessionTranscriptKeys
+        ? null
+        : new Set(params.targetSessionTranscriptKeys);
+    const files = targetSessionTranscriptKeys
+      ? Array.from(targetSessionTranscriptKeys)
+          .map(sessionTranscriptScopeFromKey)
+          .filter((scope): scope is SessionTranscriptScope => scope !== null)
       : await listSessionTranscriptsForAgent(this.agentId);
     const sessionPlan = resolveMemorySessionSyncPlan({
       needsFullReindex: params.needsFullReindex,
       files,
-      targetSessionTranscripts,
+      targetSessionTranscriptKeys,
       dirtySessionTranscripts: this.dirtySessionTranscripts,
-      existingRows: targetSessionTranscripts
+      existingRows: targetSessionTranscriptKeys
         ? null
         : loadMemorySourceFileState({
             db: this.db,
@@ -815,7 +811,7 @@ export abstract class MemoryManagerSyncOps {
       files: files.length,
       indexAll,
       dirtyTranscripts: this.dirtySessionTranscripts.size,
-      targetedTranscripts: targetSessionTranscripts?.size ?? 0,
+      targetedTranscripts: targetSessionTranscriptKeys?.size ?? 0,
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
@@ -830,8 +826,9 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
-    const tasks = files.map((absPath) => async () => {
-      if (!indexAll && !this.dirtySessionTranscripts.has(absPath)) {
+    const tasks = files.map((scope) => async () => {
+      const scopeKey = sessionTranscriptScopeKey(scope);
+      if (!indexAll && !this.dirtySessionTranscripts.has(scopeKey)) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -841,7 +838,7 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      const entry = await buildSessionTranscriptEntry(absPath);
+      const entry = await buildSessionTranscriptEntry(scope);
       if (!entry) {
         if (params.progress) {
           params.progress.completed += 1;
@@ -866,11 +863,11 @@ export abstract class MemoryManagerSyncOps {
             total: params.progress.total,
           });
         }
-        this.resetSessionDelta(absPath, entry.size, entry.messageCount);
+        this.resetSessionDelta(scopeKey, entry.size, entry.messageCount);
         return;
       }
       await this.indexFile(entry, { source: "sessions", content: entry.content });
-      this.resetSessionDelta(absPath, entry.size, entry.messageCount);
+      this.resetSessionDelta(scopeKey, entry.size, entry.messageCount);
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -939,7 +936,6 @@ export abstract class MemoryManagerSyncOps {
     reason?: string;
     force?: boolean;
     sessionTranscriptScopes?: MemorySessionTranscriptScope[];
-    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
@@ -962,11 +958,11 @@ export abstract class MemoryManagerSyncOps {
         maxFileBytes: this.settings.multimodal.maxFileBytes,
       },
     });
-    const targetSessionTranscripts = this.normalizeTargetSessionTranscripts(params);
-    const hasTargetSessionTranscripts = targetSessionTranscripts !== null;
+    const targetSessionTranscriptKeys = this.normalizeTargetSessionTranscripts(params);
+    const hasTargetSessionTranscripts = targetSessionTranscriptKeys !== null;
     const targetedSessionSync = await runMemoryTargetedSessionSync({
       hasSessionSource: this.sources.has("sessions"),
-      targetSessionTranscripts,
+      targetSessionTranscriptKeys,
       reason: params?.reason,
       progress: progress ?? undefined,
       useUnsafeReindex:
@@ -1038,8 +1034,8 @@ export abstract class MemoryManagerSyncOps {
       if (shouldSyncSessions) {
         await this.syncSessionTranscripts({
           needsFullReindex,
-          targetSessionTranscripts: targetSessionTranscripts
-            ? Array.from(targetSessionTranscripts)
+          targetSessionTranscriptKeys: targetSessionTranscriptKeys
+            ? Array.from(targetSessionTranscriptKeys)
             : undefined,
           progress: progress ?? undefined,
         });

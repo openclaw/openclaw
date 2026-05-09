@@ -9,10 +9,7 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import {
-  createSqliteSessionTranscriptRef,
-  extractKeywords,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   readMemoryFile,
   type MemoryEmbeddingProbeResult,
@@ -623,7 +620,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     reason?: string;
     force?: boolean;
     sessionTranscriptScopes?: MemorySessionTranscriptScope[];
-    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     if (this.closed) {
@@ -643,7 +639,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return this.syncing ?? Promise.resolve();
   }
 
-  private enqueueTargetedSessionSync(sessionTranscripts?: string[]): Promise<void> {
+  private enqueueTargetedSessionSync(
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[],
+  ): Promise<void> {
     return enqueueMemoryTargetedSessionSync(
       {
         isClosed: () => this.closed,
@@ -655,7 +653,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         },
         sync: async (params) => await this.sync(params),
       },
-      sessionTranscripts,
+      sessionTranscriptScopes,
     );
   }
 
@@ -671,7 +669,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     reason?: string;
     force?: boolean;
     sessionTranscriptScopes?: MemorySessionTranscriptScope[];
-    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     const getClosed = () => this.closed;
@@ -742,23 +739,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private resolveQueuedSessionTranscripts(params?: {
     sessionTranscriptScopes?: MemorySessionTranscriptScope[];
-    sessionTranscripts?: string[];
-  }): string[] {
-    const targets = new Set<string>();
+  }): MemorySessionTranscriptScope[] {
+    const targets = new Map<string, MemorySessionTranscriptScope>();
     for (const scope of params?.sessionTranscriptScopes ?? []) {
       const agentId = scope.agentId.trim();
       const sessionId = scope.sessionId.trim();
       if (agentId && sessionId) {
-        targets.add(createSqliteSessionTranscriptRef({ agentId, sessionId }));
+        targets.set(`${agentId}\0${sessionId}`, { agentId, sessionId });
       }
     }
-    for (const sessionTranscript of params?.sessionTranscripts ?? []) {
-      const trimmed = sessionTranscript.trim();
-      if (trimmed) {
-        targets.add(trimmed);
-      }
-    }
-    return Array.from(targets);
+    return Array.from(targets.values());
   }
 
   async readFile(params: {
