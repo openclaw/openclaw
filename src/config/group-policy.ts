@@ -302,7 +302,11 @@ function resolveChannelGroups(
     return undefined;
   }
   const accountGroups = resolveAccountEntry(channelConfig.accounts, normalizedAccountId)?.groups;
-  return accountGroups ?? channelConfig.groups;
+  // Treat an explicit empty `groups: {}` as absent so single-account bots still
+  // fall back to channel-level groups (mirrors mergeTelegramAccountConfig behaviour).
+  const effectiveAccountGroups =
+    accountGroups != null && Object.keys(accountGroups).length > 0 ? accountGroups : undefined;
+  return effectiveAccountGroups ?? channelConfig.groups;
 }
 
 type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";
