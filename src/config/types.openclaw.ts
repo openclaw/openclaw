@@ -24,6 +24,7 @@ import type {
   CommandsConfig,
   MessagesConfig,
 } from "./types.messages.js";
+import type { ModelCompatConfig } from "./types.models.js";
 import type { ModelsConfig } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
@@ -129,6 +130,10 @@ export type OpenClawConfig = {
   cron?: CronConfig;
   commitments?: CommitmentsConfig;
   hooks?: HooksConfig;
+  trainingExport?: {
+    enabled?: boolean;
+    compat?: ModelCompatConfig;
+  };
   discovery?: DiscoveryConfig;
   talk?: TalkConfig;
   gateway?: GatewayConfig;

@@ -214,7 +214,7 @@ function parseTextSignature(
   return { id: signature };
 }
 
-function convertResponsesMessages(
+export function convertResponsesMessages(
   model: Model<Api>,
   context: Context,
   allowedToolCallProviders: Set<string>,
@@ -386,7 +386,7 @@ function convertResponsesMessages(
   return messages;
 }
 
-function convertResponsesTools(
+export function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   model: OpenAIModeModel,
   options?: { strict?: boolean | null },

@@ -4,6 +4,7 @@ import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import { pathExists } from "../../infra/fs-safe.js";
+import { getTrainingExportConfig, runTrainingExport } from "../../training-export.js";
 import {
   exportTrajectoryForCommand,
   formatTrajectoryCommandExportSummary,
@@ -167,6 +168,18 @@ export async function buildExportTrajectoryReply(
     return {
       text: `❌ Failed to export trajectory: ${formatErrorMessage(err)}`,
     };
+  }
+
+  if (getTrainingExportConfig(params.cfg)?.enabled === true) {
+    runTrainingExport({
+      trigger: {
+        kind: "trajectory_export",
+        sessionId: entry.sessionId,
+        sessionFile,
+        command: params.command.commandBodyNormalized,
+      },
+      config: params.cfg,
+    });
   }
 
   return {
