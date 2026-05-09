@@ -35,6 +35,7 @@ export type BackupCreateOptions = {
   verify?: boolean;
   json?: boolean;
   nowMs?: number;
+  log?: (message: string) => void;
 };
 
 type BackupManifestAsset = {

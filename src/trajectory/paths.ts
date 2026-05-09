@@ -18,6 +18,8 @@ export function safeTrajectorySessionFileName(sessionId: string): string {
   return /[A-Za-z0-9]/u.test(safe) ? safe : "session";
 }
 
+export const safeTrajectoryTranscriptLocatorName = safeTrajectorySessionFileName;
+
 export function resolveTrajectoryPointerOpenFlags(
   constants: TrajectoryPointerOpenFlagConstants = fs.constants,
 ): number {
@@ -42,6 +44,7 @@ function resolveContainedPath(baseDir: string, fileName: string): string {
 export function resolveTrajectoryFilePath(params: {
   env?: NodeJS.ProcessEnv;
   sessionFile?: string;
+  transcriptLocator?: string;
   sessionId: string;
 }): string {
   const env = params.env ?? process.env;
@@ -52,15 +55,16 @@ export function resolveTrajectoryFilePath(params: {
       `${safeTrajectorySessionFileName(params.sessionId)}.jsonl`,
     );
   }
-  if (!params.sessionFile) {
+  const source = params.transcriptLocator ?? params.sessionFile;
+  if (!source) {
     return path.join(
       process.cwd(),
       `${safeTrajectorySessionFileName(params.sessionId)}.trajectory.jsonl`,
     );
   }
-  return params.sessionFile.endsWith(".jsonl")
-    ? `${params.sessionFile.slice(0, -".jsonl".length)}.trajectory.jsonl`
-    : `${params.sessionFile}.trajectory.jsonl`;
+  return source.endsWith(".jsonl")
+    ? `${source.slice(0, -".jsonl".length)}.trajectory.jsonl`
+    : `${source}.trajectory.jsonl`;
 }
 
 export function resolveTrajectoryPointerFilePath(sessionFile: string): string {

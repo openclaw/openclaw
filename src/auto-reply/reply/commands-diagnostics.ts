@@ -456,12 +456,6 @@ async function executeCodexDiagnosticsAddon(
     gatewayClientScopes: params.ctx.GatewayClientScopes,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
-    transcriptLocator: targetSessionEntry?.sessionId
-      ? createSqliteSessionTranscriptLocator({
-          agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg }),
-          sessionId: targetSessionEntry.sessionId,
-        })
-      : undefined,
     commandBody,
     config: params.cfg,
     from: params.command.from,

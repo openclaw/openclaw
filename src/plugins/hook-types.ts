@@ -416,6 +416,12 @@ export type PluginHookBeforeToolCallEvent = {
   params: Record<string, unknown>;
   runId?: string;
   toolCallId?: string;
+  /**
+   * Optional best-effort destination path hints the host derived from `params`
+   * for well-known tool envelopes. Plugins must still validate exact params
+   * when correctness or policy decisions depend on the affected path set.
+   */
+  derivedPaths?: readonly string[];
 };
 
 export const PluginApprovalResolutions = {

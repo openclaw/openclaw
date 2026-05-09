@@ -11,7 +11,6 @@ import {
   isSilentReplyPayloadText,
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
-  parseUsageCountedSessionIdFromFileName,
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
@@ -24,6 +23,10 @@ const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
 const SQLITE_TRANSCRIPT_REF_PREFIX = "sqlite-transcript://";
+
+function parseUsageCountedSessionIdFromFileName(fileName: string): string {
+  return fileName.replace(/\.usage-counted$/u, "").replace(/\.jsonl$/u, "");
+}
 
 export type SessionTranscriptEntry = {
   path: string;
