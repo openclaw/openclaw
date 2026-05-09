@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 
 export type StateDiagnosticWriter = {
-  filePath: string;
+  destination: string;
   write: (line: string) => unknown;
   flush: () => Promise<void>;
 };
@@ -37,7 +37,7 @@ export function getStateDiagnosticWriter(
 
   let seq = 0;
   const writer: StateDiagnosticWriter = {
-    filePath: options.label,
+    destination: options.label,
     write: (line: string) => {
       const value = parseLineValue(line);
       const digest = crypto.createHash("sha256").update(line).digest("hex").slice(0, 16);

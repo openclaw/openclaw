@@ -46,7 +46,7 @@ type CacheTraceEvent = {
 
 type CacheTrace = {
   enabled: true;
-  filePath: string;
+  destination: string;
   recordStage: (stage: CacheTraceStage, payload?: Partial<CacheTraceEvent>) => void;
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
 };
@@ -66,7 +66,7 @@ type CacheTraceInit = {
 
 type CacheTraceConfig = {
   enabled: boolean;
-  filePath: string;
+  destination: string;
   includeMessages: boolean;
   includePrompt: boolean;
   includeSystem: boolean;
@@ -91,7 +91,7 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 
   return {
     enabled,
-    filePath: CACHE_TRACE_SQLITE_LABEL,
+    destination: CACHE_TRACE_SQLITE_LABEL,
     includeMessages: includeMessages ?? true,
     includePrompt: includePrompt ?? true,
     includeSystem: includeSystem ?? true,
@@ -101,7 +101,7 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 function getWriter(cfg: CacheTraceConfig, env: NodeJS.ProcessEnv): CacheTraceWriter {
   return getStateDiagnosticWriter(stateWriters, {
     env,
-    label: cfg.filePath,
+    label: cfg.destination,
     scope: CACHE_TRACE_SQLITE_SCOPE,
   });
 }
@@ -260,7 +260,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
 
   return {
     enabled: true,
-    filePath: cfg.filePath,
+    destination: cfg.destination,
     recordStage,
     wrapStreamFn,
   };

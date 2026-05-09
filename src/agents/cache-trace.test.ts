@@ -21,7 +21,7 @@ describe("createCacheTrace", () => {
       },
       env: {},
       writer: {
-        filePath: "memory",
+        destination: "memory",
         write: (line) => lines.push(line),
         flush: async () => undefined,
       },
@@ -50,14 +50,14 @@ describe("createCacheTrace", () => {
       },
       env: {},
       writer: {
-        filePath: "memory",
+        destination: "memory",
         write: (line) => lines.push(line),
         flush: async () => undefined,
       },
     });
 
     expect(typeof trace?.recordStage).toBe("function");
-    expect(trace?.filePath).toBe("sqlite://state/diagnostics/cache-trace");
+    expect(trace?.destination).toBe("sqlite://state/diagnostics/cache-trace");
 
     trace?.recordStage("session:loaded", {
       messages: [],
@@ -82,7 +82,7 @@ describe("createCacheTrace", () => {
         env,
       });
 
-      expect(trace?.filePath).toBe("sqlite://state/diagnostics/cache-trace");
+      expect(trace?.destination).toBe("sqlite://state/diagnostics/cache-trace");
       trace?.recordStage("session:loaded", { messages: [] });
 
       const entries = listOpenClawStateKvJson<Record<string, unknown>>("diagnostics.cache_trace", {
@@ -110,7 +110,7 @@ describe("createCacheTrace", () => {
       },
       env: {},
       writer: {
-        filePath: "memory",
+        destination: "memory",
         write: (line) => lines.push(line),
         flush: async () => undefined,
       },
@@ -149,7 +149,7 @@ describe("createCacheTrace", () => {
       },
       env: {},
       writer: {
-        filePath: "memory",
+        destination: "memory",
         write: (line) => lines.push(line),
         flush: async () => undefined,
       },
@@ -194,7 +194,7 @@ describe("createCacheTrace", () => {
         OPENCLAW_CACHE_TRACE: "0",
       },
       writer: {
-        filePath: "memory",
+        destination: "memory",
         write: (line) => lines.push(line),
         flush: async () => undefined,
       },

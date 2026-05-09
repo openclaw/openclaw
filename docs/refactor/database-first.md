@@ -333,10 +333,10 @@ The remaining cleanup is mostly consolidation and deletion:
   `{agentId, sessionId}` identity before worker launch and again before the
   attempt touches transcript state. A stale `/tmp/*.jsonl` input cannot select a
   runtime write target.
-- Cache trace and Anthropic payload diagnostics now write to SQLite diagnostic
-  KV rows only. The old `diagnostics.cacheTrace.filePath`,
-  `OPENCLAW_CACHE_TRACE_FILE`, and `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE`
-  JSONL override paths are removed.
+- Cache trace, Anthropic payload, and diagnostics timeline records now write to
+  SQLite diagnostic KV rows only. The old `diagnostics.cacheTrace.filePath`,
+  `OPENCLAW_CACHE_TRACE_FILE`, `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE`, and
+  `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH` JSONL override paths are removed.
 - Cron persistence now reconciles SQLite `cron_jobs` rows instead of
   deleting/reinserting the whole job table on each save. Plugin target
   writebacks update matching cron rows directly and keep runtime cron state in
@@ -475,8 +475,9 @@ The remaining cleanup is mostly consolidation and deletion:
   the canonical byte store. Local paths returned to channel and sandbox
   compatibility surfaces are temp materializations of the database row, not the
   durable media store.
-- Cache-trace diagnostics, Anthropic payload diagnostics, and raw model stream
-  diagnostics now write SQLite diagnostic rows instead of `logs/*.jsonl` files.
+- Cache-trace diagnostics, Anthropic payload diagnostics, raw model stream
+  diagnostics, and diagnostics timeline events now write SQLite diagnostic rows
+  instead of `logs/*.jsonl` files.
   Runtime path override flags and env vars have been removed; export/debug
   commands can materialize files explicitly from database rows.
 - Gateway singleton locks now use shared SQLite KV instead of temp-dir lock

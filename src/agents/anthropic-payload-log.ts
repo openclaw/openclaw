@@ -27,7 +27,7 @@ type PayloadLogEvent = {
 
 type PayloadLogConfig = {
   enabled: boolean;
-  filePath: string;
+  destination: string;
 };
 
 type PayloadLogWriter = StateDiagnosticWriter;
@@ -39,13 +39,13 @@ const ANTHROPIC_PAYLOAD_SQLITE_SCOPE = "diagnostics.anthropic_payload";
 
 function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
   const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
-  return { enabled, filePath: ANTHROPIC_PAYLOAD_SQLITE_LABEL };
+  return { enabled, destination: ANTHROPIC_PAYLOAD_SQLITE_LABEL };
 }
 
 function getWriter(cfg: PayloadLogConfig, env: NodeJS.ProcessEnv): PayloadLogWriter {
   return getStateDiagnosticWriter(stateWriters, {
     env,
-    label: cfg.filePath,
+    label: cfg.destination,
     scope: ANTHROPIC_PAYLOAD_SQLITE_SCOPE,
   });
 }
@@ -182,6 +182,6 @@ export function createAnthropicPayloadLogger(params: {
     });
   };
 
-  log.info("anthropic payload logger enabled", { filePath: writer.filePath });
+  log.info("anthropic payload logger enabled", { destination: writer.destination });
   return { enabled: true, wrapStreamFn, recordUsage };
 }
