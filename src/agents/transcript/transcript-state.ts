@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { isSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   appendSqliteSessionTranscriptEvent,
@@ -59,8 +58,8 @@ function transcriptStateFromEntries(fileEntries: FileEntry[]): TranscriptState {
   return new TranscriptState({ header, entries, migrated });
 }
 
-function transcriptStateFromSqlite(sessionFile: string): TranscriptState | undefined {
-  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile });
+function transcriptStateFromSqlite(transcriptLocator: string): TranscriptState | undefined {
+  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: transcriptLocator });
   if (!scope) {
     return undefined;
   }
@@ -74,19 +73,17 @@ function transcriptStateFromSqlite(sessionFile: string): TranscriptState | undef
 }
 
 function resolveTranscriptWriteScope(
-  sessionFile: string,
+  transcriptLocator: string,
   entries: Array<SessionHeader | SessionEntry>,
 ): { agentId: string; sessionId: string; transcriptPath: string } | undefined {
-  const transcriptPath = isSqliteSessionTranscriptLocator(sessionFile)
-    ? sessionFile
-    : path.resolve(sessionFile);
-  const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
-  const existing = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
-  if (!isSqliteSessionTranscriptLocator(transcriptPath) && !existing) {
+  const transcriptPath = transcriptLocator.trim();
+  if (!isSqliteSessionTranscriptLocator(transcriptPath)) {
     throw new Error(
-      `Legacy transcript has not been imported into SQLite: ${transcriptPath}. Run "openclaw doctor --fix" to build the session database.`,
+      `Transcript locator must be SQLite-backed: ${transcriptPath}. Run "openclaw doctor --fix" to import legacy transcript files.`,
     );
   }
+  const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
+  const existing = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
   if (!existing) {
     return undefined;
   }
@@ -414,33 +411,35 @@ export class TranscriptState {
   }
 }
 
-export async function readTranscriptState(sessionFile: string): Promise<TranscriptState> {
-  const sqliteState = transcriptStateFromSqlite(sessionFile);
+export async function readTranscriptState(transcriptLocator: string): Promise<TranscriptState> {
+  const sqliteState = transcriptStateFromSqlite(transcriptLocator);
   if (sqliteState) {
     return sqliteState;
   }
   throw new Error(
-    `Transcript is not in SQLite: ${sessionFile}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
+    `Transcript is not in the SQLite state database: ${transcriptLocator}. Runtime transcript readers do not read transcript files; run "openclaw doctor --fix" if legacy files still need import.`,
   );
 }
 
-export function readTranscriptStateSync(sessionFile: string): TranscriptState {
-  const sqliteState = transcriptStateFromSqlite(sessionFile);
+export function readTranscriptStateSync(transcriptLocator: string): TranscriptState {
+  const sqliteState = transcriptStateFromSqlite(transcriptLocator);
   if (sqliteState) {
     return sqliteState;
   }
   throw new Error(
-    `Transcript is not in SQLite: ${sessionFile}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
+    `Transcript is not in the SQLite state database: ${transcriptLocator}. Runtime transcript readers do not read transcript files; run "openclaw doctor --fix" if legacy files still need import.`,
   );
 }
 
 export async function replaceTranscriptStateEvents(
-  filePath: string,
+  transcriptLocator: string,
   entries: Array<SessionHeader | SessionEntry>,
 ): Promise<void> {
-  const scope = resolveTranscriptWriteScope(filePath, entries);
+  const scope = resolveTranscriptWriteScope(transcriptLocator, entries);
   if (!scope) {
-    throw new Error(`Cannot write SQLite transcript without a session header: ${filePath}`);
+    throw new Error(
+      `Cannot write SQLite transcript without a session header: ${transcriptLocator}`,
+    );
   }
   replaceSqliteSessionTranscriptEvents({
     ...scope,
@@ -449,12 +448,14 @@ export async function replaceTranscriptStateEvents(
 }
 
 export function replaceTranscriptStateEventsSync(
-  filePath: string,
+  transcriptLocator: string,
   entries: Array<SessionHeader | SessionEntry>,
 ): void {
-  const scope = resolveTranscriptWriteScope(filePath, entries);
+  const scope = resolveTranscriptWriteScope(transcriptLocator, entries);
   if (!scope) {
-    throw new Error(`Cannot write SQLite transcript without a session header: ${filePath}`);
+    throw new Error(
+      `Cannot write SQLite transcript without a session header: ${transcriptLocator}`,
+    );
   }
   replaceSqliteSessionTranscriptEvents({
     ...scope,
@@ -463,7 +464,7 @@ export function replaceTranscriptStateEventsSync(
 }
 
 export async function persistTranscriptStateMutation(params: {
-  sessionFile: string;
+  transcriptLocator: string;
   state: TranscriptState;
   appendedEntries: SessionEntry[];
 }): Promise<void> {
@@ -471,19 +472,19 @@ export async function persistTranscriptStateMutation(params: {
     return;
   }
   if (params.state.migrated) {
-    await replaceTranscriptStateEvents(params.sessionFile, [
+    await replaceTranscriptStateEvents(params.transcriptLocator, [
       ...(params.state.header ? [params.state.header] : []),
       ...params.state.entries,
     ]);
     return;
   }
-  const scope = resolveTranscriptWriteScope(params.sessionFile, [
+  const scope = resolveTranscriptWriteScope(params.transcriptLocator, [
     ...(params.state.header ? [params.state.header] : []),
     ...params.state.entries,
   ]);
   if (!scope) {
     throw new Error(
-      `Cannot append SQLite transcript without a session header: ${params.sessionFile}`,
+      `Cannot append SQLite transcript without a session header: ${params.transcriptLocator}`,
     );
   }
   for (const entry of params.appendedEntries) {
@@ -492,7 +493,7 @@ export async function persistTranscriptStateMutation(params: {
 }
 
 export function persistTranscriptStateMutationSync(params: {
-  sessionFile: string;
+  transcriptLocator: string;
   state: TranscriptState;
   appendedEntries: SessionEntry[];
 }): void {
@@ -500,19 +501,19 @@ export function persistTranscriptStateMutationSync(params: {
     return;
   }
   if (params.state.migrated) {
-    replaceTranscriptStateEventsSync(params.sessionFile, [
+    replaceTranscriptStateEventsSync(params.transcriptLocator, [
       ...(params.state.header ? [params.state.header] : []),
       ...params.state.entries,
     ]);
     return;
   }
-  const scope = resolveTranscriptWriteScope(params.sessionFile, [
+  const scope = resolveTranscriptWriteScope(params.transcriptLocator, [
     ...(params.state.header ? [params.state.header] : []),
     ...params.state.entries,
   ]);
   if (!scope) {
     throw new Error(
-      `Cannot append SQLite transcript without a session header: ${params.sessionFile}`,
+      `Cannot append SQLite transcript without a session header: ${params.transcriptLocator}`,
     );
   }
   for (const entry of params.appendedEntries) {

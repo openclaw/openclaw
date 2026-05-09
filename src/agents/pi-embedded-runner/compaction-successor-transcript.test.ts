@@ -241,7 +241,7 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
   });
 
-  it("does not create legacy jsonl successor files for unmigrated transcripts", async () => {
+  it("rejects filesystem transcript locators without creating successor files", async () => {
     const dir = await createTmpDir();
     const { manager } = createCompactedSession(dir);
 
