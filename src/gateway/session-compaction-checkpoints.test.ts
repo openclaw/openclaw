@@ -475,4 +475,102 @@ describe("session-compaction-checkpoints", () => {
       25,
     );
   });
+
+  test("persist trims rotated checkpoints by source-session snapshot ownership", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-rotated-trim-"));
+    tempDirs.push(dir);
+
+    const sourceSessionId = "source-session";
+    const sessionKey = "agent:main:main";
+    const now = Date.now();
+    const existingCheckpoints = Array.from({ length: 26 }, (_, index) => {
+      const checkpointSessionId = `rotated-checkpoint-session-${index}`;
+      replaceSqliteSessionTranscriptEvents({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: checkpointSessionId,
+        events: [
+          {
+            type: "session",
+            id: checkpointSessionId,
+            timestamp: new Date(now + index).toISOString(),
+            cwd: dir,
+          },
+        ],
+      });
+      recordSqliteSessionTranscriptSnapshot({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: sourceSessionId,
+        snapshotId: checkpointSessionId,
+        reason: "pre-compaction",
+        eventCount: 1,
+      });
+      return {
+        checkpointId: `rotated-${index}`,
+        sessionKey,
+        sessionId: `post-compaction-session-${index}`,
+        sourceSessionId,
+        createdAt: now + index,
+        reason: "manual" as const,
+        preCompaction: {
+          sessionId: checkpointSessionId,
+          leafId: `rotated-leaf-${index}`,
+        },
+        postCompaction: { sessionId: `post-compaction-session-${index}` },
+      };
+    });
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: {
+        sessionId: sourceSessionId,
+        updatedAt: now,
+        compactionCheckpoints: existingCheckpoints,
+      },
+    });
+
+    replaceSqliteSessionTranscriptEvents({
+      agentId: DEFAULT_AGENT_ID,
+      sessionId: "current-rotated-snapshot",
+      events: [
+        {
+          type: "session",
+          id: "current-rotated-snapshot",
+          timestamp: new Date(now + 100).toISOString(),
+          cwd: dir,
+        },
+      ],
+    });
+
+    await persistSessionCompactionCheckpoint({
+      cfg: {
+        session: {},
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig,
+      sessionKey,
+      sessionId: "current-active-session",
+      reason: "manual",
+      snapshot: {
+        agentId: "main",
+        sourceSessionId,
+        sessionId: "current-rotated-snapshot",
+        leafId: "current-rotated-leaf",
+      },
+      createdAt: now + 100,
+    });
+
+    expect(
+      hasSqliteSessionTranscriptSnapshot({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: sourceSessionId,
+        snapshotId: existingCheckpoints[0].preCompaction.sessionId,
+      }),
+    ).toBe(false);
+    expect(
+      hasSqliteSessionTranscriptSnapshot({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: sourceSessionId,
+        snapshotId: existingCheckpoints[1].preCompaction.sessionId,
+      }),
+    ).toBe(false);
+  });
 });

@@ -306,6 +306,7 @@ export async function persistSessionCompactionCheckpoint(params: {
     checkpointId: randomUUID(),
     sessionKey: target.canonicalKey,
     sessionId: params.sessionId,
+    sourceSessionId: params.snapshot.sourceSessionId,
     createdAt,
     reason: params.reason,
     ...(typeof params.tokensBefore === "number" ? { tokensBefore: params.tokensBefore } : {}),
@@ -359,7 +360,7 @@ export async function persistSessionCompactionCheckpoint(params: {
   for (const removed of trimmedCheckpoints?.removed ?? []) {
     deleteSqliteSessionTranscriptSnapshot({
       agentId: target.agentId,
-      sessionId: removed.sessionId,
+      sessionId: removed.sourceSessionId ?? removed.sessionId,
       snapshotId: removed.preCompaction.sessionId,
     });
     deleteSqliteSessionTranscript({

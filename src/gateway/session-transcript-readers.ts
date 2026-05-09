@@ -146,16 +146,6 @@ function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTr
     currentId = entry.parentId ?? undefined;
   }
   const activeBranch = selected.toReversed();
-  const firstActiveRecord = activeBranch[0];
-  const firstActiveIndex = firstActiveRecord ? entries.indexOf(firstActiveRecord) : -1;
-  if (firstActiveIndex > 0) {
-    for (let index = firstActiveIndex - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-      if (entry?.record.type === "compaction") {
-        return [entry, ...activeBranch];
-      }
-    }
-  }
   return activeBranch;
 }
 

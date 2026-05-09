@@ -25,6 +25,8 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
   "skills",
 ] as const;
 const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
+const OPENCLAW_STATE_SQLITE_RELATIVE_PATH = path.join("state", "openclaw.sqlite");
+const OPENCLAW_AGENT_SQLITE_BASENAME = "openclaw-agent.sqlite";
 
 async function exists(candidate: string): Promise<boolean> {
   try {
@@ -41,6 +43,26 @@ async function hasDirectoryEntries(candidate: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function hasAgentSqliteState(stateDir: string): Promise<boolean> {
+  try {
+    const agentsRoot = path.join(stateDir, "agents");
+    const entries = await fs.readdir(agentsRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (
+        await exists(path.join(agentsRoot, entry.name, "agent", OPENCLAW_AGENT_SQLITE_BASENAME))
+      ) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 function hasMeaningfulConfig(config: OpenClawConfig): boolean {
@@ -62,6 +84,12 @@ export async function inspectSetupMigrationFreshness(params: {
     if (await exists(path.join(params.workspaceDir, entry))) {
       reasons.push(`workspace ${entry} exists`);
     }
+  }
+  if (await exists(path.join(params.stateDir, OPENCLAW_STATE_SQLITE_RELATIVE_PATH))) {
+    reasons.push(`state ${OPENCLAW_STATE_SQLITE_RELATIVE_PATH} exists`);
+  }
+  if (await hasAgentSqliteState(params.stateDir)) {
+    reasons.push(`state agents/*/agent/${OPENCLAW_AGENT_SQLITE_BASENAME} exists`);
   }
   for (const entry of MEANINGFUL_STATE_ENTRIES) {
     if (await hasDirectoryEntries(path.join(params.stateDir, entry))) {

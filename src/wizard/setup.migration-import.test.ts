@@ -58,4 +58,28 @@ describe("setup migration import freshness", () => {
       ]),
     );
   });
+
+  it("rejects canonical SQLite runtime state even without legacy session folders", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "state");
+    await writeFile(path.join(stateDir, "state", "openclaw.sqlite"), "sqlite\n");
+    await writeFile(
+      path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite"),
+      "agent sqlite\n",
+    );
+
+    const result = await inspectSetupMigrationFreshness({
+      baseConfig: {},
+      stateDir,
+      workspaceDir: path.join(root, "workspace"),
+    });
+
+    expect(result.fresh).toBe(false);
+    expect(result.reasons).toEqual(
+      expect.arrayContaining([
+        "state state/openclaw.sqlite exists",
+        "state agents/*/agent/openclaw-agent.sqlite exists",
+      ]),
+    );
+  });
 });

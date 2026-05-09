@@ -242,6 +242,7 @@ describe("buildExportSessionReply", () => {
       systemPrompt: "system prompt",
       tools: [],
     });
+    expect(html).toContain('JSON.stringify({ type: "session", ...header })');
     expect(html).toContain('const base64 = document.getElementById("session-data").textContent;');
   });
 

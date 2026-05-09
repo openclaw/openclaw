@@ -180,6 +180,41 @@ describe("SQLite transcript readers", () => {
     ).resolves.toEqual([expect.objectContaining({ content: "tail" })]);
   });
 
+  test("does not prepend an off-branch compaction marker to the active branch", () => {
+    setupState();
+    const sessionId = "off-branch-compaction";
+    const scope = { agentId: "main", sessionId };
+    seedTranscript({
+      sessionId,
+      events: [
+        header(sessionId),
+        {
+          type: "compaction",
+          id: "off-branch-compact",
+          parentId: "old-branch",
+          timestamp: new Date().toISOString(),
+          summary: "off branch",
+        },
+        {
+          type: "message",
+          id: "active-root",
+          parentId: null,
+          message: { role: "user", content: "active root" },
+        },
+        {
+          type: "message",
+          id: "active-tail",
+          parentId: "active-root",
+          message: { role: "assistant", content: "active tail" },
+        },
+      ],
+    });
+
+    expect(
+      readSessionMessages(scope).map((entry) => (entry as { content?: unknown }).content),
+    ).toEqual(["active root", "active tail"]);
+  });
+
   test("adds sequence metadata to recent message windows", async () => {
     setupState();
     const sessionId = "stats-session";

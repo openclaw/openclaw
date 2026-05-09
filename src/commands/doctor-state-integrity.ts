@@ -190,27 +190,6 @@ function addUserRwx(mode: number): number {
   return perms | 0o700;
 }
 
-function countJsonlLines(filePath: string): number {
-  try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    if (!raw) {
-      return 0;
-    }
-    let count = 0;
-    for (let i = 0; i < raw.length; i += 1) {
-      if (raw[i] === "\n") {
-        count += 1;
-      }
-    }
-    if (!raw.endsWith("\n")) {
-      count += 1;
-    }
-    return count;
-  } catch {
-    return 0;
-  }
-}
-
 function resolveTranscriptSqliteScope(params: { agentId: string; sessionId: string }): {
   agentId: string;
   sessionId: string;
@@ -221,33 +200,14 @@ function resolveTranscriptSqliteScope(params: { agentId: string; sessionId: stri
   };
 }
 
-function hasSessionTranscript(params: {
-  agentId: string;
-  sessionId: string;
-  legacyTranscriptPath?: string;
-}): boolean {
+function hasSessionTranscript(params: { agentId: string; sessionId: string }): boolean {
   const scope = resolveTranscriptSqliteScope(params);
-  return (
-    hasSqliteSessionTranscriptEvents(scope) ||
-    (params.legacyTranscriptPath ? existsFile(params.legacyTranscriptPath) : false)
-  );
+  return hasSqliteSessionTranscriptEvents(scope);
 }
 
-function countSessionTranscriptEvents(params: {
-  agentId: string;
-  sessionId: string;
-  legacyTranscriptPath?: string;
-}): number {
+function countSessionTranscriptEvents(params: { agentId: string; sessionId: string }): number {
   const scope = resolveTranscriptSqliteScope(params);
-  const sqliteEvents = loadSqliteSessionTranscriptEvents(scope);
-  if (sqliteEvents.length > 0) {
-    return sqliteEvents.length;
-  }
-  return params.legacyTranscriptPath ? countJsonlLines(params.legacyTranscriptPath) : 0;
-}
-
-function resolveLegacyTranscriptPathForSession(sessionsDir: string, sessionId: string): string {
-  return path.join(sessionsDir, `${sessionId}.jsonl`);
+  return loadSqliteSessionTranscriptEvents(scope).length;
 }
 
 function findOtherStateDirs(stateDir: string): string[] {
@@ -882,11 +842,7 @@ export async function noteStateIntegrity(
       if (!sessionId) {
         return false;
       }
-      return !hasSessionTranscript({
-        agentId,
-        sessionId,
-        legacyTranscriptPath: resolveLegacyTranscriptPathForSession(sessionsDir, sessionId),
-      });
+      return !hasSessionTranscript({ agentId, sessionId });
     });
     if (missing.length > 0) {
       warnings.push(
@@ -973,13 +929,7 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const legacyTranscriptPath = resolveLegacyTranscriptPathForSession(
-        sessionsDir,
-        mainEntry.sessionId,
-      );
-      if (
-        !hasSessionTranscript({ agentId, sessionId: mainEntry.sessionId, legacyTranscriptPath })
-      ) {
+      if (!hasSessionTranscript({ agentId, sessionId: mainEntry.sessionId })) {
         warnings.push(
           `- Main session transcript missing (${agentId}/${mainEntry.sessionId}). History will appear to reset.`,
         );
@@ -987,7 +937,6 @@ export async function noteStateIntegrity(
         const eventCount = countSessionTranscriptEvents({
           agentId,
           sessionId: mainEntry.sessionId,
-          legacyTranscriptPath,
         });
         if (eventCount <= 1) {
           warnings.push(

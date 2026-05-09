@@ -528,6 +528,28 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain(" ls ");
   });
 
+  it("treats stale legacy JSONL files as insufficient operational truth", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(process.env, tempHome);
+    const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
+      "main",
+      process.env,
+      () => tempHome,
+    );
+    fs.writeFileSync(path.join(sessionsDir, "legacy-only-main.jsonl"), '{"type":"session"}\n');
+    await writeSessionStore(cfg, {
+      "agent:main:main": {
+        sessionId: "legacy-only-main",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const text = await runStateIntegrityText(cfg);
+
+    expect(text).toContain("recent sessions are missing transcripts");
+    expect(text).toContain("Main session transcript missing (main/legacy-only-main)");
+  });
+
   it("moves a heartbeat-poisoned main session and clears stale TUI restore pointers", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(process.env, tempHome);

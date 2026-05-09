@@ -98,6 +98,8 @@ export type SessionCompactionCheckpoint = {
   checkpointId: string;
   sessionKey: string;
   sessionId: string;
+  /** Original source session that owns the checkpoint snapshot metadata. */
+  sourceSessionId?: string;
   createdAt: number;
   reason: SessionCompactionCheckpointReason;
   tokensBefore?: number;
