@@ -216,6 +216,37 @@ describe("isBlockedHostnameOrIp", () => {
   it.each(["example.com", "api.example.net"])("does not block ordinary hostname %s", (value) => {
     expect(isBlockedHostnameOrIp(value)).toBe(false);
   });
+
+  it("allows .internal hostname when in hostnameAllowlist (e.g. host.docker.internal)", () => {
+    expect(isBlockedHostnameOrIp("host.docker.internal")).toBe(true);
+    expect(
+      isBlockedHostnameOrIp("host.docker.internal", {
+        hostnameAllowlist: ["host.docker.internal"],
+      }),
+    ).toBe(false);
+  });
+
+  it("allows .localhost hostname when in hostnameAllowlist", () => {
+    expect(isBlockedHostnameOrIp("myapp.localhost")).toBe(true);
+    expect(
+      isBlockedHostnameOrIp("myapp.localhost", {
+        hostnameAllowlist: ["myapp.localhost"],
+      }),
+    ).toBe(false);
+  });
+
+  it("allows .local hostname when in hostnameAllowlist", () => {
+    expect(isBlockedHostnameOrIp("printer.local")).toBe(true);
+    expect(
+      isBlockedHostnameOrIp("printer.local", {
+        hostnameAllowlist: ["printer.local"],
+      }),
+    ).toBe(false);
+  });
+
+  it("does not bypass hostname block with empty allowlist", () => {
+    expect(isBlockedHostnameOrIp("db.internal", { hostnameAllowlist: [] })).toBe(true);
+  });
 });
 
 describe("isSameSsrFPolicy", () => {

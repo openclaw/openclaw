@@ -264,6 +264,11 @@ export function isBlockedHostnameOrIp(hostname: string, policy?: SsrFPolicy): bo
   if (!normalized) {
     return false;
   }
+  // Allowlist from SSRF policy should bypass hostname blocks (e.g. host.docker.internal)
+  const allowlist = normalizeHostnameAllowlist(policy?.hostnameAllowlist);
+  if (allowlist.length > 0 && matchesHostnameAllowlist(normalized, allowlist)) {
+    return false;
+  }
   return isBlockedHostnameNormalized(normalized) || isPrivateIpAddress(normalized, policy);
 }
 
