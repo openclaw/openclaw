@@ -80,7 +80,7 @@ function createTaskRegistryMaintenanceHarness(params: {
             sessionKey: "",
             storeSessionKey: "",
             entry: acpEntry,
-            storeReadFailed: false,
+            readFailed: false,
           } satisfies AcpSessionStoreEntry)
         : ({
             cfg: {} as never,
@@ -88,7 +88,7 @@ function createTaskRegistryMaintenanceHarness(params: {
             sessionKey: "",
             storeSessionKey: "",
             entry: undefined,
-            storeReadFailed: false,
+            readFailed: false,
           } satisfies AcpSessionStoreEntry),
     getSessionEntry:
       params.getSessionEntry ??

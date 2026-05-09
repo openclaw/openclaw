@@ -274,8 +274,8 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
       staleBindings.push(binding);
       continue;
     }
-    // Session store read failures are transient; never auto-unbind on uncertain reads.
-    if (session.storeReadFailed) {
+    // Session reads can fail transiently; never auto-unbind on uncertain reads.
+    if (session.readFailed) {
       continue;
     }
 
