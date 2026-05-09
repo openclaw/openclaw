@@ -2597,6 +2597,72 @@ describe("openai transport stream", () => {
     expect(disabled.reasoning_effort).toBe("none");
   });
 
+  it("maps qwen thinking format to top-level enable_thinking", () => {
+    const baseModel = {
+      id: "qwen3.5-32b",
+      name: "Qwen 3.5 32B",
+      api: "openai-completions",
+      provider: "llama-cpp",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: {
+        thinkingFormat: "qwen",
+      },
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const enabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "medium",
+    } as never) as { enable_thinking?: unknown; reasoning_effort?: unknown };
+    const disabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "off",
+    } as never) as { enable_thinking?: unknown; reasoning_effort?: unknown };
+
+    expect(enabled.enable_thinking).toBe(true);
+    expect(disabled.enable_thinking).toBe(false);
+    expect(enabled).not.toHaveProperty("reasoning_effort");
+    expect(disabled).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("maps qwen-chat-template thinking format to chat_template_kwargs", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen3.5-32b",
+        name: "Qwen 3.5 32B",
+        api: "openai-completions",
+        provider: "llama-cpp",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+        compat: {
+          thinkingFormat: "qwen-chat-template",
+        },
+      } as unknown as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "off",
+      } as never,
+    ) as { chat_template_kwargs?: Record<string, unknown>; reasoning_effort?: unknown };
+
+    expect(params.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
   it("omits unsupported disabled reasoning for completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {

@@ -1831,6 +1831,44 @@ function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptio
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
 }
 
+function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
+  return format === "qwen" || format === "qwen-chat-template";
+}
+
+function isOpenAICompletionsThinkingEnabled(effort: OpenAIReasoningEffort): boolean {
+  const normalized = effort.trim().toLowerCase();
+  return normalized !== "off" && normalized !== "none";
+}
+
+function setQwenChatTemplateThinking(params: Record<string, unknown>, enabled: boolean): void {
+  const existing = params.chat_template_kwargs;
+  params.chat_template_kwargs =
+    existing && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>), enable_thinking: enabled }
+      : { enable_thinking: enabled };
+}
+
+function applyQwenOpenAICompletionsThinkingParams(params: {
+  compatThinkingFormat: string;
+  modelReasoning: boolean;
+  payload: Record<string, unknown>;
+  requestedEffort: OpenAIReasoningEffort;
+}): boolean {
+  if (
+    !params.modelReasoning ||
+    !isQwenOpenAICompletionsThinkingFormat(params.compatThinkingFormat)
+  ) {
+    return false;
+  }
+  const enabled = isOpenAICompletionsThinkingEnabled(params.requestedEffort);
+  if (params.compatThinkingFormat === "qwen-chat-template") {
+    setQwenChatTemplateThinking(params.payload, enabled);
+  } else {
+    params.payload.enable_thinking = enabled;
+  }
+  return true;
+}
+
 function convertTools(
   tools: NonNullable<Context["tools"]>,
   compat: ReturnType<typeof getCompat>,
@@ -2030,6 +2068,12 @@ export function buildOpenAICompletionsParams(
     : undefined;
   const omitGpt54MiniToolReasoningEffort =
     isOpenAIGpt54MiniModel(model) && Array.isArray(params.tools) && params.tools.length > 0;
+  const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
+    compatThinkingFormat: compat.thinkingFormat,
+    modelReasoning: model.reasoning,
+    payload: params,
+    requestedEffort: completionsReasoningEffort,
+  });
   if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&
@@ -2042,6 +2086,7 @@ export function buildOpenAICompletionsParams(
     resolvedCompletionsReasoningEffort &&
     model.reasoning &&
     compat.supportsReasoningEffort &&
+    !handledQwenThinkingFormat &&
     !omitGpt54MiniToolReasoningEffort
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;
