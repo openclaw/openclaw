@@ -157,6 +157,56 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     expect(resolveImplicitProvidersCallCount).toBe(firstCount);
   });
 
+  it("invalidates the cache when a token profile's expiry changes", async () => {
+    // Counterpart to the OAuth-rotation test above.  For `type: "token"`
+    // profiles, `expires`/`expiresAt`/`expiresIn` are credential
+    // ELIGIBILITY policy: `resolveApiKeyForProfile` returns null for an
+    // expired token profile.  If we strip those fields when fingerprinting,
+    // a transition from valid->expired (with no other field change) would
+    // leave the fingerprint unchanged and the ready cache would hand back
+    // stale provider state.  Round-5 fix on PR #73260 makes the volatile
+    // set per-type so token profiles keep `expires*` in the hash.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    const futureMs = Date.now() + 60 * 60 * 1000;
+    await writeAuthProfiles(agentDir, {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "sk-ant-token", // pragma: allowlist secret
+          expires: futureMs,
+        },
+      },
+    });
+
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    const firstCount = resolveImplicitProvidersCallCount;
+    expect(firstCount).toBe(1);
+
+    // Update only `expires` to a past value (simulating the token's
+    // eligibility window closing).  All other fields identical.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const pastMs = Date.now() - 60 * 60 * 1000;
+    await writeAuthProfiles(agentDir, {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "sk-ant-token", // pragma: allowlist secret
+          expires: pastMs,
+        },
+      },
+    });
+
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    // Eligibility-affecting expiry change must trigger a cache miss.
+    expect(resolveImplicitProvidersCallCount).toBe(firstCount + 1);
+  });
+
   it("DOES invalidate the cache when a static type:token credential rotates (Codex/Greptile P2)", async () => {
     // Counterpart to the OAuth-rotation test above. Profiles with
     // `type: "token"` use the literal `token` key as a long-lived static

@@ -28,6 +28,15 @@ export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
  * shape of what providers are available (OAuth token refreshes,
  * expirations).  We exclude them from the fingerprint so token rotation
  * does not invalidate the implicit-provider-discovery cache.
+ *
+ * NOTE: this base set applies to OAuth and other non-`type: "token"`
+ * profiles.  For `type: "token"` profiles, `expires`/`expiresAt`/
+ * `expiresIn` are credential ELIGIBILITY policy — `resolveApiKeyForProfile`
+ * returns null when a token profile's `expires` is in the past or invalid.
+ * If we strip those fields for token profiles, a transition from valid
+ * to expired (without any other field change) leaves the fingerprint
+ * unchanged and the ready cache hands back stale provider state. See
+ * `getVolatileFieldsForProfileObject` below for the per-type selection.
  */
 const AUTH_PROFILE_VOLATILE_FIELDS: ReadonlySet<string> = new Set([
   "access",
@@ -47,6 +56,40 @@ const AUTH_PROFILE_VOLATILE_FIELDS: ReadonlySet<string> = new Set([
   "lastRefreshAt",
   "lastValidatedAt",
 ]);
+
+/**
+ * Volatile fields applied to `type: "token"` profile objects.  Mirrors
+ * the base set MINUS `expires`/`expiresAt`/`expiresIn`: those drive
+ * eligibility for token credentials (an expired token profile resolves
+ * to `null` in `resolveApiKeyForProfile`), so a fingerprint that strips
+ * them would let valid->expired transitions ride a stale ready-cache
+ * entry.  `access`/`refresh` and the `*At` session-management fields
+ * remain volatile for all profile types.
+ */
+const AUTH_PROFILE_VOLATILE_FIELDS_TOKEN: ReadonlySet<string> = new Set([
+  "access",
+  "refresh",
+  "issuedAt",
+  "refreshedAt",
+  "lastCheckedAt",
+  "lastRefreshAt",
+  "lastValidatedAt",
+]);
+
+/**
+ * Pick the volatile-fields set to apply when stripping an object that
+ * looks like a profile entry inside `auth-profiles.json`.  Profile
+ * entries are reached at depth=2 by `stripAuthProfilesVolatileFields`
+ * (root object -> `profiles` map -> profile value).  We detect the
+ * type by inspecting `type === "token"` directly on the object so any
+ * future profile types are covered by the OAuth/default branch.
+ */
+function getVolatileFieldsForProfileObject(value: Record<string, unknown>): ReadonlySet<string> {
+  if (value.type === "token") {
+    return AUTH_PROFILE_VOLATILE_FIELDS_TOKEN;
+  }
+  return AUTH_PROFILE_VOLATILE_FIELDS;
+}
 
 /**
  * Hard cap on the bytes we will read + parse from auth-profiles.json when
@@ -253,13 +296,22 @@ function stripAuthProfilesVolatileFields(value: unknown, depth: number): unknown
   if (Array.isArray(value)) {
     return value.map((entry) => stripAuthProfilesVolatileFields(entry, depth + 1));
   }
+  const valueRecord = value as Record<string, unknown>;
+  // Pick the volatile-field set based on the profile `type` so token
+  // profiles preserve their `expires*` fields (which drive eligibility
+  // in `resolveApiKeyForProfile`) while OAuth profiles strip them as
+  // session-rotation noise.  Non-profile objects (root, profile map,
+  // nested metadata) won't carry `type: "token"`, so they fall through
+  // to the default OAuth/non-token volatile set, preserving prior
+  // behavior outside profile entries.
+  const volatileFields = getVolatileFieldsForProfileObject(valueRecord);
   // Build with Object.create(null) so prototype-mutating keys ("__proto__",
   // "constructor", "prototype") in untrusted input can't pollute the
   // resulting object's prototype chain.  Filter them explicitly too —
   // belt and suspenders (CWE-1321).
   const result: Record<string, unknown> = Object.create(null);
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (AUTH_PROFILE_VOLATILE_FIELDS.has(key)) {
+  for (const [key, entry] of Object.entries(valueRecord)) {
+    if (volatileFields.has(key)) {
       continue;
     }
     if (DANGEROUS_PROTO_KEYS.has(key)) {
