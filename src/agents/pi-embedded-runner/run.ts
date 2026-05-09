@@ -931,7 +931,8 @@ export async function runEmbeddedPiAgent(
                 )
               : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
-          const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
+          const attemptUsage =
+            attempt.attemptUsage !== undefined ? attempt.attemptUsage : lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
