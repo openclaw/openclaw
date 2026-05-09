@@ -578,7 +578,14 @@ describe("detectChangedScope", () => {
         ? `HEAD & echo injected > "${markerPath}" & rem`
         : `HEAD; touch "${markerPath}" #`;
 
-    expect(() => listChangedPaths(injectedBase, "HEAD")).toThrow();
+    let error: unknown;
+    try {
+      listChangedPaths(injectedBase, "HEAD");
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(injectedBase);
     expect(fs.existsSync(markerPath)).toBe(false);
   });
 
