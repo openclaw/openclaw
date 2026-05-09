@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import {
   appendSessionTranscriptMessage,
   emitSessionTranscriptUpdate,
+  resolveSqliteSessionTranscriptScopeForLocator,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -65,7 +65,7 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
 }
 
 export async function mirrorCodexAppServerTranscript(params: {
-  sessionFile: string;
+  transcriptLocator: string;
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
@@ -81,13 +81,14 @@ export async function mirrorCodexAppServerTranscript(params: {
     return;
   }
 
-  const agentId = params.agentId?.trim() || DEFAULT_AGENT_ID;
-  const sessionId =
-    params.sessionId?.trim() ||
-    path
-      .basename(params.sessionFile)
-      .replace(/\.jsonl$/i, "")
-      .trim();
+  const resolvedScope = resolveSqliteSessionTranscriptScopeForLocator({
+    transcriptLocator: params.transcriptLocator,
+  });
+  const agentId = params.agentId?.trim() || resolvedScope?.agentId || DEFAULT_AGENT_ID;
+  const sessionId = params.sessionId?.trim() || resolvedScope?.sessionId;
+  if (!sessionId) {
+    throw new Error("Codex transcript mirror requires a SQLite transcript locator or session id.");
+  }
 
   for (const message of messages) {
     const dedupeIdentity = buildMirrorDedupeIdentity(message);
@@ -115,7 +116,7 @@ export async function mirrorCodexAppServerTranscript(params: {
         : nextMessage
     ) as AgentMessage;
     await appendSessionTranscriptMessage({
-      transcriptPath: params.sessionFile,
+      transcriptLocator: params.transcriptLocator,
       agentId,
       sessionId,
       message: messageToAppend,
@@ -127,14 +128,14 @@ export async function mirrorCodexAppServerTranscript(params: {
     emitSessionTranscriptUpdate({
       agentId,
       sessionId,
-      sessionFile: params.sessionFile,
+      transcriptLocator: params.transcriptLocator,
       sessionKey: params.sessionKey,
     });
   } else {
     emitSessionTranscriptUpdate({
       agentId,
       sessionId,
-      sessionFile: params.sessionFile,
+      transcriptLocator: params.transcriptLocator,
     });
   }
 }

@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { appendSqliteSessionTranscriptEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  appendSqliteSessionTranscriptEvent,
+  createSqliteSessionTranscriptLocator,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -166,13 +169,12 @@ describe("active-memory plugin", () => {
   const expectLinesNotToContain = (lines: string[], text: string) => {
     expect(lines).not.toEqual(expect.arrayContaining([expect.stringContaining(text)]));
   };
-  const writeSqliteTranscriptEvents = async (sessionFile: string, records: unknown[]) => {
-    const sessionId = path.basename(sessionFile, ".jsonl");
+  const writeSqliteTranscriptEvents = async (transcriptLocator: string, records: unknown[]) => {
+    const sessionId = path.basename(transcriptLocator, ".jsonl");
     for (const record of records) {
       appendSqliteSessionTranscriptEvent({
         agentId: "main",
         sessionId,
-        transcriptPath: sessionFile,
         event: record,
       });
     }
@@ -2000,7 +2002,7 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore[sessionKey] = { sessionId: "s-main", updatedAt: 0 };
 
     runEmbeddedPiAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+      async (params: { transcriptLocator: string; abortSignal?: AbortSignal }) => {
         const lines = [
           JSON.stringify({
             message: {
@@ -2018,7 +2020,7 @@ describe("active-memory plugin", () => {
           }),
         ];
         await writeSqliteTranscriptEvents(
-          params.sessionFile,
+          params.transcriptLocator,
           lines.map((line) => JSON.parse(line) as unknown),
         );
         return { payloads: [{ text: "wings are fine." }] };
@@ -2285,8 +2287,8 @@ describe("active-memory plugin", () => {
       updatedAt: 0,
     };
     runEmbeddedPiAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await writeSqliteTranscriptEvents(params.sessionFile, [
+      async (params: { transcriptLocator: string; abortSignal?: AbortSignal }) => {
+        await writeSqliteTranscriptEvents(params.transcriptLocator, [
           { type: "message", message: { role: "user", content: "ignore this user text" } },
           {
             type: "message",
@@ -2345,11 +2347,11 @@ describe("active-memory plugin", () => {
       sessionId: "s-timeout-partial-temp-transcript",
       updatedAt: 0,
     };
-    let tempSessionFile = "";
+    let tempTranscriptLocator = "";
     runEmbeddedPiAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        tempSessionFile = params.sessionFile;
-        await writeSqliteTranscriptEvents(params.sessionFile, [
+      async (params: { transcriptLocator: string; abortSignal?: AbortSignal }) => {
+        tempTranscriptLocator = params.transcriptLocator;
+        await writeSqliteTranscriptEvents(params.transcriptLocator, [
           {
             type: "message",
             message: { role: "assistant", content: "temporary partial recall summary" },
@@ -2368,7 +2370,7 @@ describe("active-memory plugin", () => {
       prependContext: expect.stringContaining("temporary partial recall summary"),
     });
     await vi.waitFor(async () => {
-      await expect(fs.access(tempSessionFile)).rejects.toThrow();
+      await expect(fs.access(tempTranscriptLocator)).rejects.toThrow();
     });
     expect(getActiveMemoryLines(sessionKey)).toEqual(
       expect.arrayContaining([
@@ -2396,8 +2398,8 @@ describe("active-memory plugin", () => {
       updatedAt: 0,
     };
     runEmbeddedPiAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await writeSqliteTranscriptEvents(params.sessionFile, []);
+      async (params: { transcriptLocator: string; abortSignal?: AbortSignal }) => {
+        await writeSqliteTranscriptEvents(params.transcriptLocator, []);
         return await waitForAbort(params.abortSignal);
       },
     );
@@ -2413,7 +2415,7 @@ describe("active-memory plugin", () => {
     expectLinesNotToContain(lines, "timeout_partial");
   });
 
-  it("keeps timeout status when the timeout transcript path does not exist", async () => {
+  it("keeps timeout status when no timeout transcript events were written", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
     __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -2458,8 +2460,8 @@ describe("active-memory plugin", () => {
       updatedAt: 0,
     };
     runEmbeddedPiAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await writeSqliteTranscriptEvents(params.sessionFile, [
+      async (params: { transcriptLocator: string; abortSignal?: AbortSignal }) => {
+        await writeSqliteTranscriptEvents(params.transcriptLocator, [
           {
             type: "message",
             message: {
@@ -2504,8 +2506,8 @@ describe("active-memory plugin", () => {
       updatedAt: 0,
     };
     runEmbeddedPiAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await writeSqliteTranscriptEvents(params.sessionFile, [
+      async (params: { transcriptLocator: string; abortSignal?: AbortSignal }) => {
+        await writeSqliteTranscriptEvents(params.transcriptLocator, [
           {
             type: "message",
             message: { role: "assistant", content: "partial abort summary" },
@@ -2552,8 +2554,8 @@ describe("active-memory plugin", () => {
       sessionId: "s-generic-error-partial-ignored",
       updatedAt: 0,
     };
-    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeSqliteTranscriptEvents(params.sessionFile, [
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { transcriptLocator: string }) => {
+      await writeSqliteTranscriptEvents(params.transcriptLocator, [
         {
           type: "message",
           message: { role: "assistant", content: "must not be surfaced from generic errors" },
@@ -2576,10 +2578,13 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("bounds partial assistant transcript reads by character cap for large JSONL files", async () => {
-    const sessionFile = path.join(stateDir, "large-timeout-transcript.jsonl");
+  it("bounds partial assistant transcript reads by character cap for large SQLite transcripts", async () => {
+    const transcriptLocator = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "large-timeout-transcript",
+    });
     await writeSqliteTranscriptEvents(
-      sessionFile,
+      transcriptLocator,
       Array.from({ length: 50 }, () => ({
         type: "message",
         message: {
@@ -2590,7 +2595,7 @@ describe("active-memory plugin", () => {
     );
     const readFileSpy = vi.spyOn(fs, "readFile");
 
-    const result = await __testing.readPartialAssistantText(sessionFile, {
+    const result = await __testing.readPartialAssistantText(transcriptLocator, {
       maxChars: 128,
       maxLines: 2_000,
       maxBytes: 10 * 1024 * 1024,
@@ -2602,13 +2607,16 @@ describe("active-memory plugin", () => {
     expect(readFileSpy).not.toHaveBeenCalled();
   });
 
-  it("skips malformed JSONL lines when reading partial assistant transcripts", async () => {
-    const sessionFile = path.join(stateDir, "malformed-timeout-transcript.jsonl");
-    await writeSqliteTranscriptEvents(sessionFile, [
+  it("reads partial assistant text from SQLite transcript events", async () => {
+    const transcriptLocator = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "partial-timeout-transcript",
+    });
+    await writeSqliteTranscriptEvents(transcriptLocator, [
       { type: "message", message: { role: "assistant", content: "valid partial summary" } },
     ]);
 
-    const result = await __testing.readPartialAssistantText(sessionFile, {
+    const result = await __testing.readPartialAssistantText(transcriptLocator, {
       maxChars: 200,
       maxLines: 10,
     });
@@ -2617,8 +2625,11 @@ describe("active-memory plugin", () => {
   });
 
   it("honors transcript maxLines caps for partial text and search debug reads", async () => {
-    const sessionFile = path.join(stateDir, "max-lines-transcript.jsonl");
-    await writeSqliteTranscriptEvents(sessionFile, [
+    const transcriptLocator = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "max-lines-transcript",
+    });
+    await writeSqliteTranscriptEvents(transcriptLocator, [
       {
         type: "message",
         message: { role: "user", content: "line one" },
@@ -2644,18 +2655,18 @@ describe("active-memory plugin", () => {
     ]);
 
     await expect(
-      __testing.readPartialAssistantText(sessionFile, {
+      __testing.readPartialAssistantText(transcriptLocator, {
         maxChars: 1_000,
         maxLines: 2,
       }),
     ).resolves.toBe("inside cap");
     await expect(
-      __testing.readActiveMemorySearchDebug(sessionFile, {
+      __testing.readActiveMemorySearchDebug(transcriptLocator, {
         maxLines: 3,
       }),
     ).resolves.toBeUndefined();
     await expect(
-      __testing.readActiveMemorySearchDebug(sessionFile, {
+      __testing.readActiveMemorySearchDebug(transcriptLocator, {
         maxLines: 4,
       }),
     ).resolves.toMatchObject({ backend: "qmd", hits: 1 });
@@ -2960,8 +2971,8 @@ describe("active-memory plugin", () => {
     const sessionKey = "agent:main:terminal-zero-hit";
     hoisted.sessionStore[sessionKey] = { sessionId: "s-terminal-zero-hit", updatedAt: 0 };
     runEmbeddedPiAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await writeSqliteTranscriptEvents(params.sessionFile, [
+      async (params: { transcriptLocator: string; abortSignal?: AbortSignal }) => {
+        await writeSqliteTranscriptEvents(params.transcriptLocator, [
           {
             message: {
               role: "toolResult",
@@ -3005,8 +3016,8 @@ describe("active-memory plugin", () => {
       sessionId: "s-terminal-zero-hit-with-results",
       updatedAt: 0,
     };
-    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeSqliteTranscriptEvents(params.sessionFile, [
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { transcriptLocator: string }) => {
+      await writeSqliteTranscriptEvents(params.transcriptLocator, [
         {
           message: {
             role: "toolResult",
@@ -3047,8 +3058,8 @@ describe("active-memory plugin", () => {
     const sessionKey = "agent:main:terminal-unavailable";
     hoisted.sessionStore[sessionKey] = { sessionId: "s-terminal-unavailable", updatedAt: 0 };
     runEmbeddedPiAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await writeSqliteTranscriptEvents(params.sessionFile, [
+      async (params: { transcriptLocator: string; abortSignal?: AbortSignal }) => {
+        await writeSqliteTranscriptEvents(params.transcriptLocator, [
           {
             message: {
               role: "toolResult",
@@ -3093,8 +3104,8 @@ describe("active-memory plugin", () => {
       timeoutMs: 500,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeSqliteTranscriptEvents(params.sessionFile, [
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { transcriptLocator: string }) => {
+      await writeSqliteTranscriptEvents(params.transcriptLocator, [
         {
           message: {
             role: "toolResult",
@@ -3845,9 +3856,9 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const sessionFile = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile;
-    expect(sessionFile).toMatch(
-      /^sqlite-transcript:\/\/main\/active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/,
+    const transcriptLocator = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.transcriptLocator;
+    expect(transcriptLocator).toMatch(
+      /^sqlite-transcript:\/\/main\/active-memory-[a-z0-9]+-[a-f0-9]{8}$/,
     );
     expect(mkdtempSpy).not.toHaveBeenCalled();
     expect(rmSpy).not.toHaveBeenCalled();
@@ -3871,9 +3882,9 @@ describe("active-memory plugin", () => {
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
 
-    const sessionFile = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile;
-    expect(sessionFile).toMatch(
-      /^sqlite-transcript:\/\/main\/active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/,
+    const transcriptLocator = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.transcriptLocator;
+    expect(transcriptLocator).toMatch(
+      /^sqlite-transcript:\/\/main\/active-memory-[a-z0-9]+-[a-f0-9]{8}$/,
     );
     expect(mkdirSpy).not.toHaveBeenCalled();
     expect(mkdtempSpy).not.toHaveBeenCalled();
@@ -3881,7 +3892,7 @@ describe("active-memory plugin", () => {
       vi
         .mocked(api.logger.info)
         .mock.calls.some((call: unknown[]) =>
-          String(call[0]).includes(`transcript=${sessionFile}`),
+          String(call[0]).includes(`transcript=${transcriptLocator}`),
         ),
     ).toBe(true);
     expect(rmSpy).not.toHaveBeenCalled();
@@ -3908,8 +3919,8 @@ describe("active-memory plugin", () => {
     );
 
     expect(mkdirSpy).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile).toMatch(
-      /^sqlite-transcript:\/\/main\/active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/,
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.transcriptLocator).toMatch(
+      /^sqlite-transcript:\/\/main\/active-memory-[a-z0-9]+-[a-f0-9]{8}$/,
     );
   });
 
@@ -3934,8 +3945,8 @@ describe("active-memory plugin", () => {
     );
 
     expect(mkdirSpy).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile).toMatch(
-      /^sqlite-transcript:\/\/support-agent\/active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/,
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.transcriptLocator).toMatch(
+      /^sqlite-transcript:\/\/support-agent\/active-memory-[a-z0-9]+-[a-f0-9]{8}$/,
     );
   });
 

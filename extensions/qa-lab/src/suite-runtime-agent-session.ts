@@ -94,7 +94,7 @@ async function seedQaSessionTranscript(
   if (!sessionId) {
     throw new Error("seedQaSessionTranscript requires sessionId");
   }
-  const sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
+  const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId, sessionId });
   const sessionKey = params.sessionKey?.trim() || `agent:${agentId}:seed-${sessionId}`;
   const messages = params.messages ?? [];
   let parentId: string | null = null;
@@ -120,7 +120,6 @@ async function seedQaSessionTranscript(
   replaceSqliteSessionTranscriptEvents({
     agentId,
     sessionId,
-    transcriptPath: sessionFile,
     env: env.gateway.runtimeEnv,
     events: [
       {
@@ -141,7 +140,6 @@ async function seedQaSessionTranscript(
     entry: {
       sessionId,
       updatedAt: now,
-      sessionFile,
       ...(params.lastChannel ? { lastChannel: params.lastChannel } : {}),
       ...(params.lastProvider ? { lastProvider: params.lastProvider } : {}),
       ...(params.lastTo ? { lastTo: params.lastTo } : {}),
@@ -154,7 +152,7 @@ async function seedQaSessionTranscript(
       },
     },
   });
-  return { agentId, sessionId, sessionKey, sessionFile };
+  return { agentId, sessionId, sessionKey, transcriptLocator };
 }
 
 async function setQaActiveMemorySessionDisabled(

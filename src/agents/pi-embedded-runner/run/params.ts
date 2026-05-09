@@ -106,10 +106,11 @@ export type RunEmbeddedPiAgentParams = {
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   /**
-   * Deprecated boundary hint. `runEmbeddedPiAgent()` always derives the active
-   * SQLite transcript locator from `{agentId, sessionId}` before it writes.
+   * Ignored legacy boundary hint. `runEmbeddedPiAgent()` always derives the
+   * active SQLite transcript locator from `{agentId, sessionId}` before it
+   * writes, so callers cannot route runtime transcript writes to JSON files.
    */
-  transcriptLocator: string;
+  transcriptLocator?: string;
   workspaceDir: string;
   agentDir?: string;
   config?: OpenClawConfig;

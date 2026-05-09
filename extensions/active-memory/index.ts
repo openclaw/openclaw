@@ -1,10 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import {
-  createSqliteSessionTranscriptLocator,
-  loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { loadSqliteSessionTranscriptEvents } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   DEFAULT_PROVIDER,
   parseModelRef,
@@ -250,10 +246,15 @@ type TranscriptReadLimits = {
   maxBytes?: number;
 };
 
+type TranscriptScope = {
+  agentId: string;
+  sessionId: string;
+};
+
 type RecallSubagentResult = {
   rawReply: string;
   resultStatus?: "failed" | "unavailable";
-  transcriptPath?: string;
+  transcriptScope?: TranscriptScope;
   searchDebug?: ActiveMemorySearchDebug;
 };
 
@@ -1509,19 +1510,13 @@ function resolveTranscriptReadLimits(
 }
 
 async function streamBoundedTranscriptJsonl(params: {
-  sessionFile: string;
+  transcriptScope: TranscriptScope;
   limits?: TranscriptReadLimits;
   onRecord: (record: unknown) => boolean | void;
 }): Promise<void> {
   const limits = resolveTranscriptReadLimits(params.limits);
-  const scope = resolveSqliteSessionTranscriptScopeForPath({
-    transcriptPath: params.sessionFile,
-  });
-  if (!scope) {
-    return;
-  }
   try {
-    const events = loadSqliteSessionTranscriptEvents(scope);
+    const events = loadSqliteSessionTranscriptEvents(params.transcriptScope);
     if (JSON.stringify(events.map((entry) => entry.event)).length > limits.maxBytes) {
       return;
     }
@@ -1610,12 +1605,12 @@ function extractTerminalMemorySearchResultFromSessionRecord(
 }
 
 async function readActiveMemorySearchDebug(
-  sessionFile: string,
+  transcriptScope: TranscriptScope,
   limits?: TranscriptReadLimits,
 ): Promise<ActiveMemorySearchDebug | undefined> {
   let found: ActiveMemorySearchDebug | undefined;
   await streamBoundedTranscriptJsonl({
-    sessionFile,
+    transcriptScope,
     limits,
     onRecord: (record) => {
       const debug = extractActiveMemorySearchDebugFromSessionRecord(record);
@@ -1628,12 +1623,12 @@ async function readActiveMemorySearchDebug(
 }
 
 async function readTerminalMemorySearchResult(
-  sessionFile: string,
+  transcriptScope: TranscriptScope,
   limits?: TranscriptReadLimits,
 ): Promise<TerminalMemorySearchResult | undefined> {
   let found: TerminalMemorySearchResult | undefined;
   await streamBoundedTranscriptJsonl({
-    sessionFile,
+    transcriptScope,
     limits,
     onRecord: (record) => {
       const result = extractTerminalMemorySearchResultFromSessionRecord(record);
@@ -1648,7 +1643,7 @@ async function readTerminalMemorySearchResult(
 }
 
 function watchTerminalMemorySearchResult(params: {
-  getSessionFile: () => string | undefined;
+  getTranscriptScope: () => TranscriptScope | undefined;
   abortSignal: AbortSignal;
 }): TerminalMemorySearchWatch {
   let stopped = false;
@@ -1687,8 +1682,10 @@ function watchTerminalMemorySearchResult(params: {
     }
     inFlight = true;
     try {
-      const sessionFile = params.getSessionFile();
-      const result = sessionFile ? await readTerminalMemorySearchResult(sessionFile) : undefined;
+      const transcriptScope = params.getTranscriptScope();
+      const result = transcriptScope
+        ? await readTerminalMemorySearchResult(transcriptScope)
+        : undefined;
       if (result) {
         finish(result);
         return;
@@ -1774,17 +1771,17 @@ function extractAssistantTextFromSessionRecord(value: unknown): string {
 }
 
 async function readPartialAssistantText(
-  sessionFile: string | undefined,
+  transcriptScope: TranscriptScope | undefined,
   limits?: TranscriptReadLimits,
 ): Promise<string | null> {
-  if (!sessionFile) {
+  if (!transcriptScope) {
     return null;
   }
   const texts: string[] = [];
   const resolvedLimits = resolveTranscriptReadLimits(limits);
   let collectedChars = 0;
   await streamBoundedTranscriptJsonl({
-    sessionFile,
+    transcriptScope,
     limits: resolvedLimits,
     onRecord: (record) => {
       const text = extractAssistantTextFromSessionRecord(record);
@@ -1876,7 +1873,7 @@ async function waitForSubagentPartialTimeoutData(
 async function buildTimeoutRecallResult(params: {
   elapsedMs: number;
   maxSummaryChars: number;
-  sessionFile?: string;
+  transcriptScope?: TranscriptScope;
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
   subagentPromise?: Promise<RecallSubagentResult>;
@@ -1888,7 +1885,7 @@ async function buildTimeoutRecallResult(params: {
   const rawReply =
     params.rawReply ??
     subagentPartialData.rawReply ??
-    (await readPartialAssistantText(params.sessionFile));
+    (await readPartialAssistantText(params.transcriptScope));
   const summary = truncateSummary(
     normalizeActiveSummary(rawReply ?? "") ?? "",
     params.maxSummaryChars,
@@ -1896,7 +1893,7 @@ async function buildTimeoutRecallResult(params: {
   const searchDebug =
     params.searchDebug ??
     subagentPartialData.searchDebug ??
-    (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined);
+    (params.transcriptScope ? await readActiveMemorySearchDebug(params.transcriptScope) : undefined);
   if (summary.length === 0) {
     return {
       status: "timeout",
@@ -2296,7 +2293,7 @@ async function runRecallSubagent(params: {
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
   abortSignal?: AbortSignal;
-  onSessionFile?: (sessionFile: string) => void;
+  onTranscriptScope?: (transcriptScope: TranscriptScope) => void;
 }): Promise<RecallSubagentResult> {
   const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
   const agentDir = resolveAgentDir(params.api.config, params.agentId);
@@ -2326,11 +2323,11 @@ async function runRecallSubagent(params: {
   const subagentSessionKey = parentSessionKey
     ? `${parentSessionKey}:${subagentSuffix}`
     : `agent:${params.agentId}:${subagentSuffix}`;
-  const sessionFile = createSqliteSessionTranscriptLocator({
+  const transcriptScope = {
     agentId: params.agentId,
     sessionId: subagentSessionId,
-  });
-  params.onSessionFile?.(sessionFile);
+  };
+  params.onTranscriptScope?.(transcriptScope);
   const prompt = buildRecallPrompt({
     config: params.config,
     query: params.query,
@@ -2354,7 +2351,6 @@ async function runRecallSubagent(params: {
       agentId: params.agentId,
       messageChannel,
       messageProvider,
-      sessionFile,
       workspaceDir,
       agentDir,
       config: embeddedConfig,
@@ -2394,17 +2390,19 @@ async function runRecallSubagent(params: {
       .join("\n")
       .trim();
     const searchDebug =
-      (await readActiveMemorySearchDebug(sessionFile)) ??
+      (await readActiveMemorySearchDebug(transcriptScope)) ??
       readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
-      transcriptPath: params.config.persistTranscripts ? sessionFile : undefined,
+      transcriptScope: params.config.persistTranscripts ? transcriptScope : undefined,
       searchDebug,
     };
   } catch (error) {
     if (params.abortSignal?.aborted) {
-      const partialReply = await readPartialAssistantText(sessionFile);
-      const searchDebug = await readActiveMemorySearchDebug(sessionFile);
+      const partialReply = await readPartialAssistantText(transcriptScope);
+      const searchDebug = partialReply
+        ? await readActiveMemorySearchDebug(transcriptScope)
+        : undefined;
       attachPartialTimeoutData(error, partialReply, searchDebug);
     }
     if (
@@ -2522,7 +2520,7 @@ async function maybeResolveActiveRecall(params: {
 
   const controller = new AbortController();
   const TIMEOUT_SENTINEL = Symbol("timeout");
-  let sessionFile: string | undefined;
+  let transcriptScope: TranscriptScope | undefined;
   const watchdogTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
   const timeoutId = setTimeout(() => {
     controller.abort(new Error(`active-memory timeout after ${watchdogTimeoutMs}ms`));
@@ -2545,12 +2543,12 @@ async function maybeResolveActiveRecall(params: {
       ...params,
       modelRef: resolvedModelRef,
       abortSignal: controller.signal,
-      onSessionFile: (value) => {
-        sessionFile = value;
+      onTranscriptScope: (value) => {
+        transcriptScope = value;
       },
     });
     terminalMemorySearchWatch = watchTerminalMemorySearchResult({
-      getSessionFile: () => sessionFile,
+      getTranscriptScope: () => transcriptScope,
       abortSignal: controller.signal,
     });
     // Silently catch late rejections after timeout so they don't become
@@ -2568,7 +2566,7 @@ async function maybeResolveActiveRecall(params: {
       const result = await buildTimeoutRecallResult({
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
-        sessionFile,
+        transcriptScope,
         subagentPromise,
       });
       if (params.config.logging) {
@@ -2615,13 +2613,16 @@ async function maybeResolveActiveRecall(params: {
       return result;
     }
 
-    const { rawReply, resultStatus, transcriptPath, searchDebug } = raceResult;
+    const { rawReply, resultStatus, transcriptScope: persistedTranscriptScope, searchDebug } =
+      raceResult;
     const summary = truncateSummary(
       normalizeActiveSummary(rawReply) ?? "",
       params.config.maxSummaryChars,
     );
-    if (params.config.logging && transcriptPath) {
-      params.api.logger.info?.(`${logPrefix} transcript=${transcriptPath}`);
+    if (params.config.logging && persistedTranscriptScope) {
+      params.api.logger.info?.(
+        `${logPrefix} transcript=${persistedTranscriptScope.agentId}/${persistedTranscriptScope.sessionId}`,
+      );
     }
     const result: ActiveRecallResult =
       summary.length > 0
@@ -2676,7 +2677,7 @@ async function maybeResolveActiveRecall(params: {
       const result = await buildTimeoutRecallResult({
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
-        sessionFile,
+        transcriptScope,
         rawReply: partialTimeoutData.rawReply,
         searchDebug: partialTimeoutData.searchDebug,
       });
