@@ -1,6 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { buildChannelSummary } from "./channel-summary.js";
+
+const readOnlyMock = vi.hoisted(() => ({
+  listReadOnlyChannelPluginsForConfig: vi.fn().mockReturnValue([]),
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: readOnlyMock.listReadOnlyChannelPluginsForConfig,
+}));
+
+describe("listChannelSummaryPlugins includeSetupFallbackPlugins", () => {
+  it("passes includeSetupFallbackPlugins: true so external channels appear in status output", async () => {
+    await buildChannelSummary({} as never, { sourceConfig: {} as never });
+
+    expect(readOnlyMock.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ includeSetupFallbackPlugins: true }),
+    );
+  });
+});
 
 const isFixtureAccountConfigured = (account: unknown) =>
   Boolean((account as { configured?: boolean }).configured);
