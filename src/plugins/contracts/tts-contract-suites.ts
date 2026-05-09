@@ -494,7 +494,6 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
     },
     providerConfigs: {},
     personas: {},
-    prefsPath: typeof rawConfig.prefsPath === "string" ? rawConfig.prefsPath : undefined,
     maxTextLength: typeof rawConfig.maxTextLength === "number" ? rawConfig.maxTextLength : 4096,
     timeoutMs: typeof rawConfig.timeoutMs === "number" ? rawConfig.timeoutMs : 30_000,
     rawConfig,
@@ -1252,13 +1251,7 @@ export function describeTtsAutoApplyContract() {
     const withMockedAutoTtsFetch = async (
       run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
     ) => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      try {
-        await withMockedSpeechFetch(run, 1);
-      } finally {
-        process.env.OPENCLAW_TTS_PREFS = prevPrefs;
-      }
+      await withMockedSpeechFetch(run, 1);
     };
 
     const taggedCfg: OpenClawConfig = {

@@ -167,7 +167,7 @@ export function shouldAttemptTtsPayload(params: {
   }
 
   const raw = resolveEffectiveTtsConfig(params.cfg, params);
-  const prefsAuto = readTtsPrefsAutoMode(resolveTtsPrefsRef(raw?.prefsPath));
+  const prefsAuto = readTtsPrefsAutoMode(resolveTtsPrefsRef());
   if (prefsAuto) {
     return prefsAuto !== "off";
   }

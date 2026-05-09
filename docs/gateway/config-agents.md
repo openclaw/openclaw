@@ -1329,7 +1329,6 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
       modelOverrides: { enabled: true },
       maxTextLength: 4000,
       timeoutMs: 30000,
-      prefsPath: "/path/to/legacy-tts-prefs.json",
       providers: {
         elevenlabs: {
           apiKey: "elevenlabs_api_key",

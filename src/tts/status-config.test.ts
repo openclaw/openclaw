@@ -53,30 +53,19 @@ function restoreEnv(key: string, value: string | undefined): void {
 
 describe("resolveStatusTtsSnapshot", () => {
   it("uses prefs overrides without loading speech providers", async () => {
-    await withStatusTempHome(async (home) => {
-      const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
-      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
-      fs.writeFileSync(
-        prefsPath,
-        JSON.stringify({
-          tts: {
-            auto: "always",
-            provider: "edge",
-            maxLength: 2048,
-            summarize: false,
-          },
-        }),
-      );
+    await withStatusTempHome(async () => {
+      writeTtsUserPrefsForMigration({
+        tts: {
+          auto: "always",
+          provider: "edge",
+          maxLength: 2048,
+          summarize: false,
+        },
+      });
 
       expect(
         resolveStatusTtsSnapshot({
-          cfg: {
-            messages: {
-              tts: {
-                prefsPath,
-              },
-            },
-          } as OpenClawConfig,
+          cfg: {} as OpenClawConfig,
         }),
       ).toEqual({
         autoMode: "always",
@@ -293,18 +282,13 @@ describe("resolveStatusTtsSnapshot", () => {
   });
 
   it("uses provider metadata for local provider prefs overrides", async () => {
-    await withStatusTempHome(async (home) => {
-      const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
-      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
-      fs.writeFileSync(
-        prefsPath,
-        JSON.stringify({
-          tts: {
-            auto: "always",
-            provider: "edge",
-          },
-        }),
-      );
+    await withStatusTempHome(async () => {
+      writeTtsUserPrefsForMigration({
+        tts: {
+          auto: "always",
+          provider: "edge",
+        },
+      });
 
       expect(
         resolveStatusTtsSnapshot({
@@ -312,7 +296,6 @@ describe("resolveStatusTtsSnapshot", () => {
             messages: {
               tts: {
                 provider: "openai",
-                prefsPath,
                 providers: {
                   microsoft: {
                     voice: "en-US-AvaMultilingualNeural",

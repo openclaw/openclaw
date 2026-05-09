@@ -1,10 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { TtsAutoMode, TtsProvider } from "../config/types.tts.js";
-import { privateFileStoreSync } from "../infra/private-file-store.js";
 import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import { resolveConfigDir } from "../utils.js";
 
 const TTS_PREFS_PLUGIN_ID = "speech-core";
 const TTS_PREFS_NAMESPACE = "tts-prefs";
@@ -48,42 +45,17 @@ export function resolveLegacyDefaultTtsPrefsPath(env: NodeJS.ProcessEnv = proces
 }
 
 export function resolveTtsPrefsRef(
-  prefsPath: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
+  _prefsPath?: string,
+  _env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const configuredPath = normalizeOptionalString(prefsPath);
-  if (configuredPath) {
-    return resolveUserPath(configuredPath, env);
-  }
-  const envPath = normalizeOptionalString(env.OPENCLAW_TTS_PREFS);
-  if (envPath) {
-    return resolveUserPath(envPath, env);
-  }
   return SQLITE_TTS_PREFS_REF;
 }
 
 export function readTtsUserPrefs(
-  prefsRef: string,
+  _prefsRef: string,
   env: NodeJS.ProcessEnv = process.env,
 ): TtsUserPrefs {
-  if (isSqliteTtsPrefsRef(prefsRef)) {
-    return coercePrefs(openTtsPrefsStore(env).lookup(TTS_PREFS_KEY));
-  }
-  try {
-    if (!existsSync(prefsRef)) {
-      return {};
-    }
-    return coercePrefs(JSON.parse(readFileSync(prefsRef, "utf8")) as unknown);
-  } catch {
-    return {};
-  }
-}
-
-function writePrefsFile(filePath: string, prefs: TtsUserPrefs): void {
-  privateFileStoreSync(path.dirname(filePath)).writeText(
-    path.basename(filePath),
-    JSON.stringify(prefs, null, 2),
-  );
+  return coercePrefs(openTtsPrefsStore(env).lookup(TTS_PREFS_KEY));
 }
 
 export function writeTtsUserPrefsForMigration(
@@ -94,15 +66,11 @@ export function writeTtsUserPrefsForMigration(
 }
 
 export function updateTtsUserPrefs(
-  prefsRef: string,
+  _prefsRef: string,
   update: (prefs: TtsUserPrefs) => void,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  const prefs = readTtsUserPrefs(prefsRef, env);
+  const prefs = readTtsUserPrefs(SQLITE_TTS_PREFS_REF, env);
   update(prefs);
-  if (isSqliteTtsPrefsRef(prefsRef)) {
-    openTtsPrefsStore(env).register(TTS_PREFS_KEY, prefs);
-    return;
-  }
-  writePrefsFile(prefsRef, prefs);
+  openTtsPrefsStore(env).register(TTS_PREFS_KEY, prefs);
 }

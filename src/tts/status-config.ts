@@ -195,7 +195,7 @@ export function resolveStatusTtsSnapshot(params: {
     accountId: params.accountId,
   };
   const raw: TtsConfig = resolveEffectiveTtsConfig(params.cfg, context);
-  const prefsRef = resolveTtsPrefsRef(raw.prefsPath);
+  const prefsRef = resolveTtsPrefsRef();
   const prefs = readTtsUserPrefs(prefsRef);
   const autoMode =
     normalizeTtsAutoMode(params.sessionAuto) ??

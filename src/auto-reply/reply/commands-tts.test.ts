@@ -216,12 +216,7 @@ describe("handleTtsCommands status fallback reporting", () => {
   });
 
   it("treats bare /tts as status", async () => {
-    const result = await handleTtsCommands(
-      buildTtsParams("/tts", {
-        messages: { tts: { prefsPath: "/tmp/tts.json" } },
-      } as OpenClawConfig),
-      true,
-    );
+    const result = await handleTtsCommands(buildTtsParams("/tts"), true);
     const reply = expectReply(result);
     expect(reply.text).toContain("TTS status");
   });

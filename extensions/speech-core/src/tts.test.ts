@@ -146,7 +146,6 @@ function createTtsConfig(prefsName: string): OpenClawConfig {
       tts: {
         enabled: true,
         provider: "mock",
-        prefsPath: `/tmp/${prefsName}.json`,
       },
     },
   };
@@ -511,7 +510,6 @@ describe("speech-core native voice-note routing", () => {
         tts: {
           enabled: true,
           provider: "mock",
-          prefsPath: "/tmp/openclaw-speech-core-persona-merge.json",
           providers: {
             mock: {
               model: "base-model",

@@ -871,9 +871,6 @@
               "additionalProperties": true
             }
           },
-          "prefsPath": {
-            "type": "string"
-          },
           "maxTextLength": {
             "type": "integer",
             "minimum": 1
