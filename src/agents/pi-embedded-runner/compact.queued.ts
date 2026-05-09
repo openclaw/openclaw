@@ -200,8 +200,10 @@ export async function compactEmbeddedPiSession(
               });
               if (rotation.rotated) {
                 postCompactionSessionId = rotation.sessionId ?? postCompactionSessionId;
-                postCompactionTranscriptLocator =
-                  rotation.transcriptLocator ?? postCompactionTranscriptLocator;
+                postCompactionTranscriptLocator = createSqliteSessionTranscriptLocator({
+                  agentId: agentIds.sessionAgentId,
+                  sessionId: postCompactionSessionId,
+                });
                 postCompactionLeafId = rotation.leafId;
                 log.info(
                   `[compaction] rotated active transcript after context-engine compaction ` +
