@@ -96,6 +96,17 @@ type SlackBlockActionBody = {
 
 type SlackBlockActionRespond = NonNullable<SlackActionMiddlewareArgs["respond"]>;
 
+type SlackInteractionWakeRuntime = {
+  system?: {
+    requestHeartbeat?: (opts: {
+      source: "other";
+      intent: "immediate";
+      reason: "slack-interaction";
+      sessionKey: string;
+    }) => void;
+  };
+};
+
 type ParsedSlackBlockAction = {
   typedBody: SlackBlockActionBody;
   typedAction: Record<string, unknown>;
@@ -757,7 +768,7 @@ function enqueueSlackBlockActionEvent(params: {
   parsed: ParsedSlackBlockAction;
   auth: { channelType?: "im" | "mpim" | "channel" | "group" };
   formatSystemEvent: (payload: Record<string, unknown>) => string;
-}): void {
+}): string {
   const eventPayload: InteractionSummary = {
     interactionType: "block_action",
     actionId: params.parsed.actionId,
@@ -789,6 +800,7 @@ function enqueueSlackBlockActionEvent(params: {
     sessionKey,
     contextKey: contextParts.join(":"),
   });
+  return sessionKey;
 }
 
 function buildSlackConfirmationBlocks(params: {
@@ -941,11 +953,17 @@ async function handleSlackBlockAction(params: {
       return;
     }
   }
-  enqueueSlackBlockActionEvent({
+  const sessionKey = enqueueSlackBlockActionEvent({
     ctx: params.ctx,
     parsed,
     auth,
     formatSystemEvent: params.formatSystemEvent,
+  });
+  (params.ctx.runtime as SlackInteractionWakeRuntime).system?.requestHeartbeat?.({
+    source: "other",
+    intent: "immediate",
+    reason: "slack-interaction",
+    sessionKey,
   });
   await updateSlackLegacyBlockAction({
     ctx: params.ctx,

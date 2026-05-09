@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 type DispatchPluginInteractiveHandlerResult = {
   matched: boolean;
   handled: boolean;
@@ -250,7 +251,7 @@ function createContext(overrides?: {
         },
       },
     },
-    runtime: { log: runtimeLog },
+    runtime: { log: runtimeLog, system: { requestHeartbeat: requestHeartbeatMock } },
     dmEnabled: overrides?.dmEnabled ?? true,
     dmPolicy: overrides?.dmPolicy ?? ("open" as const),
     allowFrom: overrides?.allowFrom ?? ["*"],
@@ -308,6 +309,7 @@ describe("registerSlackInteractionEvents", () => {
 
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
+    requestHeartbeatMock.mockClear();
     dispatchPluginInteractiveHandlerMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockResolvedValue({ status: "expired" });
@@ -681,6 +683,12 @@ describe("registerSlackInteractionEvents", () => {
       expect.stringContaining('"actionId":"openclaw:reply_button"'),
       expect.any(Object),
     );
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      source: "other",
+      intent: "immediate",
+      reason: "slack-interaction",
+      sessionKey: "agent:ops:slack:channel:C1",
+    });
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
   });
 
