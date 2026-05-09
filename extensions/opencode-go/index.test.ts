@@ -52,8 +52,6 @@ describe("opencode-go provider plugin", () => {
       "glm-5.1",
       "kimi-k2.5",
       "kimi-k2.6",
-      "mimo-v2-omni",
-      "mimo-v2-pro",
       "mimo-v2.5",
       "mimo-v2.5-pro",
       "minimax-m2.5",
@@ -98,7 +96,7 @@ describe("opencode-go provider plugin", () => {
       contextWindow: 204_800,
       maxTokens: 131_072,
     });
-    expect(models.get("mimo-v2-pro")).toMatchObject({
+    expect(models.get("mimo-v2.5-pro")).toMatchObject({
       api: "openai-completions",
       baseUrl: "https://opencode.ai/zen/go/v1",
       input: ["text"],
@@ -106,10 +104,10 @@ describe("opencode-go provider plugin", () => {
       contextWindow: 1_048_576,
       maxTokens: 128_000,
     });
-    expect(models.get("mimo-v2-omni")).toMatchObject({
+    expect(models.get("mimo-v2.5")).toMatchObject({
       input: ["text", "image"],
       reasoning: true,
-      contextWindow: 262_144,
+      contextWindow: 1_000_000,
       maxTokens: 128_000,
     });
     expect(
