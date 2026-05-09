@@ -135,6 +135,7 @@ export function createFinishedBarrier() {
 }
 
 export function createStartedCronServiceWithFinishedBarrier(params: {
+  storeKey?: string;
   storePath?: string;
   logger: ReturnType<typeof createNoopLogger>;
 }): {
@@ -147,7 +148,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   const requestHeartbeat = vi.fn();
   const finished = createFinishedBarrier();
   const cron = new CronService({
-    storeKey: params.storePath ?? "default",
+    storeKey: params.storeKey ?? params.storePath ?? "default",
     cronEnabled: true,
     log: params.logger,
     enqueueSystemEvent,
