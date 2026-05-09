@@ -32,6 +32,7 @@ import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import { emitDiagnosticEvent, type DiagnosticMessageDeliveryKind } from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
+import { checkBroker, recordAction } from "./attention-broker-client.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import {
   ackDelivery,
@@ -82,6 +83,92 @@ let channelBootstrapRuntimePromise:
 async function loadChannelBootstrapRuntime() {
   channelBootstrapRuntimePromise ??= import("./channel-bootstrap.runtime.js");
   return await channelBootstrapRuntimePromise;
+}
+
+/** Helper: resolve channel via attention broker if available. */
+async function maybeResolveChannelViaAttentionBroker(params: {
+  channel: OutboundChannel;
+  to: ChannelOutboundTargetRef;
+  agentId?: string;
+  payloads: ReplyPayload[];
+}): Promise<{
+  resolvedTo: ChannelOutboundTargetRef;
+  brokerChannelId: string | null;
+}> {
+  // Only attempt broker resolution for Slack channels with valid agent context
+  if (params.channel !== "slack" || !params.agentId) {
+    return { resolvedTo: params.to, brokerChannelId: null };
+  }
+
+  try {
+    // Extract message summary from first payload (first 100 chars)
+    const messageSummary = params.payloads
+      .slice(0, 1)
+      .map((p) => (typeof p.text === "string" ? p.text : ""))
+      .join(" ")
+      .substring(0, 100);
+
+    // Query broker with sensible defaults for metadata
+    const brokerResult = await checkBroker({
+      agent_id: params.agentId,
+      business: "unknown", // TODO: infer from session context
+      category: "routine", // TODO: infer from message type
+      surface_tier: "routine", // TODO: infer from priority
+      message_summary: messageSummary,
+    });
+
+    // If broker resolved a channel, return it; otherwise fall back to original `to`
+    if (brokerResult.resolved_channel) {
+      log.debug(`Attention broker resolved to channel: ${brokerResult.resolved_channel}`);
+      return {
+        resolvedTo: { channel: "slack", to: brokerResult.resolved_channel },
+        brokerChannelId: brokerResult.resolved_channel,
+      };
+    }
+
+    return { resolvedTo: params.to, brokerChannelId: null };
+  } catch (err) {
+    log.warn(`Attention broker resolution failed: ${err}`);
+    // Non-blocking: fall back to original `to` recipient
+    return { resolvedTo: params.to, brokerChannelId: null };
+  }
+}
+
+/** Helper: record delivery action with attention broker for learning. */
+async function maybeRecordBrokerAction(params: {
+  channel: OutboundChannel;
+  agentId?: string;
+  brokerChannelId: string | null;
+  deliverySuccess: boolean;
+  payloads: ReplyPayload[];
+}): Promise<void> {
+  // Only record actions for Slack channels with valid agent context
+  if (params.channel !== "slack" || !params.agentId) {
+    return;
+  }
+
+  try {
+    // Extract message summary (same logic as resolution)
+    const messageSummary = params.payloads
+      .slice(0, 1)
+      .map((p) => (typeof p.text === "string" ? p.text : ""))
+      .join(" ")
+      .substring(0, 100);
+
+    // Record the action for broker learning
+    await recordAction({
+      agent_id: params.agentId,
+      business: "unknown", // TODO: infer from session context
+      category: "routine", // TODO: infer from message type
+      surface_tier: "routine", // TODO: infer from priority
+      resolved_channel: params.brokerChannelId,
+      delivery_success: params.deliverySuccess,
+      message_summary: messageSummary,
+    });
+  } catch (err) {
+    log.warn(`Failed to record action with attention broker: ${err}`);
+    // Non-blocking: continue even if recording fails
+  }
 }
 
 type ChannelHandler = {
@@ -941,11 +1028,20 @@ async function deliverOutboundPayloadsCore(
           requesterSenderE164: params.session?.requesterSenderE164,
         })
       : (params.mediaAccess ?? {});
+
+  // Resolve channel via attention broker for proactive alerts (non-blocking fallback to original `to`)
+  const { resolvedTo, brokerChannelId } = await maybeResolveChannelViaAttentionBroker({
+    channel,
+    to,
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
+    payloads,
+  });
+
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
     channel,
-    to,
+    to: resolvedTo,
     deps,
     accountId,
     replyToId: params.replyToId,
@@ -1302,6 +1398,15 @@ async function deliverOutboundPayloadsCore(
       });
     }
   }
+
+  // Record action with attention broker for learning (non-blocking)
+  await maybeRecordBrokerAction({
+    channel,
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
+    brokerChannelId,
+    deliverySuccess: results.length > 0 && results.some((r) => r.success),
+    payloads,
+  }).catch(() => {});
 
   return results;
 }
