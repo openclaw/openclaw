@@ -123,6 +123,10 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/zip",
+  "application/gzip",
+  "application/x-tar",
+  "application/x-7z-compressed",
   "text/csv",
   "text/markdown",
 ]);
@@ -317,7 +321,7 @@ function assertHostReadMediaAllowed(params: {
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow buffer-verified images, audio, video, PDF, and Office documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, and common archives (zip/gzip/tar/7z) (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
