@@ -2882,11 +2882,8 @@ describe("active-memory plugin", () => {
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    // Simulate a subagent that never cooperatively checks the abort signal --
-    // it just blocks for a long time.
-    runEmbeddedPiAgent.mockImplementationOnce(
-      () => new Promise((resolve) => setTimeout(() => resolve({ payloads: [] }), 30_000)),
-    );
+    // Simulate a subagent that never cooperatively checks the abort signal.
+    runEmbeddedPiAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
 
     const startedAt = Date.now();
     const result = await hooks.before_prompt_build(
