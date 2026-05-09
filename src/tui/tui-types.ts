@@ -9,6 +9,8 @@ export type TuiOptions = {
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+  /** Suppress animated spinner, elapsed counter, and shimmer for recording-friendly output. */
+  quietStatus?: boolean;
 };
 
 export type TuiExitReason = "exit" | "return-to-crestodian";
