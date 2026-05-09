@@ -1254,46 +1254,39 @@ describe("google-meet plugin", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      fetchGoogleMeetAttendance({
-        accessToken: "token",
-        conferenceRecord: "rec-1",
-      }),
-    ).resolves.toMatchObject({
-      attendance: [
-        {
-          displayName: "Alice",
-          participants: [
-            "conferenceRecords/rec-1/participants/p1",
-            "conferenceRecords/rec-1/participants/p2",
-          ],
-          firstJoinTime: "2026-04-25T10:10:00.000Z",
-          lastLeaveTime: "2026-04-25T10:50:00.000Z",
-          durationMs: 1_800_000,
-          late: true,
-          earlyLeave: true,
-          sessions: [
-            { name: expect.stringContaining("/p1/") },
-            { name: expect.stringContaining("/p2/") },
-          ],
-        },
-      ],
+    const result = await fetchGoogleMeetAttendance({
+      accessToken: "token",
+      conferenceRecord: "rec-1",
     });
+    expect(result.attendance).toHaveLength(1);
+    const row = result.attendance[0];
+    expect(row?.displayName).toBe("Alice");
+    expect(row?.participants).toEqual([
+      "conferenceRecords/rec-1/participants/p1",
+      "conferenceRecords/rec-1/participants/p2",
+    ]);
+    expect(row?.firstJoinTime).toBe("2026-04-25T10:10:00.000Z");
+    expect(row?.lastLeaveTime).toBe("2026-04-25T10:50:00.000Z");
+    expect(row?.durationMs).toBe(1_800_000);
+    expect(row?.late).toBe(true);
+    expect(row?.earlyLeave).toBe(true);
+    expect(row?.sessions.map((session) => session.name)).toEqual([
+      "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
+      "conferenceRecords/rec-1/participants/p2/participantSessions/s1",
+    ]);
   });
 
   it("surfaces Developer Preview acknowledgment blockers in preflight reports", () => {
-    expect(
-      buildGoogleMeetPreflightReport({
-        input: "abc-defg-hij",
-        space: { name: "spaces/abc-defg-hij" },
-        previewAcknowledged: false,
-        tokenSource: "cached-access-token",
-      }),
-    ).toMatchObject({
-      resolvedSpaceName: "spaces/abc-defg-hij",
+    const report = buildGoogleMeetPreflightReport({
+      input: "abc-defg-hij",
+      space: { name: "spaces/abc-defg-hij" },
       previewAcknowledged: false,
-      blockers: [expect.stringContaining("Developer Preview Program")],
+      tokenSource: "cached-access-token",
     });
+    expect(report.resolvedSpaceName).toBe("spaces/abc-defg-hij");
+    expect(report.previewAcknowledged).toBe(false);
+    expect(report.blockers).toHaveLength(1);
+    expect(report.blockers[0]).toContain("Developer Preview Program");
   });
 
   it("builds Twilio dial plans from a PIN", () => {
@@ -1315,28 +1308,27 @@ describe("google-meet plugin", () => {
       pin: "123456",
     });
 
-    expect(result.details.session).toMatchObject({
-      transport: "twilio",
-      mode: "agent",
-      twilio: {
-        dialInNumber: "+15551234567",
-        pinProvided: true,
-        dtmfSequence: "wwwwwwwwwwwwwwwwwwwwwwww123456#",
-        voiceCallId: "call-1",
-        dtmfSent: true,
-        introSent: true,
-      },
+    const session = requireRecord(result.details.session, "Twilio session");
+    expect(session.transport).toBe("twilio");
+    expect(session.mode).toBe("agent");
+    expect(session.twilio).toEqual({
+      dialInNumber: "+15551234567",
+      pinProvided: true,
+      dtmfSequence: "wwwwwwwwwwwwwwwwwwwwwwww123456#",
+      voiceCallId: "call-1",
+      dtmfSent: true,
+      introSent: true,
     });
-    expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({ defaultTransport: "twilio" }),
-        dialInNumber: "+15551234567",
-        dtmfSequence: "wwwwwwwwwwwwwwwwwwwwwwww123456#",
-        logger: expect.objectContaining({ info: expect.any(Function) }),
-        message: "Say exactly: I'm here and listening.",
-        sessionKey: expect.stringMatching(/^voice:google-meet:meet_/),
-      }),
+    const [voiceCallParams] = voiceCallMocks.joinMeetViaVoiceCallGateway.mock
+      .calls[0] as unknown as [Record<string, unknown>];
+    expect(requireRecord(voiceCallParams.config, "voice-call config").defaultTransport).toBe(
+      "twilio",
     );
+    expect(voiceCallParams.dialInNumber).toBe("+15551234567");
+    expect(voiceCallParams.dtmfSequence).toBe("wwwwwwwwwwwwwwwwwwwwwwww123456#");
+    expect(typeof requireRecord(voiceCallParams.logger, "voice-call logger").info).toBe("function");
+    expect(voiceCallParams.message).toBe("Say exactly: I'm here and listening.");
+    expect(String(voiceCallParams.sessionKey)).toMatch(/^voice:google-meet:meet_/);
   });
 
   it("passes the caller session key through tool joins for agent context forking", async () => {
@@ -1359,10 +1351,9 @@ describe("google-meet plugin", () => {
       requesterSessionKey: "agent:main:wrong",
     });
 
-    expect(gatewayParams[0]).toMatchObject({
-      url: "https://meet.google.com/abc-defg-hij",
-      requesterSessionKey: "agent:main:discord:channel:general",
-    });
+    const gatewayJoinParams = requireRecord(gatewayParams[0], "gateway join params");
+    expect(gatewayJoinParams.url).toBe("https://meet.google.com/abc-defg-hij");
+    expect(gatewayJoinParams.requesterSessionKey).toBe("agent:main:discord:channel:general");
   });
 
   it("explains that Twilio joins need dial-in details", async () => {
@@ -1394,8 +1385,15 @@ describe("google-meet plugin", () => {
 
     await tool.execute("id", { action: "leave", sessionId: joined.details.session.id });
 
+    const [endParams] = voiceCallMocks.endMeetVoiceCallGatewayCall.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+    ];
+    expect(requireRecord(endParams.config, "voice-call end config").defaultTransport).toBe(
+      "twilio",
+    );
+    expect(endParams.callId).toBe("call-1");
     expect(voiceCallMocks.endMeetVoiceCallGatewayCall).toHaveBeenCalledWith({
-      config: expect.objectContaining({ defaultTransport: "twilio" }),
+      config: endParams.config,
       callId: "call-1",
     });
   });
@@ -1446,9 +1444,17 @@ describe("google-meet plugin", () => {
       message: "Say exactly: hello after joining.",
     });
 
-    expect(spoken.details).toMatchObject({ spoken: true });
+    expect(requireRecord(spoken.details, "spoken details").spoken).toBe(true);
+    const [speakParams] = voiceCallMocks.speakMeetViaVoiceCallGateway.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+    ];
+    expect(requireRecord(speakParams.config, "voice-call speak config").defaultTransport).toBe(
+      "twilio",
+    );
+    expect(speakParams.callId).toBe("call-1");
+    expect(speakParams.message).toBe("Say exactly: hello after joining.");
     expect(voiceCallMocks.speakMeetViaVoiceCallGateway).toHaveBeenCalledWith({
-      config: expect.objectContaining({ defaultTransport: "twilio" }),
+      config: speakParams.config,
       callId: "call-1",
       message: "Say exactly: hello after joining.",
     });
