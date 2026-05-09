@@ -1,10 +1,3 @@
-/**
- * Wave 12 — real-world fixtures.
- *
- * Eight workspace files (one per upstream-recognized workspace
- * filename) — each parsed, resolved, and round-tripped to verify the
- * substrate handles realistic content.
- */
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,8 +13,8 @@ function load(name: string): string {
   return readFileSync(join(FIXTURES, name), "utf-8");
 }
 
-describe("wave-12 real-world-fixtures", () => {
-  it("F-01 SOUL.md parses + round-trips", () => {
+describe("real-world-fixtures", () => {
+  it("SOUL.md parses + round-trips", () => {
     const raw = load("SOUL.md");
     const { ast, diagnostics } = parseMd(raw);
     expect(diagnostics).toEqual([]);
@@ -30,7 +23,7 @@ describe("wave-12 real-world-fixtures", () => {
     expect(ast.blocks.length).toBeGreaterThan(0);
   });
 
-  it("F-02 AGENTS.md parses + resolves Tools section", () => {
+  it("AGENTS.md parses + resolves Tools section", () => {
     const raw = load("AGENTS.md");
     const { ast } = parseMd(raw);
     expect(emitMd(ast)).toBe(raw);
@@ -41,7 +34,7 @@ describe("wave-12 real-world-fixtures", () => {
     }
   });
 
-  it("F-03 MEMORY.md frontmatter scope resolves via [frontmatter]", () => {
+  it("MEMORY.md frontmatter scope resolves via [frontmatter]", () => {
     const raw = load("MEMORY.md");
     const { ast } = parseMd(raw);
     expect(emitMd(ast)).toBe(raw);
@@ -56,7 +49,7 @@ describe("wave-12 real-world-fixtures", () => {
     }
   });
 
-  it("F-04 TOOLS.md tool-guidance section resolves by slug", () => {
+  it("TOOLS.md tool-guidance section resolves by slug", () => {
     const raw = load("TOOLS.md");
     const { ast } = parseMd(raw);
     expect(emitMd(ast)).toBe(raw);
@@ -67,7 +60,7 @@ describe("wave-12 real-world-fixtures", () => {
     expect(guidance?.kind).toBe("block");
   });
 
-  it("F-05 IDENTITY.md sections resolvable by slug", () => {
+  it("IDENTITY.md sections resolvable by slug", () => {
     const raw = load("IDENTITY.md");
     const { ast } = parseMd(raw);
     expect(emitMd(ast)).toBe(raw);
@@ -78,7 +71,7 @@ describe("wave-12 real-world-fixtures", () => {
     expect(trust?.kind).toBe("block");
   });
 
-  it("F-06 USER.md Preferences items extracted", () => {
+  it("USER.md Preferences items extracted", () => {
     const raw = load("USER.md");
     const { ast } = parseMd(raw);
     expect(emitMd(ast)).toBe(raw);
@@ -92,7 +85,7 @@ describe("wave-12 real-world-fixtures", () => {
     }
   });
 
-  it("F-07 HEARTBEAT.md schedules — H2 sections as triggers", () => {
+  it("HEARTBEAT.md schedules — H2 sections as triggers", () => {
     const raw = load("HEARTBEAT.md");
     const { ast } = parseMd(raw);
     expect(emitMd(ast)).toBe(raw);
@@ -102,7 +95,7 @@ describe("wave-12 real-world-fixtures", () => {
     expect(slugs).toContain("every-4h-wake");
   });
 
-  it("F-08 SKILL.md frontmatter has name + description + tier", () => {
+  it("SKILL.md frontmatter has name + description + tier", () => {
     const raw = load("SKILL.md");
     const { ast } = parseMd(raw);
     expect(emitMd(ast)).toBe(raw);
@@ -112,13 +105,13 @@ describe("wave-12 real-world-fixtures", () => {
     expect(fmKeys).toContain("tier");
   });
 
-  it("F-09 BOOTSTRAP.md round-trips", () => {
+  it("BOOTSTRAP.md round-trips", () => {
     const raw = load("BOOTSTRAP.md");
     const { ast } = parseMd(raw);
     expect(emitMd(ast)).toBe(raw);
   });
 
-  it("F-10 all 8 fixtures combined round-trip-clean (sanity)", () => {
+  it("all 8 fixtures combined round-trip-clean (sanity)", () => {
     const names = [
       "SOUL.md",
       "AGENTS.md",

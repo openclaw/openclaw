@@ -1,10 +1,3 @@
-/**
- * Universal verbs — `setOcPath` + `resolveOcPath` test surface.
- *
- * Every test exercises the universal entry point. The substrate
- * dispatches via `ast.kind` and coerces value strings based on AST
- * shape at the path location.
- */
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../emit.js";
 import { emitJsonc } from "../jsonc/emit.js";
@@ -15,7 +8,6 @@ import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { detectInsertion, resolveOcPath, setOcPath } from "../universal.js";
 
-// ---------- detectInsertion ------------------------------------------------
 
 describe("detectInsertion", () => {
   it("returns null for plain paths", () => {
@@ -46,7 +38,6 @@ describe("detectInsertion", () => {
   });
 });
 
-// ---------- resolveOcPath — universal across kinds -------------------------
 
 describe("resolveOcPath — md AST", () => {
   const md = parseMd("---\nname: github\n---\n\n## Boundaries\n\n- enabled: true\n").ast;
@@ -173,7 +164,6 @@ describe("resolveOcPath — insertion-point detection", () => {
   });
 });
 
-// ---------- setOcPath — leaf assignment ------------------------------------
 
 describe("setOcPath — md leaf", () => {
   it("replaces frontmatter value", () => {
@@ -286,7 +276,6 @@ describe("setOcPath — jsonl leaf", () => {
   });
 });
 
-// ---------- setOcPath — insertion ------------------------------------------
 
 describe("setOcPath — md insertion", () => {
   it("appends item to section with `+`", () => {
@@ -432,7 +421,6 @@ describe("setOcPath — jsonl insertion (session append)", () => {
   });
 });
 
-// ---------- Cross-cutting properties ---------------------------------------
 
 describe("setOcPath — cross-cutting properties", () => {
   it("is non-mutating across all kinds", () => {

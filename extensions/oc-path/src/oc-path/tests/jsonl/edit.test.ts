@@ -217,12 +217,8 @@ describe("setJsonlOcPath — positional field tokens (round-11 resolve↔edit sy
   });
 });
 
-describe("setJsonlOcPath — quoted field segments (regression: resolve↔edit symmetry)", () => {
+describe("setJsonlOcPath — quoted field segments", () => {
   it("edits a field key containing a slash via quoted segment", () => {
-    // Closes ClawSweeper P2 on PR #78678: JSONL resolve unquotes
-    // bracket-aware segments but the edit path used plain
-    // `.split('.')`. A path that resolves under `Lnnn` MUST be
-    // editable through the same address.
     const raw = `{"event":"start","detail":{"github/repo":"old"}}\n`;
     const { ast } = parseJsonl(raw);
     const r = setJsonlOcPath(ast, parseOcPath('oc://x.jsonl/L1/detail/"github/repo"'), {

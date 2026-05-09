@@ -1,9 +1,3 @@
-/**
- * Wave 1 — byte-fidelity round-trip.
- *
- * Substrate guarantee: `emitMd(parse(raw), { mode: 'roundtrip' }) === raw`
- * for every input the parser accepts. This wave hammers that.
- */
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
 import { parseMd } from "../../parse.js";
@@ -13,72 +7,72 @@ function roundTrip(raw: string): string {
   return emitMd(ast);
 }
 
-describe("wave-01 byte-fidelity", () => {
-  it("B-01 empty file", () => {
+describe("byte-fidelity", () => {
+  it("empty file", () => {
     expect(roundTrip("")).toBe("");
   });
 
-  it("B-02 whitespace-only file", () => {
+  it("whitespace-only file", () => {
     expect(roundTrip("   \n\n   \n")).toBe("   \n\n   \n");
   });
 
-  it("B-03 single newline", () => {
+  it("single newline", () => {
     expect(roundTrip("\n")).toBe("\n");
   });
 
-  it("B-04 file without trailing newline", () => {
+  it("file without trailing newline", () => {
     expect(roundTrip("## H\n- item")).toBe("## H\n- item");
   });
 
-  it("B-05 file with trailing newline", () => {
+  it("file with trailing newline", () => {
     expect(roundTrip("## H\n- item\n")).toBe("## H\n- item\n");
   });
 
-  it("B-06 file with multiple trailing newlines", () => {
+  it("file with multiple trailing newlines", () => {
     expect(roundTrip("## H\n- item\n\n\n")).toBe("## H\n- item\n\n\n");
   });
 
-  it("B-07 BOM at start", () => {
+  it("BOM at start", () => {
     const raw = "﻿## Heading\n- item\n";
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-08 CRLF line endings", () => {
+  it("CRLF line endings", () => {
     const raw = "## H\r\n\r\n- item\r\n";
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-09 mixed line endings (CRLF + LF)", () => {
+  it("mixed line endings (CRLF + LF)", () => {
     const raw = "## H\r\n- item\n- another\r\n";
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-10 tabs preserved in body", () => {
+  it("tabs preserved in body", () => {
     const raw = "## H\n\n\tindented body\n";
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-11 trailing whitespace on lines preserved", () => {
+  it("trailing whitespace on lines preserved", () => {
     const raw = "## Heading   \n- item   \n";
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-12 multiple consecutive blank lines preserved", () => {
+  it("multiple consecutive blank lines preserved", () => {
     const raw = "## H\n\n\n\n- item\n";
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-13 frontmatter only, no body", () => {
+  it("frontmatter only, no body", () => {
     const raw = "---\nname: x\n---\n";
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-14 body only, no frontmatter, no headings", () => {
+  it("body only, no frontmatter, no headings", () => {
     const raw = "Just some prose.\nNo structure.\n";
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-15 frontmatter + body + multiple sections", () => {
+  it("frontmatter + body + multiple sections", () => {
     const raw = `---
 name: github
 description: gh CLI
@@ -98,27 +92,27 @@ Preamble.
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-16 unicode content preserved", () => {
+  it("unicode content preserved", () => {
     const raw = "## Café Section\n\n- résumé item\n- 日本語\n";
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-17 emoji preserved", () => {
+  it("emoji preserved", () => {
     const raw = "## 🚀 Launch\n\n- ✅ ready\n- 🔒 secure\n";
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-18 frontmatter with special chars in values", () => {
+  it("frontmatter with special chars in values", () => {
     const raw = `---\nurl: https://example.com:443/path?q=1&a=2\n---\n`;
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-19 file with mixed bullet markers (-, *, +)", () => {
+  it("file with mixed bullet markers (-, *, +)", () => {
     const raw = "## H\n\n- dash\n* star\n+ plus\n";
     expect(roundTrip(raw)).toBe(raw);
   });
 
-  it("B-20 raw === parse(raw).raw === emitMd(parse(raw)) for 50 random shapes", () => {
+  it("raw === parse(raw).raw === emitMd(parse(raw)) for 50 random shapes", () => {
     const inputs = [
       "",
       "\n",

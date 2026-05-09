@@ -1,10 +1,3 @@
-/**
- * Wave 19 — edit → emit round-trip across all kinds.
- *
- * Substrate guarantee: parse → setXxxOcPath → emitXxx produces valid
- * bytes that re-parse to an AST whose addressed value reflects the edit.
- * Per-kind verbs throughout — caller picks based on AST type.
- */
 import { describe, expect, it } from "vitest";
 import { setMdOcPath } from "../../edit.js";
 import { emitMd } from "../../emit.js";
@@ -18,8 +11,8 @@ import { parseJsonl } from "../../jsonl/parse.js";
 import { parseOcPath } from "../../oc-path.js";
 import { parseMd } from "../../parse.js";
 
-describe("wave-19 edit-then-emit round-trip", () => {
-  it("EE-01 md frontmatter edit re-parses to the new value", () => {
+describe("edit-then-emit round-trip", () => {
+  it("md frontmatter edit re-parses to the new value", () => {
     const md = parseMd("---\nname: old\n---\n\n## Body\n").ast;
     const r = setMdOcPath(md, parseOcPath("oc://AGENTS.md/[frontmatter]/name"), "new");
     expect(r.ok).toBe(true);
@@ -29,7 +22,7 @@ describe("wave-19 edit-then-emit round-trip", () => {
     }
   });
 
-  it("EE-02 md item kv edit re-parses to the new value", () => {
+  it("md item kv edit re-parses to the new value", () => {
     const md = parseMd("## Boundaries\n\n- timeout: 5\n").ast;
     const r = setMdOcPath(md, parseOcPath("oc://AGENTS.md/boundaries/timeout/timeout"), "60");
     expect(r.ok).toBe(true);
@@ -40,7 +33,7 @@ describe("wave-19 edit-then-emit round-trip", () => {
     }
   });
 
-  it("EE-03 jsonc value edit re-parses to the new value", () => {
+  it("jsonc value edit re-parses to the new value", () => {
     const ast = parseJsonc('{ "k": 1 }').ast;
     const r = setJsoncOcPath(ast, parseOcPath("oc://config/k"), {
       kind: "number",
@@ -52,7 +45,7 @@ describe("wave-19 edit-then-emit round-trip", () => {
     }
   });
 
-  it("EE-04 jsonc nested edit preserves untouched siblings", () => {
+  it("jsonc nested edit preserves untouched siblings", () => {
     const ast = parseJsonc('{ "a": 1, "b": { "c": 2, "d": 3 }, "e": 4 }').ast;
     const r = setJsoncOcPath(ast, parseOcPath("oc://config/b.c"), {
       kind: "number",
@@ -67,7 +60,7 @@ describe("wave-19 edit-then-emit round-trip", () => {
     }
   });
 
-  it("EE-05 jsonl line edit re-parses to the new value at the same line", () => {
+  it("jsonl line edit re-parses to the new value at the same line", () => {
     const ast = parseJsonl('{"a":1}\n{"a":2}\n{"a":3}\n').ast;
     const r = setJsonlOcPath(ast, parseOcPath("oc://log/L2/a"), {
       kind: "number",
@@ -84,7 +77,7 @@ describe("wave-19 edit-then-emit round-trip", () => {
     }
   });
 
-  it("EE-06 jsonc edit composes: two sequential edits both land", () => {
+  it("jsonc edit composes: two sequential edits both land", () => {
     let ast = parseJsonc('{ "a": 1, "b": 2 }').ast;
     let r = setJsoncOcPath(ast, parseOcPath("oc://config/a"), {
       kind: "number",
@@ -103,7 +96,7 @@ describe("wave-19 edit-then-emit round-trip", () => {
     expect(JSON.parse(emitJsonc(ast))).toEqual({ a: 10, b: 20 });
   });
 
-  it("EE-07 missing path returns structured failure (not throw)", () => {
+  it("missing path returns structured failure (not throw)", () => {
     const ast = parseJsonc('{ "a": 1 }').ast;
     const r = setJsoncOcPath(ast, parseOcPath("oc://config/missing"), {
       kind: "number",
@@ -115,7 +108,7 @@ describe("wave-19 edit-then-emit round-trip", () => {
     }
   });
 
-  it("EE-08 each per-kind verb takes its own AST type — no cross-kind leakage", () => {
+  it("each per-kind verb takes its own AST type — no cross-kind leakage", () => {
     // Type-level guarantee: each setter only accepts its kind's AST.
     // Caller picks based on the AST they have. This is the design.
     const md = parseMd("---\nx: 1\n---\n").ast;
@@ -137,7 +130,7 @@ describe("wave-19 edit-then-emit round-trip", () => {
     expect(c.ok).toBe(true);
   });
 
-  it("EE-09 jsonc parser-backed edit preserves comments", () => {
+  it("jsonc parser-backed edit preserves comments", () => {
     const raw = '{\n  "k": 1 // comment\n}\n';
     const ast = parseJsonc(raw).ast;
     const r = setJsoncOcPath(ast, parseOcPath("oc://config/k"), {
@@ -154,7 +147,7 @@ describe("wave-19 edit-then-emit round-trip", () => {
     }
   });
 
-  it("EE-10 edit on empty AST surfaces no-root", () => {
+  it("edit on empty AST surfaces no-root", () => {
     const ast = parseJsonc("").ast;
     const r = setJsoncOcPath(ast, parseOcPath("oc://config/x"), {
       kind: "number",

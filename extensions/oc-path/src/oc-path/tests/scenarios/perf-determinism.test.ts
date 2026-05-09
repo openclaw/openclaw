@@ -1,19 +1,10 @@
-/**
- * Wave 14 — performance + determinism + immutability.
- *
- * Substrate guarantees:
- *   - Parsing scales sub-linearly with file size (no quadratic blowup)
- *   - Same input produces same AST (no Object.keys / Set order surprises)
- *   - Resolver does not mutate the AST
- *   - AST is structurally cloneable (no functions, no cycles)
- */
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
 import { parseMd } from "../../parse.js";
 import { resolveMdOcPath as resolveOcPath } from "../../resolve.js";
 
-describe("wave-14 perf + determinism", () => {
-  it("PD-01 parses 100 KB file in under 200 ms", () => {
+describe("perf + determinism", () => {
+  it("parses 100 KB file in under 200 ms", () => {
     const lines: string[] = [];
     for (let i = 0; i < 1000; i++) {
       lines.push("## H" + i);
@@ -28,7 +19,7 @@ describe("wave-14 perf + determinism", () => {
     expect(elapsed).toBeLessThan(200);
   });
 
-  it("PD-02 parses 1000 small files in under 500 ms", () => {
+  it("parses 1000 small files in under 500 ms", () => {
     const raw = `## H\n- a\n- b: c\n## I\n- d\n`;
     const start = performance.now();
     for (let i = 0; i < 1000; i++) {
@@ -38,7 +29,7 @@ describe("wave-14 perf + determinism", () => {
     expect(elapsed).toBeLessThan(500);
   });
 
-  it("PD-03 100k OcPath resolutions on parsed AST in under 500 ms", () => {
+  it("100k OcPath resolutions on parsed AST in under 500 ms", () => {
     const raw = `## A\n- a1\n- a2\n## B\n- b1\n- b2\n## C\n- c1: cv\n`;
     const { ast } = parseMd(raw);
     const path = { file: "X.md", section: "b", item: "b1" };
@@ -50,7 +41,7 @@ describe("wave-14 perf + determinism", () => {
     expect(elapsed).toBeLessThan(500);
   });
 
-  it("PD-04 same input → byte-identical AST.raw across runs", () => {
+  it("same input → byte-identical AST.raw across runs", () => {
     const raw = `---\nb: 2\na: 1\n---\n## Z\n- z\n## A\n- a\n`;
     const a1 = parseMd(raw).ast;
     const a2 = parseMd(raw).ast;
@@ -59,7 +50,7 @@ describe("wave-14 perf + determinism", () => {
     expect(a1.blocks).toEqual(a2.blocks);
   });
 
-  it("PD-05 resolveOcPath is non-mutating", () => {
+  it("resolveOcPath is non-mutating", () => {
     const raw = `## A\n- a: x\n## B\n- b\n`;
     const { ast } = parseMd(raw);
     const before = JSON.stringify(ast);
@@ -69,7 +60,7 @@ describe("wave-14 perf + determinism", () => {
     expect(JSON.stringify(ast)).toBe(before);
   });
 
-  it("PD-06 AST is JSON-serializable (no functions, no cycles)", () => {
+  it("AST is JSON-serializable (no functions, no cycles)", () => {
     const raw = `---\nk: v\n---\n## A\n- a\n\`\`\`ts\nx\n\`\`\`\n| h |\n| - |\n| 1 |\n`;
     const { ast } = parseMd(raw);
     const serialized = JSON.stringify(ast);
@@ -78,7 +69,7 @@ describe("wave-14 perf + determinism", () => {
     expect(parsed.blocks.length).toBe(ast.blocks.length);
   });
 
-  it("PD-07 emit is non-mutating", () => {
+  it("emit is non-mutating", () => {
     const raw = `## A\n- a\n`;
     const { ast } = parseMd(raw);
     const before = JSON.stringify(ast);
@@ -88,25 +79,25 @@ describe("wave-14 perf + determinism", () => {
     expect(JSON.stringify(ast)).toBe(before);
   });
 
-  it("PD-08 frontmatter ordering is preserved (insertion order, not alphabetical)", () => {
+  it("frontmatter ordering is preserved (insertion order, not alphabetical)", () => {
     const raw = `---\nz: 1\nm: 2\na: 3\n---\n`;
     const { ast } = parseMd(raw);
     expect(ast.frontmatter.map((e) => e.key)).toEqual(["z", "m", "a"]);
   });
 
-  it("PD-09 block ordering is document order, not alphabetical", () => {
+  it("block ordering is document order, not alphabetical", () => {
     const raw = `## Z\n## A\n## M\n`;
     const { ast } = parseMd(raw);
     expect(ast.blocks.map((b) => b.heading)).toEqual(["Z", "A", "M"]);
   });
 
-  it("PD-10 item ordering within block is document order", () => {
+  it("item ordering within block is document order", () => {
     const raw = `## H\n- z\n- a\n- m\n`;
     const { ast } = parseMd(raw);
     expect(ast.blocks[0]?.items.map((i) => i.text)).toEqual(["z", "a", "m"]);
   });
 
-  it("PD-11 large fixture round-trip stays under 100 ms", () => {
+  it("large fixture round-trip stays under 100 ms", () => {
     const lines: string[] = [];
     for (let i = 0; i < 500; i++) {
       lines.push(`## Section ${i}`);

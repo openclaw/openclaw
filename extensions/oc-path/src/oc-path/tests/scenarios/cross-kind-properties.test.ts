@@ -1,16 +1,3 @@
-/**
- * Wave 22 — cross-kind property invariants.
- *
- * Per-kind verbs hold the same shape contracts regardless of kind:
- *
- *   1. parse → emit (round-trip) is byte-stable for ALL kinds
- *   2. resolve is non-mutating for ALL kinds
- *   3. set returns structured failure (never throws) for unresolvable
- *      paths across ALL kinds
- *   4. inferKind aligns with the parsers consumers actually pick
- *   5. parse → emit → parse is fixpoint
- *   6. hostile inputs do not throw at parse time
- */
 import { describe, expect, it } from "vitest";
 import { inferKind } from "../../dispatch.js";
 import { setMdOcPath } from "../../edit.js";
@@ -27,18 +14,18 @@ import { parseOcPath } from "../../oc-path.js";
 import { parseMd } from "../../parse.js";
 import { resolveMdOcPath } from "../../resolve.js";
 
-describe("wave-22 cross-kind property invariants", () => {
+describe("cross-kind property invariants", () => {
   const mdRaw = "---\nname: x\n---\n\n## Boundaries\n\n- enabled: true\n";
   const jsoncRaw = '// h\n{ "k": 1, "n": [1,2,3] }\n';
   const jsonlRaw = '{"a":1}\n\nbroken\n{"b":2}\n';
 
-  it("P-01 round-trip parse → emit is byte-stable across all kinds", () => {
+  it("round-trip parse → emit is byte-stable across all kinds", () => {
     expect(emitMd(parseMd(mdRaw).ast)).toBe(mdRaw);
     expect(emitJsonc(parseJsonc(jsoncRaw).ast)).toBe(jsoncRaw);
     expect(emitJsonl(parseJsonl(jsonlRaw).ast)).toBe(jsonlRaw);
   });
 
-  it("P-02 resolve is non-mutating across all kinds", () => {
+  it("resolve is non-mutating across all kinds", () => {
     const md = parseMd(mdRaw).ast;
     let before = JSON.stringify(md);
     resolveMdOcPath(md, parseOcPath("oc://X/[frontmatter]/name"));
@@ -58,7 +45,7 @@ describe("wave-22 cross-kind property invariants", () => {
     expect(JSON.stringify(jsonl)).toBe(before);
   });
 
-  it("P-03 unresolvable set never throws across all kinds", () => {
+  it("unresolvable set never throws across all kinds", () => {
     const ocPath = parseOcPath("oc://X/totally.missing.path");
     expect(() => setMdOcPath(parseMd(mdRaw).ast, ocPath, "x")).not.toThrow();
     expect(() =>
@@ -75,7 +62,7 @@ describe("wave-22 cross-kind property invariants", () => {
     ).not.toThrow();
   });
 
-  it("P-04 inferKind aligns with the parser actually used", () => {
+  it("inferKind aligns with the parser actually used", () => {
     expect(inferKind("AGENTS.md")).toBe("md");
     expect(inferKind("SOUL.md")).toBe("md");
     expect(inferKind("config.jsonc")).toBe("jsonc");
@@ -84,7 +71,7 @@ describe("wave-22 cross-kind property invariants", () => {
     expect(inferKind("audit.ndjson")).toBe("jsonl");
   });
 
-  it("P-05 parse → emit → parse is fixpoint across all kinds", () => {
+  it("parse → emit → parse is fixpoint across all kinds", () => {
     const md1 = emitMd(parseMd(mdRaw).ast);
     const md2 = emitMd(parseMd(md1).ast);
     expect(md1).toBe(md2);
@@ -98,7 +85,7 @@ describe("wave-22 cross-kind property invariants", () => {
     expect(jl1).toBe(jl2);
   });
 
-  it("P-06 hostile inputs do not throw at parse time across all kinds", () => {
+  it("hostile inputs do not throw at parse time across all kinds", () => {
     const hostile = [
       "\x00\x01\x02 binary garbage",
       '{ "unclosed":',
@@ -112,14 +99,14 @@ describe("wave-22 cross-kind property invariants", () => {
     }
   });
 
-  it("P-07 resolver returns null for paths past valid kinds (no throw)", () => {
+  it("resolver returns null for paths past valid kinds (no throw)", () => {
     const overlong = parseOcPath("oc://X/a/b/c.d.e.f.g.h");
     expect(() => resolveMdOcPath(parseMd(mdRaw).ast, overlong)).not.toThrow();
     expect(() => resolveJsoncOcPath(parseJsonc(jsoncRaw).ast, overlong)).not.toThrow();
     expect(() => resolveJsonlOcPath(parseJsonl(jsonlRaw).ast, overlong)).not.toThrow();
   });
 
-  it("P-08 set-then-resolve produces the value just written (jsonc)", () => {
+  it("set-then-resolve produces the value just written (jsonc)", () => {
     const ast = parseJsonc('{ "k": 1 }').ast;
     const r = setJsoncOcPath(ast, parseOcPath("oc://X/k"), {
       kind: "number",
@@ -133,13 +120,13 @@ describe("wave-22 cross-kind property invariants", () => {
     }
   });
 
-  it("P-09 verbs are deterministic — same input twice produces same output", () => {
+  it("verbs are deterministic — same input twice produces same output", () => {
     expect(emitMd(parseMd(mdRaw).ast)).toBe(emitMd(parseMd(mdRaw).ast));
     expect(emitJsonc(parseJsonc(jsoncRaw).ast)).toBe(emitJsonc(parseJsonc(jsoncRaw).ast));
     expect(emitJsonl(parseJsonl(jsonlRaw).ast)).toBe(emitJsonl(parseJsonl(jsonlRaw).ast));
   });
 
-  it("P-10 inferKind returns null for unknown extensions", () => {
+  it("inferKind returns null for unknown extensions", () => {
     expect(inferKind("binary.bin")).toBeNull();
     expect(inferKind("no-ext")).toBeNull();
     expect(inferKind("archive.tar.gz")).toBeNull();
