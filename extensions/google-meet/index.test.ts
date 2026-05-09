@@ -2543,21 +2543,23 @@ describe("google-meet plugin", () => {
       };
     };
 
-    expect(status.session?.chrome?.health).toMatchObject({
-      captioning: true,
-      transcriptLines: 1,
-      lastCaptionText: "Please capture this.",
-    });
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "browser.request",
-      expect.any(Object),
-      expect.objectContaining({
-        method: "POST",
-        path: "/tabs/focus",
-        body: { targetId: "local-meet-tab" },
-      }),
-      { progress: false },
+    expect(status.session?.chrome?.health?.captioning).toBe(true);
+    expect(status.session?.chrome?.health?.transcriptLines).toBe(1);
+    expect(status.session?.chrome?.health?.lastCaptionText).toBe("Please capture this.");
+    const focusCall = callGatewayFromCli.mock.calls.find(
+      ([, , request]) => requireRecord(request, "browser request").path === "/tabs/focus",
     );
+    if (!focusCall) {
+      throw new Error("Expected browser /tabs/focus request");
+    }
+    expect(focusCall[0]).toBe("browser.request");
+    expect(focusCall[2]).toEqual({
+      method: "POST",
+      path: "/tabs/focus",
+      timeoutMs: 5000,
+      body: { targetId: "local-meet-tab" },
+    });
+    expect(focusCall[3]).toEqual({ progress: false });
   });
 
   it("does not mutate realtime browser prompts when status is requested", async () => {
@@ -2626,9 +2628,11 @@ describe("google-meet plugin", () => {
     })) as { session?: { chrome?: { health?: { manualActionRequired?: boolean } } } };
 
     expect(status.session?.chrome?.health?.manualActionRequired).toBe(true);
-    expect(nodesInvoke).not.toHaveBeenCalledWith(
-      expect.objectContaining({ command: "browser.proxy" }),
-    );
+    expect(
+      nodesInvoke.mock.calls.some(
+        ([params]) => requireRecord(params, "node invoke").command === "browser.proxy",
+      ),
+    ).toBe(false);
   });
 
   it("retries caption enable until the captions button is available", async () => {
