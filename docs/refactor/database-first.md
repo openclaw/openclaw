@@ -397,7 +397,7 @@ sessionId}` and session key context.
   surface instead.
 - Active-memory blocking subagent runs use SQLite transcript rows instead of
   creating temporary or persisted `session.jsonl` files under plugin state. The
-  old `transcriptDir` option is now a compatibility no-op.
+  old `transcriptDir` option is removed.
 - One-off slug generation and Crestodian planner runs use SQLite transcript rows
   instead of creating temporary `session.jsonl` files.
 - `llm-task` helper runs and hidden commitment extraction also use SQLite

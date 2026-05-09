@@ -73,7 +73,6 @@
       "recentAssistantChars": { "type": "integer", "minimum": 40, "maximum": 1000 },
       "logging": { "type": "boolean" },
       "persistTranscripts": { "type": "boolean" },
-      "transcriptDir": { "type": "string" },
       "cacheTtlMs": { "type": "integer", "minimum": 1000, "maximum": 120000 },
       "circuitBreakerMaxTimeouts": { "type": "integer", "minimum": 1, "maximum": 20 },
       "circuitBreakerCooldownMs": { "type": "integer", "minimum": 5000, "maximum": 600000 },
@@ -171,11 +170,7 @@
     },
     "persistTranscripts": {
       "label": "Persist Transcripts",
-      "help": "Log the blocking memory sub-agent SQLite transcript locator for debugging."
-    },
-    "transcriptDir": {
-      "label": "Transcript Directory",
-      "help": "Legacy compatibility setting ignored by the SQLite-backed runtime."
+      "help": "Log the blocking memory sub-agent SQLite transcript scope for debugging."
     },
     "qmd.searchMode": {
       "label": "QMD Search Mode",

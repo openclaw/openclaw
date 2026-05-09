@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import { loadSqliteSessionTranscriptEvents } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   DEFAULT_PROVIDER,
@@ -32,7 +31,6 @@ const DEFAULT_MIN_TIMEOUT_MS = 250;
 const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
-const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
@@ -145,7 +143,6 @@ type ActiveRecallPluginConfig = {
   circuitBreakerMaxTimeouts?: number;
   circuitBreakerCooldownMs?: number;
   persistTranscripts?: boolean;
-  transcriptDir?: string;
   qmd?: {
     searchMode?: ActiveMemoryQmdSearchMode;
   };
@@ -186,7 +183,6 @@ type ResolvedActiveRecallPluginConfig = {
   circuitBreakerMaxTimeouts: number;
   circuitBreakerCooldownMs: number;
   persistTranscripts: boolean;
-  transcriptDir: string;
   qmd: {
     searchMode: ActiveMemoryQmdSearchMode;
   };
@@ -380,17 +376,6 @@ function clampInt(value: number | undefined, fallback: number, min: number, max:
     return fallback;
   }
   return Math.max(min, Math.min(max, Math.floor(value as number)));
-}
-
-function normalizeTranscriptDir(value: unknown): string {
-  const raw = typeof value === "string" ? value.trim() : "";
-  if (!raw) {
-    return DEFAULT_TRANSCRIPT_DIR;
-  }
-  const normalized = raw.replace(/\\/g, "/");
-  const parts = normalized.split("/").map((part) => part.trim());
-  const safeParts = parts.filter((part) => part.length > 0 && part !== "." && part !== "..");
-  return safeParts.length > 0 ? path.join(...safeParts) : DEFAULT_TRANSCRIPT_DIR;
 }
 
 function normalizeChatIdList(value: unknown): string[] {
@@ -819,7 +804,6 @@ function normalizePluginConfig(
       600_000,
     ),
     persistTranscripts: raw.persistTranscripts === true,
-    transcriptDir: normalizeTranscriptDir(raw.transcriptDir),
     qmd: {
       searchMode: resolveQmdSearchMode(qmd?.searchMode),
     },

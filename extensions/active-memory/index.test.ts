@@ -3881,7 +3881,6 @@ describe("active-memory plugin", () => {
     api.pluginConfig = {
       agents: ["main"],
       persistTranscripts: true,
-      transcriptDir: "active-memory-subagents",
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -3913,40 +3912,10 @@ describe("active-memory plugin", () => {
     expect(rmSpy).not.toHaveBeenCalled();
   });
 
-  it("ignores unsafe transcript directories when using sqlite transcript scopes", async () => {
-    api.pluginConfig = {
-      agents: ["main"],
-      persistTranscripts: true,
-      transcriptDir: "C:/temp/escape",
-      logging: true,
-    };
-    plugin.register(api as unknown as OpenClawPluginApi);
-    const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
-
-    await hooks.before_prompt_build(
-      { prompt: "what wings should i order? unsafe transcript dir", messages: [] },
-      {
-        agentId: "main",
-        trigger: "user",
-        sessionKey: "agent:main:unsafe-transcript",
-        messageProvider: "webchat",
-      },
-    );
-
-    expect(mkdirSpy).not.toHaveBeenCalled();
-    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
-    expect(runParams).not.toHaveProperty("transcriptLocator");
-    expect(runParams).toMatchObject({
-      agentId: "main",
-      sessionId: expect.stringMatching(/^active-memory-[a-z0-9]+-[a-f0-9]{8}$/),
-    });
-  });
-
   it("scopes sqlite subagent transcripts by agent", async () => {
     api.pluginConfig = {
       agents: ["main", "support/agent"],
       persistTranscripts: true,
-      transcriptDir: "active-memory-subagents",
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
