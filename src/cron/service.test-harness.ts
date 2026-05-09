@@ -60,8 +60,12 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
   }
 
   async function makeStoreKey() {
+    const id = `case-${caseId++}`;
+    const stateDir = path.join(fixtureRoot, id, "state");
+    await fs.mkdir(stateDir, { recursive: true });
     return {
-      storeKey: `case-${caseId++}`,
+      storeKey: id,
+      stateDir,
       cleanup: async () => {},
     };
   }
