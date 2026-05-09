@@ -150,7 +150,7 @@ describe("buildAuthHealthSummary", () => {
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
     });
 
-    expect(profileStatuses(summary)).toMatchObject({
+    expect(profileStatuses(summary)).toEqual({
       "openai-codex:default": "expired",
       "openai-codex:named": "ok",
     });
