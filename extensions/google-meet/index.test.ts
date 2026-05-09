@@ -134,6 +134,21 @@ function requireGoogleMeetManifestConfigSchema(manifest: {
   return manifest.configSchema;
 }
 
+function requireConfigProperty(
+  properties: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> {
+  const value = properties?.[key];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Expected Google Meet config schema property ${key}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function requestUrl(input: RequestInfo | URL): URL {
   if (typeof input === "string") {
     return new URL(input);
@@ -371,126 +386,121 @@ describe("google-meet plugin", () => {
   });
 
   it("defaults to chrome agent mode with safe read-only tools", () => {
-    expect(resolveGoogleMeetConfig({})).toMatchObject({
-      enabled: true,
-      defaults: {},
-      preview: { enrollmentAcknowledged: false },
-      defaultTransport: "chrome",
-      defaultMode: "agent",
-      chrome: {
-        audioBackend: "blackhole-2ch",
-        launch: true,
-        guestName: "OpenClaw Agent",
-        reuseExistingTab: true,
-        autoJoin: true,
-        waitForInCallMs: 20000,
-        audioFormat: "pcm16-24khz",
-        audioBufferBytes: 4096,
-        audioInputCommand: [
-          "sox",
-          "-q",
-          "--buffer",
-          "4096",
-          "-t",
-          "coreaudio",
-          "BlackHole 2ch",
-          "-t",
-          "raw",
-          "-r",
-          "24000",
-          "-c",
-          "1",
-          "-e",
-          "signed-integer",
-          "-b",
-          "16",
-          "-L",
-          "-",
-        ],
-        audioOutputCommand: [
-          "sox",
-          "-q",
-          "--buffer",
-          "4096",
-          "-t",
-          "raw",
-          "-r",
-          "24000",
-          "-c",
-          "1",
-          "-e",
-          "signed-integer",
-          "-b",
-          "16",
-          "-L",
-          "-",
-          "-t",
-          "coreaudio",
-          "BlackHole 2ch",
-        ],
-        bargeInRmsThreshold: 650,
-        bargeInPeakThreshold: 2500,
-        bargeInCooldownMs: 900,
-      },
-      voiceCall: {
-        enabled: true,
-        requestTimeoutMs: 30000,
-        dtmfDelayMs: 12000,
-        postDtmfSpeechDelayMs: 5000,
-      },
-      realtime: {
-        strategy: "agent",
-        provider: "openai",
-        transcriptionProvider: "openai",
-        introMessage: "Say exactly: I'm here and listening.",
-        toolPolicy: "safe-read-only",
-      },
-      oauth: {},
-      auth: { provider: "google-oauth" },
+    const config = resolveGoogleMeetConfig({});
+
+    expect(config.enabled).toBe(true);
+    expect(config.defaults).toEqual({});
+    expect(config.preview).toEqual({ enrollmentAcknowledged: false });
+    expect(config.defaultTransport).toBe("chrome");
+    expect(config.defaultMode).toBe("agent");
+    expect(config.chrome).toEqual({
+      audioBackend: "blackhole-2ch",
+      launch: true,
+      guestName: "OpenClaw Agent",
+      reuseExistingTab: true,
+      autoJoin: true,
+      joinTimeoutMs: 30000,
+      waitForInCallMs: 20000,
+      audioFormat: "pcm16-24khz",
+      audioBufferBytes: 4096,
+      audioInputCommand: [
+        "sox",
+        "-q",
+        "--buffer",
+        "4096",
+        "-t",
+        "coreaudio",
+        "BlackHole 2ch",
+        "-t",
+        "raw",
+        "-r",
+        "24000",
+        "-c",
+        "1",
+        "-e",
+        "signed-integer",
+        "-b",
+        "16",
+        "-L",
+        "-",
+      ],
+      audioOutputCommand: [
+        "sox",
+        "-q",
+        "--buffer",
+        "4096",
+        "-t",
+        "raw",
+        "-r",
+        "24000",
+        "-c",
+        "1",
+        "-e",
+        "signed-integer",
+        "-b",
+        "16",
+        "-L",
+        "-",
+        "-t",
+        "coreaudio",
+        "BlackHole 2ch",
+      ],
+      bargeInRmsThreshold: 650,
+      bargeInPeakThreshold: 2500,
+      bargeInCooldownMs: 900,
     });
+    expect(config.chromeNode).toEqual({});
+    expect(config.twilio).toEqual({});
+    expect(config.voiceCall).toEqual({
+      enabled: true,
+      requestTimeoutMs: 30000,
+      dtmfDelayMs: 12000,
+      postDtmfSpeechDelayMs: 5000,
+    });
+    expect(config.realtime.strategy).toBe("agent");
+    expect(config.realtime.provider).toBe("openai");
+    expect(config.realtime.transcriptionProvider).toBe("openai");
+    expect(config.realtime.introMessage).toBe("Say exactly: I'm here and listening.");
+    expect(config.realtime.toolPolicy).toBe("safe-read-only");
+    expect(config.realtime.providers).toEqual({});
+    expect(config.realtime.instructions).toContain("openclaw_agent_consult");
+    expect(config.oauth).toEqual({});
+    expect(config.auth).toEqual({ provider: "google-oauth" });
+
     expect(resolveGoogleMeetConfig({ defaultMode: "realtime" }).defaultMode).toBe("agent");
-    expect(resolveGoogleMeetConfig({}).realtime.instructions).toContain("openclaw_agent_consult");
   });
 
   it("resolves separate realtime providers for agent transcription and bidi voice", () => {
-    expect(
-      resolveGoogleMeetConfig({
-        realtime: {
-          provider: "openai",
-          transcriptionProvider: "openai",
-          voiceProvider: "google",
-          model: "gemini-2.5-flash-native-audio-preview-12-2025",
-        },
-      }).realtime,
-    ).toMatchObject({
-      provider: "openai",
-      transcriptionProvider: "openai",
-      voiceProvider: "google",
-      model: "gemini-2.5-flash-native-audio-preview-12-2025",
+    const realtime = resolveGoogleMeetConfig({
+      realtime: {
+        provider: "openai",
+        transcriptionProvider: "openai",
+        voiceProvider: "google",
+        model: "gemini-2.5-flash-native-audio-preview-12-2025",
+      },
     });
+    expect(realtime.realtime.provider).toBe("openai");
+    expect(realtime.realtime.transcriptionProvider).toBe("openai");
+    expect(realtime.realtime.voiceProvider).toBe("google");
+    expect(realtime.realtime.model).toBe("gemini-2.5-flash-native-audio-preview-12-2025");
   });
 
   it("keeps realtime.provider as the transcription compatibility fallback", () => {
-    expect(
-      resolveGoogleMeetConfig({
-        realtime: {
-          provider: "custom-stt",
-        },
-      }).realtime,
-    ).toMatchObject({
-      provider: "custom-stt",
-      transcriptionProvider: "custom-stt",
+    const custom = resolveGoogleMeetConfig({
+      realtime: {
+        provider: "custom-stt",
+      },
     });
-    expect(
-      resolveGoogleMeetConfig({
-        realtime: {
-          provider: "google",
-        },
-      }).realtime,
-    ).toMatchObject({
-      provider: "google",
-      transcriptionProvider: "openai",
+    expect(custom.realtime.provider).toBe("custom-stt");
+    expect(custom.realtime.transcriptionProvider).toBe("custom-stt");
+
+    const google = resolveGoogleMeetConfig({
+      realtime: {
+        provider: "google",
+      },
     });
+    expect(google.realtime.provider).toBe("google");
+    expect(google.realtime.transcriptionProvider).toBe("openai");
   });
 
   it("uses voiceProvider for bidi and transcriptionProvider for agent mode resolution", () => {
@@ -535,25 +545,21 @@ describe("google-meet plugin", () => {
       },
     });
 
-    expect(
-      resolveGoogleMeetRealtimeProvider({
-        config,
-        fullConfig: {} as never,
-        providers: voiceProviders,
-      }),
-    ).toMatchObject({
-      provider: { id: "google" },
-      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
+    const voiceProvider = resolveGoogleMeetRealtimeProvider({
+      config,
+      fullConfig: {} as never,
+      providers: voiceProviders,
     });
-    expect(
-      resolveGoogleMeetRealtimeTranscriptionProvider({
-        config,
-        fullConfig: {} as never,
-        providers: transcriptionProviders,
-      }),
-    ).toMatchObject({
-      provider: { id: "openai" },
+    expect(voiceProvider.provider.id).toBe("google");
+    expect(voiceProvider.providerConfig).toEqual({
+      model: "gemini-2.5-flash-native-audio-preview-12-2025",
     });
+    const transcriptionProvider = resolveGoogleMeetRealtimeTranscriptionProvider({
+      config,
+      fullConfig: {} as never,
+      providers: transcriptionProviders,
+    });
+    expect(transcriptionProvider.provider.id).toBe("openai");
   });
 
   it("declares advanced config metadata in the plugin entry and manifest", () => {
@@ -570,34 +576,46 @@ describe("google-meet plugin", () => {
       };
     };
 
-    expect(entry.configSchema.uiHints).toMatchObject({
-      "chrome.audioBufferBytes": expect.objectContaining({ advanced: true }),
-      "chrome.bargeInInputCommand": expect.objectContaining({ advanced: true }),
-      "chrome.bargeInRmsThreshold": expect.objectContaining({ advanced: true }),
-      "chrome.bargeInPeakThreshold": expect.objectContaining({ advanced: true }),
-      "chrome.bargeInCooldownMs": expect.objectContaining({ advanced: true }),
-      "voiceCall.postDtmfSpeechDelayMs": expect.objectContaining({ advanced: true }),
+    for (const key of [
+      "chrome.audioBufferBytes",
+      "chrome.bargeInInputCommand",
+      "chrome.bargeInRmsThreshold",
+      "chrome.bargeInPeakThreshold",
+      "chrome.bargeInCooldownMs",
+      "voiceCall.postDtmfSpeechDelayMs",
+    ]) {
+      expect(entry.configSchema.uiHints?.[key]).toHaveProperty("advanced", true);
+      expect(manifest.uiHints?.[key]).toHaveProperty("advanced", true);
+    }
+    const chromeProperties = configSchema.properties?.chrome?.properties;
+    expect(requireConfigProperty(chromeProperties, "audioBufferBytes")).toEqual({
+      type: "number",
+      default: 4096,
     });
-    expect(manifest.uiHints).toMatchObject({
-      "chrome.audioBufferBytes": expect.objectContaining({ advanced: true }),
-      "chrome.bargeInInputCommand": expect.objectContaining({ advanced: true }),
-      "chrome.bargeInRmsThreshold": expect.objectContaining({ advanced: true }),
-      "chrome.bargeInPeakThreshold": expect.objectContaining({ advanced: true }),
-      "chrome.bargeInCooldownMs": expect.objectContaining({ advanced: true }),
-      "voiceCall.postDtmfSpeechDelayMs": expect.objectContaining({ advanced: true }),
+    expect(requireConfigProperty(chromeProperties, "bargeInInputCommand")).toEqual({
+      type: "array",
+      items: { type: "string" },
     });
-    expect(configSchema.properties?.chrome?.properties).toMatchObject({
-      audioBufferBytes: expect.objectContaining({ type: "number", default: 4096 }),
-      bargeInInputCommand: expect.objectContaining({
-        type: "array",
-        items: { type: "string" },
-      }),
-      bargeInRmsThreshold: expect.objectContaining({ type: "number", default: 650 }),
-      bargeInPeakThreshold: expect.objectContaining({ type: "number", default: 2500 }),
-      bargeInCooldownMs: expect.objectContaining({ type: "number", default: 900 }),
+    expect(requireConfigProperty(chromeProperties, "bargeInRmsThreshold")).toEqual({
+      type: "number",
+      default: 650,
     });
-    expect(configSchema.properties?.voiceCall?.properties).toMatchObject({
-      postDtmfSpeechDelayMs: expect.objectContaining({ type: "number", default: 5000 }),
+    expect(requireConfigProperty(chromeProperties, "bargeInPeakThreshold")).toEqual({
+      type: "number",
+      default: 2500,
+    });
+    expect(requireConfigProperty(chromeProperties, "bargeInCooldownMs")).toEqual({
+      type: "number",
+      default: 900,
+    });
+    expect(
+      requireConfigProperty(
+        configSchema.properties?.voiceCall?.properties,
+        "postDtmfSpeechDelayMs",
+      ),
+    ).toEqual({
+      type: "number",
+      default: 5000,
     });
     const result = validateJsonSchemaValue({
       schema: configSchema,
@@ -632,18 +650,15 @@ describe("google-meet plugin", () => {
   });
 
   it("keeps legacy command-pair audio format when custom commands omit a format", () => {
-    expect(
-      resolveGoogleMeetConfig({
-        chrome: {
-          audioInputCommand: ["capture-legacy"],
-          audioOutputCommand: ["play-legacy"],
-        },
-      }).chrome,
-    ).toMatchObject({
-      audioFormat: "g711-ulaw-8khz",
-      audioInputCommand: ["capture-legacy"],
-      audioOutputCommand: ["play-legacy"],
+    const config = resolveGoogleMeetConfig({
+      chrome: {
+        audioInputCommand: ["capture-legacy"],
+        audioOutputCommand: ["play-legacy"],
+      },
     });
+    expect(config.chrome.audioFormat).toBe("g711-ulaw-8khz");
+    expect(config.chrome.audioInputCommand).toEqual(["capture-legacy"]);
+    expect(config.chrome.audioOutputCommand).toEqual(["play-legacy"]);
   });
 
   it("lets generated Chrome audio commands use a configured SoX buffer", () => {
@@ -688,29 +703,26 @@ describe("google-meet plugin", () => {
   });
 
   it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
-    expect(
-      resolveGoogleMeetConfigWithEnv(
-        {},
-        {
-          OPENCLAW_GOOGLE_MEET_CLIENT_ID: "client-id",
-          GOOGLE_MEET_CLIENT_SECRET: "client-secret",
-          OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: "refresh-token",
-          GOOGLE_MEET_ACCESS_TOKEN: "access-token",
-          OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: "123456",
-          GOOGLE_MEET_DEFAULT_MEETING: "https://meet.google.com/abc-defg-hij",
-          OPENCLAW_GOOGLE_MEET_PREVIEW_ACK: "true",
-        },
-      ),
-    ).toMatchObject({
-      defaults: { meeting: "https://meet.google.com/abc-defg-hij" },
-      preview: { enrollmentAcknowledged: true },
-      oauth: {
-        clientId: "client-id",
-        clientSecret: "client-secret",
-        refreshToken: "refresh-token",
-        accessToken: "access-token",
-        expiresAt: 123456,
+    const config = resolveGoogleMeetConfigWithEnv(
+      {},
+      {
+        OPENCLAW_GOOGLE_MEET_CLIENT_ID: "client-id",
+        GOOGLE_MEET_CLIENT_SECRET: "client-secret",
+        OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: "refresh-token",
+        GOOGLE_MEET_ACCESS_TOKEN: "access-token",
+        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: "123456",
+        GOOGLE_MEET_DEFAULT_MEETING: "https://meet.google.com/abc-defg-hij",
+        OPENCLAW_GOOGLE_MEET_PREVIEW_ACK: "true",
       },
+    );
+    expect(config.defaults).toEqual({ meeting: "https://meet.google.com/abc-defg-hij" });
+    expect(config.preview).toEqual({ enrollmentAcknowledged: true });
+    expect(config.oauth).toEqual({
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      refreshToken: "refresh-token",
+      accessToken: "access-token",
+      expiresAt: 123456,
     });
   });
 
@@ -739,13 +751,15 @@ describe("google-meet plugin", () => {
   it("registers the node-host command used by chrome-node transport", () => {
     const { nodeHostCommands } = setup();
 
-    expect(nodeHostCommands).toContainEqual(
-      expect.objectContaining({
-        command: "googlemeet.chrome",
-        cap: "google-meet",
-        handle: expect.any(Function),
-      }),
+    const command = nodeHostCommands.find(
+      (entry): entry is Record<string, unknown> =>
+        isRecord(entry) && entry.command === "googlemeet.chrome",
     );
+    if (!command) {
+      throw new Error("expected googlemeet.chrome node host command");
+    }
+    expect(command.cap).toBe("google-meet");
+    expect(typeof command.handle).toBe("function");
   });
 
   it("keeps the agent tool visible on non-macOS hosts but blocks local Chrome talk-back joins", async () => {
