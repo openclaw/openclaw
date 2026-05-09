@@ -4,6 +4,10 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
+import {
+  loadPersistedAuthProfileStore,
+  savePersistedAuthProfileSecretsStore,
+} from "../src/agents/auth-profiles/persisted.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
 
@@ -346,18 +350,41 @@ function sanitizeLiveConfig(raw: string): string {
   }
 }
 
-function copyLiveAuthProfiles(realStateDir: string, tempStateDir: string): void {
-  const agentsDir = path.join(realStateDir, "agents");
+function stageLiveAuthProfiles(params: {
+  env: NodeJS.ProcessEnv;
+  realHome: string;
+  realStateDir: string;
+  tempHome: string;
+  tempStateDir: string;
+}): void {
+  const agentsDir = path.join(params.realStateDir, "agents");
   if (!fs.existsSync(agentsDir)) {
     return;
   }
+  const sourceEnv: NodeJS.ProcessEnv = {
+    ...params.env,
+    HOME: params.realHome,
+    USERPROFILE: params.realHome,
+    OPENCLAW_STATE_DIR: params.realStateDir,
+  };
+  const targetEnv: NodeJS.ProcessEnv = {
+    ...params.env,
+    HOME: params.tempHome,
+    USERPROFILE: params.tempHome,
+    OPENCLAW_STATE_DIR: params.tempStateDir,
+  };
   for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
       continue;
     }
-    const sourcePath = path.join(agentsDir, entry.name, "agent", "auth-profiles.json");
-    const targetPath = path.join(tempStateDir, "agents", entry.name, "agent", "auth-profiles.json");
-    copyFileIfExists(sourcePath, targetPath);
+    const sourceAgentDir = path.join(agentsDir, entry.name, "agent");
+    const store = loadPersistedAuthProfileStore(sourceAgentDir, { env: sourceEnv });
+    if (!store) {
+      continue;
+    }
+    const targetAgentDir = path.join(params.tempStateDir, "agents", entry.name, "agent");
+    fs.mkdirSync(targetAgentDir, { recursive: true });
+    savePersistedAuthProfileSecretsStore(store, targetAgentDir, { env: targetEnv });
   }
 }
 
@@ -401,7 +428,13 @@ function stageLiveTestState(params: {
     path.join(realStateDir, "external-plugins"),
     path.join(tempStateDir, "external-plugins"),
   );
-  copyLiveAuthProfiles(realStateDir, tempStateDir);
+  stageLiveAuthProfiles({
+    env: params.env,
+    realHome: params.realHome,
+    realStateDir,
+    tempHome: params.tempHome,
+    tempStateDir,
+  });
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
     copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir));
