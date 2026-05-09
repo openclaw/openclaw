@@ -115,7 +115,7 @@ export async function startGatewayEarlyRuntime(params: {
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
     taskRegistryMaintenance.configureTaskRegistryMaintenance({
-      cronStorePath: resolveCronStoreKey(),
+      cronStoreKey: resolveCronStoreKey(),
       cronRuntimeAuthoritative: true,
     });
     taskRegistryMaintenance.startTaskRegistryMaintenance();

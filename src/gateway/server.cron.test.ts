@@ -109,12 +109,12 @@ async function waitForCronEvent(
 
 async function createCronCasePaths(tempPrefix: string): Promise<{
   dir: string;
-  storePath: string;
+  storeKey: string;
 }> {
   const suiteRoot = await getCronSuiteTempRoot();
   const dir = path.join(suiteRoot, `${tempPrefix}${cronSuiteCaseId++}`);
-  const storePath = resolveCronStoreKey();
-  return { dir, storePath };
+  const storeKey = resolveCronStoreKey();
+  return { dir, storeKey };
 }
 
 async function cleanupCronTestRun(params: {
@@ -127,7 +127,7 @@ async function cleanupCronTestRun(params: {
   params.ws?.close();
   await params.server?.close();
   params.cronState?.cron.stop();
-  testState.cronStorePath = undefined;
+  testState.cronStoreKey = undefined;
   if (params.clearSessionConfig) {
     testState.sessionConfig = undefined;
   }
@@ -147,11 +147,11 @@ async function setupCronTestRun(params: {
 }): Promise<{ prevSkipCron: string | undefined; dir: string }> {
   const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
   process.env.OPENCLAW_SKIP_CRON = "0";
-  const { dir, storePath } = await createCronCasePaths(params.tempPrefix);
-  testState.cronStorePath = storePath;
+  const { dir, storeKey } = await createCronCasePaths(params.tempPrefix);
+  testState.cronStoreKey = storeKey;
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
-  await saveCronStore(testState.cronStorePath, {
+  await saveCronStore(testState.cronStoreKey, {
     version: 1,
     jobs: (params.jobs ?? EMPTY_CRON_STORE.jobs) as CronStoreFile["jobs"],
   });
@@ -951,11 +951,11 @@ describe("gateway server cron", () => {
       const statusRes = await directCronReq(cronState, "cron.status", {});
       expect(statusRes.ok).toBe(true);
       const statusPayload = statusRes.payload as
-        | { enabled?: unknown; storePath?: unknown }
+        | { enabled?: unknown; storeKey?: unknown }
         | undefined;
       expect(statusPayload?.enabled).toBe(true);
-      const storePath = typeof statusPayload?.storePath === "string" ? statusPayload.storePath : "";
-      expect(storePath).toBe("default");
+      const storeKey = typeof statusPayload?.storeKey === "string" ? statusPayload.storeKey : "";
+      expect(storeKey).toBe("default");
 
       const autoRes = await directCronReq(cronState, "cron.add", {
         name: "auto run test",

@@ -30,7 +30,7 @@ type LoadedCommitmentStore = {
   hadLegacySourceText: boolean;
 };
 
-export function resolveCommitmentStorePath(): string {
+export function resolveCommitmentDatabasePath(): string {
   return resolveOpenClawStateSqlitePath();
 }
 

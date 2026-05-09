@@ -149,7 +149,7 @@ export async function getStatusSummary(
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
   taskMaintenanceModule.configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronStoreKey(),
+    cronStoreKey: resolveCronStoreKey(),
   });
   const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
   const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
