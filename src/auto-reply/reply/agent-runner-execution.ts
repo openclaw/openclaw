@@ -40,7 +40,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -1439,6 +1439,47 @@ export async function runAgentTurnWithFallback(params: {
               provider: params.sessionCtx.Provider,
             });
             return (async () => {
+              // Bridge intermediate assistant deltas from the CLI backend into the
+              // turn's onPartialReply callback so channels (Telegram preview edits,
+              // Discord drafts, etc.) can render progressive text updates for
+              // CLI-backed agents the same way runEmbeddedPiAgent already does.
+              //
+              // Without this, CLI backends emit granular text_delta events (claude
+              // CLI does this when spawned with --include-partial-messages) onto
+              // the global agent-event bus, but nothing forwards them to the
+              // channel preview layer -- so users see a single block at turn end
+              // instead of a live-edited draft.
+              const cliAssistantDeltaUnsub = onAgentEvent((evt) => {
+                if (evt.runId !== runId) {
+                  return;
+                }
+                if (evt.stream !== "assistant") {
+                  return;
+                }
+                const data = evt.data;
+                const delta = typeof data?.delta === "string" ? data.delta : "";
+                if (!delta) {
+                  return;
+                }
+                const onPartialReply = params.opts?.onPartialReply;
+                if (typeof onPartialReply !== "function") {
+                  return;
+                }
+                try {
+                  Promise.resolve(
+                    onPartialReply({
+                      text: typeof data.text === "string" ? data.text : "",
+                      mediaUrls: Array.isArray(data.mediaUrls)
+                        ? (data.mediaUrls as string[])
+                        : undefined,
+                    }),
+                  ).catch(() => {
+                    /* swallow downstream errors */
+                  });
+                } catch {
+                  /* swallow */
+                }
+              });
               let lifecycleTerminalEmitted = false;
               try {
                 const result = await runCliAgent({
@@ -1486,9 +1527,12 @@ export async function runAgentTurnWithFallback(params: {
                   result.meta?.systemPromptReport,
                 );
 
-                // CLI backends don't emit streaming assistant events, so we need to
-                // emit one with the final text so server-chat can populate its buffer
-                // and send the response to TUI/WebSocket clients.
+                // Intermediate assistant text deltas from the CLI backend were
+                // forwarded to params.opts.onPartialReply via the
+                // cliAssistantDeltaUnsub listener above. Emit a single assistant
+                // event with the final accumulated text so server-chat
+                // (TUI/WebSocket) can populate its buffer with the canonical turn
+                // output.
                 const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
                 if (cliText) {
                   emitAgentEvent({
@@ -1534,6 +1578,11 @@ export async function runAgentTurnWithFallback(params: {
                 lifecycleTerminalEmitted = true;
                 throw err;
               } finally {
+                try {
+                  cliAssistantDeltaUnsub();
+                } catch {
+                  /* swallow */
+                }
                 // Defensive backstop: never let a CLI run complete without a terminal
                 // lifecycle event, otherwise downstream consumers can hang.
                 if (!lifecycleTerminalEmitted) {
