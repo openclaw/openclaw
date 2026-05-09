@@ -259,6 +259,53 @@ describe("matrixOutbound cfg threading", () => {
     );
   });
 
+  it("only forwards presentation metadata from Matrix extraContent", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "resolved-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    const presentationContent = {
+      version: 1,
+      type: "message.presentation",
+      title: "Select model",
+      blocks: [{ type: "divider" }],
+    };
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:example",
+      text: "Select model",
+      payload: {
+        text: "Select model",
+        channelData: {
+          matrix: {
+            extraContent: {
+              body: "spoofed",
+              msgtype: "m.notice",
+              "m.relates_to": { "m.in_reply_to": { event_id: "$spoof" } },
+              "com.openclaw.presentation": presentationContent,
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
+      "room:!room:example",
+      "Select model",
+      expect.objectContaining({
+        extraContent: {
+          "com.openclaw.presentation": presentationContent,
+        },
+      }),
+    );
+  });
+
   it("sends all media URLs via sendPayload", async () => {
     const cfg = {
       channels: {
@@ -281,7 +328,6 @@ describe("matrixOutbound cfg threading", () => {
     });
 
     expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(2);
-    // First call: caption + media
     expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
       1,
       "room:!room:example",
@@ -291,7 +337,6 @@ describe("matrixOutbound cfg threading", () => {
         threadId: "$thread",
       }),
     );
-    // Second call: no text, just media
     expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
       2,
       "room:!room:example",
@@ -335,7 +380,6 @@ describe("matrixOutbound cfg threading", () => {
     });
 
     expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(2);
-    // First call gets extraContent
     expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
       1,
       "room:!room:example",
@@ -349,7 +393,6 @@ describe("matrixOutbound cfg threading", () => {
         },
       }),
     );
-    // Second call does NOT get extraContent
     expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
       2,
       "room:!room:example",
@@ -380,7 +423,6 @@ describe("matrixOutbound cfg threading", () => {
       accountId: "default",
     });
 
-    // Every URL must be sent — none may be silently dropped
     expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(3);
     expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
       1,

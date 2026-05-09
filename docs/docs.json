@@ -1066,6 +1066,7 @@
                   "channels/imessage-from-bluebubbles",
                   "channels/matrix",
                   "channels/matrix-migration",
+                  "channels/matrix-presentation",
                   "channels/matrix-push-rules"
                 ]
               },
