@@ -2257,9 +2257,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         CommandBody: commandBody,
         InputProvenance: systemInputProvenance,
         SessionKey: sessionKey,
-        Provider: (canInjectSystemProvenance(client) && systemInputProvenance?.sourceChannel) || INTERNAL_MESSAGE_CHANNEL,
-        Surface: (canInjectSystemProvenance(client) && systemInputProvenance?.sourceChannel) || INTERNAL_MESSAGE_CHANNEL,
-        OriginatingChannel: (canInjectSystemProvenance(client) && systemInputProvenance?.sourceChannel) || originatingChannel,
+        Provider:
+          (canInjectSystemProvenance(client) && systemInputProvenance?.sourceChannel) ||
+          INTERNAL_MESSAGE_CHANNEL,
+        Surface:
+          (canInjectSystemProvenance(client) && systemInputProvenance?.sourceChannel) ||
+          INTERNAL_MESSAGE_CHANNEL,
+        OriginatingChannel: originatingChannel,
         OriginatingTo: originatingTo,
         ExplicitDeliverRoute: explicitDeliverRoute,
         AccountId: accountId,
