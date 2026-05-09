@@ -89,7 +89,7 @@ describe("resolveSandboxFsPathWithMounts", () => {
     expect(resolved.writable).toBe(true);
   });
 
-  it("preserves legacy sandbox-root error for outside paths", () => {
+  it("includes the container workspace root in outside-path errors", () => {
     const sandbox = createSandbox();
     const mounts = buildSandboxFsMounts(sandbox);
     expect(() =>
@@ -100,7 +100,31 @@ describe("resolveSandboxFsPathWithMounts", () => {
         defaultContainerRoot: sandbox.containerWorkdir,
         mounts,
       }),
-    ).toThrow(/Path escapes sandbox root/);
+    ).toThrow(
+      /Path escapes sandbox root \(.*container root \/workspace\): \/etc\/passwd\. Use a path under \/workspace\/ instead\./,
+    );
+  });
+
+  it("uses the configured custom container root in outside-path errors", () => {
+    const sandbox = createSandbox({
+      containerWorkdir: "/sandbox-root",
+      docker: {
+        ...createSandbox().docker,
+        workdir: "/sandbox-root",
+      },
+    });
+    const mounts = buildSandboxFsMounts(sandbox);
+    expect(() =>
+      resolveSandboxFsPathWithMounts({
+        filePath: "/tmp/healthcheck-alert/config.json",
+        cwd: sandbox.workspaceDir,
+        defaultWorkspaceRoot: sandbox.workspaceDir,
+        defaultContainerRoot: sandbox.containerWorkdir,
+        mounts,
+      }),
+    ).toThrow(
+      /Path escapes sandbox root \(.*container root \/sandbox-root\): \/tmp\/healthcheck-alert\/config\.json\. Use a path under \/sandbox-root\/ instead\./,
+    );
   });
 
   it("prefers custom bind mounts over default workspace mount at /workspace", () => {

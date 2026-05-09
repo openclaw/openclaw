@@ -71,6 +71,19 @@ function isAnthropicApi(modelApi?: string | null): boolean {
   return modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream";
 }
 
+function isOpenAiResponsesCompatibleApi(modelApi?: string | null): boolean {
+  return (
+    modelApi === "openai-responses" ||
+    modelApi === "openai-codex-responses" ||
+    modelApi === "azure-openai-responses"
+  );
+}
+
+function isClaudeFamilyModelId(modelId?: string | null): boolean {
+  const id = normalizeLowercaseStringOrEmpty(modelId);
+  return /(?:^|[./:_-])claude(?:$|[./:_-])/.test(id);
+}
+
 /**
  * Provides a narrow replay-policy fallback for providers that do not have an
  * owning runtime plugin.
@@ -101,6 +114,9 @@ function buildUnownedProviderTransportReplayFallback(params: {
   }
 
   const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  const isClaudeOpenAiResponses = isOpenAiResponsesCompatibleApi(params.modelApi)
+    ? isClaudeFamilyModelId(modelId)
+    : false;
   return {
     ...(isGoogle || isAnthropic ? { sanitizeMode: "full" as const } : {}),
     ...(isGoogle || isAnthropic || requiresOpenAiCompatibleToolIdSanitization
@@ -126,7 +142,9 @@ function buildUnownedProviderTransportReplayFallback(params: {
       : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
-    ...(isAnthropic || isStrictOpenAiCompatible ? { validateAnthropicTurns: true } : {}),
+    ...(isAnthropic || isStrictOpenAiCompatible || isClaudeOpenAiResponses
+      ? { validateAnthropicTurns: true }
+      : {}),
     ...(isGoogle || isAnthropic ? { allowSyntheticToolResults: true } : {}),
   };
 }

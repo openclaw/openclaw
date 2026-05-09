@@ -151,13 +151,30 @@ export function resolveSandboxFsPathWithMounts(params: {
     };
   }
 
-  // Preserve legacy error wording for out-of-sandbox paths.
-  resolveSandboxPath({
-    filePath: input,
-    cwd: params.cwd,
-    root: params.defaultWorkspaceRoot,
+  const escapeMessage = formatSandboxRootEscapeMessage({
+    input,
+    defaultWorkspaceRoot: params.defaultWorkspaceRoot,
+    defaultContainerRoot: params.defaultContainerRoot,
   });
-  throw new Error(`Path escapes sandbox root (${params.defaultWorkspaceRoot}): ${input}`);
+  try {
+    resolveSandboxPath({
+      filePath: input,
+      cwd: params.cwd,
+      root: params.defaultWorkspaceRoot,
+    });
+  } catch {
+    throw new Error(escapeMessage);
+  }
+  throw new Error(escapeMessage);
+}
+
+function formatSandboxRootEscapeMessage(params: {
+  input: string;
+  defaultWorkspaceRoot: string;
+  defaultContainerRoot: string;
+}): string {
+  const containerRoot = normalizeContainerPath(params.defaultContainerRoot);
+  return `Path escapes sandbox root (${params.defaultWorkspaceRoot}; container root ${containerRoot}): ${params.input}. Use a path under ${containerRoot}/ instead.`;
 }
 
 function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): number {

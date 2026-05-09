@@ -167,6 +167,7 @@ Docs: https://docs.openclaw.ai
 - OpenAI/Codex: install the Codex runtime plugin from npm during OpenAI onboarding and load it automatically for implicit OpenAI model routes, while preserving manual PI runtime overrides. Fixes #79358.
 - OpenAI/realtime voice: defer `response.create` while a realtime response is still active, retry after `response.done`/`response.cancelled`, and align GA input transcription/noise-reduction defaults with the Codex realtime reference so Discord/Voice Call consult results can resume speaking instead of tripping the active-response race.
 - OpenAI/realtime voice: avoid duplicate barge-in cancellation requests, log realtime model interruption/cutoff events in Discord voice logs, and treat OpenAI's no-active-response cancellation reply as a completed cancel so Discord voice sessions do not wedge pending speech after fast interruptions.
+- Agents/runtime: strip trailing assistant prefill for Claude-family OpenAI Responses routes, persist prompt/assistant profile cooldown marks before fallback, and show the configured container root in sandbox escape diagnostics. Fixes #79688 and #79712. Thanks @stainlu and @mushuiyu886.
 - Gateway: avoid false degraded event-loop health during rapid health/readiness/status probes unless sustained load has delay co-evidence, while keeping hard delay detection immediate. (#77028) Thanks @rubencu.
 - Markdown: keep blockquote spans off trailing paragraph separators. Fixes #79646.
 - Plugin SDK/LM Studio: recover Harmony plain-text tool calls from LM Studio streams. Fixes #78326.

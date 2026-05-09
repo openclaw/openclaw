@@ -81,6 +81,7 @@ describe("resolveAttemptTranscriptPolicy", () => {
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
       repairToolUseResultPairing: true,
+      validateAnthropicTurns: false,
       allowSyntheticToolResults: false,
     });
     expect(resolveProviderRuntimePluginMock).toHaveBeenCalledWith({
@@ -88,6 +89,24 @@ describe("resolveAttemptTranscriptPolicy", () => {
       config: undefined,
       workspaceDir: "/tmp/openclaw-transcript-policy",
       env,
+    });
+  });
+
+  it("inherits Claude-family OpenAI Responses turn validation from legacy fallback", () => {
+    const policy = resolveAttemptTranscriptPolicy({
+      runtimePlanModelContext: {
+        workspaceDir: "/tmp/openclaw-transcript-policy",
+        modelApi: "openai-responses",
+      },
+      provider: "anthropic-foundry",
+      modelId: "anthropic-foundry/claude-opus-4-7",
+    });
+
+    expect(policy).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      validateAnthropicTurns: true,
+      validateGeminiTurns: false,
     });
   });
 });
