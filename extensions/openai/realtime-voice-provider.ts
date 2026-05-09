@@ -19,6 +19,7 @@ import type {
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
+  RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
@@ -95,6 +96,14 @@ type RealtimeEvent = {
   item_id?: string;
   call_id?: string;
   name?: string;
+  arguments?: string;
+  item?: {
+    id?: string;
+    type?: string;
+    name?: string;
+    call_id?: string;
+    arguments?: string;
+  };
   response?: {
     id?: string;
     status?: string;
@@ -272,6 +281,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
   private static readonly BASE_RECONNECT_DELAY_MS = 1000;
   private static readonly CONNECT_TIMEOUT_MS = 10_000;
+  readonly supportsToolResultContinuation = true;
 
   private ws: WebSocket | null = null;
   private connected = false;
@@ -288,6 +298,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
   private toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
+  private deliveredToolCallKeys = new Set<string>();
   private readonly flowId = randomUUID();
   private sessionReadyFired = false;
   private readonly audioFormat: RealtimeVoiceAudioFormat;
@@ -338,7 +349,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.sendUserMessage(instructions ?? this.config.instructions ?? "Greet the meeting.");
   }
 
-  submitToolResult(callId: string, result: unknown): void {
+  submitToolResult(
+    callId: string,
+    result: unknown,
+    options?: RealtimeVoiceToolResultOptions,
+  ): void {
     this.sendEvent({
       type: "conversation.item.create",
       item: {
@@ -347,7 +362,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         output: JSON.stringify(result),
       },
     });
-    this.requestResponseCreate();
+    if (options?.willContinue !== true) {
+      this.requestResponseCreate();
+    }
   }
 
   acknowledgeMark(): void {
@@ -774,23 +791,26 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "response.function_call_arguments.done": {
         const key = event.item_id ?? "unknown";
         const buffered = this.toolCallBuffers.get(key);
-        if (this.config.onToolCall) {
-          const rawArgs =
-            buffered?.args ||
-            ((event as unknown as Record<string, unknown>).arguments as string) ||
-            "{}";
-          let args: unknown = {};
-          try {
-            args = JSON.parse(rawArgs);
-          } catch {}
-          this.config.onToolCall({
-            itemId: key,
-            callId: buffered?.callId || event.call_id || "",
-            name: buffered?.name || event.name || "",
-            args,
-          });
-        }
+        this.emitToolCallOnce({
+          itemId: event.item_id,
+          callId: buffered?.callId || event.call_id,
+          name: buffered?.name || event.name,
+          rawArgs: buffered?.args || event.arguments,
+        });
         this.toolCallBuffers.delete(key);
+        return;
+      }
+
+      case "conversation.item.done": {
+        if (event.item?.type !== "function_call") {
+          return;
+        }
+        this.emitToolCallOnce({
+          itemId: event.item.id ?? event.item_id,
+          callId: event.item.call_id ?? event.call_id ?? event.item.id ?? event.item_id,
+          name: event.item.name ?? event.name,
+          rawArgs: event.item.arguments ?? event.arguments,
+        });
         return;
       }
 
@@ -864,6 +884,35 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.config.onClearAudio();
   }
 
+  private emitToolCallOnce(fields: {
+    itemId?: string;
+    callId?: string;
+    name?: string;
+    rawArgs?: string;
+  }): void {
+    if (!this.config.onToolCall) {
+      return;
+    }
+    const itemId = fields.itemId || fields.callId || "unknown";
+    const callId = fields.callId || itemId;
+    const name = fields.name || "";
+    const dedupeKey = fields.itemId || fields.callId || `${name}:${fields.rawArgs ?? ""}`;
+    if (this.deliveredToolCallKeys.has(dedupeKey)) {
+      return;
+    }
+    this.deliveredToolCallKeys.add(dedupeKey);
+    let args: unknown = {};
+    try {
+      args = JSON.parse(fields.rawArgs || "{}");
+    } catch {}
+    this.config.onToolCall({
+      itemId,
+      callId,
+      name,
+      args,
+    });
+  }
+
   private requestResponseCreate(): void {
     if (this.responseActive || this.responseCreateInFlight || this.responseCancelInFlight) {
       this.responseCreatePending = true;
@@ -890,6 +939,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseCreatePending = false;
     this.lastAssistantItemId = null;
     this.toolCallBuffers.clear();
+    this.deliveredToolCallKeys.clear();
   }
 
   private sendMark(): void {
@@ -937,6 +987,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     if (event.type === "response.cancelled") {
       return "cancelled";
+    }
+    if (event.type === "conversation.item.done" && event.item?.type) {
+      return [event.item.type, event.item.name ? `name=${event.item.name}` : undefined]
+        .filter(Boolean)
+        .join(" ");
     }
     return undefined;
   }

@@ -151,6 +151,17 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
   });
 
+  it("advertises continuing realtime tool results", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    expect(bridge.supportsToolResultContinuation).toBe(true);
+  });
+
   it("adds OpenClaw attribution headers to native realtime websocket requests", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const provider = buildOpenAIRealtimeVoiceProvider();
@@ -768,6 +779,125 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
   });
 
+  it("emits tool calls from realtime conversation item done events", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onToolCall = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall,
+      onEvent,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.done",
+          item: {
+            id: "item_tool_1",
+            type: "function_call",
+            name: "openclaw_agent_consult",
+            call_id: "call_1",
+            arguments: JSON.stringify({ question: "delegate this" }),
+          },
+        }),
+      ),
+    );
+
+    expect(onToolCall).toHaveBeenCalledWith({
+      itemId: "item_tool_1",
+      callId: "call_1",
+      name: "openclaw_agent_consult",
+      args: { question: "delegate this" },
+    });
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "conversation.item.done",
+      detail: "function_call name=openclaw_agent_consult",
+    });
+  });
+
+  it("deduplicates tool calls reported by arguments done and item done events", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onToolCall = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.function_call_arguments.delta",
+          item_id: "item_tool_1",
+          name: "openclaw_agent_consult",
+          call_id: "call_1",
+          delta: JSON.stringify({ question: "delegate this" }),
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.function_call_arguments.done",
+          item_id: "item_tool_1",
+          name: "openclaw_agent_consult",
+          call_id: "call_1",
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.done",
+          item: {
+            id: "item_tool_1",
+            type: "function_call",
+            name: "openclaw_agent_consult",
+            call_id: "call_1",
+            arguments: JSON.stringify({ question: "delegate this" }),
+          },
+        }),
+      ),
+    );
+
+    expect(onToolCall).toHaveBeenCalledTimes(1);
+    expect(onToolCall).toHaveBeenCalledWith({
+      itemId: "item_tool_1",
+      callId: "call_1",
+      name: "openclaw_agent_consult",
+      args: { question: "delegate this" },
+    });
+  });
+
   it("creates an explicit user item and response for manual speech", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onEvent = vi.fn();
@@ -851,6 +981,53 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
 
     expect(parseSent(socket).slice(-1)).toEqual([{ type: "response.create" }]);
+  });
+
+  it("does not request a realtime response for continuing tool results", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+
+    expect(parseSent(socket).slice(-1)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: JSON.stringify({ status: "working" }),
+        },
+      },
+    ]);
+    expect(parseSent(socket)).not.toContainEqual({ type: "response.create" });
+
+    bridge.submitToolResult("call_1", { text: "done" });
+
+    expect(parseSent(socket).slice(-2)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: JSON.stringify({ text: "done" }),
+        },
+      },
+      { type: "response.create" },
+    ]);
   });
 
   it("drains deferred response.create after response.cancelled", async () => {

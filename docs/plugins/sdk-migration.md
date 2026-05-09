@@ -120,6 +120,12 @@ await gateway.request("talk.session.create", {
 });
 await gateway.request("talk.session.appendAudio", { sessionId, audioBase64 });
 await gateway.request("talk.session.cancelOutput", { sessionId, reason: "barge-in" });
+await gateway.request("talk.session.submitToolResult", {
+  sessionId,
+  callId,
+  result: { status: "working" },
+  options: { willContinue: true },
+});
 await gateway.request("talk.session.submitToolResult", { sessionId, callId, result });
 await gateway.request("talk.session.close", { sessionId });
 
@@ -172,15 +178,15 @@ Removed method map:
 
 The unified control vocabulary is also deliberately narrow:
 
-| Method                          | Applies to                                              | Contract                                                                                      |
-| ------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `talk.session.appendAudio`      | `realtime/gateway-relay`, `transcription/gateway-relay` | Append a base64 PCM audio chunk to the provider session owned by the same Gateway connection. |
-| `talk.session.startTurn`        | `stt-tts/managed-room`                                  | Start a managed-room user turn.                                                               |
-| `talk.session.endTurn`          | `stt-tts/managed-room`                                  | End the active turn after stale-turn validation.                                              |
-| `talk.session.cancelTurn`       | all Gateway-owned sessions                              | Cancel active capture/provider/agent/TTS work for a turn.                                     |
-| `talk.session.cancelOutput`     | `realtime/gateway-relay`                                | Stop assistant audio output without necessarily ending the user turn.                         |
-| `talk.session.submitToolResult` | `realtime/gateway-relay`                                | Complete a provider tool call emitted by the relay.                                           |
-| `talk.session.close`            | all unified sessions                                    | Stop relay sessions or revoke managed-room state, then forget the unified session id.         |
+| Method                          | Applies to                                              | Contract                                                                                                                  |
+| ------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `talk.session.appendAudio`      | `realtime/gateway-relay`, `transcription/gateway-relay` | Append a base64 PCM audio chunk to the provider session owned by the same Gateway connection.                             |
+| `talk.session.startTurn`        | `stt-tts/managed-room`                                  | Start a managed-room user turn.                                                                                           |
+| `talk.session.endTurn`          | `stt-tts/managed-room`                                  | End the active turn after stale-turn validation.                                                                          |
+| `talk.session.cancelTurn`       | all Gateway-owned sessions                              | Cancel active capture/provider/agent/TTS work for a turn.                                                                 |
+| `talk.session.cancelOutput`     | `realtime/gateway-relay`                                | Stop assistant audio output without necessarily ending the user turn.                                                     |
+| `talk.session.submitToolResult` | `realtime/gateway-relay`                                | Complete a provider tool call emitted by the relay; pass `options.willContinue` for interim output before a final result. |
+| `talk.session.close`            | all unified sessions                                    | Stop relay sessions or revoke managed-room state, then forget the unified session id.                                     |
 
 Do not introduce provider or platform special cases in core to make this work.
 Core owns Talk session semantics. Provider plugins own vendor session setup.

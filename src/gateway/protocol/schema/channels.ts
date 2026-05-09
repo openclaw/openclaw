@@ -251,6 +251,14 @@ export const TalkSessionSubmitToolResultParamsSchema = Type.Object(
     sessionId: NonEmptyString,
     callId: NonEmptyString,
     result: Type.Unknown(),
+    options: Type.Optional(
+      Type.Object(
+        {
+          willContinue: Type.Optional(Type.Boolean()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

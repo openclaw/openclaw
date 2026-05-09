@@ -561,7 +561,12 @@ describe("talk.session unified handlers", () => {
     const toolRespond = vi.fn();
     await talkHandlers["talk.session.submitToolResult"]({
       req: { type: "req", id: "4", method: "talk.session.submitToolResult" },
-      params: { sessionId: "relay-unified-1", callId: "call-1", result: { ok: true } },
+      params: {
+        sessionId: "relay-unified-1",
+        callId: "call-1",
+        result: { status: "working" },
+        options: { willContinue: true },
+      },
       client: { connId: "conn-1" } as never,
       isWebchatConnect: () => false,
       respond: toolRespond as never,
@@ -571,7 +576,8 @@ describe("talk.session unified handlers", () => {
       relaySessionId: "relay-unified-1",
       connId: "conn-1",
       callId: "call-1",
-      result: { ok: true },
+      result: { status: "working" },
+      options: { willContinue: true },
     });
 
     const closeRespond = vi.fn();
