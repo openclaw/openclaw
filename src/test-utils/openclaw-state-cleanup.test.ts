@@ -1,19 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../infra/file-lock.js";
 import {
-  cleanupSessionStateForTest,
-  resetSessionStateCleanupRuntimeForTests,
-  setSessionStateCleanupRuntimeForTests,
-} from "./session-state-cleanup.js";
+  cleanupOpenClawStateForTest,
+  resetOpenClawStateCleanupRuntimeForTests,
+  setOpenClawStateCleanupRuntimeForTests,
+} from "./openclaw-state-cleanup.js";
 
 const drainFileLockStateMock = vi.hoisted(() => vi.fn(async () => undefined));
 
-describe("cleanupSessionStateForTest", () => {
+describe("cleanupOpenClawStateForTest", () => {
   beforeEach(() => {
     vi.useRealTimers();
     resetFileLockStateForTest();
     drainFileLockStateMock.mockClear();
-    setSessionStateCleanupRuntimeForTests({
+    setOpenClawStateCleanupRuntimeForTests({
       drainFileLockStateForTest: drainFileLockStateMock,
     });
   });
@@ -21,12 +21,12 @@ describe("cleanupSessionStateForTest", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetFileLockStateForTest();
-    resetSessionStateCleanupRuntimeForTests();
+    resetOpenClawStateCleanupRuntimeForTests();
     vi.restoreAllMocks();
   });
 
   it("cleans file locks and closes SQLite state", async () => {
-    await cleanupSessionStateForTest();
+    await cleanupOpenClawStateForTest();
 
     expect(drainFileLockStateMock).toHaveBeenCalledTimes(1);
   });

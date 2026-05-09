@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { captureEnv } from "./env.js";
-import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
+import { cleanupOpenClawStateForTest } from "./openclaw-state-cleanup.js";
 
 type OpenClawTestStateLayout = "home" | "state-only" | "split";
 
@@ -321,7 +321,7 @@ export async function createOpenClawTestState(
         return;
       }
       cleaned = true;
-      await cleanupSessionStateForTest().catch(() => undefined);
+      await cleanupOpenClawStateForTest().catch(() => undefined);
       state.restoreEnv();
       await fs.rm(root, { recursive: true, force: true });
     },

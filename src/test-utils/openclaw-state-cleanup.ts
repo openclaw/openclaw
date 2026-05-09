@@ -4,7 +4,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 
 let fileLockDrainerForTests: typeof drainFileLockStateForTest | null = null;
 
-export function setSessionStateCleanupRuntimeForTests(params: {
+export function setOpenClawStateCleanupRuntimeForTests(params: {
   drainFileLockStateForTest?: typeof drainFileLockStateForTest | null;
 }): void {
   if ("drainFileLockStateForTest" in params) {
@@ -12,11 +12,11 @@ export function setSessionStateCleanupRuntimeForTests(params: {
   }
 }
 
-export function resetSessionStateCleanupRuntimeForTests(): void {
+export function resetOpenClawStateCleanupRuntimeForTests(): void {
   fileLockDrainerForTests = null;
 }
 
-export async function cleanupSessionStateForTest(): Promise<void> {
+export async function cleanupOpenClawStateForTest(): Promise<void> {
   await (fileLockDrainerForTests ?? drainFileLockStateForTest)();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();

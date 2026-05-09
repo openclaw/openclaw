@@ -257,7 +257,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     {
       prefix: "openclaw-agent-",
       skipHomeCleanup: true,
-      skipSessionCleanup: true,
+      skipStateCleanup: true,
     },
   );
 }

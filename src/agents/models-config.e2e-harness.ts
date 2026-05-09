@@ -10,7 +10,7 @@ export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise
   // unrelated session database state during temp-home teardown.
   return withTempHomeBase(fn, {
     prefix: "openclaw-models-",
-    skipSessionCleanup: true,
+    skipStateCleanup: true,
   });
 }
 
