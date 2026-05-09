@@ -428,6 +428,9 @@ The remaining cleanup is mostly consolidation and deletion:
   only when the path has not been imported or mapped yet.
 - Role-ordering and compaction reset paths no longer unlink old transcript
   files; reset only rotates the SQLite session row and transcript identity.
+- Gateway reset responses still derive a temporary SQLite transcript locator
+  for clients, but the stored session row stays free of transcript locator
+  fields.
 - Memory-core dreaming no longer prunes session rows by probing for missing
   JSONL files. Subagent cleanup goes through the session runtime API instead of
   filesystem existence checks. Its transcript-ingestion tests seed SQLite rows

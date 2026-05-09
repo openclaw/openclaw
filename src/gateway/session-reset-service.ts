@@ -602,7 +602,7 @@ export async function performGatewaySessionReset(params: {
   reason: "new" | "reset";
   commandSource: string;
 }): Promise<
-  | { ok: true; key: string; entry: SessionEntry }
+  | { ok: true; key: string; entry: SessionEntry & { transcriptLocator: string } }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
   const { cfg, target } = (() => {
@@ -641,7 +641,6 @@ export async function performGatewaySessionReset(params: {
   let oldSessionId: string | undefined;
   let oldTranscriptLocator: string | undefined;
   let resetSourceEntry: SessionEntry | undefined;
-  let nextTranscriptLocator: string | undefined;
   let deleteOldTranscript = false;
   const currentEntry = getSessionEntry({
     agentId: target.agentId,
@@ -675,10 +674,6 @@ export async function performGatewaySessionReset(params: {
       : undefined;
     const now = Date.now();
     const nextSessionId = randomUUID();
-    nextTranscriptLocator = createSqliteSessionTranscriptLocator({
-      agentId: sessionAgentId,
-      sessionId: nextSessionId,
-    });
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
       updatedAt: now,
@@ -768,12 +763,6 @@ export async function performGatewaySessionReset(params: {
   });
 
   if (!hasSqliteSessionTranscriptEvents({ agentId: target.agentId, sessionId: next.sessionId })) {
-    const transcriptPath =
-      nextTranscriptLocator ??
-      createSqliteSessionTranscriptLocator({
-        agentId: target.agentId,
-        sessionId: next.sessionId,
-      });
     const header = {
       type: "session",
       version: CURRENT_SESSION_VERSION,
@@ -817,5 +806,15 @@ export async function performGatewaySessionReset(params: {
       reason: "session-reset",
     });
   }
-  return { ok: true, key: target.canonicalKey, entry: next };
+  return {
+    ok: true,
+    key: target.canonicalKey,
+    entry: {
+      ...next,
+      transcriptLocator: createSqliteSessionTranscriptLocator({
+        agentId: target.agentId,
+        sessionId: next.sessionId,
+      }),
+    },
+  };
 }
