@@ -44,21 +44,22 @@ const SESSION_KEY_COMPAT_METHODS = [
   "assemble",
   "compact",
 ] as const;
-const LEGACY_COMPAT_PARAMS = ["sessionKey", "prompt"] as const;
+const LEGACY_COMPAT_PARAMS = ["sessionKey", "prompt", "transcriptScope"] as const;
 const LEGACY_COMPAT_METHOD_KEYS = {
-  bootstrap: ["sessionKey"],
-  maintain: ["sessionKey"],
+  bootstrap: ["sessionKey", "transcriptScope"],
+  maintain: ["sessionKey", "transcriptScope"],
   ingest: ["sessionKey"],
   ingestBatch: ["sessionKey"],
-  afterTurn: ["sessionKey"],
+  afterTurn: ["sessionKey", "transcriptScope"],
   assemble: ["sessionKey", "prompt"],
-  compact: ["sessionKey"],
+  compact: ["sessionKey", "transcriptScope"],
 } as const;
 
 type SessionKeyCompatMethodName = (typeof SESSION_KEY_COMPAT_METHODS)[number];
 type SessionKeyCompatParams = {
   sessionKey?: string;
   prompt?: string;
+  transcriptScope?: unknown;
 };
 type LegacyCompatKey = (typeof LEGACY_COMPAT_PARAMS)[number];
 type LegacyCompatParamMap = Partial<Record<LegacyCompatKey, unknown>>;
@@ -143,6 +144,15 @@ const LEGACY_UNKNOWN_FIELD_PATTERNS: Record<LegacyCompatKey, readonly RegExp[]> 
     /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]prompt['"`]/i,
     /['"`]prompt['"`].*\b(?:was|is)\s+not allowed\b/i,
     /"code"\s*:\s*"unrecognized_keys"[^]*"prompt"/i,
+  ],
+  transcriptScope: [
+    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]transcriptScope['"`]/i,
+    /\badditional propert(?:y|ies)\b.*['"`]transcriptScope['"`]/i,
+    /\bmust not have additional propert(?:y|ies)\b.*['"`]transcriptScope['"`]/i,
+    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]transcriptScope['"`]/i,
+    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]transcriptScope['"`]/i,
+    /['"`]transcriptScope['"`].*\b(?:was|is)\s+not allowed\b/i,
+    /"code"\s*:\s*"unrecognized_keys"[^]*"transcriptScope"/i,
   ],
 } as const;
 
@@ -299,7 +309,22 @@ function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEn
           isLegacy &&
           allowedKeys.some((key) => rejectedKeys.has(key) && hasOwnLegacyCompatKey(params, key))
         ) {
-          return method(withoutLegacyCompatKeys(params, rejectedKeys));
+          return invokeWithLegacyCompat(
+            method,
+            withoutLegacyCompatKeys(params, rejectedKeys),
+            allowedKeys,
+            {
+              onLegacyModeDetected: () => {
+                isLegacy = true;
+              },
+              onLegacyKeysDetected: (keys) => {
+                for (const key of keys) {
+                  rejectedKeys.add(key);
+                }
+              },
+              rejectedKeys,
+            },
+          );
         }
         return invokeWithLegacyCompat(method, params, allowedKeys, {
           onLegacyModeDetected: () => {

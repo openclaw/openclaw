@@ -107,6 +107,11 @@ export type TranscriptRewriteResult = {
 
 export type ContextEngineMaintenanceResult = TranscriptRewriteResult;
 
+export type ContextEngineTranscriptScope = {
+  agentId: string;
+  sessionId: string;
+};
+
 type ContextEnginePromptCacheRetention = "none" | "short" | "long" | "in_memory" | "24h";
 
 type ContextEnginePromptCacheUsage = {
@@ -153,6 +158,8 @@ export type ContextEnginePromptCacheInfo = {
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** Runtime-resolved agent id for the active session. */
   agentId?: string;
+  /** Runtime-resolved SQLite transcript scope for the active session. */
+  transcriptScope?: ContextEngineTranscriptScope;
   /**
    * True when the host has explicitly opted this maintenance run into
    * consuming deferred compaction debt.
@@ -197,6 +204,7 @@ export interface ContextEngine {
   bootstrap?(params: {
     sessionId: string;
     sessionKey?: string;
+    transcriptScope?: ContextEngineTranscriptScope;
     transcriptLocator: string;
   }): Promise<BootstrapResult>;
 
@@ -209,6 +217,7 @@ export interface ContextEngine {
   maintain?(params: {
     sessionId: string;
     sessionKey?: string;
+    transcriptScope?: ContextEngineTranscriptScope;
     transcriptLocator: string;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<ContextEngineMaintenanceResult>;
@@ -243,6 +252,7 @@ export interface ContextEngine {
   afterTurn?(params: {
     sessionId: string;
     sessionKey?: string;
+    transcriptScope?: ContextEngineTranscriptScope;
     transcriptLocator: string;
     messages: AgentMessage[];
     /** Number of messages that existed before the prompt was sent. */
@@ -284,6 +294,7 @@ export interface ContextEngine {
   compact(params: {
     sessionId: string;
     sessionKey?: string;
+    transcriptScope?: ContextEngineTranscriptScope;
     transcriptLocator: string;
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */
