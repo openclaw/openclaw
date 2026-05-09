@@ -331,12 +331,12 @@ async function readPhaseSignalStoreForTest(workspaceDir: string, nowMs: number) 
 function createTestTranscriptFixture(
   workspaceDir: string,
   agentId: string,
-  fileName: string,
+  sessionId: string,
 ): TestTranscriptFixture {
   return {
     workspaceDir,
     agentId,
-    sessionId: path.basename(fileName).replace(/\.jsonl$/i, ""),
+    sessionId,
   };
 }
 
@@ -763,11 +763,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const transcriptFixture = createTestTranscriptFixture(
-      workspaceDir,
-      "main",
-      "dreaming-main.jsonl",
-    );
+    const transcriptFixture = createTestTranscriptFixture(workspaceDir, "main", "dreaming-main");
     await writeTranscriptFixture(
       transcriptFixture,
       [
@@ -864,7 +860,7 @@ describe("memory-core dreaming phases", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
 
     await writeTranscriptFixture(
-      createTestTranscriptFixture(workspaceDir, "main", "main-session.jsonl"),
+      createTestTranscriptFixture(workspaceDir, "main", "main-session"),
       [
         JSON.stringify({
           type: "message",
@@ -877,7 +873,7 @@ describe("memory-core dreaming phases", () => {
       ].join("\n") + "\n",
     );
     await writeTranscriptFixture(
-      createTestTranscriptFixture(workspaceDir, "agi-ceo", "subagent-session.jsonl"),
+      createTestTranscriptFixture(workspaceDir, "agi-ceo", "subagent-session"),
       [
         JSON.stringify({
           type: "message",
@@ -941,11 +937,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const transcriptFixture = createTestTranscriptFixture(
-      workspaceDir,
-      "main",
-      "dreaming-main.jsonl",
-    );
+    const transcriptFixture = createTestTranscriptFixture(workspaceDir, "main", "dreaming-main");
     await writeTranscriptFixture(
       transcriptFixture,
       [
@@ -1009,7 +1001,7 @@ describe("memory-core dreaming phases", () => {
     const transcriptFixture = createTestTranscriptFixture(
       workspaceDir,
       "main",
-      "dreaming-narrative.jsonl",
+      "dreaming-narrative",
     );
     await writeTranscriptFixture(
       transcriptFixture,
@@ -1101,7 +1093,7 @@ describe("memory-core dreaming phases", () => {
     const transcriptFixture = createTestTranscriptFixture(
       workspaceDir,
       "main",
-      "dreaming-narrative.jsonl",
+      "dreaming-narrative",
     );
     await writeTranscriptFixture(
       transcriptFixture,
@@ -1183,7 +1175,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const transcriptFixture = createTestTranscriptFixture(workspaceDir, "main", "cron-run.jsonl");
+    const transcriptFixture = createTestTranscriptFixture(workspaceDir, "main", "cron-run");
     await writeTranscriptFixture(
       transcriptFixture,
       [
@@ -1263,11 +1255,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const transcriptFixture = createTestTranscriptFixture(
-      workspaceDir,
-      "main",
-      "ordinary-session.jsonl",
-    );
+    const transcriptFixture = createTestTranscriptFixture(workspaceDir, "main", "ordinary-session");
     await writeTranscriptFixture(
       transcriptFixture,
       [
@@ -1395,7 +1383,7 @@ describe("memory-core dreaming phases", () => {
     const transcriptFixture = createTestTranscriptFixture(
       workspaceDir,
       "main",
-      "dreaming-narrative.jsonl",
+      "dreaming-narrative",
     );
     await writeTranscriptFixture(
       transcriptFixture,
@@ -1468,11 +1456,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const transcriptFixture = createTestTranscriptFixture(
-      workspaceDir,
-      "main",
-      "dreaming-main.jsonl",
-    );
+    const transcriptFixture = createTestTranscriptFixture(workspaceDir, "main", "dreaming-main");
     const oldMessage = "Move backups to S3 Glacier.";
     await writeTranscriptFixture(
       transcriptFixture,
@@ -1576,11 +1560,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const transcriptFixture = createTestTranscriptFixture(
-      workspaceDir,
-      "main",
-      "dreaming-main.jsonl",
-    );
+    const transcriptFixture = createTestTranscriptFixture(workspaceDir, "main", "dreaming-main");
     await writeTranscriptFixture(
       transcriptFixture,
       [
@@ -1652,11 +1632,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const transcriptFixture = createTestTranscriptFixture(
-      workspaceDir,
-      "main",
-      "dreaming-main.jsonl",
-    );
+    const transcriptFixture = createTestTranscriptFixture(workspaceDir, "main", "dreaming-main");
     const lines: string[] = [];
     for (let index = 0; index < 160; index += 1) {
       lines.push(
@@ -1724,11 +1700,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const transcriptFixture = createTestTranscriptFixture(
-      workspaceDir,
-      "main",
-      "dreaming-main.jsonl",
-    );
+    const transcriptFixture = createTestTranscriptFixture(workspaceDir, "main", "dreaming-main");
 
     await writeTranscriptFixture(
       transcriptFixture,
@@ -1816,11 +1788,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const transcriptFixture = createTestTranscriptFixture(
-      workspaceDir,
-      "main",
-      "dreaming-main.jsonl",
-    );
+    const transcriptFixture = createTestTranscriptFixture(workspaceDir, "main", "dreaming-main");
     await writeTranscriptFixture(
       transcriptFixture,
       [
