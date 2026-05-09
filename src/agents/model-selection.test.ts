@@ -965,7 +965,12 @@ describe("model-selection", () => {
       });
 
       expect(result.allowAny).toBe(false);
-      expect(result.allowedCatalog).toEqual([]);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+        { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+        { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+        { provider: "vllm", id: "local-added-after-startup", name: "Local Added After Startup" },
+      ]);
       expect(result.allowedKeys.has("openai-codex/gpt-5.4-codex")).toBe(true);
       expect(result.allowedKeys.has("openai-codex/gpt-5.5-codex")).toBe(true);
       expect(result.allowedKeys.has("vllm/local-added-after-startup")).toBe(true);
@@ -998,6 +1003,8 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
       expect(result.allowedCatalog).toEqual([
         { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+        { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+        { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
       ]);
       expect(result.allowedKeys.has("openai-codex/gpt-5.5-codex")).toBe(true);
       expect(result.allowedKeys.has("vllm/qwen-local")).toBe(false);

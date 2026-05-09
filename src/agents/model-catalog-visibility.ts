@@ -80,7 +80,9 @@ export function resolveVisibleModelCatalog(params: {
           ...buildDefaultVisibleCatalog().filter((entry) =>
             visibility.providerWildcards.has(normalizeProviderId(entry.provider)),
           ),
-          ...allowed.allowedCatalog,
+          ...allowed.allowedCatalog.filter(
+            (entry) => !visibility.providerWildcards.has(normalizeProviderId(entry.provider)),
+          ),
         ]),
       );
     }

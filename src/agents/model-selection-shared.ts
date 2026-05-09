@@ -704,6 +704,7 @@ export function buildAllowedModelSetWithFallbacks(params: {
       continue;
     }
     allowedKeys.add(modelKey(entry.provider, entry.id));
+    addAllowedCatalogRef({ provider: entry.provider, model: entry.id });
   }
   const addAllowedModelRef = (raw: string) => {
     const trimmed = raw.trim();
