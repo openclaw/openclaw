@@ -115,10 +115,20 @@ async function* yieldToolCallEvent(): AsyncIterable<AcpRuntimeEvent> {
   };
 }
 
-async function* yieldNothing(): AsyncIterable<AcpRuntimeEvent> {
+function yieldNothing(): AsyncIterable<AcpRuntimeEvent> {
   // No events → simulates a session that exists but has no in-flight turn.
-  // Pinning the discriminator for Test 3.
-  return;
+  // Pinning the discriminator for Test 3. Implemented as a plain async
+  // iterable rather than `async function*` so the require-yield lint rule
+  // does not flag a generator with no `yield`.
+  return {
+    [Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {
+      return {
+        next(): Promise<IteratorResult<AcpRuntimeEvent>> {
+          return Promise.resolve({ value: undefined, done: true });
+        },
+      };
+    },
+  };
 }
 
 async function drainEvents(events: AsyncIterable<AcpRuntimeEvent>): Promise<AcpRuntimeEvent[]> {
@@ -205,9 +215,11 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
       // The discriminating signal: did SOMETHING write to the advertised
       // stream.ndjson path during the turn? Today: zero. After the fix: at
       // least one call whose first arg matches the advertised path.
-      const matchingCalls = appendFileSpy.mock.calls.filter(([targetPath]) => {
-        return typeof targetPath === "string" && targetPath === advertisedActivePath;
-      });
+      const matchingCalls = appendFileSpy.mock.calls.filter(
+        ([targetPath]: [unknown, ...unknown[]]) => {
+          return typeof targetPath === "string" && targetPath === advertisedActivePath;
+        },
+      );
       expect(
         matchingCalls.length,
         "No openclaw-side writer wrote to event_log.active_path during runTurn. " +
@@ -246,9 +258,11 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
         }),
       );
 
-      const matchingCalls = appendFileSpy.mock.calls.filter(([targetPath]) => {
-        return typeof targetPath === "string" && targetPath === advertisedActivePath;
-      });
+      const matchingCalls = appendFileSpy.mock.calls.filter(
+        ([targetPath]: [unknown, ...unknown[]]) => {
+          return typeof targetPath === "string" && targetPath === advertisedActivePath;
+        },
+      );
       // Fail-fast guard so the parse step doesn't blow up with a confusing
       // index-out-of-bounds error before the path-match assertion above gets a
       // chance to surface its own message.
@@ -266,20 +280,26 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
       // shape — keeps the test from over-pinning a future writer's exact
       // framing convention while still proving the payload is structured.
       const payloads = matchingCalls
-        .map(([, payload]) => (typeof payload === "string" ? payload : payload?.toString("utf8")))
-        .filter((value): value is string => typeof value === "string");
+        .map(([, payload]: [unknown, unknown?, ...unknown[]]) =>
+          typeof payload === "string"
+            ? payload
+            : payload instanceof Uint8Array
+              ? new TextDecoder().decode(payload)
+              : undefined,
+        )
+        .filter((value: string | undefined): value is string => typeof value === "string");
       const parsedFrames = payloads
-        .flatMap((payload) => payload.split("\n"))
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
-        .map((line) => {
+        .flatMap((payload: string) => payload.split("\n"))
+        .map((line: string) => line.trim())
+        .filter((line: string) => line.length > 0)
+        .map((line: string) => {
           try {
             return JSON.parse(line) as unknown;
           } catch {
             return null;
           }
         });
-      const toolCallFrame = parsedFrames.find((frame) => {
+      const toolCallFrame = parsedFrames.find((frame: unknown) => {
         if (typeof frame !== "object" || frame === null) {
           return false;
         }
@@ -326,9 +346,11 @@ describe("AcpxRuntime event_log.active_path wire-byte writer (catalog #4)", () =
         mode: "persistent",
       });
 
-      const matchingCalls = appendFileSpy.mock.calls.filter(([targetPath]) => {
-        return typeof targetPath === "string" && targetPath === advertisedActivePath;
-      });
+      const matchingCalls = appendFileSpy.mock.calls.filter(
+        ([targetPath]: [unknown, ...unknown[]]) => {
+          return typeof targetPath === "string" && targetPath === advertisedActivePath;
+        },
+      );
       expect(
         matchingCalls.length,
         "ensureSession alone (with no session/update) wrote to the " +
