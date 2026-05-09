@@ -107,6 +107,33 @@ Rules:
 - `agents.list[].skills`: optional per-agent final skill allowlist; explicit
   lists replace inherited defaults instead of merging.
 
+## Symlinked sibling repos
+
+By default, each skill root is a containment boundary. If a skill folder under
+`~/.agents/skills` is a symlink that resolves outside `~/.agents/skills`,
+OpenClaw skips it and logs `Skipping escaped skill path outside its configured
+root`.
+
+Keep the symlink layout and allow only the trusted target root:
+
+```json5
+{
+  skills: {
+    load: {
+      extraDirs: ["~/Projects/manager/skills"],
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
+    },
+  },
+}
+```
+
+With this config, a symlink such as
+`~/.agents/skills/manager -> ~/Projects/manager/skills` is accepted after
+realpath resolution. `extraDirs` also scans the sibling repo directly, while
+`allowSymlinkTargets` preserves the symlinked path for existing agent-skill
+layouts. Keep target entries narrow; do not point at broad roots such as `~` or
+`~/Projects` unless every skill tree under that root is trusted.
+
 Per-skill fields:
 
 - `enabled`: set `false` to disable a skill even if it's bundled/installed.
