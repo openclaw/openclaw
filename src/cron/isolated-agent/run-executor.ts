@@ -171,6 +171,7 @@ export function createCronPromptExecutor(params: {
             onExecutionStarted: params.onExecutionStarted,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            payloadNoOutputTimeoutMs: params.agentPayload?.noOutputTimeoutMs,
             senderIsOwner: true,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(

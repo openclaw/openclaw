@@ -116,4 +116,52 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       "agent:default:cron:cli-monitor",
     );
   });
+
+  it("forwards payload.noOutputTimeoutMs to the CLI runner for resume-lane watchdog override", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        sessionEntry: {
+          ...makeCronSession().sessionEntry,
+          sessionId: "cli-timeout-run-1",
+        },
+      }),
+    );
+    mockRunCronFallbackPassthrough();
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        sessionKey: "cron:cli-timeout-test",
+        job: makeIsolatedAgentTurnJob({
+          payload: { kind: "agentTurn", message: "test", noOutputTimeoutMs: 600_000 },
+        }),
+      }),
+    );
+
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      payloadNoOutputTimeoutMs: 600_000,
+    });
+  });
+
+  it("omits payloadNoOutputTimeoutMs from the CLI runner when payload does not set it", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    resolveCronSessionMock.mockReturnValue(makeCronSession());
+    mockRunCronFallbackPassthrough();
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({ sessionKey: "cron:cli-no-timeout" }),
+    );
+
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.payloadNoOutputTimeoutMs).toBeUndefined();
+  });
 });
