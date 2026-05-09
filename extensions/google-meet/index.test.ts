@@ -3445,9 +3445,10 @@ describe("google-meet plugin", () => {
         params: { url: "https://meet.google.com/abc-defg-hij" },
         respond: joinRespond,
       });
-      expect(joinRespond.mock.calls[0]?.[1]).toMatchObject({
-        session: { chrome: { health: { inCall: false } } },
-      });
+      const joinPayload = requireRecord(joinRespond.mock.calls[0]?.[1], "join response payload");
+      const joinSession = requireRecord(joinPayload.session, "join session");
+      const joinChrome = requireRecord(joinSession.chrome, "join chrome session");
+      expect(requireRecord(joinChrome.health, "join chrome health").inCall).toBe(false);
       browserState = {
         inCall: true,
         micMuted: false,
@@ -3456,19 +3457,18 @@ describe("google-meet plugin", () => {
       };
       await status?.({ params: {}, respond: statusRespond });
 
-      expect(statusRespond.mock.calls[0]?.[1]).toMatchObject({
-        sessions: [
-          {
-            chrome: {
-              health: {
-                inCall: true,
-                speechReady: false,
-                speechBlockedReason: "audio-bridge-unavailable",
-              },
-            },
-          },
-        ],
-      });
+      const statusPayload = requireRecord(
+        statusRespond.mock.calls[0]?.[1],
+        "status response payload",
+      );
+      const sessions = statusPayload.sessions as unknown[];
+      expect(sessions).toHaveLength(1);
+      const statusSession = requireRecord(sessions[0], "status session");
+      const statusChrome = requireRecord(statusSession.chrome, "status chrome session");
+      const statusHealth = requireRecord(statusChrome.health, "status chrome health");
+      expect(statusHealth.inCall).toBe(true);
+      expect(statusHealth.speechReady).toBe(false);
+      expect(statusHealth.speechBlockedReason).toBe("audio-bridge-unavailable");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
@@ -3508,16 +3508,21 @@ describe("google-meet plugin", () => {
       timeoutMs: 100,
     });
 
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "googlemeet.chrome",
-        params: expect.objectContaining({
-          action: "start",
-          mode: "transcribe",
-        }),
-      }),
+    const startCall = nodesInvoke.mock.calls.find(([rawCall]) => {
+      const call = requireRecord(rawCall, "node invoke");
+      const params = requireRecord(call.params, "node invoke params");
+      return call.command === "googlemeet.chrome" && params.action === "start";
+    });
+    if (!startCall) {
+      throw new Error("Expected googlemeet.chrome start node invoke");
+    }
+    const startParams = requireRecord(
+      requireRecord(startCall[0], "start node invoke").params,
+      "start params",
     );
-    expect(result.details).toMatchObject({ listenVerified: true, transcriptLines: 1 });
+    expect(startParams.mode).toBe("transcribe");
+    expect(result.details.listenVerified).toBe(true);
+    expect(result.details.transcriptLines).toBe(1);
   });
 
   it("does not start a second realtime response for test speech", async () => {
