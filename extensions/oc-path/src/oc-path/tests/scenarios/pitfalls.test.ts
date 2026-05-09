@@ -27,7 +27,6 @@ import {
 } from "../../index.js";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { parseJsonl } from "../../jsonl/parse.js";
-import { parseYaml } from "../../yaml/parse.js";
 
 // ---------- Encoding pitfalls --------------------------------------------
 
@@ -122,7 +121,9 @@ describe("wave-23 pitfalls — predicate content", () => {
   });
 
   it("P-012 findOcPaths matches a leaf whose id contains a slash", () => {
-    const ast = parseYaml("steps:\n  - id: foo/bar\n    cmd: x\n  - id: baz\n    cmd: y\n").ast;
+    const ast = parseJsonc(
+      '{"steps":[{"id":"foo/bar","cmd":"x"},{"id":"baz","cmd":"y"}]}',
+    ).ast;
     const out = findOcPaths(ast, parseOcPath("oc://wf/steps/[id=foo/bar]/cmd"));
     expect(out).toHaveLength(1);
     if (out[0].match.kind === "leaf") {
@@ -136,7 +137,7 @@ describe("wave-23 pitfalls — predicate content", () => {
   });
 
   it("P-013 findOcPaths matches a leaf whose id is `1.0`", () => {
-    const ast = parseYaml('steps:\n  - id: "1.0"\n    cmd: x\n  - id: "2.0"\n    cmd: y\n').ast;
+    const ast = parseJsonc('{"steps":[{"id":"1.0","cmd":"x"},{"id":"2.0","cmd":"y"}]}').ast;
     const out = findOcPaths(ast, parseOcPath("oc://wf/steps/[id=1.0]/cmd"));
     expect(out).toHaveLength(1);
     if (out[0].match.kind === "leaf") {
@@ -193,10 +194,10 @@ describe("wave-23 pitfalls — sentinels & collisions", () => {
     }
   });
 
-  it("P-021 `$last` literal in a yaml key is shadowed by positional sentinel", () => {
+  it("P-021 `$last` literal in an object key is shadowed by positional sentinel", () => {
     // Document v0 limitation: `$last` always means "last", never a literal key.
     // Authors with `$last` literal keys must use kind-narrow access.
-    const ast = parseYaml("$last: literal-value\nfoo: bar\n").ast;
+    const ast = parseJsonc('{"$last":"literal-value","foo":"bar"}').ast;
     const m = resolveOcPath(ast, parseOcPath("oc://X/$last"));
     // `$last` resolves to the LAST key (`foo` → `bar`), not the literal `$last` key.
     expect(m?.kind).toBe("leaf");
@@ -376,16 +377,22 @@ describe("wave-23 pitfalls — format/parse round-trip", () => {
 
 describe("wave-23 pitfalls — performance & limits", () => {
   it("P-031 / P-033 walker depth cap throws on pathological recursion", () => {
-    // Construct a yaml that nests deeper than MAX_TRAVERSAL_DEPTH.
-    // We're using `**` against a synthetic deeply-nested structure.
-    let yaml = "root:\n";
-    let indent = "  ";
+    // The walker's MAX_TRAVERSAL_DEPTH defense is independent of the
+    // parser's MAX_PARSE_DEPTH (covered by the JSONC and JSONL parser
+    // tests below). To exercise the walker cap in isolation, build a
+    // synthetic JSONC AST chain that bypasses parseJsonc entirely —
+    // this is the shape callers get when they construct ASTs
+    // programmatically (mutations, fixtures, generators).
+    type V = import("../../jsonc/ast.js").JsoncValue;
+    let leaf: V = { kind: "string", value: "x", line: 1 };
     for (let i = 0; i < MAX_TRAVERSAL_DEPTH + 50; i++) {
-      yaml += `${indent}a:\n`;
-      indent += "  ";
+      leaf = { kind: "object", entries: [{ key: "a", value: leaf, line: 1 }], line: 1 };
     }
-    yaml += `${indent}leaf: x\n`;
-    const ast = parseYaml(yaml).ast;
+    const ast = {
+      kind: "jsonc" as const,
+      raw: "",
+      root: { kind: "object" as const, entries: [{ key: "root", value: leaf, line: 1 }], line: 1 },
+    };
     expect(() => findOcPaths(ast, parseOcPath("oc://X/**"))).toThrow(/MAX_TRAVERSAL_DEPTH/);
   });
 

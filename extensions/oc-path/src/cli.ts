@@ -32,7 +32,6 @@ import {
   emitJsonc,
   emitJsonl,
   emitMd,
-  emitYaml,
   findOcPaths,
   formatOcPath,
   inferKind,
@@ -40,7 +39,6 @@ import {
   parseJsonl,
   parseMd,
   parseOcPath,
-  parseYaml,
   resolveOcPath,
   setOcPath,
   type OcAst,
@@ -138,9 +136,6 @@ async function loadAst(absPath: string, fileName: string): Promise<OcAst> {
   if (kind === "jsonl") {
     return parseJsonl(raw).ast;
   }
-  if (kind === "yaml") {
-    return parseYaml(raw).ast;
-  }
   return parseMd(raw).ast;
 }
 
@@ -156,13 +151,6 @@ function emitForKind(ast: OcAst, fileName?: string): string {
       return emitJsonc(ast, opts);
     case "jsonl":
       return emitJsonl(ast, opts);
-    case "yaml":
-      // Default round-trip mode preserves bytes verbatim for unmodified
-      // ASTs (so `openclaw path emit foo.yaml` is a true byte-fidelity
-      // diagnostic). After `setOcPath` mutates a YAML AST the substrate
-      // re-renders into `ast.raw` already, so round-trip mode emits the
-      // mutated bytes too — no need for the render-mode override.
-      return emitYaml(ast, opts);
     case "md":
       return emitMd(ast, opts);
   }
@@ -308,31 +296,12 @@ export async function pathSetCommand(
     }
     throw err;
   }
-  // YAML edits go through the yaml library renderer. Self-hosters
-  // running `openclaw path set` on a carefully formatted file should
-  // see the warning explicitly.
-  const lossyKinds: ReadonlySet<OcAst["kind"]> = new Set(["yaml"]);
-  const formatLossWarning = lossyKinds.has(result.ast.kind)
-    ? `note: ${result.ast.kind} edit-then-emit may rewrite comments / original formatting`
-    : null;
   if (options.dryRun === true) {
     emit(
       runtime,
       mode,
-      {
-        ok: true,
-        dryRun: true,
-        bytes: newBytes,
-        ...(formatLossWarning !== null ? { warning: formatLossWarning } : {}),
-      },
-      () => {
-        const lines = [`--dry-run: would write ${newBytes.length} bytes to ${fsPath}`];
-        if (formatLossWarning !== null) {
-          lines.push(formatLossWarning);
-        }
-        lines.push(newBytes);
-        return lines.join("\n");
-      },
+      { ok: true, dryRun: true, bytes: newBytes },
+      () => `--dry-run: would write ${newBytes.length} bytes to ${fsPath}\n${newBytes}`,
     );
     return;
   }
@@ -340,20 +309,8 @@ export async function pathSetCommand(
   emit(
     runtime,
     mode,
-    {
-      ok: true,
-      dryRun: false,
-      bytesWritten: newBytes.length,
-      fsPath,
-      ...(formatLossWarning !== null ? { warning: formatLossWarning } : {}),
-    },
-    () => {
-      const lines = [`wrote ${newBytes.length} bytes to ${fsPath}`];
-      if (formatLossWarning !== null) {
-        lines.push(formatLossWarning);
-      }
-      return lines.join("\n");
-    },
+    { ok: true, dryRun: false, bytesWritten: newBytes.length, fsPath },
+    () => `wrote ${newBytes.length} bytes to ${fsPath}`,
   );
 }
 
