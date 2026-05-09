@@ -468,6 +468,23 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (!text) {
         throw new Error("iMessage reply requires text or message.");
       }
+      // The reply action routes through `imsg send-rich --reply-to`, which
+      // does not accept attachments — the only path that handles a file is
+      // `imsg send --file`, used by sendAttachment/upload-file. Silently
+      // dropping the caller's media looked like success and let agents ship
+      // a "here's your image" reply with no attachment attached.
+      const hasMediaParam =
+        readStringParam(params, "media") != null ||
+        readStringParam(params, "mediaUrl") != null ||
+        readStringParam(params, "filePath") != null ||
+        readStringParam(params, "buffer") != null;
+      if (hasMediaParam) {
+        throw new Error(
+          "iMessage reply does not support attachments. Use action 'upload-file' " +
+            "(with filePath/filename) or action 'send' (with media) to deliver the file, " +
+            "then use 'reply' for any text reply.",
+        );
+      }
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendRichMessage({

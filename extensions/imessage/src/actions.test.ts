@@ -278,6 +278,36 @@ describe("imessage message actions", () => {
     );
   });
 
+  it("rejects reply with attachment params instead of silently dropping the media", async () => {
+    // The reply action routes through `imsg send-rich --reply-to`, which has
+    // no `--file` flag. Before this guard, supplying media on a reply was
+    // silently dropped: send-rich shipped just the text, the call returned
+    // ok:true, and the agent had no signal that the attachment was lost.
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+
+    for (const attachmentField of ["media", "mediaUrl", "filePath", "buffer"]) {
+      runtimeMock.sendRichMessage.mockClear();
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action: "reply",
+          cfg: cfg(),
+          params: {
+            chatIdentifier: "team-thread",
+            messageId: "message-guid",
+            text: "🦞 here it is",
+            [attachmentField]: "/tmp/anything.png",
+          },
+        } as never),
+      ).rejects.toThrow(/iMessage reply does not support attachments/);
+      expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    }
+  });
+
   describe("phone-number target end-to-end (regressions caught the hard way)", () => {
     it("synthesizes iMessage;-;<phone> chat_identifier from a handle target and sends through to sendReaction", async () => {
       // Scenario from prod: agent calls react with `target:"+12069106512"` and a
