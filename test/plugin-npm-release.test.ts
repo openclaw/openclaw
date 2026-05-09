@@ -25,9 +25,9 @@ afterEach(() => {
 
 describe("parsePluginReleaseSelection", () => {
   it("returns an empty list for blank input", () => {
-    expect(parsePluginReleaseSelection("")).toEqual([]);
-    expect(parsePluginReleaseSelection("   ")).toEqual([]);
-    expect(parsePluginReleaseSelection(undefined)).toEqual([]);
+    expect(parsePluginReleaseSelection("")).toStrictEqual([]);
+    expect(parsePluginReleaseSelection("   ")).toStrictEqual([]);
+    expect(parsePluginReleaseSelection(undefined)).toStrictEqual([]);
   });
 
   it("dedupes and sorts comma or whitespace separated package names", () => {
@@ -75,7 +75,9 @@ describe("parsePluginReleaseArgs", () => {
   });
 
   it("parses explicit all-publishable mode", () => {
-    expect(parsePluginReleaseArgs(["--selection-mode", "all-publishable"])).toMatchObject({
+    expect(parsePluginReleaseArgs(["--selection-mode", "all-publishable"])).toEqual({
+      baseRef: undefined,
+      headRef: undefined,
       selectionMode: "all-publishable",
       selection: [],
       pluginsFlagProvided: false,
@@ -107,7 +109,7 @@ describe("collectPublishablePluginPackageErrors", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags invalid publishable plugin metadata", () => {
@@ -207,7 +209,7 @@ describe("collectPublishablePluginPackages", () => {
       ),
     ).filter((entry) => !packageFiles.has(entry));
 
-    expect(missingExclusions).toEqual([]);
+    expect(missingExclusions).toStrictEqual([]);
   });
 
   it("collects publishable npm plugins from extension package manifests", () => {
@@ -285,11 +287,15 @@ describe("collectPublishablePluginPackages", () => {
         packageNames: ["@openclaw/demo-plugin"],
       }),
     ).toEqual([
-      expect.objectContaining({
+      {
         extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        installNpmSpec: "@openclaw/demo-plugin",
+        channel: "beta",
         packageName: "@openclaw/demo-plugin",
         publishTag: "beta",
-      }),
+        version: "2026.4.10-beta.1",
+      },
     ]);
   });
 
@@ -312,7 +318,7 @@ describe("collectPublishablePluginPackages", () => {
       collectPublishablePluginPackages(repoDir, {
         extensionIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("publishes alpha plugin packages to the alpha dist-tag", () => {
@@ -337,12 +343,15 @@ describe("collectPublishablePluginPackages", () => {
     });
 
     expect(collectPublishablePluginPackages(repoDir)).toEqual([
-      expect.objectContaining({
-        channel: "alpha",
+      {
+        extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        installNpmSpec: "@openclaw/demo-plugin",
         packageName: "@openclaw/demo-plugin",
+        channel: "alpha",
         publishTag: "alpha",
         version: "2026.4.10-alpha.1",
-      }),
+      },
     ]);
   });
 });
@@ -443,6 +452,6 @@ describe("resolveChangedPublishablePluginPackages", () => {
         plugins: publishablePlugins,
         changedExtensionIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

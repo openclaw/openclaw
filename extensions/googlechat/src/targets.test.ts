@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
@@ -79,6 +79,14 @@ vi.mock("./auth.js", async () => {
 
 const authActual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
 const { __testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("gaxios");
+  vi.doUnmock("google-auth-library");
+  vi.doUnmock("./auth.js");
+  vi.resetModules();
+});
 
 const account = {
   accountId: "default",
@@ -291,18 +299,14 @@ describe("verifyGoogleChatRequest", () => {
 
     expect(mocks.gaxiosCtor).toHaveBeenCalledOnce();
     expect(googleAuthOptions).toMatchObject({
-      clientOptions: {
-        transporter: {
-          defaults: {
-            fetchImplementation: expect.any(Function),
-          },
-        },
-      },
       credentials: {
         client_email: "bot@example.iam.gserviceaccount.com",
         token_uri: "https://oauth2.googleapis.com/token",
       },
     });
+    expect(typeof googleAuthOptions.clientOptions?.transporter?.defaults?.fetchImplementation).toBe(
+      "function",
+    );
     expect(mocks.getAccessToken).toHaveBeenCalledOnce();
     expect("window" in globalThis).toBe(false);
   });
@@ -325,13 +329,7 @@ describe("verifyGoogleChatRequest", () => {
     const oauthOptions = mocks.oauthCtor.mock.calls[0]?.[0] as {
       transporter?: { defaults?: { fetchImplementation?: unknown } };
     };
-    expect(oauthOptions).toMatchObject({
-      transporter: {
-        defaults: {
-          fetchImplementation: expect.any(Function),
-        },
-      },
-    });
+    expect(typeof oauthOptions.transporter?.defaults?.fetchImplementation).toBe("function");
   });
 
   it("rejects add-on tokens when no principal binding is configured", async () => {

@@ -364,12 +364,13 @@ describe("clearExpiredCooldowns", () => {
   });
 
   it("clears expired cooldownUntil and resets errorCount", () => {
+    const lastFailureAt = Date.now() - 120_000;
     const store = makeStore({
       "anthropic:default": {
         cooldownUntil: Date.now() - 1_000,
         errorCount: 4,
         failureCounts: { rate_limit: 3, timeout: 1 },
-        lastFailureAt: Date.now() - 120_000,
+        lastFailureAt,
       },
     });
 
@@ -380,7 +381,7 @@ describe("clearExpiredCooldowns", () => {
     expect(stats?.errorCount).toBe(0);
     expect(stats?.failureCounts).toBeUndefined();
     // lastFailureAt preserved for failureWindowMs decay
-    expect(stats?.lastFailureAt).toBeDefined();
+    expect(stats?.lastFailureAt).toBe(lastFailureAt);
   });
 
   it("clears expired disabledUntil and disabledReason", () => {
@@ -610,6 +611,7 @@ describe("markAuthProfileUsed", () => {
 
     storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(null);
 
+    const beforeUsed = Date.now();
     await markAuthProfileUsed({
       store,
       profileId: "anthropic:default",
@@ -622,7 +624,7 @@ describe("markAuthProfileUsed", () => {
     );
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
     expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
-    expect(store.usageStats?.["anthropic:default"]?.lastUsed).toEqual(expect.any(Number));
+    expect(store.usageStats?.["anthropic:default"]?.lastUsed).toBeGreaterThanOrEqual(beforeUsed);
   });
 
   it("adopts locked store usage stats without saving locally when lock update succeeds", async () => {
@@ -888,18 +890,14 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     await markCodexFailureAt({ store, now });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://chatgpt.com/backend-api/wham/usage",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Authorization: "Bearer codex-access-token",
-          "ChatGPT-Account-Id": "acct_test_123",
-          originator: "openclaw",
-          "User-Agent": expect.stringMatching(/^openclaw\//),
-        }),
-      }),
-    );
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://chatgpt.com/backend-api/wham/usage");
+    expect(init.method).toBe("GET");
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer codex-access-token");
+    expect(headers["ChatGPT-Account-Id"]).toBe("acct_test_123");
+    expect(headers.originator).toBe("openclaw");
+    expect(headers["User-Agent"]).toMatch(/^openclaw\//);
     expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + expectedMs);
   });
 

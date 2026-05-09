@@ -52,7 +52,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
       [
         {
-          text: "Reasoning:\n_step_",
+          text: "step",
           mediaUrl: audioPath,
           trustedLocalMedia: true,
           isReasoning: true,
@@ -157,7 +157,9 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
 
   it("falls back to default localRoots when explicit roots are omitted", async () => {
     const [defaultRoot] = getDefaultLocalRoots();
-    expect(defaultRoot).toBeTruthy();
+    if (defaultRoot === undefined) {
+      throw new Error("expected default local media root");
+    }
 
     fs.mkdirSync(defaultRoot, { recursive: true });
     tmpDir = fs.mkdtempSync(path.join(defaultRoot, "openclaw-webchat-audio-default-"));

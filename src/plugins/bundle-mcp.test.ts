@@ -35,7 +35,7 @@ async function expectResolvedPathEqual(actual: unknown, expected: string): Promi
 }
 
 function expectNoDiagnostics(diagnostics: unknown[]) {
-  expect(diagnostics).toEqual([]);
+  expect(diagnostics).toStrictEqual([]);
 }
 
 const tempHarness = createBundleMcpTempHarness();
@@ -115,7 +115,6 @@ describe("loadEnabledBundleMcpConfig", () => {
         expectNoDiagnostics(loaded.diagnostics);
         expect(isRecord(loadedServer) ? loadedServer.command : undefined).toBe("node");
         expect(loadedArgs).toHaveLength(1);
-        expect(loadedServerPath).toBeDefined();
         if (!loadedServerPath) {
           throw new Error("expected bundled MCP args to include the server path");
         }
@@ -171,7 +170,12 @@ describe("loadEnabledBundleMcpConfig", () => {
           },
         });
 
-        expect(loaded.config.mcpServers.enabledProbe).toBeDefined();
+        expect(loaded.config.mcpServers.enabledProbe).toEqual(
+          expect.objectContaining({
+            command: "node",
+            args: [expect.stringContaining("enabled.mjs")],
+          }),
+        );
         expect(loaded.config.mcpServers.disabledProbe).toBeUndefined();
       },
     );
@@ -240,7 +244,7 @@ describe("loadEnabledBundleMcpConfig", () => {
           cfg: createEnabledBundleConfig(["malformed-mcp"]),
         });
 
-        expect(loaded.config.mcpServers).toEqual({});
+        expect(loaded.config.mcpServers).toStrictEqual({});
         expect(loaded.diagnostics).toEqual([
           expect.objectContaining({
             pluginId: "malformed-mcp",
@@ -271,7 +275,7 @@ describe("loadEnabledBundleMcpConfig", () => {
           cfg: createEnabledBundleConfig(["malformed-lsp"]),
         });
 
-        expect(loaded.config.lspServers).toEqual({});
+        expect(loaded.config.lspServers).toStrictEqual({});
         expect(loaded.diagnostics).toEqual([
           expect.objectContaining({
             pluginId: "malformed-lsp",

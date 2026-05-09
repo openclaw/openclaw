@@ -75,6 +75,7 @@ import {
   mergeRuntimeOptions,
   normalizeRuntimeOptions,
   normalizeText,
+  resolveRuntimeConfigOptionKey,
   resolveRuntimeOptionsFromMeta,
   runtimeOptionsEqual,
   validateRuntimeConfigOptionInput,
@@ -588,7 +589,11 @@ export class AcpSessionManager {
         meta: resolvedMeta,
       });
       const inferredPatch = inferRuntimeOptionPatchFromConfigOption(key, value);
-      const capabilities = await this.resolveRuntimeCapabilities({ runtime, handle });
+      const capabilities = await this.resolveRuntimeCapabilities({
+        runtime,
+        handle,
+        includeStatusConfigOptionKeys: true,
+      });
       if (
         !capabilities.controls.includes("session/set_config_option") ||
         !runtime.setConfigOption
@@ -601,13 +606,17 @@ export class AcpSessionManager {
 
       const advertisedKeys = new Set(
         (capabilities.configOptionKeys ?? [])
-          .map((entry) => normalizeText(entry))
-          .filter(Boolean) as string[],
+          .map((entry) => normalizeLowercaseStringOrEmpty(entry))
+          .filter(Boolean),
       );
-      if (advertisedKeys.size > 0 && !advertisedKeys.has(key)) {
+      const wireKey = resolveRuntimeConfigOptionKey(key, capabilities.configOptionKeys);
+      if (
+        advertisedKeys.size > 0 &&
+        !advertisedKeys.has(normalizeLowercaseStringOrEmpty(wireKey))
+      ) {
         throw new AcpRuntimeError(
           "ACP_BACKEND_UNSUPPORTED_CONTROL",
-          `ACP backend "${handle.backend || meta.backend}" does not accept config key "${key}".`,
+          `ACP backend "${handle.backend || meta.backend}" does not accept config key "${wireKey}".`,
         );
       }
 
@@ -615,7 +624,7 @@ export class AcpSessionManager {
         run: async () =>
           await runtime.setConfigOption!({
             handle,
-            key,
+            key: wireKey,
             value,
           }),
         fallbackCode: "ACP_TURN_FAILED",
@@ -1879,6 +1888,7 @@ export class AcpSessionManager {
   private async resolveRuntimeCapabilities(params: {
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
+    includeStatusConfigOptionKeys?: boolean;
   }): Promise<AcpRuntimeCapabilities> {
     return await resolveManagerRuntimeCapabilities(params);
   }

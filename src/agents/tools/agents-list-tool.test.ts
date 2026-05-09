@@ -1,7 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createAgentsListTool } from "./agents-list-tool.js";
 
 const loadConfigMock = vi.fn<() => OpenClawConfig>();
+
+type AgentListDetails = {
+  requester?: string;
+  allowAny?: boolean;
+  agents?: Array<{
+    id?: string;
+    name?: string;
+    configured?: boolean;
+    model?: string;
+    agentRuntime?: { id?: string; source?: string };
+  }>;
+};
 
 vi.mock("../../config/config.js", async () => {
   const actual =
@@ -32,30 +45,29 @@ describe("agents_list tool", () => {
             id: "codex",
             name: "Codex",
             model: "openai/gpt-5.5",
-            agentRuntime: { id: "codex" },
+            agentRuntime: { id: "pi" },
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
           },
         ],
       },
     } satisfies OpenClawConfig);
 
-    const { createAgentsListTool } = await import("./agents-list-tool.js");
     const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
       "call",
       {},
     );
+    const details = result.details as AgentListDetails;
 
-    expect(result.details).toMatchObject({
-      requester: "main",
-      agents: [
-        {
-          id: "codex",
-          name: "Codex",
-          configured: true,
-          model: "openai/gpt-5.5",
-          agentRuntime: { id: "codex", source: "agent" },
-        },
-      ],
-    });
+    expect(details.requester).toBe("main");
+    expect(details.agents).toHaveLength(1);
+    expect(details.agents?.[0]?.id).toBe("codex");
+    expect(details.agents?.[0]?.name).toBe("Codex");
+    expect(details.agents?.[0]?.configured).toBe(true);
+    expect(details.agents?.[0]?.model).toBe("openai/gpt-5.5");
+    expect(details.agents?.[0]?.agentRuntime?.id).toBe("codex");
+    expect(details.agents?.[0]?.agentRuntime?.source).toBe("model");
   });
 
   it("returns requester as the only target when no subagent allowlist is configured", async () => {
@@ -65,25 +77,20 @@ describe("agents_list tool", () => {
       },
     } satisfies OpenClawConfig);
 
-    const { createAgentsListTool } = await import("./agents-list-tool.js");
     const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
       "call",
       {},
     );
+    const details = result.details as AgentListDetails;
 
-    expect(result.details).toMatchObject({
-      requester: "main",
-      allowAny: false,
-      agents: [
-        {
-          id: "main",
-          configured: true,
-        },
-      ],
-    });
+    expect(details.requester).toBe("main");
+    expect(details.allowAny).toBe(false);
+    expect(details.agents).toHaveLength(1);
+    expect(details.agents?.[0]?.id).toBe("main");
+    expect(details.agents?.[0]?.configured).toBe(true);
   });
 
-  it("reports env-forced plugin runtime selections", async () => {
+  it("ignores legacy env-forced plugin runtime selections", async () => {
     vi.stubEnv("OPENCLAW_AGENT_RUNTIME", "codex");
     loadConfigMock.mockReturnValue({
       agents: {
@@ -94,23 +101,19 @@ describe("agents_list tool", () => {
       },
     } satisfies OpenClawConfig);
 
-    const { createAgentsListTool } = await import("./agents-list-tool.js");
     const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
       "call",
       {},
     );
+    const details = result.details as AgentListDetails;
 
-    expect(result.details).toMatchObject({
-      agents: [
-        {
-          id: "main",
-          agentRuntime: { id: "codex", source: "env" },
-        },
-      ],
-    });
+    expect(details.agents).toHaveLength(1);
+    expect(details.agents?.[0]?.id).toBe("main");
+    expect(details.agents?.[0]?.agentRuntime?.id).toBe("codex");
+    expect(details.agents?.[0]?.agentRuntime?.source).toBe("implicit");
   });
 
-  it("reports per-agent runtime overrides", async () => {
+  it("ignores legacy per-agent runtime overrides", async () => {
     loadConfigMock.mockReturnValue({
       agents: {
         defaults: {
@@ -124,19 +127,15 @@ describe("agents_list tool", () => {
       },
     } satisfies OpenClawConfig);
 
-    const { createAgentsListTool } = await import("./agents-list-tool.js");
     const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
       "call",
       {},
     );
+    const details = result.details as AgentListDetails;
 
-    expect(result.details).toMatchObject({
-      agents: [
-        {
-          id: "strict",
-          agentRuntime: { id: "codex", source: "agent" },
-        },
-      ],
-    });
+    expect(details.agents).toHaveLength(1);
+    expect(details.agents?.[0]?.id).toBe("strict");
+    expect(details.agents?.[0]?.agentRuntime?.id).toBe("codex");
+    expect(details.agents?.[0]?.agentRuntime?.source).toBe("implicit");
   });
 });

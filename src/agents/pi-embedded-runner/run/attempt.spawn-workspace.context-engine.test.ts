@@ -466,7 +466,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(systemPrompt).toContain("Ask who I am before continuing.");
   });
 
-  it("adds explicit reply context to the current model input without exposing generic runtime context", async () => {
+  it("adds current-turn context to the current model input without exposing internal runtime context", async () => {
     let seenPrompt: string | undefined;
 
     const result = await createContextEngineAttemptRunner({
@@ -484,10 +484,19 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         ].join("\n"),
         transcriptPrompt: "what does this mean?",
         currentTurnContext: {
-          reply: {
-            senderLabel: "Mike",
-            body: "WT daily plan - Sat May 2\nSee ./quoted-secret.png and [media attached: media://inbound/quoted.png]",
-          },
+          text: [
+            "Reply target of current user message (untrusted, for context):",
+            "```json",
+            JSON.stringify(
+              {
+                sender_label: "Mike",
+                body: "WT daily plan - Sat May 2\nSee ./quoted-secret.png and [media attached: media://inbound/quoted.png]",
+              },
+              null,
+              2,
+            ),
+            "```",
+          ].join("\n"),
         },
       },
       sessionPrompt: async (session, prompt) => {
@@ -507,6 +516,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seenPrompt).toContain("media://inbound/quoted.png");
     expect(seenPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
     expect(seenPrompt).not.toContain("secret runtime context");
+    expect(seenPrompt?.trim().startsWith("Reply target of current user message")).toBe(true);
     expect(result.finalPromptText).toBe(seenPrompt);
     expect(hoisted.detectAndLoadPromptImagesMock).toHaveBeenCalledTimes(1);
     expect(hoisted.detectAndLoadPromptImagesMock.mock.calls[0]?.[0]).toMatchObject({
@@ -621,7 +631,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(sessionPrompt).not.toHaveBeenCalled();
     expect(result.finalPromptText).toBeUndefined();
-    expect(result.promptError).toBeFalsy();
+    expect(result.promptError).toBeNull();
     expect(result.messagesSnapshot).toEqual([
       expect.objectContaining({ role: "user", content: "seed" }),
     ]);
@@ -811,7 +821,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(seen.prompt).toBe("hello");
     expect(seen.prompt).not.toContain("[Inter-session message]");
-    expect(seen.messages).toEqual([]);
+    expect(seen.messages).toStrictEqual([]);
     expect(seen.systemPrompt ?? "").toBe("");
     expect(result.finalPromptText).toBe("hello");
     expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
@@ -966,7 +976,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ).toBe(true);
   });
 
-  it("forwards silentExpected to the embedded subscription", async () => {
+  it("forwards silentExpected to the embedded subscription", () => {
     const params = buildEmbeddedSubscriptionParams({
       session: {} as never,
       runId: "run-context-engine-forwarding",
@@ -1233,8 +1243,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       flushPendingToolResultsAfterIdle: flushMock,
       session: { agent: {}, dispose: disposeMock },
       sessionManager: hoisted.sessionManager,
-      releaseWsSession: hoisted.releaseWsSessionMock,
-      sessionId: embeddedSessionId,
       bundleLspRuntime: undefined,
       sessionLock: { release: releaseMock },
     });
@@ -1242,9 +1250,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(flushMock).toHaveBeenCalledTimes(1);
     expect(disposeMock).toHaveBeenCalledTimes(1);
     expect(releaseMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
-      allowPool: false,
-    });
   });
 });
 

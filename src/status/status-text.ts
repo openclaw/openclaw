@@ -152,7 +152,7 @@ async function resolveStatusHarnessId(params: {
   }
 }
 
-function resolveStatusAuthProvider(params: {
+function resolveStatusRuntimeProvider(params: {
   provider: string;
   effectiveHarness?: string;
 }): string {
@@ -160,6 +160,9 @@ function resolveStatusAuthProvider(params: {
   const provider = normalizeOptionalLowercaseString(params.provider);
   if (harness === "codex" && provider === "openai") {
     return "openai-codex";
+  }
+  if (harness === "claude-cli" && provider === "anthropic") {
+    return "claude-cli";
   }
   return params.provider;
 }
@@ -226,13 +229,19 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       sessionKey,
       sessionEntry,
     }));
+  const selectedStatusProvider = resolveStatusRuntimeProvider({
+    provider,
+    effectiveHarness,
+  });
+  const activeProvider = modelRefs.active.provider || provider;
+  const activeStatusProvider = resolveStatusRuntimeProvider({
+    provider: activeProvider,
+    effectiveHarness,
+  });
   const selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
     ? params.modelAuthOverride
     : resolveModelAuthLabel({
-        provider: resolveStatusAuthProvider({
-          provider,
-          effectiveHarness,
-        }),
+        provider: selectedStatusProvider,
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
@@ -243,10 +252,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     ? params.activeModelAuthOverride
     : modelRefs.activeDiffers
       ? resolveModelAuthLabel({
-          provider: resolveStatusAuthProvider({
-            provider: modelRefs.active.provider,
-            effectiveHarness,
-          }),
+          provider: activeStatusProvider,
           cfg,
           sessionEntry,
           agentDir: statusAgentDir,
@@ -254,19 +260,15 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           includeExternalProfiles: false,
         })
       : selectedModelAuth;
-  const currentUsageProvider = (() => {
-    try {
-      return resolveUsageProviderId(provider);
-    } catch {
-      return undefined;
-    }
-  })();
+  const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
+  const currentUsageProvider =
+    resolveUsageProviderId(activeStatusProvider) ?? resolveUsageProviderId(activeProvider);
   let usageLine: string | null = null;
   if (
     currentUsageProvider &&
     shouldLoadUsageSummary({
       provider: currentUsageProvider,
-      selectedModelAuth,
+      selectedModelAuth: usageAuthLabel,
     })
   ) {
     try {
@@ -356,13 +358,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
-  const runtimeContextProvider = resolveStatusAuthProvider({
-    provider: modelRefs.active.provider || provider,
-    effectiveHarness,
-  });
   const runtimeContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
-    provider: runtimeContextProvider,
+    provider: activeStatusProvider,
     model: modelRefs.active.model || model,
   });
   return buildStatusMessage({

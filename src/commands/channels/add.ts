@@ -160,12 +160,12 @@ export async function channelsAddCommand(
       },
     });
     if (selection.length === 0) {
-      await prompter.outro("No channels selected.");
+      await prompter.outro("No channel changes made.");
       return;
     }
 
     const wantsNames = await prompter.confirm({
-      message: "Add display names for these accounts? (optional)",
+      message: "Name these channel accounts now? (optional)",
       initialValue: false,
     });
     if (wantsNames) {
@@ -178,7 +178,7 @@ export async function channelsAddCommand(
         const snapshot = plugin?.config.describeAccount?.(account, nextConfig);
         const existingName = snapshot?.name ?? account?.name;
         const name = await prompter.text({
-          message: `${channel} account name (${accountId})`,
+          message: `${channel} display name for account "${accountId}"`,
           initialValue: existingName,
         });
         if (name?.trim()) {
@@ -208,7 +208,7 @@ export async function channelsAddCommand(
       );
     if (bindTargets.length > 0) {
       const bindNow = await prompter.confirm({
-        message: "Bind configured channel accounts to agents now?",
+        message: "Route these channel accounts to agents now?",
         initialValue: true,
       });
       if (bindNow) {
@@ -216,7 +216,7 @@ export async function channelsAddCommand(
         const defaultAgentId = resolveDefaultAgentId(nextConfig);
         for (const target of bindTargets) {
           const targetAgentId = await prompter.select({
-            message: `Route ${target.channel} account "${target.accountId}" to agent`,
+            message: `Send ${target.channel}/${target.accountId} messages to agent`,
             options: agentSummaries.map((agent) => ({
               value: agent.id,
               label: agent.isDefault ? `${agent.id} (default)` : agent.id,
@@ -344,8 +344,8 @@ export async function channelsAddCommand(
 
   if (!channel) {
     const hint = catalogEntry
-      ? `Plugin ${catalogEntry.meta.label} could not be loaded after install.`
-      : `Unknown channel: ${rawChannel}`;
+      ? `Plugin ${catalogEntry.meta.label} could not be loaded after install. Run openclaw doctor --fix, then retry openclaw channels add.`
+      : `Unknown channel: ${rawChannel}. Run openclaw channels list --all to see configured and installable channels.`;
     runtime.error(hint);
     runtime.exit(1);
     return;
@@ -353,7 +353,9 @@ export async function channelsAddCommand(
 
   const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
   if (!plugin?.setup?.applyAccountConfig) {
-    runtime.error(`Channel ${channel} does not support add.`);
+    runtime.error(
+      `Channel ${channel} does not support non-interactive add. Run openclaw channels add with no flags for guided setup, or openclaw channels list --all to inspect available channels.`,
+    );
     runtime.exit(1);
     return;
   }

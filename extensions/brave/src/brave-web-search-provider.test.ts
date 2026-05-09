@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { __testing } from "../test-api.js";
 import { createBraveWebSearchProvider as createBraveWebSearchContractProvider } from "../web-search-contract-api.js";
 import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
@@ -36,6 +36,11 @@ const braveManifest = JSON.parse(
 ) as {
   configSchema?: Record<string, unknown>;
 };
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+  vi.resetModules();
+});
 
 function installBraveLlmContextFetch() {
   const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
@@ -635,11 +640,16 @@ describe("brave web search provider", () => {
             mode: "web",
             status: 200,
             ok: true,
-            durationMs: expect.any(Number),
           }),
         ],
       ]),
     );
+    const responseLog = loggerInfoMock.mock.calls.find(
+      ([message]) => message === "brave http response",
+    );
+    const responsePayload = responseLog?.[1] as { durationMs?: unknown } | undefined;
+    expect(typeof responsePayload?.durationMs).toBe("number");
+    expect(responsePayload?.durationMs).toBeGreaterThanOrEqual(0);
     expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain("brave-test-key");
     expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain("X-Subscription-Token");
   });

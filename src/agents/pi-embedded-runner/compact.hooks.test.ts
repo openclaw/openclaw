@@ -18,6 +18,7 @@ import {
   resolveModelMock,
   resolveSandboxContextMock,
   resolveSessionAgentIdMock,
+  resolveSessionAgentIdsMock,
   rotateTranscriptAfterCompactionMock,
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
@@ -54,10 +55,13 @@ type Deferred<T> = {
 };
 
 function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
+  let resolve: ((value: T) => void) | undefined;
   const promise = new Promise<T>((promiseResolve) => {
     resolve = promiseResolve;
   });
+  if (!resolve) {
+    throw new Error("Expected compaction deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -230,7 +234,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
   });
 
-  it("routes compaction through shared stream resolution and extra params", async () => {
+  it("routes compaction through shared stream resolution and extra params", () => {
     const resolvedStreamFn = vi.fn();
     resolveEmbeddedAgentStreamFnMock.mockReturnValue(resolvedStreamFn);
     applyExtraParamsToAgentMock.mockReturnValue({
@@ -246,7 +250,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     compactTesting.prepareCompactionSessionAgent({
       session: session as never,
       providerStreamFn: vi.fn(),
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal: new AbortController().signal,
       effectiveModel: { provider: "openai", id: "fake", api: "responses", input: [] } as never,
@@ -718,7 +721,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     }
   });
 
-  it("preserves tokensAfter when full-session context exceeds result.tokensBefore", async () => {
+  it("preserves tokensAfter when full-session context exceeds result.tokensBefore", () => {
     estimateTokensMock.mockImplementation((message: unknown) => {
       const role = (message as { role?: string }).role;
       if (role === "user") {
@@ -738,7 +741,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(tokensAfter).toBe(30);
   });
 
-  it("treats pre-compaction token estimation failures as a no-op sanity check", async () => {
+  it("treats pre-compaction token estimation failures as a no-op sanity check", () => {
     estimateTokensMock.mockImplementation((message: unknown) => {
       const role = (message as { role?: string }).role;
       if (role === "assistant") {
@@ -870,7 +873,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
   });
 
-  it("skips compaction when the transcript only contains boilerplate replies and tool output", async () => {
+  it("skips compaction when the transcript only contains boilerplate replies and tool output", () => {
     const messages = [
       { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
       {
@@ -886,7 +889,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(compactTesting.containsRealConversationMessages(messages)).toBe(false);
   });
 
-  it("skips compaction when the transcript only contains heartbeat boilerplate and reasoning blocks", async () => {
+  it("skips compaction when the transcript only contains heartbeat boilerplate and reasoning blocks", () => {
     const messages = [
       { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
       {
@@ -969,7 +972,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(compactTesting.hasRealConversationContent(messages[2], messages, 2)).toBe(true);
   });
 
-  it("registers the Ollama api provider before compaction", async () => {
+  it("registers the Ollama api provider before compaction", () => {
     const streamFn = vi.fn();
     registerProviderStreamForModelMock.mockReturnValue(streamFn);
 
@@ -1048,6 +1051,59 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       result: { summary: "engine-summary", tokensAfter: 50 },
     });
     mockResolvedModel();
+  });
+
+  it("binds context-engine compaction runtime LLM to the session agent", async () => {
+    resolveSessionAgentIdsMock.mockReturnValueOnce({
+      defaultAgentId: "main",
+      sessionAgentId: "lossless-agent",
+    });
+
+    await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        config: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+            },
+          },
+        },
+        sessionKey: "legacy-topic-47",
+      }),
+    );
+
+    expect(contextEngineCompactMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeContext: expect.objectContaining({
+          llm: expect.objectContaining({ complete: expect.any(Function) }),
+        }),
+      }),
+    );
+    const contextEngineCompactCalls = contextEngineCompactMock.mock.calls as unknown as Array<
+      [
+        {
+          runtimeContext?: {
+            llm?: {
+              complete?: (params: {
+                messages: Array<{ role: "user"; content: string }>;
+                agentId?: string;
+              }) => Promise<unknown>;
+            };
+          };
+        },
+      ]
+    >;
+    const runtimeContext = contextEngineCompactCalls[0]?.[0]?.runtimeContext;
+    if (!runtimeContext) {
+      throw new Error("expected compaction runtime context");
+    }
+
+    await expect(
+      runtimeContext.llm?.complete?.({
+        messages: [{ role: "user", content: "summarize" }],
+        agentId: "other-agent",
+      }),
+    ).rejects.toThrow("cannot override the active session agent");
   });
 
   it("fires before_compaction with sentinel -1 and after_compaction on success", async () => {
@@ -1171,7 +1227,11 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     const runtimeContext = (
       maintain.mock.calls[0]?.[0] as { runtimeContext?: Record<string, unknown> } | undefined
     )?.runtimeContext;
-    expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");
+    expect(runtimeContext).toEqual(
+      expect.objectContaining({
+        rewriteTranscriptEntries: expect.any(Function),
+      }),
+    );
   });
 
   it("resolves the effective compaction model before manual engine-owned compaction", async () => {

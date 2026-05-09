@@ -129,7 +129,7 @@ describe("createChildAdapter", () => {
     // on POSIX, detached is true with a no-detach fallback.
     if (process.platform === "win32") {
       expect(spawnArgs.options?.detached).toBe(false);
-      expect(spawnArgs.fallbacks).toEqual([]);
+      expect(spawnArgs.fallbacks).toStrictEqual([]);
     } else {
       expect(spawnArgs.options?.detached).toBe(true);
       expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
@@ -263,7 +263,7 @@ describe("createChildAdapter", () => {
       fallbacks?: Array<{ options?: { detached?: boolean } }>;
     };
     expect(spawnArgs.options?.detached).toBe(false);
-    expect(spawnArgs.fallbacks ?? []).toEqual([]);
+    expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
   });
 
   it("keeps inherited env when no override env is provided on non-Linux", async () => {
@@ -324,10 +324,12 @@ describe("createChildAdapter", () => {
       "/usr/bin/node",
     ]);
     expect(spawnArgs.argv?.slice(4)).toEqual(["-e", "process.exit(0)"]);
-    expect(spawnArgs.options?.env).toBeDefined();
-    expect(spawnArgs.options?.env?.BASH_ENV).toBeUndefined();
-    expect(spawnArgs.options?.env?.ENV).toBeUndefined();
-    expect(spawnArgs.options?.env?.CDPATH).toBeUndefined();
+    if (!spawnArgs.options?.env) {
+      throw new Error("expected child process env options");
+    }
+    expect(spawnArgs.options.env.BASH_ENV).toBeUndefined();
+    expect(spawnArgs.options.env.ENV).toBeUndefined();
+    expect(spawnArgs.options.env.CDPATH).toBeUndefined();
   });
 
   it("passes explicit env overrides as strings", async () => {

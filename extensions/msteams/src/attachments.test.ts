@@ -497,8 +497,10 @@ describe("msteams attachments", () => {
       const redirected = seen.find(
         (entry) => entry.url === "https://attacker.azureedge.net/collect",
       );
-      expect(redirected).toBeDefined();
-      expect(redirected?.auth).toBe("");
+      if (!redirected) {
+        throw new Error("expected Azure CDN redirect request to be observed");
+      }
+      expect(redirected.auth).toBe("");
     });
 
     it("skips urls outside the allowlist", async () => {
@@ -636,7 +638,7 @@ describe("msteams attachments", () => {
           return resolveRequestUrl(input);
         });
         // Should have hit the original host, NOT graph shares.
-        expect(calledUrls.some((url) => url === directUrl)).toBe(true);
+        expect(calledUrls).toContain(directUrl);
         expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
       });
     });

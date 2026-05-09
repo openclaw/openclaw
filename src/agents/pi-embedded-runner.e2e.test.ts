@@ -248,10 +248,13 @@ const textFromContent = (content: unknown) => {
 
 const readSessionEntries = async (sessionFile: string) => {
   const raw = await fs.readFile(sessionFile, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as { type?: string; customType?: string; data?: unknown });
+  const entries: Array<{ type?: string; customType?: string; data?: unknown }> = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.length > 0) {
+      entries.push(JSON.parse(line) as { type?: string; customType?: string; data?: unknown });
+    }
+  }
+  return entries;
 };
 
 const readSessionMessages = async (sessionFile: string) => {
@@ -316,13 +319,15 @@ describe("runEmbeddedPiAgent", () => {
       enqueue: immediateEnqueue,
     });
 
-    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
-      "openrouter",
-      "openrouter/auto",
-      agentDir,
-      cfg,
-      expect.objectContaining({ skipPiDiscovery: true }),
-    );
+    const resolveModelCall = (resolveModelAsyncMock as unknown as { mock: { calls: unknown[][] } })
+      .mock.calls[0];
+    expect(resolveModelCall?.[0]).toBe("openrouter");
+    expect(resolveModelCall?.[1]).toBe("openrouter/auto");
+    expect(resolveModelCall?.[2]).toBe(agentDir);
+    expect(resolveModelCall?.[3]).toBe(cfg);
+    expect(
+      (resolveModelCall?.[4] as { skipPiDiscovery?: boolean } | undefined)?.skipPiDiscovery,
+    ).toBe(true);
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
   });
 
@@ -558,7 +563,7 @@ describe("runEmbeddedPiAgent", () => {
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]).toMatchObject({ text: "ok" });
+    expect(result.payloads?.[0]?.text).toBe("ok");
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
   });
@@ -613,7 +618,7 @@ describe("runEmbeddedPiAgent", () => {
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]).toMatchObject({ text: "done" });
+    expect(result.payloads?.[0]?.text).toBe("done");
   });
 
   it("handles prompt error paths without dropping user state", async () => {
