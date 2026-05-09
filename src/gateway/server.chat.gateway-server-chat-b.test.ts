@@ -108,11 +108,11 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   clearConfigCache();
 }
 
-async function writeMainSessionTranscript(_sessionDir: string, lines: string[]) {
+async function writeMainSessionTranscript(events: unknown[]) {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    events: lines.map((line) => JSON.parse(line) as unknown),
+    events,
   });
 }
 
@@ -642,26 +642,24 @@ describe("gateway server chat", () => {
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
+      await prepareMainHistoryHarness({
         ws,
         createSessionDir,
         historyMaxBytes,
       });
 
       const bigText = "x".repeat(2_000);
-      const historyLines: string[] = [];
+      const historyEvents: unknown[] = [];
       for (let i = 0; i < 45; i += 1) {
-        historyLines.push(
-          JSON.stringify({
-            message: {
-              role: "user",
-              content: [{ type: "text", text: `${i}:${bigText}` }],
-              timestamp: Date.now() + i,
-            },
-          }),
-        );
+        historyEvents.push({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: `${i}:${bigText}` }],
+            timestamp: Date.now() + i,
+          },
+        });
       }
-      await writeMainSessionTranscript(sessionDir, historyLines);
+      await writeMainSessionTranscript(historyEvents);
       const messages = await fetchHistoryMessages(ws);
       const bytes = Buffer.byteLength(JSON.stringify(messages), "utf8");
       expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
@@ -727,14 +725,14 @@ describe("gateway server chat", () => {
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
+      await prepareMainHistoryHarness({
         ws,
         createSessionDir,
         historyMaxBytes,
       });
 
       const hugeNestedText = "n".repeat(120_000);
-      const oversizedLine = JSON.stringify({
+      const oversizedEvent = {
         message: {
           role: "assistant",
           timestamp: Date.now(),
@@ -750,8 +748,8 @@ describe("gateway server chat", () => {
             },
           ],
         },
-      });
-      await writeMainSessionTranscript(sessionDir, [oversizedLine]);
+      };
+      await writeMainSessionTranscript([oversizedEvent]);
       const messages = await fetchHistoryMessages(ws);
       expect(messages.length).toBe(1);
 
@@ -766,48 +764,44 @@ describe("gateway server chat", () => {
   test("chat.history keeps recent small messages when latest message is oversized", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
+      await prepareMainHistoryHarness({
         ws,
         createSessionDir,
         historyMaxBytes,
       });
 
       const baseText = "s".repeat(1_200);
-      const lines: string[] = [];
+      const events: unknown[] = [];
       for (let i = 0; i < 30; i += 1) {
-        lines.push(
-          JSON.stringify({
-            message: {
-              role: "user",
-              timestamp: Date.now() + i,
-              content: [{ type: "text", text: `small-${i}:${baseText}` }],
-            },
-          }),
-        );
+        events.push({
+          message: {
+            role: "user",
+            timestamp: Date.now() + i,
+            content: [{ type: "text", text: `small-${i}:${baseText}` }],
+          },
+        });
       }
 
       const hugeNestedText = "z".repeat(120_000);
-      lines.push(
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            timestamp: Date.now() + 1_000,
-            content: [
-              {
-                type: "tool_result",
-                toolUseId: "tool-1",
-                output: {
-                  nested: {
-                    payload: hugeNestedText,
-                  },
+      events.push({
+        message: {
+          role: "assistant",
+          timestamp: Date.now() + 1_000,
+          content: [
+            {
+              type: "tool_result",
+              toolUseId: "tool-1",
+              output: {
+                nested: {
+                  payload: hugeNestedText,
                 },
               },
-            ],
-          },
-        }),
-      );
+            },
+          ],
+        },
+      });
 
-      await writeMainSessionTranscript(sessionDir, lines);
+      await writeMainSessionTranscript(events);
       const messages = await fetchHistoryMessages(ws);
       const serialized = JSON.stringify(messages);
       const bytes = Buffer.byteLength(serialized, "utf8");
@@ -824,11 +818,11 @@ describe("gateway server chat", () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
 
-      const sessionDir = await createSessionDir();
+      await createSessionDir();
       await seedMainSessionEntry();
 
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
+      await writeMainSessionTranscript([
+        {
           message: {
             role: "assistant",
             timestamp: Date.now(),
@@ -837,7 +831,7 @@ describe("gateway server chat", () => {
             cost: { total: 0.0123 },
             details: { debug: true },
           },
-        }),
+        },
       ]);
 
       const messages = await fetchHistoryMessages(ws);
@@ -860,11 +854,11 @@ describe("gateway server chat", () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
 
-      const sessionDir = await createSessionDir();
+      await createSessionDir();
       await seedMainSessionEntry();
 
-      const lines = [
-        JSON.stringify({
+      const events = [
+        {
           message: {
             role: "assistant",
             content: [
@@ -872,30 +866,30 @@ describe("gateway server chat", () => {
             ],
             timestamp: Date.now(),
           },
-        }),
-        JSON.stringify({
+        },
+        {
           message: {
             role: "assistant",
             content: "A [[reply_to:abc-123]] B",
             timestamp: Date.now() + 1,
           },
-        }),
-        JSON.stringify({
+        },
+        {
           message: {
             role: "assistant",
             text: "[[ reply_to : 456 ]] C",
             timestamp: Date.now() + 2,
           },
-        }),
-        JSON.stringify({
+        },
+        {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "  keep padded  " }],
             timestamp: Date.now() + 3,
           },
-        }),
+        },
       ];
-      await writeMainSessionTranscript(sessionDir, lines);
+      await writeMainSessionTranscript(events);
       const messages = await fetchHistoryMessages(ws);
       expect(messages.length).toBe(4);
 
@@ -917,16 +911,16 @@ describe("gateway server chat", () => {
 
   test("chat.history keeps visible assistant progress text from mixed tool-use transcript messages", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript([
+        {
           message: {
             role: "user",
             content: [{ type: "text", text: "fix it" }],
             timestamp: 1,
           },
-        }),
-        JSON.stringify({
+        },
+        {
           message: {
             role: "assistant",
             content: [
@@ -949,8 +943,8 @@ describe("gateway server chat", () => {
             ],
             timestamp: 2,
           },
-        }),
-        JSON.stringify({
+        },
+        {
           message: {
             role: "toolResult",
             toolCallId: "call-read",
@@ -958,7 +952,7 @@ describe("gateway server chat", () => {
             content: [{ type: "text", text: "file contents" }],
             timestamp: 3,
           },
-        }),
+        },
       ]);
 
       const messages = await fetchHistoryMessages(ws);
@@ -984,15 +978,15 @@ describe("gateway server chat", () => {
           },
         },
       });
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript([
+        {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "abcdefghij" }],
             timestamp: Date.now(),
           },
-        }),
+        },
       ]);
 
       const messages = await fetchHistoryMessages(ws);
@@ -1009,15 +1003,15 @@ describe("gateway server chat", () => {
           },
         },
       });
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript([
+        {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "abcdefghij" }],
             timestamp: Date.now(),
           },
-        }),
+        },
       ]);
 
       const messages = await fetchHistoryMessages(ws, { maxChars: 7 });
@@ -1053,15 +1047,15 @@ describe("gateway server chat", () => {
 
   test("chat.history still drops assistant NO_REPLY entries before truncation", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript([
+        {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "NO_REPLY" }],
             timestamp: Date.now(),
           },
-        }),
+        },
       ]);
 
       const messages = await fetchHistoryMessages(ws, { maxChars: 3 });
