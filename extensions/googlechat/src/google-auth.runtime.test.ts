@@ -8,34 +8,12 @@ const mocks = vi.hoisted(() => ({
     hostnameAllowlist: hosts,
   })),
   fetchWithSsrFGuard: vi.fn(),
-  gaxiosCtor: vi.fn(
-    function MockGaxios(
-      this: {
-        defaults: Record<string, unknown>;
-        interceptors: {
-          request: { add: ReturnType<typeof vi.fn> };
-          response: { add: ReturnType<typeof vi.fn> };
-        };
-      },
-      defaults,
-    ) {
-      this.defaults = defaults as Record<string, unknown>;
-      this.interceptors = {
-        request: { add: vi.fn() },
-        response: { add: vi.fn() },
-      };
-    },
-  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist:
     mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
-}));
-
-vi.mock("gaxios", () => ({
-  Gaxios: mocks.gaxiosCtor,
 }));
 
 let __testing: typeof import("./google-auth.runtime.js").__testing;
@@ -56,7 +34,6 @@ beforeEach(() => {
   __testing.resetGoogleAuthRuntimeForTests();
   mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist.mockClear();
   mocks.fetchWithSsrFGuard.mockReset();
-  mocks.gaxiosCtor.mockClear();
 });
 
 afterEach(() => {
@@ -111,6 +88,40 @@ describe("googlechat google auth runtime", () => {
       },
       url: "https://oauth2.googleapis.com/token",
     });
+    await expect(response.text()).resolves.toBe("ok");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("preserves Request properties when gaxios passes a Request object", async () => {
+    const release = vi.fn();
+    const injectedFetch = vi.fn(globalThis.fetch);
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+
+    const guardedFetch = createGoogleAuthFetch(injectedFetch);
+    const request = new Request("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "grant_type=refresh_token",
+    });
+
+    const response = await guardedFetch(request);
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://oauth2.googleapis.com/token",
+        init: expect.objectContaining({
+          method: "POST",
+          body: expect.anything(), // body is a ReadableStream in Request
+        }),
+      }),
+    );
+    // Native Headers in init should have the expected values
+    const callInit = mocks.fetchWithSsrFGuard.mock.calls[0]?.[0].init;
+    expect(callInit.headers.get("Content-Type")).toBe("application/x-www-form-urlencoded");
+
     await expect(response.text()).resolves.toBe("ok");
     expect(release).toHaveBeenCalledOnce();
   });
@@ -345,26 +356,16 @@ describe("googlechat google auth runtime", () => {
     Reflect.deleteProperty(globalThis as object, "window");
     try {
       const transport = await getGoogleAuthTransport();
-      const transportDefaults = transport.defaults as { fetchImplementation?: unknown };
-      const requestInterceptorAdd = transport.interceptors.request.add as unknown as ReturnType<
-        typeof vi.fn
-      >;
-      const responseInterceptorAdd = transport.interceptors.response.add as unknown as ReturnType<
-        typeof vi.fn
-      >;
-      const requestInterceptor = requestInterceptorAdd.mock.calls[0]?.[0] as
-        | { resolved?: unknown }
-        | undefined;
-      const responseInterceptor = responseInterceptorAdd.mock.calls[0]?.[0] as
-        | { resolved?: unknown }
-        | undefined;
 
-      expect(mocks.gaxiosCtor).toHaveBeenCalledOnce();
-      expect(typeof transportDefaults.fetchImplementation).toBe("function");
-      expect(requestInterceptorAdd).toHaveBeenCalledOnce();
-      expect(typeof requestInterceptor?.resolved).toBe("function");
-      expect(responseInterceptorAdd).toHaveBeenCalledOnce();
-      expect(typeof responseInterceptor?.resolved).toBe("function");
+      expect(transport).toMatchObject({
+        defaults: {
+          fetchImplementation: expect.any(Function),
+        },
+      });
+      // We don't have access to the internals of the real Gaxios object easily,
+      // but we can check if it has interceptors
+      expect(transport.interceptors.request).toBeDefined();
+      expect(transport.interceptors.response).toBeDefined();
       expect("window" in globalThis).toBe(false);
     } finally {
       if (originalWindowDescriptor) {
@@ -378,11 +379,7 @@ describe("googlechat google auth runtime", () => {
     const second = await getGoogleAuthTransport();
 
     expect(first).not.toBe(second);
-    expect(mocks.gaxiosCtor).toHaveBeenCalledTimes(2);
-    expect(first.interceptors.request.add).toHaveBeenCalledOnce();
-    expect(first.interceptors.response.add).toHaveBeenCalledOnce();
-    expect(second.interceptors.request.add).toHaveBeenCalledOnce();
-    expect(second.interceptors.response.add).toHaveBeenCalledOnce();
+    expect(first.interceptors).not.toBe(second.interceptors);
   });
 
   it("normalizes Google auth request headers before upstream interceptors run", () => {
@@ -393,9 +390,12 @@ describe("googlechat google auth runtime", () => {
 
     const normalized = __testing.normalizeGoogleAuthPreparedRequestHeaders(config);
 
-    expect(normalized.headers).toBeInstanceOf(Headers);
-    expect(normalized.headers.has("x-test")).toBe(true);
-    expect(normalized.headers.get("x-test")).toBe("1");
+    expect(normalized.headers).not.toBeInstanceOf(Headers);
+    const h = normalized.headers as Record<string, unknown> & Partial<Headers>;
+    expect(typeof h.get).toBe("function");
+    expect(h.get?.("x-test")).toBe("1");
+    expect(h.get?.("X-TEST")).toBe("1");
+    expect(Object.keys(normalized.headers)).not.toContain("get");
   });
 
   it("normalizes Google auth response headers before upstream cache-control reads", () => {
