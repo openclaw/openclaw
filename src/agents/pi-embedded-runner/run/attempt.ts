@@ -1901,6 +1901,8 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         agentDir,
         workspaceDir: effectiveWorkspace,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
       });
       const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransportForAttempt({
         provider: params.provider,
