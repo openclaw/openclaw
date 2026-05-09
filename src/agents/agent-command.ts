@@ -567,7 +567,8 @@ async function agentCommandInternal(
         });
         attemptExecutionRuntime.emitAcpLifecycleError({
           runId,
-          message: acpError.message,
+          error: acpError,
+          sessionKey,
         });
         throw acpError;
       }
