@@ -1,8 +1,6 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   applyExtraParamsToAgentMock,
   contextEngineCompactMock,
@@ -37,10 +35,15 @@ let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.j
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
-const TEST_SESSION_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compact-hooks-"));
-const TEST_SESSION_FILE = path.join(TEST_SESSION_ROOT, "session.jsonl");
-const TEST_ROTATED_SESSION_FILE = path.join(TEST_SESSION_ROOT, "rotated-session.jsonl");
-const TEST_WORKSPACE_DIR = TEST_SESSION_ROOT;
+const TEST_SESSION_FILE = createSqliteSessionTranscriptLocator({
+  agentId: "main",
+  sessionId: TEST_SESSION_ID,
+});
+const TEST_ROTATED_SESSION_FILE = createSqliteSessionTranscriptLocator({
+  agentId: "main",
+  sessionId: "rotated-session",
+});
+const TEST_WORKSPACE_DIR = "/tmp/openclaw-compact-hooks-workspace";
 const TEST_CUSTOM_INSTRUCTIONS = "focus on decisions";
 type SessionHookEvent = {
   type?: string;
@@ -155,8 +158,6 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  fs.rmSync(TEST_SESSION_FILE, { force: true });
-  fs.rmSync(TEST_ROTATED_SESSION_FILE, { force: true });
   resetCompactHooksHarnessMocks();
 });
 
@@ -1425,7 +1426,10 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       rewrittenEntries: 0,
     }));
     const delegatedSessionId = "delegated-session";
-    const delegatedSessionFile = "/tmp/delegated-session.jsonl";
+    const delegatedSessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: delegatedSessionId,
+    });
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
