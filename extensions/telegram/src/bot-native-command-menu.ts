@@ -50,27 +50,21 @@ function truncateTelegramCommandText(value: string, maxLength: number): string {
   if (maxLength <= 0) {
     return "";
   }
-  if (maxLength === 1) {
-    for (const char of value) {
-      return char;
-    }
-    return "";
-  }
+
+  const suffix = maxLength > 1 ? "…" : "";
+  const prefixLimit = maxLength - countTelegramCommandText(suffix);
   let count = 0;
-  let truncated = "";
+  let prefixEnd = 0;
   for (const char of value) {
     count += 1;
-    if (count < maxLength) {
-      truncated += char;
+    if (count <= prefixLimit) {
+      prefixEnd += char.length;
     }
     if (count > maxLength) {
-      return `${truncated}…`;
+      return `${value.slice(0, prefixEnd)}${suffix}`;
     }
   }
-  if (count <= maxLength) {
-    return value;
-  }
-  return `${truncated}…`;
+  return value;
 }
 
 function fitTelegramCommandsWithinTextBudget(
@@ -269,16 +263,22 @@ function buildTelegramMenuResultCacheKey(params: {
   maxTotalChars: number;
 }): string {
   const digest = createHash("sha256");
-  digest.update(String(params.maxCommands));
-  digest.update("\0");
-  digest.update(String(params.maxTotalChars));
+  updateTelegramCommandDigestField(digest, String(params.maxCommands));
+  updateTelegramCommandDigestField(digest, String(params.maxTotalChars));
   for (const command of params.allCommands) {
-    digest.update("\0");
-    digest.update(command.command);
-    digest.update("\0");
-    digest.update(command.description);
+    updateTelegramCommandDigestField(digest, command.command);
+    updateTelegramCommandDigestField(digest, command.description);
   }
   return digest.digest("hex").slice(0, 16);
+}
+
+function updateTelegramCommandDigestField(
+  digest: ReturnType<typeof createHash>,
+  value: string,
+): void {
+  digest.update(String(value.length));
+  digest.update(":");
+  digest.update(value);
 }
 
 function rememberCappedTelegramMenuResult(
@@ -295,17 +295,9 @@ function rememberCappedTelegramMenuResult(
   }
 }
 
-/** Compute a stable hash of the command list for change detection. */
 export function hashCommandList(commands: TelegramMenuCommand[]): string {
   const sorted = [...commands].toSorted((a, b) => a.command.localeCompare(b.command));
-  const digest = createHash("sha256");
-  for (const command of sorted) {
-    digest.update(command.command);
-    digest.update("\0");
-    digest.update(command.description);
-    digest.update("\0");
-  }
-  return digest.digest("hex").slice(0, 16);
+  return createHash("sha256").update(JSON.stringify(sorted)).digest("hex").slice(0, 16);
 }
 
 // Keep the sync cache process-local so restarts always re-register commands.
