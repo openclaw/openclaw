@@ -103,7 +103,7 @@ describe("TranscriptSessionManager", () => {
     await useTempStateDir();
     const scope = {
       agentId: "main",
-      sessionId: "locator-session",
+      sessionId: "scoped-session",
     };
 
     const sessionManager = openTranscriptSessionManagerForSession({
@@ -112,11 +112,11 @@ describe("TranscriptSessionManager", () => {
     });
     sessionManager.appendMessage({ role: "user", content: "seed", timestamp: 1 });
 
-    expect(sessionManager.getSessionId()).toBe("locator-session");
+    expect(sessionManager.getSessionId()).toBe("scoped-session");
     expect(readSessionEntries(scope)).toMatchObject([
       {
         type: "session",
-        id: "locator-session",
+        id: "scoped-session",
         cwd: "/tmp/workspace",
       },
       {

@@ -57,17 +57,13 @@ function requireSessionTranscriptEntry(
 function seedTranscript(params: {
   agentId?: string;
   sessionId: string;
-  transcriptPath?: string;
   events: unknown[];
-  rememberPath?: boolean;
   now?: number;
 }): SessionTranscriptScope {
   const agentId = params.agentId ?? "main";
-  const transcriptPath = params.transcriptPath;
   replaceSqliteSessionTranscriptEvents({
     agentId,
     sessionId: params.sessionId,
-    ...(params.rememberPath === false || !transcriptPath ? {} : { transcriptPath }),
     events: params.events,
     now: () => params.now ?? 1_770_000_000_000,
   });
@@ -95,7 +91,6 @@ describe("listSessionTranscriptsForAgent", () => {
     const scope = seedTranscript({
       sessionId: "sqlite-only",
       events: [{ type: "message", message: { role: "user", content: "Stored only in SQLite" } }],
-      rememberPath: false,
     });
 
     const scopes = await listSessionTranscriptsForAgent("main");
@@ -104,19 +99,6 @@ describe("listSessionTranscriptsForAgent", () => {
     const entry = await buildSessionTranscriptEntry(scope);
     expect(entry?.content).toBe("User: Stored only in SQLite");
     expect(entry?.path).toBe("sessions/main/sqlite-only");
-  });
-
-  it("ignores remembered legacy transcript paths when listing active SQLite transcripts", async () => {
-    const legacyPath = path.join(tmpDir, "agents", "main", "sessions", "remembered.jsonl");
-    seedTranscript({
-      sessionId: "remembered",
-      transcriptPath: legacyPath,
-      events: [{ type: "message", message: { role: "user", content: "remembered path" } }],
-    });
-
-    await expect(listSessionTranscriptsForAgent("main")).resolves.toEqual([
-      { agentId: "main", sessionId: "remembered" },
-    ]);
   });
 });
 
@@ -129,13 +111,13 @@ describe("sessionSourceKeyForTranscript", () => {
 });
 
 describe("buildSessionTranscriptEntry", () => {
-  it("returns lineMap tracking original JSONL line numbers", async () => {
+  it("returns lineMap tracking transcript event ordinals", async () => {
     // Simulate a real transcript event stream with metadata records interspersed
-    // Lines 1-3: non-message metadata records
-    // Line 4: user message
-    // Line 5: metadata
-    // Line 6: assistant message
-    // Line 7: user message
+    // Events 1-3: non-message metadata records
+    // Event 4: user message
+    // Event 5: metadata
+    // Event 6: assistant message
+    // Event 7: user message
     const events = [
       { type: "custom", customType: "model-snapshot", data: {} },
       { type: "custom", customType: "openclaw.cache-ttl", data: {} },
@@ -160,11 +142,11 @@ describe("buildSessionTranscriptEntry", () => {
     expect(contentLines[1]).toContain("Assistant: Hi there");
     expect(contentLines[2]).toContain("User: Tell me a joke");
 
-    // lineMap should map each content line to its original JSONL line (1-indexed)
-    // Content line 0 → JSONL line 4 (the first user message)
-    // Content line 1 → JSONL line 6 (the assistant message)
-    // Content line 2 → JSONL line 7 (the second user message)
-    expect(entry.lineMap).toStrictEqual([4, 6, 7]);
+    // lineMap should map each content line to its original event ordinal (1-indexed)
+    // Content line 0 -> event 4 (the first user message)
+    // Content line 1 -> event 6 (the assistant message)
+    // Content line 2 -> event 7 (the second user message)
+    expect(entry.lineMap).toEqual([4, 6, 7]);
   });
 
   it("returns empty lineMap when no messages are found", async () => {
@@ -301,7 +283,7 @@ describe("buildSessionTranscriptEntry", () => {
     expect(entry.lineMap).toStrictEqual([2, 3]);
   });
 
-  it("returns SQLite transcript delta stats without reading a transcript file", () => {
+  it("returns SQLite transcript delta stats from transcript events", () => {
     const filePath = seedTranscript({
       sessionId: "delta-session",
       events: [

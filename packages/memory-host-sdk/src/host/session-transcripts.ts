@@ -15,9 +15,9 @@ import {
 } from "./openclaw-runtime-session.js";
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
-// Keep the historical one-line-per-message export shape for normal turns, but
-// wrap pathological long messages so downstream indexers never ingest a single
-// toxic line. Wrapped continuation lines still map back to the same JSONL line.
+// Keep the one-line-per-message export shape for normal turns, but wrap
+// pathological long messages so downstream indexers never ingest a single toxic
+// line. Wrapped continuation lines still map back to the same transcript event.
 // This limit applies to content only; the role label adds up to 11 chars.
 const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
@@ -36,7 +36,7 @@ export type SessionTranscriptEntry = {
   messageCount: number;
   hash: string;
   content: string;
-  /** Maps each content line (0-indexed) to its 1-indexed JSONL source line. */
+  /** Maps each content line (0-indexed) to its 1-indexed transcript event ordinal. */
   lineMap: number[];
   /** Maps each content line (0-indexed) to epoch ms; 0 means unknown timestamp. */
   messageTimestampsMs: number[];

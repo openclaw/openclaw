@@ -13,7 +13,7 @@ import {
   type FileEntry,
 } from "../transcript/session-transcript-contract.js";
 
-export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
+export const MAX_CLI_SESSION_HISTORY_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 export const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
 
@@ -116,7 +116,7 @@ export function buildCliSessionHistoryPrompt(params: {
   ].join("\n");
 }
 
-function resolveSafeCliTranscriptLocator(params: {
+function resolveSafeCliTranscriptScope(params: {
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
@@ -140,14 +140,14 @@ async function loadCliSessionEntries(params: {
   config?: OpenClawConfig;
 }): Promise<unknown[]> {
   try {
-    const scope = resolveSqliteSessionTranscriptScope(resolveSafeCliTranscriptLocator(params));
+    const scope = resolveSqliteSessionTranscriptScope(resolveSafeCliTranscriptScope(params));
     if (!scope) {
       return [];
     }
     const entries = loadSqliteSessionTranscriptEvents(scope)
       .map((entry) => entry.event)
       .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
-    if (JSON.stringify(entries).length > MAX_CLI_SESSION_HISTORY_FILE_BYTES) {
+    if (JSON.stringify(entries).length > MAX_CLI_SESSION_HISTORY_BYTES) {
       return [];
     }
     migrateSessionEntries(entries);

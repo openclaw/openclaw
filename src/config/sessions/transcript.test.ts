@@ -595,13 +595,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionId = "sqlite-locator-session";
+    const sessionId = "sqlite-scope-session";
 
     await appendSessionTranscriptMessage({
       agentId: "main",
       sessionId,
       cwd: "/workspace",
-      message: { role: "assistant", content: "locator reply" },
+      message: { role: "assistant", content: "scope reply" },
       now: 789,
     });
 

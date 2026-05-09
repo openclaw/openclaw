@@ -498,7 +498,7 @@ describe("resolveAndPersistSessionTranscriptScope", () => {
     const saved = readFixtureSessionEntries();
   });
 
-  it("creates SQLite scope without persisting a locator when session is not yet present", async () => {
+  it("creates SQLite scope without persisting transcript handles when session is not yet present", async () => {
     const sessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
 

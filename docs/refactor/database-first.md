@@ -704,9 +704,8 @@ sessionId}` and session key context.
   events into the per-agent SQLite database instead of creating
   `sessions.json` and a JSONL transcript.
 - The bundled session-memory hook now resolves previous-session context from
-  SQLite by `{agentId, sessionId}` and only treats retained transcript paths as
-  legacy metadata. It no longer scans or synthesizes `workspace/sessions`
-  directories.
+  SQLite by `{agentId, sessionId}`. It no longer scans, stores, or synthesizes
+  transcript paths or `workspace/sessions` directories.
 - `migration_runs` records legacy-state migration executions with status,
   timestamps, and JSON reports.
 - `migration_sources` records each imported legacy file source with hash, size,

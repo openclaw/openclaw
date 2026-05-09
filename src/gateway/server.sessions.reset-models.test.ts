@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, test } from "vitest";
 import { getSessionEntry } from "../config/sessions.js";
 import { hasSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
@@ -230,15 +229,7 @@ test("sessions.reset follows the updated default after an auto fallback pinned a
 });
 
 test("sessions.reset preserves spawned session ownership metadata", async () => {
-  const { dir } = await createSessionFixtureDir();
-  const stateDir = await fs.realpath(process.env.OPENCLAW_STATE_DIR ?? dir);
-  const customTranscriptLocator = path.join(
-    stateDir,
-    "agents",
-    "main",
-    "sessions",
-    "custom-owned-child-transcript.jsonl",
-  );
+  await createSessionFixtureDir();
   await seedGatewaySessionEntries({
     entries: {
       "subagent:child": sessionStoreEntry("sess-owned-child", {

@@ -9,7 +9,7 @@ import {
   buildCliSessionHistoryPrompt,
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
-  MAX_CLI_SESSION_HISTORY_FILE_BYTES,
+  MAX_CLI_SESSION_HISTORY_BYTES,
   MAX_CLI_SESSION_HISTORY_MESSAGES,
 } from "./session-history.js";
 
@@ -191,13 +191,13 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
-  it("drops oversized transcript files instead of loading them into hook payloads", async () => {
+  it("drops oversized SQLite transcript history instead of loading it into hook payloads", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     createSessionTranscript({
       rootDir: stateDir,
       sessionId: "session-oversized",
-      messages: ["x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES + 1)],
+      messages: ["x".repeat(MAX_CLI_SESSION_HISTORY_BYTES + 1)],
     });
 
     try {

@@ -111,7 +111,7 @@ function createCliBackendConfig(
   } satisfies OpenClawConfig;
 }
 
-function createTranscriptLocator() {
+function createTranscriptStateFixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   replaceSqliteSessionTranscriptEvents({
@@ -219,7 +219,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("applies prompt-build hook context to Claude-style CLI preparation", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       appendTranscriptEntry({
         id: "msg-1",
@@ -372,7 +372,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("marks inter-session prompts after CLI prompt-build hook context is applied", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       const hookRunner = {
         hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
@@ -414,7 +414,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("applies agent_turn_prepare-only context on the CLI path", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       const hookRunner = {
         hasHooks: vi.fn((hookName: string) => hookName === "agent_turn_prepare"),
@@ -461,7 +461,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("merges before_prompt_build and legacy before_agent_start hook context for CLI preparation", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       const hookRunner = {
         hasHooks: vi.fn((_hookName: string) => true),
@@ -503,7 +503,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("preserves the base prompt when prompt-build hooks fail", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       const hookRunner = {
         hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
@@ -535,7 +535,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("uses explicit static prompt text for CLI session reuse hashing", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       const context = await prepareCliRunContext({
         sessionId: "session-test",
@@ -562,7 +562,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("ignores volatile prompt text when static prompt text matches", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       const staticPrompt = "## Direct Context\nYou are in a Telegram direct conversation.";
       const context = await prepareCliRunContext({
@@ -590,7 +590,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("applies direct-run prepend system context helpers on the CLI path", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
         "active video task",
@@ -628,7 +628,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("skips bundle MCP preparation when tools are disabled", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
@@ -667,7 +667,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("fails closed when a runtime toolsAllow is requested for CLI backends", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
@@ -701,7 +701,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("fails closed for native tool-capable CLI backends when tools are disabled", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
@@ -755,7 +755,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("drops the claude-cli sessionId when the on-disk transcript is missing (#77011)", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
@@ -802,7 +802,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("keeps the claude-cli sessionId when the on-disk transcript is present", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
@@ -849,7 +849,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("does not probe the transcript for non-claude-cli providers", async () => {
-    const { dir } = createTranscriptLocator();
+    const { dir } = createTranscriptStateFixture();
     try {
       const transcriptCheck = vi.fn(async () => false);
       setCliRunnerPrepareTestDeps({

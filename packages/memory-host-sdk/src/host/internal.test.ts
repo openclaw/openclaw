@@ -172,7 +172,7 @@ describe("memory host SDK package internals", () => {
     }
   });
 
-  it("remaps chunk lines using JSONL source line maps", () => {
+  it("remaps chunk lines using transcript event line maps", () => {
     const lineMap = [4, 6, 7, 10, 13];
     const chunks = chunkMarkdown(
       "User: Hello\nAssistant: Hi\nUser: Question\nAssistant: Answer\nUser: Thanks",
