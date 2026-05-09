@@ -264,7 +264,6 @@ export async function compactEmbeddedPiSession(
             agentId: agentIds.sessionAgentId,
             sessionId: postCompactionSessionId,
             sessionKey: params.sessionKey,
-            transcriptLocator: postCompactionTranscriptLocator,
           });
         }
         if (

@@ -4,7 +4,10 @@ import {
   createSubsystemLogger,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type { MemorySyncProgressUpdate } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type {
+  MemorySessionTranscriptScope,
+  MemorySyncProgressUpdate,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 const log = createSubsystemLogger("memory");
 
@@ -21,6 +24,7 @@ export type MemoryReadonlyRecoveryState = {
   runSync: (params?: {
     reason?: string;
     force?: boolean;
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
@@ -85,6 +89,7 @@ export async function runMemorySyncWithReadonlyRecovery(
   params?: {
     reason?: string;
     force?: boolean;
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   },
@@ -129,6 +134,7 @@ export function enqueueMemoryTargetedSessionSync(
     sync: (params?: {
       reason?: string;
       force?: boolean;
+      sessionTranscriptScopes?: MemorySessionTranscriptScope[];
       sessionTranscripts?: string[];
       progress?: (update: MemorySyncProgressUpdate) => void;
     }) => Promise<void>;
