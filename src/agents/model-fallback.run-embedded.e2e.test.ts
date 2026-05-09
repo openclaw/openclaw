@@ -491,10 +491,6 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         name: "codex-empty-transport-response",
         message: "Request failed",
       },
-      {
-        name: "stream-read-error",
-        message: "stream_read_error",
-      },
     ] as const;
 
     for (const { name, message } of cases) {

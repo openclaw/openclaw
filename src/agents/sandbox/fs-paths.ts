@@ -173,7 +173,8 @@ function formatSandboxRootEscapeMessage(params: {
   defaultWorkspaceRoot: string;
   defaultContainerRoot: string;
 }): string {
-  return `Path escapes sandbox root (${params.defaultWorkspaceRoot}; container root ${params.defaultContainerRoot}): ${params.input}`;
+  const containerRoot = normalizeContainerPath(params.defaultContainerRoot);
+  return `Path escapes sandbox root (${params.defaultWorkspaceRoot}; container root ${containerRoot}): ${params.input}. Use a path under ${containerRoot}/ instead.`;
 }
 
 function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): number {
