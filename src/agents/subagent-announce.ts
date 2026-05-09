@@ -9,6 +9,7 @@ import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { getTaskRequesterOriginForStatus } from "../tasks/task-status-access.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -220,9 +221,31 @@ async function wakeSubagentRunAfterDescendants(params: {
   });
 }
 
+function resolveTaskAwareCompletionContext(params: {
+  taskId?: string;
+  childRunId: string;
+  requesterOrigin?: DeliveryContext;
+}): {
+  taskId?: string;
+  requesterOrigin?: DeliveryContext;
+  error?: "task_id_missing" | "context_missing";
+} {
+  const taskId = normalizeOptionalString(params.taskId);
+  if (!taskId) {
+    return { error: "task_id_missing" };
+  }
+  const requesterOrigin = normalizeDeliveryContext(getTaskRequesterOriginForStatus(taskId));
+  const to = normalizeOptionalString(requesterOrigin?.to);
+  if (!requesterOrigin?.channel || !to) {
+    return { taskId, error: "context_missing" };
+  }
+  return { taskId, requesterOrigin };
+}
+
 export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
+  taskId?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
@@ -246,6 +269,7 @@ export async function runSubagentAnnounceFlow(params: {
   wakeOnDescendantSettle?: boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
+  allowCompletionFallback?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
 }): Promise<boolean> {
   let didAnnounce = false;
@@ -529,18 +553,41 @@ export async function runSubagentAnnounceFlow(params: {
       const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
       directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
     }
+    const taskAwareContext =
+      expectsCompletionMessage && !requesterIsSubagent
+        ? resolveTaskAwareCompletionContext({
+            taskId: params.taskId,
+            childRunId: params.childRunId,
+            requesterOrigin: directOrigin,
+          })
+        : {};
+    if (taskAwareContext.error) {
+      params.onDeliveryResult?.({
+        delivered: false,
+        path: "direct",
+        error: taskAwareContext.error,
+      });
+      return false;
+    }
+    const taskDeliveryOrigin = taskAwareContext.requesterOrigin;
     const completionDirectOrigin =
       expectsCompletionMessage && !requesterIsSubagent
         ? await resolveSubagentCompletionOrigin({
             childSessionKey: params.childSessionKey,
             requesterSessionKey: targetRequesterSessionKey,
-            requesterOrigin: directOrigin,
+            requesterOrigin: taskDeliveryOrigin,
             childRunId: params.childRunId,
             spawnMode: params.spawnMode,
             expectsCompletionMessage,
           })
         : targetRequesterOrigin;
-    const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
+    const requesterOriginTo = normalizeOptionalString(taskDeliveryOrigin?.to);
+    const directIdempotencyKey =
+      expectsCompletionMessage && !requesterIsSubagent
+        ? buildAnnounceIdempotencyKey(
+            `subagent-completion:${params.childRunId}:${taskAwareContext.taskId}:${requesterOriginTo}`,
+          )
+        : buildAnnounceIdempotencyKey(announceId);
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
       announceId,
@@ -548,7 +595,7 @@ export async function runSubagentAnnounceFlow(params: {
       steerMessage: triggerMessage,
       internalEvents,
       summaryLine: taskLabel,
-      requesterSessionOrigin: targetRequesterOrigin,
+      requesterSessionOrigin: taskDeliveryOrigin ?? targetRequesterOrigin,
       requesterOrigin:
         expectsCompletionMessage && !requesterIsSubagent
           ? completionDirectOrigin
@@ -563,6 +610,7 @@ export async function runSubagentAnnounceFlow(params: {
       expectsCompletionMessage: expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
+      allowCompletionFallback: params.allowCompletionFallback,
       signal: params.signal,
     });
     params.onDeliveryResult?.(delivery);

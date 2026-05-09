@@ -4,6 +4,7 @@ import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.j
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export type PendingFinalDeliveryPayload = {
+  taskId?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
@@ -23,6 +24,7 @@ export type PendingFinalDeliveryPayload = {
 
 export type SubagentRunRecord = {
   runId: string;
+  taskId?: string;
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;

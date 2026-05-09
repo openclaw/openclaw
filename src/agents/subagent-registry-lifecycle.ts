@@ -147,10 +147,48 @@ export function createSubagentRegistryLifecycleController(params: {
       : `delivery path ${delivery.path} did not complete`;
   };
 
+  const resolveAnnounceDeliveryStatus = (
+    delivery: SubagentAnnounceDeliveryResult,
+  ):
+    | "fallback_sent"
+    | "fallback_failed"
+    | "wake_failed"
+    | "context_missing"
+    | "task_id_missing"
+    | "failed" => {
+    if (
+      delivery.delivered &&
+      (delivery.path === "direct-fallback" || delivery.path === "direct-thread-fallback")
+    ) {
+      return "fallback_sent";
+    }
+    const error = delivery.error?.trim() ?? "";
+    if (/\btask_id_missing\b/i.test(error)) {
+      return "task_id_missing";
+    }
+    if (/\bcontext_missing\b/i.test(error)) {
+      return "context_missing";
+    }
+    if (/\bwake_failed\b|could not be woken/i.test(error)) {
+      return "wake_failed";
+    }
+    if (/fallback send failed/i.test(error)) {
+      return "fallback_failed";
+    }
+    return "failed";
+  };
+
   const safeSetSubagentTaskDeliveryStatus = (args: {
     runId: string;
     childSessionKey: string;
-    deliveryStatus: "delivered" | "failed";
+    deliveryStatus:
+      | "delivered"
+      | "failed"
+      | "fallback_sent"
+      | "fallback_failed"
+      | "wake_failed"
+      | "context_missing"
+      | "task_id_missing";
     deliveryError?: string;
   }) => {
     try {
@@ -334,6 +372,7 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord,
   ): PendingFinalDeliveryPayload => {
     return {
+      taskId: entry.pendingFinalDeliveryPayload?.taskId ?? entry.taskId,
       requesterSessionKey:
         entry.pendingFinalDeliveryPayload?.requesterSessionKey ?? entry.requesterSessionKey,
       requesterOrigin: entry.pendingFinalDeliveryPayload?.requesterOrigin ?? entry.requesterOrigin,
@@ -373,18 +412,105 @@ export function createSubagentRegistryLifecycleController(params: {
     args.entry.pendingFinalDeliveryPayload = payload;
   };
 
+  const attemptGiveUpCompletionFallback = async (args: {
+    runId: string;
+    entry: SubagentRunRecord;
+  }): Promise<{
+    didAnnounce: boolean;
+    deliveryStatus?:
+      | "fallback_sent"
+      | "fallback_failed"
+      | "wake_failed"
+      | "context_missing"
+      | "task_id_missing"
+      | "failed";
+    deliveryError?: string;
+  }> => {
+    if (args.entry.expectsCompletionMessage !== true) {
+      return { didAnnounce: false };
+    }
+    const pendingPayload = loadPendingFinalDeliveryPayload(args.entry);
+    const requesterOrigin = normalizeDeliveryContext(pendingPayload.requesterOrigin);
+    let latestDeliveryStatus:
+      | "fallback_sent"
+      | "fallback_failed"
+      | "wake_failed"
+      | "context_missing"
+      | "task_id_missing"
+      | "failed"
+      | undefined;
+    let latestDeliveryError = args.entry.lastAnnounceDeliveryError;
+    try {
+      const didAnnounce = await params.runSubagentAnnounceFlow({
+        childSessionKey: pendingPayload.childSessionKey,
+        childRunId: pendingPayload.childRunId,
+        taskId: pendingPayload.taskId,
+        requesterSessionKey: pendingPayload.requesterSessionKey,
+        requesterOrigin,
+        requesterDisplayKey: pendingPayload.requesterDisplayKey,
+        task: pendingPayload.task,
+        timeoutMs: params.subagentAnnounceTimeoutMs,
+        cleanup: args.entry.cleanup,
+        roundOneReply: pendingPayload.frozenResultText ?? undefined,
+        fallbackReply: pendingPayload.fallbackFrozenResultText ?? undefined,
+        waitForCompletion: false,
+        startedAt: pendingPayload.startedAt,
+        endedAt: pendingPayload.endedAt,
+        label: pendingPayload.label,
+        outcome: pendingPayload.outcome,
+        spawnMode: pendingPayload.spawnMode,
+        expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
+        wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+        allowCompletionFallback: true,
+        onDeliveryResult: (delivery) => {
+          latestDeliveryStatus = resolveAnnounceDeliveryStatus(delivery);
+          latestDeliveryError = delivery.delivered
+            ? undefined
+            : formatAnnounceDeliveryError(delivery);
+        },
+      });
+      return {
+        didAnnounce,
+        deliveryStatus: latestDeliveryStatus,
+        deliveryError: latestDeliveryError,
+      };
+    } catch (error) {
+      const deliveryError = formatErrorMessage(error);
+      defaultRuntime.log(
+        `[warn] Subagent give-up fallback attempt failed for run ${args.runId}: ${deliveryError}`,
+      );
+      return {
+        didAnnounce: false,
+        deliveryStatus: "failed",
+        deliveryError,
+      };
+    }
+  };
+
   const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
     runId: string;
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
   }) => {
-    clearPendingFinalDelivery(giveUpParams.entry);
-    safeSetSubagentTaskDeliveryStatus({
+    const fallbackResult = await attemptGiveUpCompletionFallback({
       runId: giveUpParams.runId,
-      childSessionKey: giveUpParams.entry.childSessionKey,
-      deliveryStatus: "failed",
-      deliveryError: giveUpParams.entry.lastAnnounceDeliveryError,
+      entry: giveUpParams.entry,
     });
+    clearPendingFinalDelivery(giveUpParams.entry);
+    if (fallbackResult.didAnnounce && fallbackResult.deliveryStatus === "fallback_sent") {
+      safeSetSubagentTaskDeliveryStatus({
+        runId: giveUpParams.runId,
+        childSessionKey: giveUpParams.entry.childSessionKey,
+        deliveryStatus: "fallback_sent",
+      });
+    } else {
+      safeSetSubagentTaskDeliveryStatus({
+        runId: giveUpParams.runId,
+        childSessionKey: giveUpParams.entry.childSessionKey,
+        deliveryStatus: fallbackResult.deliveryStatus ?? "failed",
+        deliveryError: fallbackResult.deliveryError ?? giveUpParams.entry.lastAnnounceDeliveryError,
+      });
+    }
     giveUpParams.entry.wakeOnDescendantSettle = undefined;
     giveUpParams.entry.fallbackFrozenResultText = undefined;
     giveUpParams.entry.fallbackFrozenResultCapturedAt = undefined;
@@ -604,13 +730,25 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (deferredDecision.kind === "give-up") {
-      clearPendingFinalDelivery(entry);
-      safeSetSubagentTaskDeliveryStatus({
+      const fallbackResult = await attemptGiveUpCompletionFallback({
         runId,
-        childSessionKey: entry.childSessionKey,
-        deliveryStatus: "failed",
-        deliveryError: entry.lastAnnounceDeliveryError,
+        entry,
       });
+      clearPendingFinalDelivery(entry);
+      if (fallbackResult.didAnnounce && fallbackResult.deliveryStatus === "fallback_sent") {
+        safeSetSubagentTaskDeliveryStatus({
+          runId,
+          childSessionKey: entry.childSessionKey,
+          deliveryStatus: "fallback_sent",
+        });
+      } else {
+        safeSetSubagentTaskDeliveryStatus({
+          runId,
+          childSessionKey: entry.childSessionKey,
+          deliveryStatus: fallbackResult.deliveryStatus ?? "failed",
+          deliveryError: fallbackResult.deliveryError ?? entry.lastAnnounceDeliveryError,
+        });
+      }
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -699,6 +837,14 @@ export function createSubagentRegistryLifecycleController(params: {
     const pendingPayload = loadPendingFinalDeliveryPayload(entry);
     const requesterOrigin = normalizeDeliveryContext(pendingPayload.requesterOrigin);
     let latestDeliveryError = entry.lastAnnounceDeliveryError;
+    let latestDeliveryStatus:
+      | "fallback_sent"
+      | "fallback_failed"
+      | "wake_failed"
+      | "context_missing"
+      | "task_id_missing"
+      | "failed"
+      | undefined;
     const finalizeAnnounceCleanup = (didAnnounce: boolean) => {
       if (!didAnnounce && latestDeliveryError) {
         entry.lastAnnounceDeliveryError = latestDeliveryError;
@@ -718,6 +864,7 @@ export function createSubagentRegistryLifecycleController(params: {
       .runSubagentAnnounceFlow({
         childSessionKey: pendingPayload.childSessionKey,
         childRunId: pendingPayload.childRunId,
+        taskId: pendingPayload.taskId,
         requesterSessionKey: pendingPayload.requesterSessionKey,
         requesterOrigin,
         requesterDisplayKey: pendingPayload.requesterDisplayKey,
@@ -734,7 +881,9 @@ export function createSubagentRegistryLifecycleController(params: {
         spawnMode: pendingPayload.spawnMode,
         expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
         wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+        allowCompletionFallback: (entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT - 1,
         onDeliveryResult: (delivery) => {
+          latestDeliveryStatus = resolveAnnounceDeliveryStatus(delivery);
           if (delivery.delivered) {
             if (entry.lastAnnounceDeliveryError !== undefined) {
               entry.lastAnnounceDeliveryError = undefined;
@@ -751,6 +900,33 @@ export function createSubagentRegistryLifecycleController(params: {
         },
       })
       .then((didAnnounce) => {
+        if (didAnnounce && latestDeliveryStatus === "fallback_sent") {
+          safeSetSubagentTaskDeliveryStatus({
+            runId,
+            childSessionKey: entry.childSessionKey,
+            deliveryStatus: "fallback_sent",
+          });
+          finalizeSubagentCleanup(runId, entry.cleanup, true, {
+            skipDeliveryStatus: true,
+          }).catch((err) => {
+            defaultRuntime.log(
+              `[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`,
+            );
+            const current = params.runs.get(runId);
+            if (!current || current.cleanupCompletedAt) {
+              return;
+            }
+            current.cleanupHandled = false;
+            params.persist();
+          });
+          return;
+        }
+        // A failed primary announce attempt is not a terminal task-delivery
+        // state while cleanup can still retry or give up into the direct
+        // completion fallback. Persist the concrete terminal status only in
+        // finalizeSubagentCleanup's give-up path (or the immediate delivered
+        // paths above), otherwise a later fallback_sent would be preceded by a
+        // misleading failed status for the same run.
         finalizeAnnounceCleanup(didAnnounce);
       })
       .catch((error) => {

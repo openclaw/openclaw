@@ -421,7 +421,7 @@ export function createSubagentRunManager(params: {
     };
     params.runs.set(runId, entry);
     try {
-      createRunningTaskRun({
+      const taskRecord = createRunningTaskRun({
         runtime: "subagent",
         sourceId: runId,
         ownerKey: requesterSessionKey,
@@ -436,6 +436,7 @@ export function createSubagentRunManager(params: {
         startedAt: now,
         lastEventAt: now,
       });
+      entry.taskId = taskRecord.taskId;
     } catch (error) {
       log.warn("Failed to create background task for subagent run", {
         runId: registerParams.runId,
