@@ -2105,6 +2105,12 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
+      const hadToolCalls =
+        typeof runResult.meta?.toolSummary?.calls === "number" &&
+        runResult.meta.toolSummary.calls > 0;
+      if (hadToolCalls) {
+        return returnWithQueuedFollowupDrain({ text: "Done." });
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
