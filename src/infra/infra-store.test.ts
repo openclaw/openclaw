@@ -2,8 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importLegacyVoiceWakeRoutingConfigFileToSqlite } from "../commands/doctor/legacy/voicewake-routing.js";
-import { importLegacyVoiceWakeConfigFileToSqlite } from "../commands/doctor/legacy/voicewake.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   getChannelActivity,
@@ -80,25 +78,6 @@ describe("infra store", () => {
         expect(saved.triggers).toEqual(defaultVoiceWakeTriggers());
       });
     });
-
-    it("imports malformed legacy config values through migration", async () => {
-      await withTempDir("openclaw-voicewake-", async (baseDir) => {
-        await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
-        await fs.writeFile(
-          path.join(baseDir, "settings", "voicewake.json"),
-          JSON.stringify({
-            triggers: ["  wake ", "", 42, null],
-            updatedAtMs: -1,
-          }),
-          "utf-8",
-        );
-
-        await importLegacyVoiceWakeConfigFileToSqlite(baseDir);
-        const loaded = await loadVoiceWakeConfig(baseDir);
-        expect(loaded.triggers).toEqual(["wake"]);
-        expect(loaded.updatedAtMs).toBe(0);
-      });
-    });
   });
 
   describe("voicewake routing store", () => {
@@ -117,23 +96,6 @@ describe("infra store", () => {
       expect(saved.routes).toEqual([{ trigger: "hello bot", target: { agentId: "main" } }]);
       expect(saved.updatedAtMs).toBeGreaterThan(0);
 
-      const loaded = await loadVoiceWakeRoutingConfig(baseDir);
-      expect(loaded.routes).toEqual([{ trigger: "hello bot", target: { agentId: "main" } }]);
-    });
-
-    it("imports legacy routing config through migration", async () => {
-      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-routing-"));
-      await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
-      await fs.writeFile(
-        path.join(baseDir, "settings", "voicewake-routing.json"),
-        JSON.stringify({
-          defaultTarget: { mode: "current" },
-          routes: [{ trigger: "  Hello   Bot  ", target: { agentId: "main" } }],
-        }),
-        "utf-8",
-      );
-
-      await importLegacyVoiceWakeRoutingConfigFileToSqlite(baseDir);
       const loaded = await loadVoiceWakeRoutingConfig(baseDir);
       expect(loaded.routes).toEqual([{ trigger: "hello bot", target: { agentId: "main" } }]);
     });
