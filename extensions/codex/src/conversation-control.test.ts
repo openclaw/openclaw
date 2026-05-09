@@ -36,8 +36,8 @@ describe("codex conversation controls", () => {
   });
 
   it("persists fast mode and permissions for later bound turns", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
+    const sessionId = "session";
+    await writeCodexAppServerBinding(sessionId, {
       threadId: "thread-1",
       cwd: tempDir,
       model: "gpt-5.4",
@@ -46,22 +46,23 @@ describe("codex conversation controls", () => {
       sandbox: "danger-full-access",
     });
 
-    await expect(setCodexConversationFastMode({ sessionFile, enabled: true })).resolves.toBe(
+    await expect(setCodexConversationFastMode({ sessionId, enabled: true })).resolves.toBe(
       "Codex fast mode enabled.",
     );
-    await expect(setCodexConversationPermissions({ sessionFile, mode: "default" })).resolves.toBe(
+    await expect(setCodexConversationPermissions({ sessionId, mode: "default" })).resolves.toBe(
       "Codex permissions set to default.",
     );
 
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.threadId).toBe("thread-1");
-    expect(binding?.serviceTier).toBe("priority");
-    expect(binding?.approvalPolicy).toBe("on-request");
-    expect(binding?.sandbox).toBe("workspace-write");
+    await expect(readCodexAppServerBinding(sessionId)).resolves.toMatchObject({
+      threadId: "thread-1",
+      serviceTier: "priority",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
   });
 
   it("does not persist public OpenAI provider after model changes on native auth bindings", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionId = "session";
     upsertAuthProfile({
       profileId: "work",
       credential: {
@@ -72,7 +73,7 @@ describe("codex conversation controls", () => {
         expires: Date.now() + 60_000,
       },
     });
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCodexAppServerBinding(sessionId, {
       threadId: "thread-1",
       cwd: tempDir,
       authProfileId: "work",
@@ -87,11 +88,11 @@ describe("codex conversation controls", () => {
       })),
     });
 
-    await expect(setCodexConversationModel({ sessionFile, model: "gpt-5.5" })).resolves.toBe(
+    await expect(setCodexConversationModel({ sessionId, model: "gpt-5.5" })).resolves.toBe(
       "Codex model set to gpt-5.5.",
     );
 
-    const binding = await readCodexAppServerBinding(sessionFile);
+    const binding = await readCodexAppServerBinding(sessionId);
     expect(binding).toMatchObject({
       threadId: "thread-1",
       authProfileId: "work",
@@ -101,8 +102,8 @@ describe("codex conversation controls", () => {
   });
 
   it("escapes model names returned from Codex before chat display", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
+    const sessionId = "session";
+    await writeCodexAppServerBinding(sessionId, {
       threadId: "thread-1",
       cwd: tempDir,
       model: "gpt-5.4",
@@ -116,7 +117,7 @@ describe("codex conversation controls", () => {
       })),
     });
 
-    await expect(setCodexConversationModel({ sessionFile, model: "gpt-5.5" })).resolves.toBe(
+    await expect(setCodexConversationModel({ sessionId, model: "gpt-5.5" })).resolves.toBe(
       "Codex model set to gpt-5.5 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09.",
     );
   });

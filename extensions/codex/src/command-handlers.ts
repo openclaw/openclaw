@@ -131,7 +131,6 @@ type ParsedDiagnosticsArgs =
 
 type CodexDiagnosticsTarget = {
   threadId: string;
-  sessionFile: string;
   sessionKey?: string;
   sessionId?: string;
   channel?: string;
@@ -381,7 +380,7 @@ async function bindConversation(
       text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
     };
   }
-  if (!ctx.sessionFile) {
+  if (!ctx.sessionId) {
     return {
       text: "Cannot bind Codex because this command did not include an OpenClaw session identity.",
     };
@@ -394,7 +393,7 @@ async function bindConversation(
     pluginConfig,
     config: ctx.config,
     sessionKey: ctx.sessionKey,
-    sessionFile: ctx.sessionFile,
+    sessionId: ctx.sessionId,
     workspaceDir,
     threadId: parsed.threadId,
     model: parsed.model,
@@ -441,7 +440,7 @@ async function detachConversation(
   const detached = await ctx.detachConversationBinding();
   if (data) {
     await deps.clearCodexAppServerBinding(data);
-  } else if (ctx.sessionFile) {
+  } else if (ctx.sessionId) {
     await deps.clearCodexAppServerBinding(resolveCodexCommandBindingIdentity(ctx));
   }
   return detached.removed
@@ -468,7 +467,7 @@ async function describeConversationBinding(
     `- Fast: ${isCodexFastServiceTier(threadBinding?.serviceTier) ? "on" : "off"}`,
     `- Permissions: ${threadBinding ? formatPermissionsMode(threadBinding) : "default"}`,
     `- Active run: ${formatCodexDisplayText(active ? active.turnId : "none")}`,
-    `- Session key: ${formatCodexDisplayText(data.sessionKey ?? data.sessionFile)}`,
+    `- Session key: ${formatCodexDisplayText(data.sessionKey ?? data.sessionId)}`,
   ].join("\n");
 }
 
@@ -495,7 +494,7 @@ async function resumeThread(
   if (!normalizedThreadId || args.length !== 1) {
     return "Usage: /codex resume <thread-id>";
   }
-  if (!ctx.sessionFile) {
+  if (!ctx.sessionId) {
     return "Cannot attach a Codex thread because this command did not include an OpenClaw session identity.";
   }
   const response = await deps.codexControlRequest(
@@ -525,13 +524,13 @@ async function stopConversationTurn(
   pluginConfig: unknown,
 ): Promise<string> {
   const sessionIdentity = await resolveControlSessionIdentity(ctx);
-  if (!sessionIdentity.sessionFile) {
+  if (!sessionIdentity.sessionId) {
     return "Cannot stop Codex because this command did not include an OpenClaw session identity.";
   }
   return (
     await deps.stopCodexConversationTurn({
       sessionKey: sessionIdentity.sessionKey,
-      sessionFile: sessionIdentity.sessionFile,
+      sessionId: sessionIdentity.sessionId,
       pluginConfig,
     })
   ).message;
@@ -544,13 +543,13 @@ async function steerConversationTurn(
   message: string,
 ): Promise<string> {
   const sessionIdentity = await resolveControlSessionIdentity(ctx);
-  if (!sessionIdentity.sessionFile) {
+  if (!sessionIdentity.sessionId) {
     return "Cannot steer Codex because this command did not include an OpenClaw session identity.";
   }
   return (
     await deps.steerCodexConversationTurn({
       sessionKey: sessionIdentity.sessionKey,
-      sessionFile: sessionIdentity.sessionFile,
+      sessionId: sessionIdentity.sessionId,
       pluginConfig,
       message,
     })
@@ -567,7 +566,7 @@ async function setConversationModel(
     return "Usage: /codex model <model>";
   }
   const sessionIdentity = await resolveControlSessionIdentity(ctx);
-  if (!sessionIdentity.sessionFile) {
+  if (!sessionIdentity.sessionId) {
     return "Cannot set Codex model because this command did not include an OpenClaw session identity.";
   }
   const [model = ""] = args;
@@ -580,7 +579,7 @@ async function setConversationModel(
   }
   return await deps.setCodexConversationModel({
     sessionKey: sessionIdentity.sessionKey,
-    sessionFile: sessionIdentity.sessionFile,
+    sessionId: sessionIdentity.sessionId,
     pluginConfig,
     model: normalized,
   });
@@ -596,7 +595,7 @@ async function setConversationFastMode(
     return "Usage: /codex fast [on|off|status]";
   }
   const sessionIdentity = await resolveControlSessionIdentity(ctx);
-  if (!sessionIdentity.sessionFile) {
+  if (!sessionIdentity.sessionId) {
     return "Cannot set Codex fast mode because this command did not include an OpenClaw session identity.";
   }
   const value = args[0];
@@ -606,7 +605,7 @@ async function setConversationFastMode(
   }
   return await deps.setCodexConversationFastMode({
     sessionKey: sessionIdentity.sessionKey,
-    sessionFile: sessionIdentity.sessionFile,
+    sessionId: sessionIdentity.sessionId,
     pluginConfig,
     enabled: parsed,
   });
@@ -622,7 +621,7 @@ async function setConversationPermissions(
     return "Usage: /codex permissions [default|yolo|status]";
   }
   const sessionIdentity = await resolveControlSessionIdentity(ctx);
-  if (!sessionIdentity.sessionFile) {
+  if (!sessionIdentity.sessionId) {
     return "Cannot set Codex permissions because this command did not include an OpenClaw session identity.";
   }
   const value = args[0];
@@ -632,7 +631,7 @@ async function setConversationPermissions(
   }
   return await deps.setCodexConversationPermissions({
     sessionKey: sessionIdentity.sessionKey,
-    sessionFile: sessionIdentity.sessionFile,
+    sessionId: sessionIdentity.sessionId,
     pluginConfig,
     mode: parsed,
   });
@@ -640,34 +639,34 @@ async function setConversationPermissions(
 
 async function resolveControlSessionIdentity(
   ctx: PluginCommandContext,
-): Promise<{ sessionKey?: string; sessionFile?: string }> {
+): Promise<{ sessionKey?: string; sessionId?: string }> {
   const binding = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(binding);
   if (data) {
-    return { sessionKey: data.sessionKey, sessionFile: data.sessionFile };
+    return { sessionKey: data.sessionKey, sessionId: data.sessionId };
   }
   return resolveCodexCommandBindingIdentity(ctx);
 }
 
 function resolveCodexCommandBindingIdentity(ctx: PluginCommandContext): {
   sessionKey?: string;
-  sessionFile?: string;
+  sessionId?: string;
 } {
-  return { sessionKey: ctx.sessionKey, sessionFile: ctx.sessionFile };
+  return { sessionKey: ctx.sessionKey, sessionId: ctx.sessionId };
 }
 
 function hasCodexCommandBindingIdentity(identity: {
   sessionKey?: string;
-  sessionFile?: string;
+  sessionId?: string;
 }): boolean {
-  return Boolean(identity.sessionKey?.trim() || identity.sessionFile?.trim());
+  return Boolean(identity.sessionKey?.trim() || identity.sessionId?.trim());
 }
 
 function resolveCodexDiagnosticsTargetIdentityKey(target: {
   sessionKey?: string;
-  sessionFile?: string;
+  sessionId?: string;
 }): string {
-  return target.sessionKey?.trim() || target.sessionFile?.trim() || "";
+  return target.sessionKey?.trim() || target.sessionId?.trim() || "";
 }
 
 async function handleCodexDiagnosticsFeedback(
@@ -957,9 +956,8 @@ async function resolveCodexDiagnosticsTargets(
   if (hasCodexCommandBindingIdentity(activeSessionIdentity)) {
     candidates.push({
       threadId: "",
-      sessionFile: activeSessionIdentity.sessionFile ?? "",
       sessionKey: activeSessionIdentity.sessionKey,
-      sessionId: ctx.sessionId,
+      sessionId: activeSessionIdentity.sessionId,
       channel: ctx.channel,
       channelId: ctx.channelId,
       accountId: ctx.accountId,
@@ -973,9 +971,8 @@ async function resolveCodexDiagnosticsTargets(
     }
     candidates.push({
       threadId: "",
-      sessionFile: session.sessionFile ?? "",
       sessionKey: session.sessionKey,
-      sessionId: session.sessionId,
+      sessionId: session.sessionId ?? "",
       channel: session.channel,
       channelId: session.channelId,
       accountId: session.accountId,
@@ -1531,7 +1528,7 @@ async function startThreadAction(
     return `Usage: /codex ${label === "compaction" ? "compact" : label}`;
   }
   const sessionIdentity = await resolveControlSessionIdentity(ctx);
-  if (!sessionIdentity.sessionFile) {
+  if (!sessionIdentity.sessionId) {
     return `Cannot start Codex ${label} because this command did not include an OpenClaw session identity.`;
   }
   const binding = await deps.readCodexAppServerBinding(sessionIdentity);

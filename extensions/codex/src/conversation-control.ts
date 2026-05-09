@@ -15,7 +15,7 @@ import { formatCodexDisplayText } from "./command-formatters.js";
 
 type ActiveTurn = {
   sessionKey?: string;
-  sessionFile: string;
+  sessionId: string;
   threadId: string;
   turnId: string;
 };
@@ -45,14 +45,14 @@ export function trackCodexConversationActiveTurn(active: ActiveTurn): () => void
 }
 
 export function readCodexConversationActiveTurn(
-  identity: string | { sessionKey?: string; sessionFile?: string },
+  identity: string | { sessionKey?: string; sessionId?: string },
 ): ActiveTurn | undefined {
   return getActiveTurns().get(resolveCodexConversationControlKey(identity));
 }
 
 export async function stopCodexConversationTurn(params: {
   sessionKey?: string;
-  sessionFile: string;
+  sessionId: string;
   pluginConfig?: unknown;
 }): Promise<{ stopped: boolean; message: string }> {
   const active = readCodexConversationActiveTurn(params);
@@ -79,7 +79,7 @@ export async function stopCodexConversationTurn(params: {
 
 export async function steerCodexConversationTurn(params: {
   sessionKey?: string;
-  sessionFile: string;
+  sessionId: string;
   message: string;
   pluginConfig?: unknown;
 }): Promise<{ steered: boolean; message: string }> {
@@ -112,7 +112,7 @@ export async function steerCodexConversationTurn(params: {
 
 export async function setCodexConversationModel(params: {
   sessionKey?: string;
-  sessionFile: string;
+  sessionId: string;
   model: string;
   pluginConfig?: unknown;
 }): Promise<string> {
@@ -142,7 +142,7 @@ export async function setCodexConversationModel(params: {
 
 export async function setCodexConversationFastMode(params: {
   sessionKey?: string;
-  sessionFile: string;
+  sessionId: string;
   enabled?: boolean;
   pluginConfig?: unknown;
 }): Promise<string> {
@@ -162,7 +162,7 @@ export async function setCodexConversationFastMode(params: {
 
 export async function setCodexConversationPermissions(params: {
   sessionKey?: string;
-  sessionFile: string;
+  sessionId: string;
   mode?: PermissionsMode;
   pluginConfig?: unknown;
 }): Promise<string> {
@@ -218,7 +218,7 @@ export function formatPermissionsMode(binding: {
     : "default";
 }
 
-async function requireThreadBinding(identity: { sessionKey?: string; sessionFile?: string }) {
+async function requireThreadBinding(identity: { sessionKey?: string; sessionId?: string }) {
   const binding = await readCodexAppServerBinding(identity);
   if (!binding?.threadId) {
     throw new Error("No Codex thread is attached to this OpenClaw session yet.");
@@ -227,12 +227,12 @@ async function requireThreadBinding(identity: { sessionKey?: string; sessionFile
 }
 
 function resolveCodexConversationControlKey(
-  identity: string | { sessionKey?: string; sessionFile?: string },
+  identity: string | { sessionKey?: string; sessionId?: string },
 ): string {
   if (typeof identity === "string") {
     return identity;
   }
-  return identity.sessionKey?.trim() || identity.sessionFile?.trim() || "";
+  return identity.sessionKey?.trim() || identity.sessionId?.trim() || "";
 }
 
 async function resumeThreadWithOverrides(params: {
