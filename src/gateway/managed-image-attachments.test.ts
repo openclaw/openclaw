@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -19,6 +20,10 @@ const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 const expectedManagedOriginalsDir = () =>
   path.join(resolvePreferredOpenClawTmpDir(), "media", "outgoing", "originals");
+
+function sqliteTranscript(sessionId: string, agentId = "main"): string {
+  return createSqliteSessionTranscriptLocator({ agentId, sessionId });
+}
 
 vi.mock("./http-utils.js", () => ({
   authorizeGatewayHttpRequestOrReply: authorizeGatewayHttpRequestOrReplyMock,
@@ -167,7 +172,10 @@ async function requestManagedImage(params: {
   });
   loadSessionEntryMock.mockReturnValue({
     storePath: path.join(params.stateDir, "openclaw-state.sqlite"),
-    entry: params.sessionEntry ?? { sessionId: "sess-1", sessionFile: "session.jsonl" },
+    entry: params.sessionEntry ?? {
+      sessionId: "sess-1",
+      sessionFile: sqliteTranscript("sess-1"),
+    },
   });
   readSessionMessagesMock.mockReturnValue(
     params.transcriptMessages ?? [
@@ -380,7 +388,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
   it("reuses the session attachment index across requests until the transcript changes", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
-    const sessionFile = path.join(stateDir, "agents", "main", "sessions", "sess-main.jsonl");
+    const sessionFile = sqliteTranscript("sess-main");
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "sess-main",
@@ -953,7 +961,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     const fixture = await createFixture(stateDir);
     loadSessionEntryMock.mockReturnValue({
       storePath: path.join(stateDir, "openclaw-state.sqlite"),
-      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
+      entry: { sessionId: "sess-main", sessionFile: sqliteTranscript("sess-main") },
     });
     readSessionMessagesMock.mockReturnValue([]);
 
@@ -971,7 +979,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     const fixture = await createFixture(stateDir);
     loadSessionEntryMock.mockReturnValue({
       storePath: path.join(stateDir, "openclaw-state.sqlite"),
-      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
+      entry: { sessionId: "sess-main", sessionFile: sqliteTranscript("sess-main") },
     });
     readSessionMessagesMock.mockReturnValue([
       {
@@ -1007,7 +1015,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     });
     loadSessionEntryMock.mockReturnValue({
       storePath: path.join(stateDir, "openclaw-state.sqlite"),
-      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
+      entry: { sessionId: "sess-main", sessionFile: sqliteTranscript("sess-main") },
     });
     readSessionMessagesMock.mockReturnValue([
       {
@@ -1051,7 +1059,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       storePath: path.join(stateDir, "openclaw-state.sqlite"),
       entry: {
         sessionId: sessionKey === retainedFixture.sessionKey ? "sess-other" : "sess-main",
-        sessionFile: "/tmp/session.jsonl",
+        sessionFile:
+          sessionKey === retainedFixture.sessionKey
+            ? sqliteTranscript("sess-other", "other")
+            : sqliteTranscript("sess-main"),
       },
     }));
     readSessionMessagesMock.mockReturnValue([]);

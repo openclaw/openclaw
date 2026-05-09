@@ -32,6 +32,8 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
     "../../infra/session-cost-usage.js",
   );
+  const locator = (agentId: string, sessionId: string) =>
+    `sqlite-transcript://${agentId}/${sessionId}.jsonl`;
   return {
     ...actual,
     discoverAllSessions: vi.fn(async (params?: { agentId?: string }) => {
@@ -39,7 +41,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
         return [
           {
             sessionId: "s-main",
-            sessionFile: "/tmp/transcript-fixtures/main/s-main.jsonl",
+            sessionFile: locator("main", "s-main"),
             mtime: 100,
             firstUserMessage: "hello",
           },
@@ -49,7 +51,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
         return [
           {
             sessionId: "s-opus",
-            sessionFile: "/tmp/transcript-fixtures/opus/s-opus.jsonl",
+            sessionFile: locator("opus", "s-opus"),
             mtime: 200,
             firstUserMessage: "hi",
           },
@@ -178,10 +180,14 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const sessionFile = createSqliteSessionTranscriptLocator({
+          agentId: "opus",
+          sessionId: "s-opus",
+        });
         replaceSqliteSessionTranscriptEvents({
           agentId: "opus",
           sessionId: "s-opus",
-          transcriptPath: path.join(stateDir, "agents", "opus", "sessions", "s-opus.jsonl"),
+          transcriptPath: sessionFile,
           events: [{ type: "session", id: "s-opus" }],
         });
         // Swap the store mock for this test: the canonical key differs from the discovered key
@@ -191,7 +197,7 @@ describe("sessions.usage", () => {
           entries: {
             [storeKey]: {
               sessionId: "s-opus",
-              sessionFile: "s-opus.jsonl",
+              sessionFile,
               label: "Named session",
               updatedAt: 999,
             },
@@ -330,10 +336,14 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const sessionFile = createSqliteSessionTranscriptLocator({
+          agentId: "opus",
+          sessionId: "run-dup",
+        });
         replaceSqliteSessionTranscriptEvents({
           agentId: "opus",
           sessionId: "run-dup",
-          transcriptPath: path.join(stateDir, "agents", "opus", "sessions", "run-dup.jsonl"),
+          transcriptPath: sessionFile,
           events: [{ type: "session", id: "run-dup" }],
         });
         vi.mocked(loadCombinedSessionEntriesForGateway).mockReturnValue({
@@ -341,12 +351,12 @@ describe("sessions.usage", () => {
           entries: {
             [preferredKey]: {
               sessionId: "run-dup",
-              sessionFile: "run-dup.jsonl",
+              sessionFile,
               updatedAt: 1_000,
             },
             "agent:other:main": {
               sessionId: "run-dup",
-              sessionFile: "run-dup.jsonl",
+              sessionFile,
               updatedAt: 2_000,
             },
           },
