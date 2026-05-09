@@ -15,6 +15,7 @@ vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal)
 }));
 
 let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildGoogleGenerativeAiParams;
+let buildGoogleGemini3FirstResponseRetryParams: typeof import("./transport-stream.js").buildGoogleGemini3FirstResponseRetryParams;
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
 let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
@@ -89,6 +90,7 @@ describe("google transport stream", () => {
   beforeAll(async () => {
     ({
       buildGoogleGenerativeAiParams,
+      buildGoogleGemini3FirstResponseRetryParams,
       createGoogleGenerativeAiTransportStreamFn,
       createGoogleVertexTransportStreamFn,
     } = await import("./transport-stream.js"));
@@ -246,6 +248,90 @@ describe("google transport stream", () => {
         },
       ],
     });
+  });
+
+  it("builds a lean Gemini 3 first-response retry payload", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+    const retryPayload = buildGoogleGemini3FirstResponseRetryParams({
+      model,
+      request: {
+        contents: [{ role: "user", parts: [{ text: "hello" }] }],
+        generationConfig: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: "HIGH",
+          },
+        },
+      },
+    });
+
+    expect(retryPayload?.generationConfig).toEqual({
+      thinkingConfig: {
+        thinkingLevel: "LOW",
+      },
+    });
+  });
+
+  it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    guardedFetchMock
+      .mockImplementationOnce(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(init.signal?.reason ?? new Error("aborted"));
+            });
+          }),
+      )
+      .mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+          },
+        ]),
+      );
+
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: {
+                type: "object",
+                properties: { q: { type: "string" } },
+              },
+            },
+          ],
+        } as never,
+        { reasoning: "high" } as never,
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+    expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(guardedFetchMock.mock.calls[0]?.[1]?.body as string);
+    const retryBody = JSON.parse(guardedFetchMock.mock.calls[1]?.[1]?.body as string);
+    expect(firstBody.generationConfig.thinkingConfig).toMatchObject({
+      includeThoughts: true,
+      thinkingLevel: "HIGH",
+    });
+    expect(retryBody.generationConfig.thinkingConfig).toEqual({
+      thinkingLevel: "LOW",
+    });
+    expect(retryBody.tools).toEqual(firstBody.tools);
   });
 
   it("uses bearer auth when the Google api key is an OAuth JSON payload", async () => {
