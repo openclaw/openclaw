@@ -141,7 +141,6 @@ vi.mock("./runtime-api.js", async () => {
 function createRuntimeCore(cfg: OpenClawConfig) {
   const runPrepared = vi.fn(
     async (turn: {
-      storePath: string;
       routeSessionKey: string;
       ctxPayload: { SessionKey?: string };
       recordInboundSession: (params: unknown) => Promise<void>;
@@ -157,7 +156,6 @@ function createRuntimeCore(cfg: OpenClawConfig) {
       }>;
     }) => {
       await turn.recordInboundSession({
-        storePath: turn.storePath,
         sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
         ctx: turn.ctxPayload,
         groupResolution: turn.record?.groupResolution,

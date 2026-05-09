@@ -52,8 +52,6 @@ const createChannelMessageReplyPipeline = vi.hoisted(() =>
   })),
 );
 const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
-const loadSessionStore = vi.hoisted(() => vi.fn());
-const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 const sessionRows = vi.hoisted(() => ({ value: {} as Record<string, Record<string, unknown>> }));
 const getSessionEntry = vi.hoisted(() =>
   vi.fn(({ sessionKey }: { sessionKey: string }) => sessionRows.value[sessionKey]),
@@ -109,7 +107,6 @@ vi.mock("./send.js", () => ({
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
-  loadSessionStore,
   getSessionEntry,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode,
@@ -195,8 +192,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     listSkillCommandsForAgents.mockReset();
     createChannelMessageReplyPipeline.mockReset();
     wasSentByBot.mockReset();
-    loadSessionStore.mockReset();
-    resolveStorePath.mockReset();
     sessionRows.value = {};
     getSessionEntry.mockReset();
     getSessionEntry.mockImplementation(
@@ -250,8 +245,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
       onModelSelected: () => undefined,
     });
     wasSentByBot.mockReturnValue(false);
-    resolveStorePath.mockReturnValue("/tmp/sessions.json");
-    loadSessionStore.mockReturnValue({});
     sessionRows.value = {};
     generateTopicLabel.mockResolvedValue("Topic label");
     describeStickerImage.mockResolvedValue(null);
@@ -345,7 +338,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
       removeAckAfterReply: false,
     } as unknown as TelegramMessageContext;
     base.turn = {
-      storePath: "/tmp/openclaw/telegram-agent.sqlite",
       recordInboundSession: vi.fn(async () => undefined),
       record: {
         onRecordError: vi.fn(),
