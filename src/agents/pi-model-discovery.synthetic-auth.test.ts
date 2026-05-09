@@ -36,7 +36,6 @@ vi.mock("./auth-profiles/store.js", () => ({
 
 vi.mock("./pi-auth-discovery-core.js", () => ({
   addEnvBackedPiCredentials: (credentials: Record<string, unknown>) => ({ ...credentials }),
-  scrubLegacyStaticAuthJsonEntriesForDiscovery: vi.fn(),
 }));
 
 let resolvePiCredentialsForDiscovery: typeof import("./pi-auth-discovery.js").resolvePiCredentialsForDiscovery;

@@ -635,6 +635,9 @@ sessionId}` and session key context.
   canonical credential file remains `auth-profiles.json`; per-agent `auth.json`
   and shared `credentials/oauth.json` are doctor migration inputs that are
   removed after import.
+- PI model discovery now passes canonical credentials into in-memory
+  `pi-coding-agent` auth storage. It no longer creates, scrubs, or writes
+  per-agent `auth.json` during discovery.
 - Voice Wake trigger and routing settings now use shared SQLite KV instead of
   `settings/voicewake.json` and `settings/voicewake-routing.json`; doctor imports
   the legacy JSON files and removes them after a successful migration.

@@ -139,6 +139,9 @@ This plan has started landing in slices:
   credentials and stays file-backed. Retired per-agent `auth.json` and shared
   `credentials/oauth.json` credential files are doctor migration inputs only;
   runtime no longer imports them.
+- PI model discovery uses in-memory `pi-coding-agent` auth storage seeded from
+  canonical OpenClaw credentials. It no longer creates or scrubs per-agent
+  `auth.json`.
 - Device identity, local device auth tokens, bootstrap tokens, device/node
   pairing ledgers, channel pairing requests/allowlists, inferred commitment
   records, subagent run records, TUI restore pointers, auth routing state,

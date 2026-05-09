@@ -6,5 +6,4 @@ export {
   ModelRegistry,
   normalizeDiscoveredPiModel,
   resolvePiCredentialsForDiscovery,
-  scrubLegacyStaticAuthJsonEntriesForDiscovery,
 } from "./pi-model-discovery.js";

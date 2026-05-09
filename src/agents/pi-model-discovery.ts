@@ -10,7 +10,6 @@ import type { Api, Model } from "./pi-ai-contract.js";
 import type { PiCredentialMap } from "./pi-auth-credentials.js";
 import {
   resolvePiCredentialsForDiscovery,
-  scrubLegacyStaticAuthJsonEntriesForDiscovery,
   type DiscoverAuthStorageOptions,
 } from "./pi-auth-discovery.js";
 import type {
@@ -172,7 +171,7 @@ function createOpenClawModelRegistry(
   return registry;
 }
 
-function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCredentialMap) {
+function createAuthStorage(AuthStorageLike: unknown, creds: PiCredentialMap) {
   const withInMemory = AuthStorageLike as { inMemory?: (data?: unknown) => unknown };
   if (typeof withInMemory.inMemory === "function") {
     return withInMemory.inMemory(creds) as PiAuthStorage;
@@ -196,25 +195,7 @@ function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCred
     return withFromStorage.fromStorage(backend) as PiAuthStorage;
   }
 
-  const withFactory = AuthStorageLike as { create?: (path: string) => unknown };
-  const withRuntimeOverride = (
-    typeof withFactory.create === "function"
-      ? withFactory.create(path)
-      : new (AuthStorageLike as { new (path: string): unknown })(path)
-  ) as PiAuthStorage & {
-    setRuntimeApiKey?: (provider: string, apiKey: string) => void; // pragma: allowlist secret
-  };
-  const hasRuntimeApiKeyOverride = typeof withRuntimeOverride.setRuntimeApiKey === "function"; // pragma: allowlist secret
-  if (hasRuntimeApiKeyOverride) {
-    for (const [provider, credential] of Object.entries(creds)) {
-      if (credential.type === "api_key") {
-        withRuntimeOverride.setRuntimeApiKey(provider, credential.key);
-        continue;
-      }
-      withRuntimeOverride.setRuntimeApiKey(provider, credential.access);
-    }
-  }
-  return withRuntimeOverride;
+  throw new Error("pi-coding-agent AuthStorage must support in-memory credentials");
 }
 
 // Compatibility helpers for pi-coding-agent 0.50+ (discover* helpers removed).
@@ -224,11 +205,7 @@ export function discoverAuthStorage(
 ): PiAuthStorage {
   const credentials =
     options?.skipCredentials === true ? {} : resolvePiCredentialsForDiscovery(agentDir, options);
-  const authPath = path.join(agentDir, "auth.json");
-  if (options?.readOnly !== true) {
-    scrubLegacyStaticAuthJsonEntriesForDiscovery(authPath);
-  }
-  return createAuthStorage(PiAuthStorageClass, authPath, credentials);
+  return createAuthStorage(PiAuthStorageClass, credentials);
 }
 
 export function discoverModels(
@@ -247,6 +224,5 @@ export function discoverModels(
 export {
   addEnvBackedPiCredentials,
   resolvePiCredentialsForDiscovery,
-  scrubLegacyStaticAuthJsonEntriesForDiscovery,
   type DiscoverAuthStorageOptions,
 } from "./pi-auth-discovery.js";
