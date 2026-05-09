@@ -592,11 +592,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               lastSnapshotTextLength = text.length;
               flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
             }
-            // Send media even when streaming handled the text
-            if (hasMedia) {
-              await sendMediaReplies(payload);
+            // Tool results should appear as separate messages in chat rather than
+            // being silently dropped when a streaming card is active.
+            if (info?.kind !== "tool") {
+              if (hasMedia) {
+                await sendMediaReplies(payload);
+              }
+              return;
             }
-            return;
           }
 
           if (useCard) {
