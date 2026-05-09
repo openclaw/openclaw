@@ -445,7 +445,6 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../transcript-state-repair.js", () => ({
-    repairTranscriptStateIfNeeded: vi.fn(async () => {}),
     repairTranscriptSessionStateIfNeeded: vi.fn(async () => {}),
   }));
 
