@@ -1,6 +1,5 @@
 import { expect, test } from "vitest";
 import { getSessionEntry } from "../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { embeddedRunMock, rpcReq, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
@@ -19,10 +18,6 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
-
-function sqliteTranscript(sessionId: string): string {
-  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
-}
 
 test("sessions.delete rejects main and aborts active runs", async () => {
   const { dir } = await createSessionStoreDir();
@@ -175,7 +170,6 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
 test("sessions.delete emits session_end with deleted reason and no replacement", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
-  const transcriptPath = sqliteTranscript("sess-delete");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-delete",

@@ -1,5 +1,4 @@
 import { expect, test, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { rpcReq, testState, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
@@ -11,10 +10,6 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
-
-function sqliteTranscript(sessionId: string): string {
-  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
-}
 
 test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
   await createSessionStoreDir();

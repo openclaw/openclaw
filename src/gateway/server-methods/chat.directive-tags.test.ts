@@ -6,6 +6,11 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+} from "../../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -16,7 +21,6 @@ import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
-  transcriptPath: "",
   sessionId: "sess-1",
   mainSessionKey: "main",
   finalText: "[[reply_to_current]]",
@@ -57,7 +61,8 @@ const mockState = vi.hoisted(() => ({
   lastDispatchImageOrder: undefined as string[] | undefined,
   modelCatalog: null as ModelCatalogEntry[] | null,
   emittedTranscriptUpdates: [] as Array<{
-    sessionFile: string;
+    agentId?: string;
+    sessionId?: string;
     sessionKey?: string;
     message?: unknown;
     messageId?: string;
@@ -81,14 +86,13 @@ const mockState = vi.hoisted(() => ({
   deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
 }));
 
-function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
-  const entries: Array<Record<string, unknown>> = [];
-  for (const line of fs.readFileSync(transcriptPath, "utf-8").split("\n")) {
-    if (line.length > 0) {
-      entries.push(JSON.parse(line) as Record<string, unknown>);
-    }
-  }
-  return entries;
+const cleanupDirs: string[] = [];
+
+function readTranscriptJsonLines(): Array<Record<string, unknown>> {
+  return loadSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: mockState.sessionId,
+  }).map((entry) => entry.event as Record<string, unknown>);
 }
 
 const bindingMocks = vi.hoisted(() => ({
@@ -122,7 +126,6 @@ vi.mock("../session-utils.js", async () => {
       },
       entry: {
         sessionId: mockState.sessionId,
-        sessionFile: mockState.transcriptPath,
         ...mockState.sessionEntry,
       },
       canonicalKey:
@@ -244,7 +247,8 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 vi.mock("../../sessions/transcript-events.js", () => ({
   emitSessionTranscriptUpdate: vi.fn(
     (update: {
-      sessionFile: string;
+      agentId?: string;
+      sessionId?: string;
       sessionKey?: string;
       message?: unknown;
       messageId?: string;
@@ -339,19 +343,22 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 1000, stepMs 
 
 function createTranscriptFixture(prefix: string) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  const transcriptPath = path.join(dir, "sess.jsonl");
-  fs.writeFileSync(
-    transcriptPath,
-    `${JSON.stringify({
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: mockState.sessionId,
-      timestamp: new Date(0).toISOString(),
-      cwd: "/tmp",
-    })}\n`,
-    "utf-8",
-  );
-  mockState.transcriptPath = transcriptPath;
+  cleanupDirs.push(dir);
+  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  closeOpenClawStateDatabaseForTest();
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: mockState.sessionId,
+    events: [
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: mockState.sessionId,
+        timestamp: new Date(0).toISOString(),
+        cwd: "/tmp",
+      },
+    ],
+  });
   return dir;
 }
 
@@ -556,6 +563,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.deleteMediaBufferCalls = [];
     mockState.hasBeforeAgentRunHooks = false;
     mockState.dispatchBlockedByBeforeAgentRun = false;
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
+    for (const dir of cleanupDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   });
 
   it("registers tool-event recipients for clients advertising tool-events capability", async () => {
@@ -621,8 +633,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("persists agent-run audio replies emitted as media-bearing block payloads", async () => {
-    createTranscriptFixture("openclaw-chat-send-agent-audio-");
-    const transcriptDir = path.dirname(mockState.transcriptPath);
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-audio-");
     const audioPath = path.join(transcriptDir, "reply.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     mockState.config = {
@@ -791,7 +802,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // Agent-run delivery is a live projection; Pi message_end owns persisted
     // assistant transcript entries, including stale media/text final payloads.
     expect(assistantUpdates).toStrictEqual([]);
-    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
+    const transcriptLines = readTranscriptJsonLines();
     const assistantEntries = transcriptLines.filter(
       (entry) =>
         (entry as { message?: { role?: string } }).message?.role === "assistant" ||
@@ -838,7 +849,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // Normal agent-run final text must not be mirrored into JSONL by WebChat;
     // Pi persists the model-visible assistant turn from message_end.
     expect(assistantUpdates).toStrictEqual([]);
-    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
+    const transcriptLines = readTranscriptJsonLines();
     const assistantEntries = transcriptLines.filter(
       (entry) =>
         (entry as { message?: { role?: string } }).message?.role === "assistant" ||
@@ -2069,7 +2080,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         (update.message as { role?: unknown }).role === "user",
     );
     expect(userUpdate).toMatchObject({
-      sessionFile: expect.stringMatching(/sess-\d+\.jsonl$/),
+      agentId: "main",
+      sessionId: mockState.sessionId,
       sessionKey: "main",
       message: {
         role: "user",
@@ -2211,7 +2223,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           (update.message as { role?: unknown }).role === "user",
       );
       expect(userUpdate).toMatchObject({
-        sessionFile: expect.stringMatching(/sess-\d+\.jsonl$/),
+        agentId: "main",
+        sessionId: mockState.sessionId,
         sessionKey: "main",
       });
       expect(mockState.savedMediaCalls).toEqual([
@@ -3390,7 +3403,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         (update.message as { role?: unknown }).role === "user",
     );
     expect(userUpdate).toMatchObject({
-      sessionFile: expect.stringMatching(/sess-\d+\.jsonl$/),
+      agentId: "main",
+      sessionId: mockState.sessionId,
       sessionKey: "main",
       message: {
         role: "user",
@@ -3423,7 +3437,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           (update.message as { role?: unknown }).role === "user",
       );
       expect(userUpdate).toMatchObject({
-        sessionFile: expect.stringMatching(/sess-\d+\.jsonl$/),
+        agentId: "main",
+        sessionId: mockState.sessionId,
         sessionKey: "main",
         message: {
           role: "user",
