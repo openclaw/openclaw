@@ -41,7 +41,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   getSessionEntry,
   listSessionEntries,
-  resolveAndPersistSessionTranscriptIdentity,
+  resolveAndPersistSessionTranscriptScope,
   resolveSessionRowEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -167,12 +167,12 @@ function resolveTelegramProgressPlaceholder(command: {
   return text ? text : null;
 }
 
-async function resolveTelegramCommandTranscriptLocator(params: {
+async function resolveTelegramCommandTranscriptScope(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
   threadId?: string | number;
-}): Promise<{ sessionId?: string; transcriptLocator?: string }> {
+}): Promise<{ sessionId?: string }> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return {};
@@ -184,14 +184,14 @@ async function resolveTelegramCommandTranscriptLocator(params: {
       sessionKey,
     });
     const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
-    const identity = await resolveAndPersistSessionTranscriptIdentity({
+    const scope = await resolveAndPersistSessionTranscriptScope({
       sessionId,
       sessionKey: resolved.normalizedKey,
       sessionEntry: resolved.existing,
       agentId: params.agentId,
       topicId: params.threadId,
     });
-    return { sessionId, transcriptLocator: identity.transcriptLocator };
+    return { sessionId: scope.sessionId };
   } catch {
     return {};
   }
@@ -1327,7 +1327,7 @@ export const registerTelegramNativeCommands = ({
           } catch {}
         }
 
-        const transcriptLocatorContext = await resolveTelegramCommandTranscriptLocator({
+        const transcriptScopeContext = await resolveTelegramCommandTranscriptScope({
           cfg: runtimeCfg,
           agentId: route.agentId,
           sessionKey: route.sessionKey,
@@ -1343,8 +1343,7 @@ export const registerTelegramNativeCommands = ({
             isAuthorizedSender: commandAuthorized,
             senderIsOwner,
             sessionKey: route.sessionKey,
-            sessionId: transcriptLocatorContext.sessionId,
-            transcriptLocator: transcriptLocatorContext.transcriptLocator,
+            sessionId: transcriptScopeContext.sessionId,
             commandBody,
             config: runtimeCfg,
             from,

@@ -53,7 +53,7 @@ const sessionMocks = vi.hoisted(() => {
       Object.entries(sessionStore.value).map(([sessionKey, entry]) => ({ sessionKey, entry })),
     ),
     recordSessionMetaFromInbound: vi.fn(),
-    resolveAndPersistSessionTranscriptIdentity: vi.fn(),
+    resolveAndPersistSessionTranscriptScope: vi.fn(),
     sessionStore,
   };
 });
@@ -160,8 +160,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
     ...actual,
     getSessionEntry: sessionMocks.getSessionEntry,
     listSessionEntries: sessionMocks.listSessionEntries,
-    resolveAndPersistSessionTranscriptIdentity:
-      sessionMocks.resolveAndPersistSessionTranscriptIdentity,
+    resolveAndPersistSessionTranscriptScope: sessionMocks.resolveAndPersistSessionTranscriptScope,
   };
 });
 vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
@@ -484,13 +483,12 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       })),
     );
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
-    sessionMocks.resolveAndPersistSessionTranscriptIdentity
+    sessionMocks.resolveAndPersistSessionTranscriptScope
       .mockClear()
       .mockImplementation(async (params) => {
-        const topicSuffix = params.topicId === undefined ? "" : `?topic=${params.topicId}`;
-        const transcriptLocator = `sqlite-transcript://${params.agentId ?? "main"}/${params.sessionId}${topicSuffix}`;
         return {
-          transcriptLocator,
+          agentId: params.agentId ?? "main",
+          sessionId: params.sessionId,
           sessionEntry: {
             ...params.sessionEntry,
             sessionId: params.sessionId,
@@ -1199,7 +1197,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       createTelegramTopicCommandContext({ match: "bind --cwd /tmp/work", threadId: 42 }),
     );
 
-    expect(sessionMocks.resolveAndPersistSessionTranscriptIdentity).toHaveBeenCalledWith(
+    expect(sessionMocks.resolveAndPersistSessionTranscriptScope).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "sess-topic",
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
@@ -1210,7 +1208,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       expect.objectContaining({
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         sessionId: "sess-topic",
-        transcriptLocator: "sqlite-transcript://main/sess-topic?topic=42",
         messageThreadId: 42,
       }),
     );
