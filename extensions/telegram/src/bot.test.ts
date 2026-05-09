@@ -226,7 +226,7 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).not.toHaveBeenCalled();
-      expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
+      expect(loadSessionStore(storePath, { skipCache: true })).toStrictEqual({});
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-authz-bypass-1");
     } finally {
       await rm(storePath, { force: true });
@@ -299,7 +299,7 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).not.toHaveBeenCalled();
-      expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
+      expect(loadSessionStore(storePath, { skipCache: true })).toStrictEqual({});
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-model-authz-1");
     } finally {
       await rm(storePath, { force: true });
@@ -381,7 +381,7 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).not.toHaveBeenCalled();
-      expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
+      expect(loadSessionStore(storePath, { skipCache: true })).toStrictEqual({});
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-model-authz-runtime-1");
     } finally {
       loadConfig.mockReset();

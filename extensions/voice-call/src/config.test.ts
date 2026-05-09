@@ -385,7 +385,7 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.serve.path).toBe("/voice/webhook");
     expect(normalized.streaming.streamPath).toBe("/custom-stream");
     expect(normalized.streaming.provider).toBeUndefined();
-    expect(normalized.streaming.providers).toEqual({});
+    expect(normalized.streaming.providers).toStrictEqual({});
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
     expect(normalized.realtime.consultPolicy).toBe("auto");
