@@ -38,6 +38,19 @@ function requireFirstLane(plan: ReturnType<typeof planFor>) {
   return lane;
 }
 
+function summarizeLane(lane: ReturnType<typeof planFor>["lanes"][number]) {
+  return {
+    command: lane.command,
+    imageKind: lane.imageKind,
+    live: lane.live,
+    name: lane.name,
+    resources: lane.resources,
+    ...(lane.stateScenario ? { stateScenario: lane.stateScenario } : {}),
+    ...(lane.timeoutMs !== undefined ? { timeoutMs: lane.timeoutMs } : {}),
+    weight: lane.weight,
+  };
+}
+
 describe("scripts/lib/docker-e2e-plan", () => {
   it("plans the full release path against package-backed e2e images", () => {
     const plan = planFor({
@@ -156,68 +169,117 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(packageInstallAnthropic.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-anthropic",
     ]);
-    expect(packageUpdateCore.lanes.map((lane) => lane.name)).toEqual([
-      "npm-onboard-channel-agent",
-      "npm-onboard-discord-channel-agent",
-      "npm-onboard-slack-channel-agent",
-      "doctor-switch",
-      "update-channel-switch",
-      "upgrade-survivor",
-      "published-upgrade-survivor",
-      "update-restart-auth",
+    expect(packageUpdateCore.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
+        imageKind: "bare",
+        live: false,
+        name: "npm-onboard-channel-agent",
+        resources: ["docker", "npm", "service"],
+        stateScenario: "empty",
+        weight: 3,
+      },
+      {
+        command:
+          "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
+        imageKind: "bare",
+        live: false,
+        name: "npm-onboard-discord-channel-agent",
+        resources: ["docker", "npm", "service"],
+        stateScenario: "empty",
+        weight: 3,
+      },
+      {
+        command:
+          "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
+        imageKind: "bare",
+        live: false,
+        name: "npm-onboard-slack-channel-agent",
+        resources: ["docker", "npm", "service"],
+        stateScenario: "empty",
+        weight: 3,
+      },
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch",
+        imageKind: "bare",
+        live: false,
+        name: "doctor-switch",
+        resources: ["docker", "npm"],
+        stateScenario: "empty",
+        weight: 3,
+      },
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
+        imageKind: "bare",
+        live: false,
+        name: "update-channel-switch",
+        resources: ["docker", "npm"],
+        stateScenario: "update-stable",
+        timeoutMs: 1_800_000,
+        weight: 3,
+      },
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor",
+        imageKind: "bare",
+        live: false,
+        name: "upgrade-survivor",
+        resources: ["docker", "npm"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_200_000,
+        weight: 3,
+      },
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
+        imageKind: "bare",
+        live: false,
+        name: "published-upgrade-survivor",
+        resources: ["docker", "npm"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_500_000,
+        weight: 3,
+      },
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth",
+        imageKind: "bare",
+        live: false,
+        name: "update-restart-auth",
+        resources: ["docker", "npm"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_500_000,
+        weight: 3,
+      },
     ]);
-    expect(packageUpdateCore.lanes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "npm-onboard-channel-agent",
-          stateScenario: "empty",
-        }),
-        expect.objectContaining({
-          name: "npm-onboard-discord-channel-agent",
-          stateScenario: "empty",
-        }),
-        expect.objectContaining({
-          name: "npm-onboard-slack-channel-agent",
-          stateScenario: "empty",
-        }),
-        expect.objectContaining({
-          name: "doctor-switch",
-          stateScenario: "empty",
-        }),
-        expect.objectContaining({
-          name: "update-channel-switch",
-          stateScenario: "update-stable",
-        }),
-        expect.objectContaining({
-          name: "upgrade-survivor",
-          command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor",
-          stateScenario: "upgrade-survivor",
-        }),
-        expect.objectContaining({
-          name: "published-upgrade-survivor",
-          stateScenario: "upgrade-survivor",
-        }),
-        expect.objectContaining({
-          name: "update-restart-auth",
-          command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth",
-          stateScenario: "upgrade-survivor",
-        }),
-      ]),
-    );
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).toEqual(["plugins"]);
-    expect(pluginsRuntimeServices.lanes.map((lane) => lane.name)).toEqual([
-      "cron-mcp-cleanup",
-      "openai-web-search-minimal",
-      "openwebui",
+    expect(pluginsRuntimeServices.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",
+        imageKind: "functional",
+        live: false,
+        name: "cron-mcp-cleanup",
+        resources: ["docker", "service", "npm"],
+        stateScenario: "empty",
+        weight: 3,
+      },
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
+        imageKind: "functional",
+        live: false,
+        name: "openai-web-search-minimal",
+        resources: ["docker", "service"],
+        stateScenario: "empty",
+        timeoutMs: 480_000,
+        weight: 2,
+      },
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
+        imageKind: "functional",
+        live: true,
+        name: "openwebui",
+        resources: ["docker", "live", "live:openai", "service"],
+        timeoutMs: 1_200_000,
+        weight: 5,
+      },
     ]);
-    expect(pluginsRuntimeServices.lanes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "cron-mcp-cleanup",
-          stateScenario: "empty",
-        }),
-      ]),
-    );
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).not.toContain(
       "bundled-plugin-install-uninstall-0",
     );
