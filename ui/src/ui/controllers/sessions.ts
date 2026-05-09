@@ -45,6 +45,19 @@ type LoadSessionsOverrides = {
   configuredAgentsOnly?: boolean;
 };
 
+type PinnedSessionPreferenceState = SessionsState & {
+  hello?: { snapshot?: unknown } | null;
+  settings?: {
+    pinnedSessionKeys?: string[];
+    pinnedSessionSlotCount?: number;
+  };
+  applySettings?: (next: unknown) => void;
+};
+
+type SessionsDescribeResult = {
+  session?: GatewaySessionRow | null;
+};
+
 type CreateSessionParams = {
   agentId?: string;
   label?: string;
@@ -183,24 +196,61 @@ function resolvePinnedSessionPreferenceKey(
   return "main";
 }
 
-function syncPinnedSessionPreferences(
-  state: SessionsState & {
-    hello?: { snapshot?: unknown } | null;
-    settings?: {
-      pinnedSessionKeys?: string[];
-      pinnedSessionSlotCount?: number;
-    };
-    applySettings?: (next: unknown) => void;
-  },
+function resolvePinnedSessionPreferenceKeyCandidates(
+  state: PinnedSessionPreferenceState,
+): string[] {
+  return Array.from(
+    new Set([resolvePinnedSessionPreferenceKey(state), "main", "agent:main:main"].filter(Boolean)),
+  );
+}
+
+function findPinnedSessionPreferenceRow(
+  state: PinnedSessionPreferenceState,
+  sessions: GatewaySessionRow[],
+): GatewaySessionRow | null {
+  const candidateKeys = new Set(resolvePinnedSessionPreferenceKeyCandidates(state));
+  return sessions.find((row) => candidateKeys.has(row.key)) ?? null;
+}
+
+async function loadPinnedSessionPreferenceRow(
+  state: PinnedSessionPreferenceState,
+  client: NonNullable<SessionsState["client"]>,
   res: SessionsListResult,
+): Promise<GatewaySessionRow | null> {
+  const listedRow = findPinnedSessionPreferenceRow(state, res.sessions);
+  if (listedRow) {
+    return listedRow;
+  }
+  if (!state.settings || typeof state.applySettings !== "function") {
+    return null;
+  }
+  for (const key of resolvePinnedSessionPreferenceKeyCandidates(state)) {
+    try {
+      const described = await client.request<SessionsDescribeResult | undefined>(
+        "sessions.describe",
+        {
+          key,
+        },
+      );
+      if (described?.session) {
+        return described.session;
+      }
+    } catch (err) {
+      state.sessionsError = String(err);
+      return null;
+    }
+  }
+  return null;
+}
+
+function syncPinnedSessionPreferences(
+  state: PinnedSessionPreferenceState,
+  prefsRow: GatewaySessionRow | null,
 ) {
   if (!state.settings || typeof state.applySettings !== "function") {
     return;
   }
   const prefsKey = resolvePinnedSessionPreferenceKey(state);
-  const prefsRow =
-    res.sessions.find((row) => row.key === prefsKey) ??
-    res.sessions.find((row) => row.key === "main" || row.key === "agent:main:main");
   const localKeys = normalizePinnedSessionKeys(state.settings.pinnedSessionKeys);
   const localSlotCount = normalizePinnedSessionSlotCount(state.settings.pinnedSessionSlotCount);
   const serverHasPrefs =
@@ -526,17 +576,9 @@ async function loadSessionsOnce(
     const res = await client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       state.sessionsResult = projectSessionsResultForAvailability(res, { showArchived });
-      syncPinnedSessionPreferences(
-        state as SessionsState & {
-          hello?: { snapshot?: unknown } | null;
-          settings?: {
-            pinnedSessionKeys?: string[];
-            pinnedSessionSlotCount?: number;
-          };
-          applySettings?: (next: unknown) => void;
-        },
-        res,
-      );
+      const pinnedPreferenceState = state as PinnedSessionPreferenceState;
+      const prefsRow = await loadPinnedSessionPreferenceRow(pinnedPreferenceState, client, res);
+      syncPinnedSessionPreferences(pinnedPreferenceState, prefsRow);
       const nextKeys = new Set(state.sessionsResult.sessions.map((row) => row.key));
       for (const key of Object.keys(state.sessionsCheckpointItemsByKey)) {
         if (!nextKeys.has(key)) {

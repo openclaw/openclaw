@@ -552,6 +552,63 @@ describe("loadSessions", () => {
     ).toEqual(["checkpoint-new"]);
   });
 
+  it("hydrates pinned session preferences from an unfiltered main session lookup", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: {},
+          sessions: [{ key: "agent:main:subagent:recent", kind: "direct", updatedAt: 2 }],
+        };
+      }
+      if (method === "sessions.describe") {
+        expect(params).toEqual({ key: "agent:main:main" });
+        return {
+          session: {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            controlUiPinnedSessionKeys: ["main", "agent:main:subagent:planner"],
+            controlUiPinnedSessionSlotCount: 4,
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = {
+      ...createState(request, { sessionsFilterActive: "120", sessionsFilterLimit: "1" }),
+      hello: { snapshot: { sessionDefaults: { mainSessionKey: "agent:main:main" } } },
+      settings: { pinnedSessionKeys: [], pinnedSessionSlotCount: 3 },
+      applySettings(next: unknown) {
+        state.settings = next as typeof state.settings;
+      },
+    } as SessionsState & {
+      hello: { snapshot: { sessionDefaults: { mainSessionKey: string } } };
+      settings: { pinnedSessionKeys: string[]; pinnedSessionSlotCount: number };
+      applySettings: (next: unknown) => void;
+    };
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      activeMinutes: 120,
+      limit: 1,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: "agent:main:main" });
+    expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:subagent:recent",
+    ]);
+    expect(state.settings).toEqual({
+      pinnedSessionKeys: ["main", "agent:main:subagent:planner"],
+      pinnedSessionSlotCount: 4,
+    });
+  });
+
   it("hydrates pinned session preferences from the main session row", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
