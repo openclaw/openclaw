@@ -3563,12 +3563,10 @@ describe("google-meet plugin", () => {
       message: "Say exactly: hello.",
     });
 
-    expect(join).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Say exactly: hello.",
-        mode: "agent",
-      }),
-    );
+    expect(join).toHaveBeenCalledTimes(1);
+    const joinArgs = requireRecord(join.mock.calls[0]?.[0], "test speech join args");
+    expect(joinArgs.message).toBe("Say exactly: hello.");
+    expect(joinArgs.mode).toBe("agent");
     expect(speak).not.toHaveBeenCalled();
     expect(result.spoken).toBe(true);
     expect(result.speechOutputVerified).toBe(false);
@@ -3658,23 +3656,18 @@ describe("google-meet plugin", () => {
       message: "Say exactly: hello.",
     });
 
-    expect(result.details).toMatchObject({
-      manualActionRequired: true,
-      manualActionReason: "google-login-required",
-      spoken: false,
-      speechReady: false,
-      speechBlockedReason: "google-login-required",
-      session: {
-        chrome: {
-          health: {
-            manualActionRequired: true,
-            manualActionReason: "google-login-required",
-            speechReady: false,
-            speechBlockedReason: "google-login-required",
-          },
-        },
-      },
-    });
+    expect(result.details.manualActionRequired).toBe(true);
+    expect(result.details.manualActionReason).toBe("google-login-required");
+    expect(result.details.spoken).toBe(false);
+    expect(result.details.speechReady).toBe(false);
+    expect(result.details.speechBlockedReason).toBe("google-login-required");
+    const session = requireRecord(result.details.session, "manual action session");
+    const chrome = requireRecord(session.chrome, "manual action session chrome");
+    const health = requireRecord(chrome.health, "manual action chrome health");
+    expect(health.manualActionRequired).toBe(true);
+    expect(health.manualActionReason).toBe("google-login-required");
+    expect(health.speechReady).toBe(false);
+    expect(health.speechBlockedReason).toBe("google-login-required");
   });
 
   it("refreshes browser health before blocking an explicit speech retry", async () => {
@@ -3788,28 +3781,24 @@ describe("google-meet plugin", () => {
       };
     };
 
-    expect(retry).toMatchObject({
-      found: true,
-      spoken: false,
-      session: {
-        chrome: {
-          health: {
-            inCall: true,
-            manualActionRequired: false,
-            speechBlockedReason: "audio-bridge-unavailable",
-          },
-        },
-      },
-    });
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "browser.proxy",
-        params: expect.objectContaining({
-          path: "/tabs/focus",
-          body: { targetId: "tab-1" },
-        }),
-      }),
-    );
+    expect(retry.found).toBe(true);
+    expect(retry.spoken).toBe(false);
+    const retrySession = requireRecord(retry.session, "retry session");
+    const retryChrome = requireRecord(retrySession.chrome, "retry session chrome");
+    const retryHealth = requireRecord(retryChrome.health, "retry chrome health");
+    expect(retryHealth.inCall).toBe(true);
+    expect(retryHealth.manualActionRequired).toBe(false);
+    expect(retryHealth.speechBlockedReason).toBe("audio-bridge-unavailable");
+    const focusCalls = nodesInvoke.mock.calls
+      .map(([call]) => call)
+      .filter(
+        (call): call is { command: string; params: Record<string, unknown> } =>
+          call.command === "browser.proxy" &&
+          isRecord(call.params) &&
+          call.params.path === "/tabs/focus",
+      );
+    expect(focusCalls.length).toBeGreaterThan(0);
+    expect(focusCalls.at(-1)?.params.body).toStrictEqual({ targetId: "tab-1" });
   });
 
   it("explains when chrome-node has no capable paired node", async () => {
