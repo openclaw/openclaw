@@ -1397,7 +1397,7 @@ describe("thread binding lifecycle", () => {
 
     expect(result.checked).toBe(1);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
+    expect(result.staleSessionKeys).toStrictEqual([]);
     expect(requireBinding(manager, "thread-acp-uncertain")).toMatchObject({
       threadId: "thread-acp-uncertain",
       targetKind: "acp",
@@ -1436,7 +1436,7 @@ describe("thread binding lifecycle", () => {
 
     expect(result.checked).toBe(0);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
+    expect(result.staleSessionKeys).toStrictEqual([]);
     expect(manager.getByThreadId("user:1177378744822943744")).toMatchObject({
       threadId: "user:1177378744822943744",
       metadata: {
@@ -1530,7 +1530,7 @@ describe("thread binding lifecycle", () => {
 
     expect(result.checked).toBe(1);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
+    expect(result.staleSessionKeys).toStrictEqual([]);
     expect(requireBinding(manager, "thread-acp-running-uncertain")).toMatchObject({
       threadId: "thread-acp-running-uncertain",
       targetKind: "acp",
@@ -1577,7 +1577,7 @@ describe("thread binding lifecycle", () => {
 
     expect(result.checked).toBe(1);
     expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toEqual([]);
+    expect(result.staleSessionKeys).toStrictEqual([]);
     expect(requireBinding(manager, "thread-acp-error")).toMatchObject({
       threadId: "thread-acp-error",
       targetKind: "acp",
@@ -1881,7 +1881,7 @@ describe("thread binding lifecycle", () => {
       const payload = JSON.parse(fs.readFileSync(bindingsPath, "utf-8")) as {
         bindings?: Record<string, unknown>;
       };
-      expect(Object.keys(payload.bindings ?? {})).toEqual([]);
+      expect(Object.keys(payload.bindings ?? {})).toStrictEqual([]);
     } finally {
       __testing.resetThreadBindingsForTests();
       if (previousStateDir === undefined) {

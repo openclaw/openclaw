@@ -17,7 +17,7 @@ describe("resolveDiscordPresenceUpdate", () => {
   it("returns online presence when no config is provided", () => {
     const result = expectPresenceUpdate(resolveDiscordPresenceUpdate({}));
     expect(result.status).toBe("online");
-    expect(result.activities).toEqual([]);
+    expect(result.activities).toStrictEqual([]);
   });
 
   it("uses configured status", () => {

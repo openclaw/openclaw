@@ -336,7 +336,7 @@ describe("discord doctor", () => {
     expect(result.config.channels?.discord?.guilds?.main?.users).toEqual(["111"]);
     expect(result.config.channels?.discord?.guilds?.main?.roles).toEqual(["222"]);
     expect(result.changes).not.toHaveLength(0);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("formats repair guidance for unsafe numeric ids", () => {
@@ -363,7 +363,7 @@ describe("discord doctor", () => {
     ]);
     expect(
       collectDiscordMissingEnvTokenWarnings({ cfg, env: { DISCORD_BOT_TOKEN: "Bot tok" } }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       await discordDoctor.collectPreviewWarnings?.({
         cfg,
@@ -386,6 +386,6 @@ describe("discord doctor", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([]);
+    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([]);
   });
 });
