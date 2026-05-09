@@ -47,12 +47,14 @@ This migration has one canonical runtime shape:
 - Legacy `sessions.json`, transcript JSONL, `.jsonl.lock`, pruning, truncation,
   and old session-path logic belong only to the doctor migration/import path.
 - Runtime startup, hot reply paths, compaction, reset, recovery, diagnostics,
-  TTS, memory hooks, subagents, and plugin command routing must derive transcript
-  handles from SQLite identity or pass `{agentId, sessionId}` directly.
-- `runEmbeddedPiAgent(...)` and the inner embedded attempt must not honor
-  file-shaped transcript locator inputs. They derive the SQLite transcript
-  handle from `{agentId, sessionId}` before worker dispatch or model execution,
-  so stale callers cannot make the runner write JSON/JSONL transcripts.
+  TTS, memory hooks, subagents, and plugin command routing must pass
+  `{agentId, sessionId}` through the runtime. Any string transcript handle is a
+  boundary artifact, not runtime identity.
+- `runEmbeddedPiAgent(...)`, prepared worker runs, and the inner embedded
+  attempt must not accept transcript locators. They open the SQLite transcript
+  manager by `{agentId, sessionId}` and pass that manager to the internalized
+  PI-compatible agent session, so stale callers cannot make the runner write
+  JSON/JSONL transcripts.
 - Runner diagnostics must store runtime/cache/payload trace records in SQLite.
   Runtime diagnostics must not expose JSONL file override knobs; export/debug
   commands can materialize files explicitly from database rows.
@@ -240,17 +242,17 @@ The remaining cleanup is mostly consolidation and deletion:
   transcript files. Gateway chat/media/history paths read transcript rows from
   SQLite; JSONL is now a legacy doctor input or in-memory export
   encoding, not a runtime state file.
-- Runtime transcript store APIs resolve SQLite transcript locators, not
-  filesystem paths. The old `resolve...ForPath` helper and unused
-  `transcriptPath` write options are gone from runtime callers.
+- Runtime transcript store APIs resolve SQLite scope, not filesystem paths. The
+  old `resolve...ForPath` helper and unused `transcriptPath` write options are
+  gone from runtime callers.
 - Runtime session resolution now uses `{agentId, sessionId}`. It may derive a
   `sqlite-transcript://<agent>/<session>` handle for external boundaries, but it
   must not store that derived value in active session rows. Legacy absolute
   JSONL paths are doctor migration inputs only.
-- `runEmbeddedPiAgent(...)` now treats caller-provided transcript locators as
-  ignored legacy hints. It derives the active SQLite transcript locator from the
-  resolved agent id and session id before worker dispatch, attempt creation, or
-  prepared-run serialization.
+- `runEmbeddedPiAgent(...)` no longer has a transcript-locator parameter.
+  Prepared worker descriptors also omit transcript locators. Runtime session
+  persistence starts from the resolved agent id and session id, then opens the
+  SQLite session manager directly.
 - Gateway transcript-key lookup compares derived SQLite transcript handles at
   protocol boundaries and no longer realpaths or stats transcript filenames.
 - Automatic compaction transcript rotation writes successor transcript rows

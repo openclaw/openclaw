@@ -27,6 +27,11 @@ type SessionMessageEntry = {
   message: { role: string; content?: unknown } & Record<string, unknown>;
 } & Record<string, unknown>;
 
+type TranscriptRepairScope = {
+  agentId: string;
+  sessionId: string;
+};
+
 function isSessionHeader(entry: unknown): entry is { type: string; id: string } {
   if (!entry || typeof entry !== "object") {
     return false;
@@ -184,24 +189,13 @@ function buildRepairSummaryParts(params: {
   return parts.length > 0 ? parts.join(", ") : "no changes";
 }
 
-export async function repairTranscriptStateIfNeeded(params: {
-  transcriptLocator: string;
+async function repairTranscriptEntries(params: {
+  scope: TranscriptRepairScope;
+  label: string;
   debug?: (message: string) => void;
   warn?: (message: string) => void;
 }): Promise<RepairReport> {
-  const transcriptLocator = params.transcriptLocator.trim();
-  if (!transcriptLocator) {
-    return { repaired: false, droppedLines: 0, reason: "missing session transcript" };
-  }
-
-  const scope = resolveSqliteSessionTranscriptScopeForLocator({
-    transcriptLocator: transcriptLocator,
-  });
-  if (!scope) {
-    return { repaired: false, droppedLines: 0, reason: "missing SQLite transcript" };
-  }
-
-  const storedEntries = loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
+  const storedEntries = loadSqliteSessionTranscriptEvents(params.scope).map((entry) => entry.event);
   const entries: unknown[] = [];
   let droppedLines = 0;
   let rewrittenAssistantMessages = 0;
@@ -246,9 +240,7 @@ export async function repairTranscriptStateIfNeeded(params: {
   }
 
   if (!isSessionHeader(entries[0])) {
-    params.warn?.(
-      `session transcript repair skipped: invalid session header (${transcriptLocator})`,
-    );
+    params.warn?.(`session transcript repair skipped: invalid session header (${params.label})`);
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
@@ -263,7 +255,7 @@ export async function repairTranscriptStateIfNeeded(params: {
 
   try {
     replaceSqliteSessionTranscriptEvents({
-      ...scope,
+      ...params.scope,
       events: entries,
     });
   } catch (err) {
@@ -283,7 +275,7 @@ export async function repairTranscriptStateIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
-    })} (${transcriptLocator})`,
+    })} (${params.label})`,
   );
   return {
     repaired: true,
@@ -292,4 +284,49 @@ export async function repairTranscriptStateIfNeeded(params: {
     droppedBlankUserMessages,
     rewrittenUserMessages,
   };
+}
+
+export async function repairTranscriptStateIfNeeded(params: {
+  transcriptLocator: string;
+  debug?: (message: string) => void;
+  warn?: (message: string) => void;
+}): Promise<RepairReport> {
+  const transcriptLocator = params.transcriptLocator.trim();
+  if (!transcriptLocator) {
+    return { repaired: false, droppedLines: 0, reason: "missing session transcript" };
+  }
+
+  const scope = resolveSqliteSessionTranscriptScopeForLocator({
+    transcriptLocator: transcriptLocator,
+  });
+  if (!scope) {
+    return { repaired: false, droppedLines: 0, reason: "missing SQLite transcript" };
+  }
+
+  return repairTranscriptEntries({
+    scope,
+    label: transcriptLocator,
+    debug: params.debug,
+    warn: params.warn,
+  });
+}
+
+export async function repairTranscriptSessionStateIfNeeded(params: {
+  agentId: string;
+  sessionId: string;
+  debug?: (message: string) => void;
+  warn?: (message: string) => void;
+}): Promise<RepairReport> {
+  const agentId = params.agentId.trim();
+  const sessionId = params.sessionId.trim();
+  if (!agentId || !sessionId) {
+    return { repaired: false, droppedLines: 0, reason: "missing SQLite transcript scope" };
+  }
+
+  return repairTranscriptEntries({
+    scope: { agentId, sessionId },
+    label: `agentId=${agentId} sessionId=${sessionId}`,
+    debug: params.debug,
+    warn: params.warn,
+  });
 }

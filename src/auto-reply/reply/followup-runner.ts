@@ -289,7 +289,6 @@ export function createFollowupRunner(params: {
                 senderUsername: run.senderUsername,
                 senderE164: run.senderE164,
                 senderIsOwner: run.senderIsOwner,
-                transcriptLocator: run.transcriptLocator,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,
                 config: runtimeConfig,

@@ -108,7 +108,7 @@ function buildRunnerSessionPaths(sessionId: string) {
   }
   return {
     agentDir: liveRunnerRootDir,
-    sessionFile: createSqliteSessionTranscriptLocator({ agentId: "main", sessionId }),
+    transcriptLocator: createSqliteSessionTranscriptLocator({ agentId: "main", sessionId }),
     workspaceDir: path.join(liveRunnerRootDir, `${sessionId}-workspace`),
   };
 }
@@ -303,7 +303,6 @@ async function runEmbeddedCacheProbe(params: {
     runEmbeddedPiAgent({
       sessionId: params.sessionId,
       sessionKey: `live-cache:${params.providerTag}:${params.sessionId}`,
-      sessionFile: sessionPaths.sessionFile,
       workspaceDir: sessionPaths.workspaceDir,
       agentDir: sessionPaths.agentDir,
       config: buildEmbeddedRunnerConfig({
@@ -347,7 +346,7 @@ async function compactLiveCacheSession(params: {
     compactEmbeddedPiSessionDirect({
       sessionId: params.sessionId,
       sessionKey: `live-cache:${params.providerTag}:${params.sessionId}`,
-      sessionFile: sessionPaths.sessionFile,
+      transcriptLocator: sessionPaths.transcriptLocator,
       workspaceDir: sessionPaths.workspaceDir,
       agentDir: sessionPaths.agentDir,
       config: buildEmbeddedRunnerConfig({

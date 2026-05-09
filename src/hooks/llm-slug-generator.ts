@@ -11,7 +11,6 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -39,7 +38,6 @@ export async function generateSlugViaLLM(params: {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     const agentDir = resolveAgentDir(params.cfg, agentId);
     const sessionId = `slug-generator-${randomUUID()}`;
-    const sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
 
     const prompt = `Based on this conversation, generate a short 1-2 word filename slug (lowercase, hyphen-separated, no file extension).
 
@@ -58,7 +56,6 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       sessionId,
       sessionKey: "temp:slug-generator",
       agentId,
-      sessionFile,
       workspaceDir,
       agentDir,
       config: params.cfg,

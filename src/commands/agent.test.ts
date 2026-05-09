@@ -131,7 +131,6 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         messageTo: opts.replyTo ?? opts.to,
         messageThreadId: opts.threadId,
         senderIsOwner: opts.senderIsOwner,
-        sessionFile: params.sessionFile,
         workspaceDir: params.workspaceDir,
         config: params.cfg,
         skillsSnapshot: params.skillsSnapshot,
@@ -242,16 +241,16 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
       async (params: {
         sessionId: string;
         sessionKey: string;
-        sessionEntry?: { sessionFile?: string; sessionId?: string };
-        sessionStore?: Record<string, { sessionFile?: string; sessionId?: string }>;
+        sessionEntry?: { transcriptLocator?: string; sessionId?: string };
+        sessionStore?: Record<string, { transcriptLocator?: string; sessionId?: string }>;
         agentId: string;
         threadId?: string | number;
       }) => {
-        const sessionFileFromStorePath =
-          params.sessionEntry?.sessionFile ??
+        const transcriptLocatorFromStorePath =
+          params.sessionEntry?.transcriptLocator ??
           resolveTranscriptLocator(params.sessionId, params.agentId);
-        const sessionFile = params.sessionEntry?.sessionFile
-          ? sessionFileFromStorePath
+        const transcriptLocator = params.sessionEntry?.transcriptLocator
+          ? transcriptLocatorFromStorePath
           : resolveTranscriptLocator(params.sessionId, params.agentId);
         let sessionEntry = params.sessionEntry;
         if (params.sessionStore && params.sessionKey) {
@@ -262,12 +261,12 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
           sessionEntry = {
             ...existingEntry,
             sessionId: params.sessionId,
-            sessionFile,
+            transcriptLocator,
           };
           params.sessionStore[params.sessionKey] = sessionEntry;
           await replaceTestSessionRows(params.agentId, params.sessionStore as never);
         }
-        return { sessionFile, sessionEntry };
+        return { transcriptLocator, sessionEntry };
       },
     ),
   };
@@ -714,12 +713,7 @@ describe("agentCommand", () => {
 
       const callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionId).toBe("session-123");
-      expect(callArgs?.sessionFile).toContain(
-        path.join("agents", "main", "sessions", "session-123.jsonl"),
-      );
-      expect(callArgs?.sessionFile).not.toContain(
-        `${path.sep}sessions${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}`,
-      );
+      expect(callArgs).not.toHaveProperty("transcriptLocator");
     });
   });
 
@@ -1108,7 +1102,7 @@ describe("agentCommand", () => {
       );
       let callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionKey).toBe("agent:ops:main");
-      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+      expect(callArgs).not.toHaveProperty("transcriptLocator");
       expect(callArgs?.messageChannel).toBe("slack");
       expect(runtime.log).toHaveBeenCalledWith("ok");
 

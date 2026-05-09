@@ -219,11 +219,13 @@ describe("commitment extraction runtime", () => {
 
     await expect(drainCommitmentExtractionQueue()).resolves.toBe(1);
     expect(resolveDefaultModelMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const request = requireFirstEmbeddedPiRequest();
-    expect(request.provider).toBe("openai-codex");
-    expect(request.model).toBe("gpt-5.5");
-    expect(request.disableTools).toBe(true);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        disableTools: true,
+      }),
+    );
   });
 
   it("backs off hidden extraction after terminal model or auth failures", async () => {

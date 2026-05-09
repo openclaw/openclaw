@@ -4,7 +4,6 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
@@ -95,6 +94,7 @@ import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import type { AgentWorkerPermissionMode } from "../runtime-worker-permissions.js";
 import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
+import { openTranscriptSessionManagerForSession } from "../transcript/session-manager.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -479,15 +479,17 @@ export async function runEmbeddedPiAgent(
     config: params.config,
     agentId: params.agentId,
   });
-  const sqliteTranscriptLocator = createSqliteSessionTranscriptLocator({
+  const initialSessionManager = openTranscriptSessionManagerForSession({
     agentId: sessionAgentId,
     sessionId: params.sessionId,
+    cwd: params.workspaceDir,
   });
-  const normalizedParams: RunEmbeddedPiAgentParams & { transcriptLocator: string } = {
-    ...params,
-    transcriptLocator: sqliteTranscriptLocator,
-  };
-  params = normalizedParams;
+  const initialTranscriptLocator = initialSessionManager.getTranscriptLocator();
+  if (!initialTranscriptLocator) {
+    throw new Error(
+      `SQLite transcript scope did not produce a runtime transcript handle: agentId=${sessionAgentId} sessionId=${params.sessionId}`,
+    );
+  }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
@@ -1104,9 +1106,9 @@ export async function runEmbeddedPiAgent(
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       let activeSessionId = params.sessionId;
-      let activeTranscriptLocator = sqliteTranscriptLocator;
+      let activeTranscriptLocator = initialTranscriptLocator;
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
-      // Pi owns transcript persistence; this marker only lets the outer retry avoid
+      // OpenClaw owns transcript persistence; this marker only lets the outer retry avoid
       // replaying the same inbound channel message after overflow compaction.
       let lastPersistedCurrentMessageId: string | number | undefined;
       const onUserMessagePersisted: RunEmbeddedPiAgentParams["onUserMessagePersisted"] = (
@@ -1423,7 +1425,6 @@ export async function runEmbeddedPiAgent(
             currentMessageId: params.currentMessageId,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
-            transcriptLocator: activeTranscriptLocator,
             workspaceDir: resolvedWorkspace,
             agentDir,
             config: params.config,

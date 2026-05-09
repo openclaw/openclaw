@@ -24,7 +24,7 @@ type MockCompactionResult =
         tokensBefore?: number;
         tokensAfter?: number;
         sessionId?: string;
-        sessionFile?: string;
+        transcriptLocator?: string;
       };
       reason?: string;
     }
@@ -231,7 +231,6 @@ export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 export const overflowBaseRunParams = {
   sessionId: "test-session",
   sessionKey: "test-key",
-  sessionFile: "/tmp/session.json",
   workspaceDir: "/tmp/workspace",
   prompt: "hello",
   timeoutMs: 30000,

@@ -23,8 +23,12 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: string;
   bootstrapMode?: BootstrapMode;
-  sessionFile: string;
-  hasCompletedBootstrapTranscriptTurn: (transcriptLocator: string) => Promise<boolean>;
+  agentId: string;
+  sessionId: string;
+  hasCompletedBootstrapSessionTurn: (scope: {
+    agentId: string;
+    sessionId: string;
+  }) => Promise<boolean>;
   resolveBootstrapContextForRun: () => Promise<
     AttemptBootstrapContext<TBootstrapFile, TContextFile>
   >;
@@ -38,7 +42,10 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     params.bootstrapMode !== "full" &&
     params.contextInjectionMode === "continuation-skip" &&
     params.bootstrapContextRunKind !== "heartbeat" &&
-    (await params.hasCompletedBootstrapTranscriptTurn(params.sessionFile));
+    (await params.hasCompletedBootstrapSessionTurn({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    }));
   const shouldSkipBootstrapInjection =
     params.contextInjectionMode === "never" || isContinuationTurn;
   const shouldRecordCompletedBootstrapTurn =

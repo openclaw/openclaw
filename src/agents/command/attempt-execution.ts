@@ -590,7 +590,6 @@ export function runAgentAttempt(params: {
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
     senderIsOwner: params.opts.senderIsOwner,
-    transcriptLocator: params.transcriptLocator,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
     agentHarnessId: requestedAgentHarnessId,
