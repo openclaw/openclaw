@@ -55,7 +55,6 @@ describe("Codex trajectory recorder", () => {
     const recorder = createCodexTrajectoryRecorder({
       cwd: tmpDir,
       attempt: {
-        sessionId: "session",
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
         runId: "run-1",
@@ -94,7 +93,6 @@ describe("Codex trajectory recorder", () => {
     const recorder = createCodexTrajectoryRecorder({
       cwd: tmpDir,
       attempt: {
-        sessionId: "session",
         sessionId: "session-1",
         model: { api: "responses" },
       } as never,
@@ -110,7 +108,6 @@ describe("Codex trajectory recorder", () => {
     const recorder = createCodexTrajectoryRecorder({
       cwd: tmpDir,
       attempt: {
-        sessionId: "session",
         sessionId: "session-1",
         model: { api: "responses" },
       } as never,

@@ -141,11 +141,17 @@ export async function readCodexAppServerBinding(
   if (!normalized.primaryKey) {
     return undefined;
   }
-  const value = readOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, normalized.primaryKey);
-  if (value !== undefined) {
-    return normalizeCodexAppServerBinding(normalized, value, lookup);
+  let value = readOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, normalized.primaryKey);
+  if (value === undefined && normalized.sessionKey) {
+    value = readOpenClawStateKvJson(
+      CODEX_APP_SERVER_BINDING_KV_SCOPE,
+      `session-key:${normalized.sessionKey}`,
+    );
   }
-  return normalizeCodexAppServerBinding(normalized, undefined, lookup);
+  if (value === undefined) {
+    return undefined;
+  }
+  return normalizeCodexAppServerBinding(normalized, value, lookup);
 }
 
 export async function writeCodexAppServerBinding(

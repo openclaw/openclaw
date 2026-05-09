@@ -18,6 +18,7 @@ import {
   listSessionTranscriptsForAgent,
   readSessionTranscriptDeltaStats,
   sessionSourceKeyForTranscript,
+  type SessionTranscriptEntry,
   type SessionTranscriptScope,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
@@ -27,6 +28,7 @@ import {
   loadSqliteVecExtension,
   normalizeExtraMemoryPaths,
   runWithConcurrency,
+  type MemoryFileEntry,
   type MemorySource,
   type MemorySessionTranscriptScope,
   type MemorySyncProgressUpdate,
@@ -65,14 +67,7 @@ type MemorySyncProgressState = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
-type MemoryIndexEntry = {
-  path: string;
-  absPath: string;
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  content?: string;
-};
+type MemoryIndexEntry = MemoryFileEntry | SessionTranscriptEntry;
 
 function sessionTranscriptScopeKey(scope: Pick<SessionTranscriptScope, "agentId" | "sessionId">) {
   return `${scope.agentId}\0${scope.sessionId}`;
@@ -711,7 +706,7 @@ export abstract class MemoryManagerSyncOps {
         ),
         this.getIndexConcurrency(),
       )
-    ).filter((entry): entry is MemoryIndexEntry => entry !== null);
+    ).filter((entry): entry is MemoryFileEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,

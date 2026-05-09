@@ -101,7 +101,6 @@ function createMockQaRuntime(params?: {
       turn: {
         async runPrepared(turn: QaRunPreparedTurn) {
           await turn.recordInboundSession({
-            storePath: turn.storePath,
             sessionKey:
               typeof turn.ctxPayload.SessionKey === "string"
                 ? turn.ctxPayload.SessionKey

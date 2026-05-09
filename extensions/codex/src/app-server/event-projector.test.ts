@@ -64,17 +64,14 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
     .basename(tempDir)
     .replace(/[^a-z0-9]/giu, "")
     .toLowerCase()}`;
-  const transcriptPath = transcriptSessionId;
   appendSqliteSessionTranscriptEvent({
     agentId: "main",
     sessionId: transcriptSessionId,
-    transcriptPath,
     event: { type: "session", version: 1, id: sessionId },
   });
   appendSqliteSessionTranscriptEvent({
     agentId: "main",
     sessionId: transcriptSessionId,
-    transcriptPath,
     event: {
       type: "message",
       id: "history",

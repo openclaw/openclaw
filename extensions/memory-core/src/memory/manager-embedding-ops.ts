@@ -7,12 +7,14 @@ import {
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { SessionTranscriptEntry } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   hashText,
   remapChunkLines,
   type MemoryChunk,
+  type MemoryFileEntry,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -53,16 +55,7 @@ const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 
 const log = createSubsystemLogger("memory");
 
-type MemoryIndexEntry = {
-  path: string;
-  absPath: string;
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  kind?: "markdown" | "multimodal";
-  contentText?: string;
-  lineMap?: number[];
-};
+type MemoryIndexEntry = MemoryFileEntry | SessionTranscriptEntry;
 
 export function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
@@ -570,6 +563,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(pathname, source);
   }
 
+  private async readIndexEntryContent(
+    entry: MemoryIndexEntry,
+    options: { content?: string },
+  ): Promise<string> {
+    if (options.content !== undefined) {
+      return options.content;
+    }
+    if (!("absPath" in entry)) {
+      throw new Error(
+        `Cannot read virtual memory index entry without inline content: ${entry.path}`,
+      );
+    }
+    return await fs.readFile(entry.absPath, "utf-8");
+  }
+
   /**
    * Write chunks (and optional embeddings) for a file into the index.
    * Handles both the chunks table, the vector table, and the FTS table.
@@ -652,7 +660,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if ("kind" in entry && entry.kind === "multimodal") {
         return;
       }
-      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+      const content = await this.readIndexEntryContent(entry, options);
       const chunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
@@ -682,7 +690,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       structuredInputBytes = multimodalChunk.structuredInputBytes;
       chunks = [multimodalChunk.chunk];
     } else {
-      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+      const content = await this.readIndexEntryContent(entry, options);
       const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
       chunks = this.provider
         ? enforceEmbeddingMaxInputTokens(this.provider, baseChunks, EMBEDDING_BATCH_MAX_TOKENS)

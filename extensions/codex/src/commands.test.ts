@@ -1534,13 +1534,11 @@ describe("codex command", () => {
     const diagnosticsSessions = [
       {
         sessionKey: "agent:main:whatsapp:one",
-        sessionId: "session-one",
         sessionId: firstSessionId,
         channel: "whatsapp",
       },
       {
         sessionKey: "agent:main:discord:two",
-        sessionId: "session-two",
         sessionId: secondSessionId,
         channel: "discord",
       },

@@ -10,7 +10,6 @@ import {
   appendMemoryHostEvent,
   readMemoryHostEvents,
   renderMemoryHostEventsJsonl,
-  resolveMemoryHostEventLogPath,
 } from "openclaw/plugin-sdk/memory-host-events";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -234,7 +233,7 @@ describe("syncMemoryWikiBridgeSources", () => {
         kind: "event-log",
         workspaceDir,
         relativePath: "memory/.dreams/events.jsonl",
-        absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
+        absolutePath: "sqlite:plugin_state_entries/memory-core/memory-host.events",
         agentIds: ["main"],
         contentType: "json",
         content: eventContent,
