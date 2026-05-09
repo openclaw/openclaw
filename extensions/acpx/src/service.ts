@@ -200,7 +200,7 @@ function resolveAllowedAgentsProbeAgent(ctx: OpenClawPluginServiceContext): stri
 }
 
 function shouldRunStartupProbe(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[ENABLE_STARTUP_PROBE_ENV] === "1";
+  return env[ENABLE_STARTUP_PROBE_ENV] !== "0";
 }
 
 async function resolveGatewayInstanceId(stateDir: string): Promise<string> {
