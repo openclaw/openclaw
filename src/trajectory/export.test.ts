@@ -75,16 +75,22 @@ function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] 
   return events.map((event) => event.type);
 }
 
-function recordRuntimeEvents(events: readonly TrajectoryEvent[]): void {
+function recordRuntimeEvents(
+  events: readonly TrajectoryEvent[],
+  params: { agentId?: string } = {},
+): void {
   for (const event of events) {
-    recordTrajectoryRuntimeEvent({ agentId: "main", event });
+    recordTrajectoryRuntimeEvent({ agentId: params.agentId ?? "main", event });
   }
 }
 
-function writeSessionTranscript(entries: Record<string, unknown>[]): void {
+function writeSessionTranscript(
+  entries: Record<string, unknown>[],
+  params: { agentId?: string } = {},
+): void {
   const header = entries.find((entry) => entry.type === "session") as { id?: unknown } | undefined;
   replaceSqliteSessionTranscriptEvents({
-    agentId: "main",
+    agentId: params.agentId ?? "main",
     sessionId: typeof header?.id === "string" ? header.id : "session-1",
     events: entries,
   });
@@ -92,12 +98,13 @@ function writeSessionTranscript(entries: Record<string, unknown>[]): void {
 
 function writeSimpleSessionTranscript(
   workspaceDir: string,
-  params: { userEntryTimestamp?: string | number } = {},
+  params: { agentId?: string; sessionId?: string; userEntryTimestamp?: string | number } = {},
 ): void {
+  const sessionId = params.sessionId ?? "session-1";
   const header = {
     type: "session",
     version: 3,
-    id: "session-1",
+    id: sessionId,
     timestamp: "2026-04-01T05:46:39.000Z",
     cwd: workspaceDir,
   };
@@ -115,7 +122,7 @@ function writeSimpleSessionTranscript(
     timestamp: "2026-04-01T05:46:41.000Z",
     message: assistantMessage([{ type: "text", text: "done" }]),
   };
-  writeSessionTranscript([header, userEntry, assistantEntry]);
+  writeSessionTranscript([header, userEntry, assistantEntry], { agentId: params.agentId });
 }
 
 function writeToolCallOnlySessionTranscript(workspaceDir: string): void {
@@ -388,6 +395,56 @@ describe("exportTrajectoryBundle", () => {
 
     expect(bundle.manifest.runtimeEventCount).toBe(1);
     expect(eventTypes(bundle.events)).toContain("session.started");
+  });
+
+  it("reads runtime trajectory events from the requested agent database", async () => {
+    const tmpDir = makeTempDir();
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionTranscript(tmpDir, { agentId: "worker", sessionId: "session-shared" });
+    const baseEvent = {
+      traceSchema: "openclaw-trajectory" as const,
+      schemaVersion: 1 as const,
+      traceId: "session-shared",
+      source: "runtime" as const,
+      ts: "2026-04-22T08:00:00.000Z",
+      seq: 1,
+      sourceSeq: 1,
+      sessionId: "session-shared",
+    };
+    recordRuntimeEvents(
+      [
+        {
+          ...baseEvent,
+          type: "session.started",
+          data: { agent: "main" },
+        },
+      ],
+      { agentId: "main" },
+    );
+    recordRuntimeEvents(
+      [
+        {
+          ...baseEvent,
+          type: "context.compiled",
+          data: { agent: "worker" },
+        },
+      ],
+      { agentId: "worker" },
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      agentId: "worker",
+      sessionId: "session-shared",
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.manifest.runtimeEventCount).toBe(1);
+    expect(eventTypes(bundle.events)).toContain("context.compiled");
+    expect(eventTypes(bundle.events)).not.toContain("session.started");
+    expect(bundle.manifest.sourceFiles?.runtime).toBe(
+      "agent-db:worker:trajectory_runtime_events:session-shared",
+    );
   });
 
   it("counts expanded transcript events when enforcing the total event limit", async () => {

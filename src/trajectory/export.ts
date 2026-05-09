@@ -172,12 +172,13 @@ function isRuntimeTrajectoryEventForSession(
 }
 
 function loadSqliteRuntimeTrajectoryEvents(params: {
+  agentId?: string;
   sessionId: string;
   sessionKey?: string;
 }): TrajectoryEvent[] {
   try {
     return listTrajectoryRuntimeEvents({
-      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
       sessionId: params.sessionId,
       limit: MAX_TRAJECTORY_RUNTIME_EVENTS,
     }).filter((event) => isRuntimeTrajectoryEventForSession(event, params.sessionId));
@@ -663,6 +664,7 @@ function buildArtifactsCapture(params: {
 }
 
 function loadTrajectoryRunArtifacts(params: {
+  agentId?: string;
   sessionKey?: string;
   runtimeEvents: TrajectoryEvent[];
 }): JsonRecord[] {
@@ -676,7 +678,7 @@ function loadTrajectoryRunArtifacts(params: {
   if (runIds.length === 0) {
     return [];
   }
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   return runIds.flatMap((runId) => {
     try {
       return exportSqliteToolArtifacts({ agentId, runId }).map((artifact) => {
@@ -771,6 +773,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     sessionKey: params.sessionKey,
   });
   const sqliteRuntimeEvents = loadSqliteRuntimeTrajectoryEvents({
+    agentId: params.agentId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
@@ -807,7 +810,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
       session: `agent-db:${params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey)}:transcript_events:${params.sessionId}`,
       runtime:
         sqliteRuntimeEvents.length > 0
-          ? `agent-db:${resolveAgentIdFromSessionKey(params.sessionKey)}:trajectory_runtime_events:${params.sessionId}`
+          ? `agent-db:${params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey)}:trajectory_runtime_events:${params.sessionId}`
           : undefined,
     },
   };
@@ -821,6 +824,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     events: rawEvents,
   });
   const toolArtifacts = loadTrajectoryRunArtifacts({
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     runtimeEvents,
   });
