@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { importLegacyDeviceIdentityFileToSqlite } from "../commands/doctor/legacy/device-identity.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -11,6 +10,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
   verifyDeviceSignature,
+  writeStoredDeviceIdentitySnapshot,
 } from "./device-identity.js";
 
 const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
@@ -54,13 +54,7 @@ describe("device identity crypto helpers", () => {
         privateKeyPem: created.privateKeyPem,
         createdAtMs: Date.now(),
       };
-      fs.mkdirSync(path.dirname(identityPath), { recursive: true });
-      fs.writeFileSync(
-        identityPath,
-        `${JSON.stringify({ ...stored, deviceId: "mismatched" }, null, 2)}\n`,
-        "utf8",
-      );
-      importLegacyDeviceIdentityFileToSqlite({ ...process.env, OPENCLAW_STATE_DIR: dir });
+      writeStoredDeviceIdentitySnapshot(identityPath, { ...stored, deviceId: "mismatched" });
 
       expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
     });

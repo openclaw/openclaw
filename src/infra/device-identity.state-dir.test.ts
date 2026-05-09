@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { importLegacyDeviceIdentityFileToSqlite } from "../commands/doctor/legacy/device-identity.js";
 import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   restoreStateDirEnv,
@@ -16,6 +15,7 @@ import {
   loadDeviceIdentityIfPresent,
   loadDeviceIdentityIfPresentForEnv,
   loadOrCreateDeviceIdentity,
+  writeStoredDeviceIdentitySnapshot,
 } from "./device-identity.js";
 
 describe("device identity state dir defaults", () => {
@@ -51,13 +51,7 @@ describe("device identity state dir defaults", () => {
         createdAtMs: Date.now(),
       };
 
-      await fs.mkdir(path.dirname(identityPath), { recursive: true });
-      await fs.writeFile(
-        identityPath,
-        `${JSON.stringify({ ...raw, deviceId: "stale-device-id" }, null, 2)}\n`,
-        "utf8",
-      );
-      expect(importLegacyDeviceIdentityFileToSqlite()).toEqual({ imported: true });
+      writeStoredDeviceIdentitySnapshot(identityPath, { ...raw, deviceId: "stale-device-id" });
 
       const repaired = loadOrCreateDeviceIdentity();
 
@@ -85,9 +79,6 @@ describe("device identity state dir defaults", () => {
         DeviceIdentityMigrationRequiredError,
       );
       await expect(() => loadOrCreateDeviceIdentity()).toThrow(/openclaw doctor --fix/u);
-
-      expect(importLegacyDeviceIdentityFileToSqlite()).toEqual({ imported: true });
-      expect(loadOrCreateDeviceIdentity().deviceId).toBe(original.deviceId);
     });
   });
 
