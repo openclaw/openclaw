@@ -1,11 +1,7 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
-import { resolveStateDir } from "../config/paths.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { privateFileStore } from "../infra/private-file-store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -21,14 +17,9 @@ type LastSessionRecord = {
   updatedAt: number;
 };
 
-type LastSessionStore = Record<string, LastSessionRecord>;
 type TuiLastSessionsTable = OpenClawStateKyselyDatabase["tui_last_sessions"];
 type TuiLastSessionRow = Selectable<TuiLastSessionsTable>;
 type TuiLastSessionDatabase = Pick<OpenClawStateKyselyDatabase, "tui_last_sessions">;
-
-export function resolveLegacyTuiLastSessionStatePath(stateDir = resolveStateDir()): string {
-  return path.join(stateDir, "tui", "last-session.json");
-}
 
 export function buildTuiLastSessionScopeKey(params: {
   connectionUrl: string;
@@ -41,23 +32,6 @@ export function buildTuiLastSessionScopeKey(params: {
     .update(`${params.sessionScope}\n${agentId}\n${connectionUrl}`)
     .digest("hex")
     .slice(0, 32);
-}
-
-async function readStore(filePath: string): Promise<LastSessionStore> {
-  try {
-    const parsed = await privateFileStore(path.dirname(filePath)).readJsonIfExists(
-      path.basename(filePath),
-    );
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as LastSessionStore)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-async function deleteStore(filePath: string): Promise<void> {
-  await fs.rm(filePath, { force: true });
 }
 
 function sqliteOptionsForStateDir(stateDir?: string): OpenClawStateDatabaseOptions {
@@ -124,54 +98,6 @@ function writeTuiLastSessionRow(params: {
   }, sqliteOptionsForStateDir(params.stateDir));
 }
 
-async function readLegacyTuiLastSessionStore(params: {
-  stateDir?: string;
-}): Promise<LastSessionStore> {
-  const filePath = resolveLegacyTuiLastSessionStatePath(params.stateDir);
-  return await readStore(filePath);
-}
-
-export async function legacyTuiLastSessionFileExists(
-  params: {
-    stateDir?: string;
-  } = {},
-): Promise<boolean> {
-  try {
-    await fs.access(resolveLegacyTuiLastSessionStatePath(params.stateDir));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function importLegacyTuiLastSessionStoreToSqlite(
-  params: {
-    stateDir?: string;
-  } = {},
-): Promise<{ imported: boolean; pointers: number }> {
-  const filePath = resolveLegacyTuiLastSessionStatePath(params.stateDir);
-  const exists = await legacyTuiLastSessionFileExists(params);
-  if (!exists) {
-    return { imported: false, pointers: 0 };
-  }
-  const store = await readLegacyTuiLastSessionStore(params);
-  let pointers = 0;
-  for (const [scopeKey, value] of Object.entries(store)) {
-    const record = normalizeLastSessionRecord(value);
-    if (!record) {
-      continue;
-    }
-    writeTuiLastSessionRow({
-      scopeKey,
-      record,
-      stateDir: params.stateDir,
-    });
-    pointers += 1;
-  }
-  await deleteStore(filePath);
-  return { imported: true, pointers };
-}
-
 function normalizeMarker(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -227,6 +153,27 @@ export async function writeTuiLastSessionKey(params: {
     record,
     stateDir: params.stateDir,
   });
+}
+
+export async function writeTuiLastSessionRecordForMigration(params: {
+  scopeKey: string;
+  sessionKey: string;
+  updatedAt: number;
+  stateDir?: string;
+}): Promise<boolean> {
+  const record = normalizeLastSessionRecord({
+    sessionKey: params.sessionKey,
+    updatedAt: params.updatedAt,
+  });
+  if (!record || isHeartbeatSessionKey(record.sessionKey)) {
+    return false;
+  }
+  writeTuiLastSessionRow({
+    scopeKey: params.scopeKey,
+    record,
+    stateDir: params.stateDir,
+  });
+  return true;
 }
 
 export async function clearTuiLastSessionPointers(params: {
