@@ -455,6 +455,12 @@ type chatRequest struct {
 	History []chatTurn    `json:"history"`
 	Cwd     string        `json:"cwd"`     // optional; defaults to $HOME
 	Timeout int           `json:"timeout"` // optional seconds; default 600
+	// SessionID, when set, causes claude to resume that session instead
+	// of starting a fresh one. Preserves slash-command + MCP + skill
+	// state + conversation history across turns. The first turn omits
+	// it; the response's `system.subtype=init` event carries the new
+	// session_id which the client threads back on subsequent turns.
+	SessionID string `json:"session_id"`
 }
 
 type chatTurn struct {
@@ -551,7 +557,16 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 		req.Cwd = os.Getenv("HOME")
 	}
 
-	flatPrompt := flattenHistory(req.History, req.Prompt)
+	// When SessionID is set, claude resumes that session — flat-prompt
+	// flattening would duplicate history. Pass just the new turn's
+	// prompt instead. Otherwise fall back to flattening for the
+	// no-session case.
+	var promptArg string
+	if req.SessionID != "" {
+		promptArg = req.Prompt
+	} else {
+		promptArg = flattenHistory(req.History, req.Prompt)
+	}
 
 	var args []string
 	switch binary {
@@ -561,10 +576,13 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 		// tool_result, result). --include-partial-messages gives us
 		// content_block_delta tokens as they stream.
 		args = []string{
-			"-p", flatPrompt,
+			"-p", promptArg,
 			"--output-format", "stream-json",
 			"--verbose",
 			"--include-partial-messages",
+		}
+		if req.SessionID != "" {
+			args = append(args, "--resume", req.SessionID)
 		}
 	case "codex":
 		// Codex CLI: `exec` is the headless invocation. `--json`
@@ -573,7 +591,7 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 		// /home/runtime is not a git repo, so codex refuses to start
 		// without this flag (verified live: "Not inside a trusted
 		// directory and --skip-git-repo-check was not specified").
-		args = []string{"exec", "--json", "--skip-git-repo-check", flatPrompt}
+		args = []string{"exec", "--json", "--skip-git-repo-check", promptArg}
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(),
