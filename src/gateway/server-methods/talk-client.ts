@@ -183,7 +183,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       if (resolution.provider.createBrowserSession && transport !== "gateway-relay") {
         const session = await resolution.provider.createBrowserSession({
           providerConfig: resolution.providerConfig,
-          instructions: buildRealtimeInstructions(),
+          instructions: buildRealtimeInstructions(realtimeConfig.instructions),
           tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
           model: normalizeOptionalString(typedParams.model) ?? realtimeConfig.model,
           voice: normalizeOptionalString(typedParams.voice) ?? realtimeConfig.voice,

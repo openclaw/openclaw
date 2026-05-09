@@ -153,6 +153,7 @@ describe("validateTalkConfigResult", () => {
               },
               model: "gpt-realtime",
               voice: "alloy",
+              instructions: "Speak with crisp diction.",
               mode: "realtime",
               transport: "gateway-relay",
               brain: "agent-consult",

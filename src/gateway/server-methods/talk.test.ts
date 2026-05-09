@@ -498,6 +498,7 @@ describe("talk.session unified handlers", () => {
               realtime: {
                 provider: "openai",
                 providers: { openai: { apiKey: "openai-key" } },
+                instructions: "Speak warmly.",
               },
             },
           }) as OpenClawConfig,
@@ -513,6 +514,7 @@ describe("talk.session unified handlers", () => {
           model: "gpt-realtime",
           voice: "alloy",
         }),
+        instructions: expect.stringContaining("Additional realtime instructions:\nSpeak warmly."),
       }),
     );
     expect(createRespond).toHaveBeenCalledWith(
@@ -1196,7 +1198,7 @@ describe("talk.client.create handler", () => {
     vi.clearAllMocks();
   });
 
-  it("uses talk.realtime provider, model, and voice without reading speech provider config", async () => {
+  it("uses talk.realtime provider, model, voice, and instructions without reading speech provider config", async () => {
     const createBrowserSession = vi.fn(async () => ({
       provider: "openai",
       transport: "webrtc" as const,
@@ -1232,6 +1234,7 @@ describe("talk.client.create handler", () => {
                 providers: { openai: { apiKey: "openai-key" } },
                 model: "gpt-realtime",
                 voice: "alloy",
+                instructions: "Speak warmly.",
               },
             },
           }) as OpenClawConfig,
@@ -1248,6 +1251,7 @@ describe("talk.client.create handler", () => {
       expect.objectContaining({
         model: "gpt-realtime",
         voice: "alloy",
+        instructions: expect.stringContaining("Additional realtime instructions:\nSpeak warmly."),
       }),
     );
     expect(respond).toHaveBeenCalledWith(

@@ -236,6 +236,7 @@ const TalkRealtimeSchema = z
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     model: z.string().optional(),
     voice: z.string().optional(),
+    instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),

@@ -1396,6 +1396,7 @@ Defaults for Talk mode (macOS/iOS/Android).
           voice: "cedar",
         },
       },
+      instructions: "Speak warmly and keep answers brief.",
       mode: "realtime",
       transport: "webrtc",
       brain: "agent-consult",
@@ -1416,6 +1417,7 @@ Defaults for Talk mode (macOS/iOS/Android).
 - `consultFastMode` sets a one-shot fast-mode override for Control UI Talk realtime consults without changing the session's normal fast-mode setting.
 - `speechLocale` sets the BCP 47 locale id used by iOS/macOS Talk speech recognition. Leave unset to use the device default.
 - `silenceTimeoutMs` controls how long Talk mode waits after user silence before it sends the transcript. Unset keeps the platform default pause window (`700 ms on macOS and Android, 900 ms on iOS`).
+- `realtime.instructions` appends provider-facing system instructions to OpenClaw's built-in realtime prompt, so voice style can be configured without losing default `openclaw_agent_consult` guidance.
 
 ---
 
