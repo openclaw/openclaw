@@ -536,6 +536,124 @@ async function postWebhookFormWithHeadersResult(
   });
 }
 
+async function requestWebSocketUpgrade(
+  server: VoiceCallWebhookServer,
+  baseUrl: string,
+  pathname: string,
+): Promise<
+  | { kind: "response"; statusCode: number; body: string }
+  | { kind: "upgrade"; statusCode: number }
+  | { kind: "error"; code: string | undefined }
+> {
+  const requestUrl = requireBoundRequestUrl(server, baseUrl);
+  requestUrl.pathname = pathname;
+  requestUrl.search = "";
+  return await new Promise((resolve) => {
+    let settled = false;
+    let req: ReturnType<typeof request> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (
+      result:
+        | { kind: "response"; statusCode: number; body: string }
+        | { kind: "upgrade"; statusCode: number }
+        | { kind: "error"; code: string | undefined },
+    ) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve(result);
+    };
+    timer = setTimeout(() => {
+      req?.destroy();
+      finish({ kind: "error", code: "timeout" });
+    }, 2_000);
+    req = request(
+      {
+        hostname: requestUrl.hostname,
+        port: requestUrl.port,
+        path: requestUrl.pathname,
+        method: "GET",
+        headers: {
+          connection: "Upgrade",
+          upgrade: "websocket",
+        },
+      },
+      (res) => {
+        res.setEncoding("utf8");
+        let responseBody = "";
+        res.on("data", (chunk) => {
+          responseBody += chunk;
+        });
+        res.on("end", () => {
+          finish({
+            kind: "response",
+            statusCode: res.statusCode ?? 0,
+            body: responseBody,
+          });
+        });
+      },
+    );
+    req.on("upgrade", (res, socket) => {
+      socket.destroy();
+      finish({ kind: "upgrade", statusCode: res.statusCode ?? 0 });
+    });
+    req.on("error", (error: NodeJS.ErrnoException) => {
+      finish({ kind: "error", code: error.code });
+    });
+    req.end();
+  });
+}
+
+describe("VoiceCallWebhookServer realtime WebSocket routing", () => {
+  it("does not route sibling paths through the realtime stream handler", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig({
+      realtime: {
+        enabled: true,
+        streamPath: "/voice/stream/realtime",
+        instructions: "Be helpful.",
+        toolPolicy: "safe-read-only",
+        tools: [],
+        providers: {},
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+    const handleWebSocketUpgrade = vi.fn<RealtimeCallHandler["handleWebSocketUpgrade"]>(
+      (_req, socket) => {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+      },
+    );
+    server.setRealtimeHandler({
+      buildTwiMLPayload: () => ({
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: "<Response />",
+      }),
+      getStreamPathPattern: () => "/voice/stream/realtime",
+      handleWebSocketUpgrade,
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+
+    try {
+      const baseUrl = await server.start();
+      const valid = await requestWebSocketUpgrade(server, baseUrl, "/voice/stream/realtime/token");
+      expect(valid).toMatchObject({ kind: "response", statusCode: 401 });
+      expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
+
+      await requestWebSocketUpgrade(server, baseUrl, "/voice/stream/realtime-extra/token");
+      expect(handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 describe("VoiceCallWebhookServer stale call reaper", () => {
   beforeEach(() => {
     vi.useFakeTimers();
