@@ -4395,31 +4395,32 @@ describe("google-meet plugin", () => {
       spawn: spawnMock,
     });
 
-    expect(callbacks).toMatchObject({
-      autoRespondToAudio: false,
-      tools: [],
-    });
+    if (!callbacks) {
+      throw new Error("Expected realtime bridge callbacks");
+    }
+    expect(callbacks.autoRespondToAudio).toBe(false);
+    expect(callbacks.tools).toStrictEqual([]);
     callbacks?.onTranscript?.("user", "Are we still on track?", true);
     callbacks?.onTranscript?.("user", "Please include launch blockers.", true);
 
     await vi.waitFor(() => {
       expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-      expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "jay",
-          spawnedBy: "agent:jay:main",
-          sessionKey: "agent:jay:subagent:google-meet:meet-1",
-          sandboxSessionKey: "agent:jay:subagent:google-meet:meet-1",
-        }),
-      );
     });
-    const consultArgs = (runtime.agent.runEmbeddedPiAgent.mock.calls as unknown[][])[0]?.[0];
+    const consultArgs = requireRecord(
+      (runtime.agent.runEmbeddedPiAgent.mock.calls as unknown[][])[0]?.[0],
+      "default talk-back agent request",
+    );
+    expect(consultArgs.agentId).toBe("jay");
+    expect(consultArgs.spawnedBy).toBe("agent:jay:main");
+    expect(consultArgs.sessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
+    expect(consultArgs.sandboxSessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
     expect(JSON.stringify(consultArgs)).toContain(
       "Are we still on track?\\nPlease include launch blockers.",
     );
-    expect(sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining(JSON.stringify("The launch is still on track.")),
-    );
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    const sentUserMessage = sendUserMessage.mock.calls[0]?.[0];
+    expect(typeof sentUserMessage).toBe("string");
+    expect(sentUserMessage).toContain(JSON.stringify("The launch is still on track."));
     expect(sessionStore).toHaveProperty("agent:jay:subagent:google-meet:meet-1");
 
     await handle.stop();
@@ -4441,16 +4442,12 @@ describe("google-meet plugin", () => {
       suppressInputUntilMs: first.suppressInputUntilMs,
     });
 
-    expect(first).toMatchObject({
-      durationMs: 1_000,
-      lastOutputPlayableUntilMs: 2_000,
-      suppressInputUntilMs: 5_000,
-    });
-    expect(second).toMatchObject({
-      durationMs: 1_000,
-      lastOutputPlayableUntilMs: 3_000,
-      suppressInputUntilMs: 6_000,
-    });
+    expect(first.durationMs).toBe(1_000);
+    expect(first.lastOutputPlayableUntilMs).toBe(2_000);
+    expect(first.suppressInputUntilMs).toBe(5_000);
+    expect(second.durationMs).toBe(1_000);
+    expect(second.lastOutputPlayableUntilMs).toBe(3_000);
+    expect(second.suppressInputUntilMs).toBe(6_000);
   });
 
   it("detects assistant transcript echoes before agent consult", () => {
