@@ -1928,6 +1928,7 @@ export async function runEmbeddedAttempt(
         shouldUseWebSocketTransport,
         wsApiKey,
         model: params.model,
+        resolvedApiKey: params.resolvedApiKey,
       });
       activeSession.agent.streamFn = resolveEmbeddedAgentStreamFn({
         currentStreamFn: defaultSessionStreamFn,
