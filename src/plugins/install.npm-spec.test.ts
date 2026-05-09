@@ -945,7 +945,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.lstatSync(peerLink).isSymbolicLink()).toBe(true);
     await expect(
       fs.promises.access(path.join(npmRoot, "node_modules", "openclaw")),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rolls back installed npm package debris when security scan blocks the plugin", async () => {
