@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/model-fallback: prevent a bare-model alias from silently redirecting an explicitly-specified provider — when the caller supplies a provider (e.g. `opencode-go/deepseek-v4-pro`), a bare alias that resolves to a *different* provider (e.g. `"DeepSeek-V4-Pro" → openrouter/deepseek/deepseek-v4-pro`) is now skipped; aliases that stay within the same provider are unaffected. Fixes #79325. Thanks @dubr1k.
 - Active Memory: support concrete `plugins.entries.active-memory.config.toolsAllow` recall tool names for custom memory plugins while keeping the built-in memory-core default on `memory_search`/`memory_get` and preserving `memory_recall` automatically for `plugins.slots.memory: "memory-lancedb"`.
 - Telegram/Feishu: honor configured per-agent and global `reasoningDefault` values when deciding whether channel reasoning previews should stream or stay hidden, addressing the preview-default part of #73182. Thanks @anagnorisis2peripeteia.
 - Docker: run the runtime image under `tini` so long-lived containers reap orphaned child processes and forward signals correctly. (#77885) Thanks @VintageAyu.
