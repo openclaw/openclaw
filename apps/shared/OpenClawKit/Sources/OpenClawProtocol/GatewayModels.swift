@@ -165,14 +165,14 @@ public struct ResponseFrame: Codable, Sendable {
     public let id: String
     public let ok: Bool
     public let payload: AnyCodable?
-    public let error: [String: AnyCodable]?
+    public let error: ErrorShape?
 
     public init(
         type: String,
         id: String,
         ok: Bool,
         payload: AnyCodable?,
-        error: [String: AnyCodable]?)
+        error: ErrorShape?)
     {
         self.type = type
         self.id = id
@@ -195,14 +195,14 @@ public struct EventFrame: Codable, Sendable {
     public let event: String
     public let payload: AnyCodable?
     public let seq: Int?
-    public let stateversion: [String: AnyCodable]?
+    public let stateversion: StateVersion?
 
     public init(
         type: String,
         event: String,
         payload: AnyCodable?,
         seq: Int?,
-        stateversion: [String: AnyCodable]?)
+        stateversion: StateVersion?)
     {
         self.type = type
         self.event = event
@@ -2778,13 +2778,13 @@ public struct WizardStep: Codable, Sendable {
 
 public struct WizardNextResult: Codable, Sendable {
     public let done: Bool
-    public let step: [String: AnyCodable]?
+    public let step: WizardStep?
     public let status: AnyCodable?
     public let error: String?
 
     public init(
         done: Bool,
-        step: [String: AnyCodable]?,
+        step: WizardStep?,
         status: AnyCodable?,
         error: String?)
     {
@@ -2805,14 +2805,14 @@ public struct WizardNextResult: Codable, Sendable {
 public struct WizardStartResult: Codable, Sendable {
     public let sessionid: String
     public let done: Bool
-    public let step: [String: AnyCodable]?
+    public let step: WizardStep?
     public let status: AnyCodable?
     public let error: String?
 
     public init(
         sessionid: String,
         done: Bool,
-        step: [String: AnyCodable]?,
+        step: WizardStep?,
         status: AnyCodable?,
         error: String?)
     {
@@ -4755,7 +4755,7 @@ public struct ToolsInvokeResult: Codable, Sendable {
     public let requiresapproval: Bool?
     public let approvalid: String?
     public let source: AnyCodable?
-    public let error: [String: AnyCodable]?
+    public let error: ToolsInvokeError?
 
     public init(
         ok: Bool,
@@ -4764,7 +4764,7 @@ public struct ToolsInvokeResult: Codable, Sendable {
         requiresapproval: Bool?,
         approvalid: String?,
         source: AnyCodable?,
-        error: [String: AnyCodable]?)
+        error: ToolsInvokeError?)
     {
         self.ok = ok
         self.toolname = toolname
