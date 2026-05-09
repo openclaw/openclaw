@@ -67,7 +67,7 @@ export function readOpenClawStateKvJson(
   const database = openOpenClawStateDatabase(options);
   const db = getNodeSqliteKysely<OpenClawStateKvDatabase>(database.db);
   const row =
-    executeSqliteQueryTakeFirstSync<KvRow>(
+    executeSqliteQueryTakeFirstSync(
       database.db,
       db
         .selectFrom("kv")
@@ -84,7 +84,7 @@ export function listOpenClawStateKvJson<TValue>(
 ): OpenClawStateKvEntry<TValue>[] {
   const database = openOpenClawStateDatabase(options);
   const db = getNodeSqliteKysely<OpenClawStateKvDatabase>(database.db);
-  return executeSqliteQuerySync<KvRow>(
+  return executeSqliteQuerySync(
     database.db,
     db
       .selectFrom("kv")

@@ -191,7 +191,7 @@ function loadBindingsIntoMemory(): void {
   bindingsByConversationKey.clear();
   const stateDatabase = openOpenClawStateDatabase();
   const db = getCurrentConversationBindingsKysely(stateDatabase.db);
-  const rows = executeSqliteQuerySync<CurrentConversationBindingRow>(
+  const rows = executeSqliteQuerySync(
     stateDatabase.db,
     db.selectFrom("current_conversation_bindings").selectAll().orderBy("updated_at", "asc"),
   ).rows;

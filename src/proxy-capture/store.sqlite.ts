@@ -20,6 +20,7 @@ import type {
   CaptureObservedDimension,
   CaptureQueryPreset,
   CaptureQueryRow,
+  CaptureQueryRowsByPreset,
   CaptureSessionCoverageSummary,
   CaptureSessionRecord,
   CaptureSessionSummary,
@@ -75,24 +76,6 @@ function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimensi
     .toSorted((left, right) => right.count - left.count || left.value.localeCompare(right.value));
 }
 
-type CaptureSessionRow = {
-  id: string;
-  startedAt: number;
-  endedAt: number | null;
-  mode: string;
-  sourceProcess: string;
-  proxyUrl: string | null;
-  eventCount: number;
-};
-
-type BlobIdRow = {
-  blobId: string | null;
-};
-
-type CountRow = {
-  count: number;
-};
-
 function getCaptureKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<ProxyCaptureKyselyDatabase>(db);
 }
@@ -115,7 +98,7 @@ function countTable(
   table: "capture_blobs" | "capture_events" | "capture_sessions",
 ): number {
   return (
-    executeSqliteQueryTakeFirstSync<CountRow>(
+    executeSqliteQueryTakeFirstSync(
       db,
       getCaptureKysely(db).selectFrom(table).select((eb) => eb.fn.countAll<number>().as("count")),
     )?.count ?? 0
@@ -241,7 +224,7 @@ export class DebugProxyCaptureStore {
   }
 
   listSessions(limit = 50): CaptureSessionSummary[] {
-    const rows = executeSqliteQuerySync<CaptureSessionRow>(
+    const rows = executeSqliteQuerySync(
       this.db,
       getCaptureKysely(this.db)
         .selectFrom("capture_sessions as s")
@@ -271,7 +254,7 @@ export class DebugProxyCaptureStore {
   }
 
   getSessionEvents(sessionId: string, limit = 500): Array<Record<string, unknown>> {
-    return executeSqliteQuerySync<Record<string, unknown>>(
+    return executeSqliteQuerySync(
       this.db,
       getCaptureKysely(this.db)
         .selectFrom("capture_events")
@@ -306,7 +289,7 @@ export class DebugProxyCaptureStore {
   }
 
   summarizeSessionCoverage(sessionId: string): CaptureSessionCoverageSummary {
-    const rows = executeSqliteQuerySync<{ host: string | null; metaJson: string | null }>(
+    const rows = executeSqliteQuerySync(
       this.db,
       getCaptureKysely(this.db)
         .selectFrom("capture_events")
@@ -361,7 +344,7 @@ export class DebugProxyCaptureStore {
   }
 
   readBlob(blobId: string): string | null {
-    const row = executeSqliteQueryTakeFirstSync<{ data: Uint8Array }>(
+    const row = executeSqliteQueryTakeFirstSync(
       this.db,
       getCaptureKysely(this.db)
         .selectFrom("capture_blobs")
@@ -372,11 +355,15 @@ export class DebugProxyCaptureStore {
     return row ? decodeCaptureBlobText(Buffer.from(row.data)) : null;
   }
 
+  queryPreset<Preset extends CaptureQueryPreset>(
+    preset: Preset,
+    sessionId?: string,
+  ): CaptureQueryRowsByPreset[Preset][];
   queryPreset(preset: CaptureQueryPreset, sessionId?: string): CaptureQueryRow[] {
     const db = getCaptureKysely(this.db);
     switch (preset) {
       case "double-sends":
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -394,7 +381,7 @@ export class DebugProxyCaptureStore {
             .orderBy("host", "asc"),
         ).rows;
       case "retry-storms":
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -408,7 +395,7 @@ export class DebugProxyCaptureStore {
             .orderBy("host", "asc"),
         ).rows;
       case "cache-busting":
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -427,7 +414,7 @@ export class DebugProxyCaptureStore {
             .orderBy("host", "asc"),
         ).rows;
       case "ws-duplicate-frames":
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -447,7 +434,7 @@ export class DebugProxyCaptureStore {
           .where("kind", "=", "ws-frame")
           .where("direction", "=", "inbound")
           .$if(Boolean(sessionId), (qb) => qb.where("session_id", "=", sessionId ?? ""));
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -466,7 +453,7 @@ export class DebugProxyCaptureStore {
         ).rows;
       }
       case "error-bursts":
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -501,7 +488,7 @@ export class DebugProxyCaptureStore {
       return { sessions: 0, events: 0, blobs: 0 };
     }
     const db = getCaptureKysely(this.db);
-    const blobRows = executeSqliteQuerySync<BlobIdRow>(
+    const blobRows = executeSqliteQuerySync(
       this.db,
       db
         .selectFrom("capture_events")
@@ -511,7 +498,7 @@ export class DebugProxyCaptureStore {
         .where("data_blob_id", "is not", null),
     ).rows;
     const eventCount =
-      executeSqliteQueryTakeFirstSync<CountRow>(
+      executeSqliteQueryTakeFirstSync(
         this.db,
         db
           .selectFrom("capture_events")
@@ -519,7 +506,7 @@ export class DebugProxyCaptureStore {
           .where("session_id", "in", uniqueSessionIds),
       )?.count ?? 0;
     const sessionCount =
-      executeSqliteQueryTakeFirstSync<CountRow>(
+      executeSqliteQueryTakeFirstSync(
         this.db,
         db
           .selectFrom("capture_sessions")
@@ -540,7 +527,7 @@ export class DebugProxyCaptureStore {
     const remainingBlobRefs =
       candidateBlobIds.length > 0
         ? new Set(
-            executeSqliteQuerySync<BlobIdRow>(
+            executeSqliteQuerySync(
               this.db,
               db
                 .selectFrom("capture_events")

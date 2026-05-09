@@ -4,8 +4,7 @@ import { InsertQueryNode, Kysely as KyselyInstance } from "kysely";
 import { NodeSqliteKyselyDialect } from "./kysely-node-sqlite.js";
 
 type CompilableQuery<Row = unknown> = {
-  compile(): CompiledQuery;
-  readonly __resultRow?: Row;
+  compile(): CompiledQuery<Row>;
 };
 
 const kyselyByDatabase = new WeakMap<DatabaseSync, Kysely<unknown>>();
@@ -24,7 +23,7 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
 
 export function executeCompiledSqliteQuerySync<Row>(
   db: DatabaseSync,
-  compiledQuery: CompiledQuery,
+  compiledQuery: CompiledQuery<Row>,
 ): QueryResult<Row> {
   const statement = db.prepare(compiledQuery.sql);
   const parameters = compiledQuery.parameters as SQLInputValue[];

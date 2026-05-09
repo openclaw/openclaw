@@ -470,12 +470,7 @@ describe("state migrations", () => {
 
     const stateDatabase = openOpenClawStateDatabase({ env });
     const db = getNodeSqliteKysely<DeliveryQueueTestDatabase>(stateDatabase.db);
-    const rows = executeSqliteQuerySync<{
-      queue_name: string;
-      id: string;
-      status: string;
-      entry_json: string;
-    }>(
+    const rows = executeSqliteQuerySync(
       stateDatabase.db,
       db
         .selectFrom("delivery_queue_entries")
@@ -584,7 +579,7 @@ describe("state migrations", () => {
 
     const stateDatabase = openOpenClawStateDatabase({ env });
     const db = getNodeSqliteKysely<PluginStateTestDatabase>(stateDatabase.db);
-    const row = executeSqliteQuerySync<{ value_json: string }>(
+    const row = executeSqliteQuerySync(
       stateDatabase.db,
       db
         .selectFrom("plugin_state_entries")
@@ -651,12 +646,7 @@ describe("state migrations", () => {
 
     const stateDatabase = openOpenClawStateDatabase({ env });
     const db = getNodeSqliteKysely<CurrentConversationBindingsTestDatabase>(stateDatabase.db);
-    const row = executeSqliteQuerySync<{
-      binding_key: string;
-      binding_id: string;
-      target_session_key: string;
-      record_json: string;
-    }>(
+    const row = executeSqliteQuerySync(
       stateDatabase.db,
       db
         .selectFrom("current_conversation_bindings")

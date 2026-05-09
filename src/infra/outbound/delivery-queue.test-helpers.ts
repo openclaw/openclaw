@@ -17,17 +17,13 @@ import type { DeliverFn, RecoveryLogger } from "./delivery-queue.js";
 
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 
-type DeliveryQueueEntryRow = {
-  entry_json: string;
-};
-
 const QUEUE_NAME = "outbound-delivery";
 
 function databaseOptions(tmpDir: string) {
   return { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } };
 }
 
-function parseEntry(row: DeliveryQueueEntryRow | undefined, id: string): Record<string, unknown> {
+function parseEntry(row: { entry_json: string } | undefined, id: string): Record<string, unknown> {
   if (!row) {
     throw new Error(`missing queued delivery test entry: ${id}`);
   }
@@ -65,7 +61,7 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
 export function readQueuedEntry(tmpDir: string, id: string): Record<string, unknown> {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(tmpDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
-  const row = executeSqliteQueryTakeFirstSync<DeliveryQueueEntryRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
@@ -80,7 +76,7 @@ export function readQueuedEntry(tmpDir: string, id: string): Record<string, unkn
 export function readFailedQueuedEntry(tmpDir: string, id: string): Record<string, unknown> | null {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(tmpDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
-  const row = executeSqliteQueryTakeFirstSync<DeliveryQueueEntryRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
@@ -95,7 +91,7 @@ export function readFailedQueuedEntry(tmpDir: string, id: string): Record<string
 export function readPendingQueuedEntries(tmpDir: string): Record<string, unknown>[] {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(tmpDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
-  return executeSqliteQuerySync<DeliveryQueueEntryRow>(
+  return executeSqliteQuerySync(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
