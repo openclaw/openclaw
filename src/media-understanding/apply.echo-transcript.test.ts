@@ -239,7 +239,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     mockDeliverOutboundPayloads.mockResolvedValue({
       status: "sent",
       results: [{ channel: "voicechat", messageId: "echo-1" }],
-      receipt: { entries: [] },
+      receipt: { platformMessageIds: ["echo-1"], parts: [], sentAt: 1 },
     });
   });
 
