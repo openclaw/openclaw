@@ -90,7 +90,7 @@ export type SessionCompactionCheckpointReason =
 
 export type SessionCompactionTranscriptReference = {
   sessionId: string;
-  sessionFile?: string;
+  transcriptLocator?: string;
   leafId?: string;
   entryId?: string;
 };
@@ -195,7 +195,6 @@ export type SessionEntry = {
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
   updatedAt: number;
-  sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
   /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
@@ -483,7 +482,7 @@ function normalizeMergedUpdatedAt(value: number | undefined, now: number): numbe
 }
 
 function stripDerivedSessionEntryFields<T extends SessionEntry>(entry: T): T {
-  delete entry.transcriptLocator;
+  delete (entry as T & { transcriptLocator?: unknown }).transcriptLocator;
   return entry;
 }
 

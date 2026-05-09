@@ -2385,7 +2385,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           message: transcriptReply,
           ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
           sessionId,
-          transcriptLocator: resolvedTranscriptLocator,
+          transcriptLocator: resolvedTranscriptLocator ?? undefined,
           agentId,
           createIfMissing: true,
           idempotencyKey: `${clientRunId}:assistant-media`,
@@ -2614,7 +2614,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                         ? { content: persistedContentForAppend }
                         : {}),
                       sessionId,
-                      transcriptLocator: resolvedTranscriptLocator,
+                      transcriptLocator: resolvedTranscriptLocator ?? undefined,
                       agentId,
                       createIfMissing: true,
                       cfg,

@@ -57,7 +57,9 @@ function stripDerivedTranscriptLocator(entry: SessionEntry | null): SessionEntry
   if (!entry) {
     return null;
   }
-  const { transcriptLocator: _derivedTranscriptLocator, ...rest } = entry;
+  const { transcriptLocator: _derivedTranscriptLocator, ...rest } = entry as SessionEntry & {
+    transcriptLocator?: unknown;
+  };
   return rest;
 }
 

@@ -363,7 +363,6 @@ async function prepareSubagentSessionContext(params: {
       }
       const nextChildEntry = mergeSessionEntry(childEntry, {
         sessionId: forked.sessionId,
-        transcriptLocator: forked.transcriptLocator,
         forkedFromParent: true,
       });
       await subagentSpawnDeps.upsertSessionEntry({
