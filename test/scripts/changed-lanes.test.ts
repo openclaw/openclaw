@@ -284,7 +284,7 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
     const lintCommand = plan.commands.find((command) => command.args[0] === "lint:extensions");
 
-    expect(lintCommand?.env).toMatchObject({
+    expect(lintCommand?.env).toEqual({
       OPENCLAW_OXLINT_SKIP_LOCK: "1",
       OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
       OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
@@ -295,12 +295,8 @@ describe("scripts/changed-lanes", () => {
   it("routes core test-only changes to core test lanes only", () => {
     const result = detectChangedLanes(["src/shared/string-normalization.test.ts"]);
 
-    expect(result.lanes).toMatchObject({
-      core: false,
+    expectLanes(result.lanes, {
       coreTests: true,
-      extensions: false,
-      extensionTests: false,
-      all: false,
     });
     expect(createChangedCheckPlan(result).commands.map((command) => command.args[0])).toContain(
       "tsgo:core:test",
@@ -313,12 +309,9 @@ describe("scripts/changed-lanes", () => {
   it("routes extension production changes to extension prod and extension test lanes", () => {
     const result = detectChangedLanes(["extensions/discord/src/index.ts"]);
 
-    expect(result.lanes).toMatchObject({
-      core: false,
-      coreTests: false,
+    expectLanes(result.lanes, {
       extensions: true,
       extensionTests: true,
-      all: false,
     });
     expect(createChangedCheckPlan(result).commands.map((command) => command.args[0])).toContain(
       "tsgo:extensions",
@@ -331,12 +324,8 @@ describe("scripts/changed-lanes", () => {
   it("routes extension test-only changes to extension test lanes only", () => {
     const result = detectChangedLanes(["extensions/discord/src/index.test.ts"]);
 
-    expect(result.lanes).toMatchObject({
-      core: false,
-      coreTests: false,
-      extensions: false,
+    expectLanes(result.lanes, {
       extensionTests: true,
-      all: false,
     });
     expect(createChangedCheckPlan(result).commands.map((command) => command.args[0])).toContain(
       "tsgo:extensions:test",
@@ -351,12 +340,11 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
 
     expect(result.extensionImpactFromCore).toBe(true);
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       core: true,
       coreTests: true,
       extensions: true,
       extensionTests: true,
-      all: false,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions:test");
@@ -375,9 +363,8 @@ describe("scripts/changed-lanes", () => {
     const result = detectChangedLanes([".gitignore"]);
     const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       tooling: true,
-      all: false,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
@@ -406,9 +393,8 @@ describe("scripts/changed-lanes", () => {
     ]);
     const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       tooling: true,
-      all: false,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
@@ -419,9 +405,8 @@ describe("scripts/changed-lanes", () => {
     const result = detectChangedLanes([".vscode/settings.json", ".vscode/extensions.json"]);
     const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       tooling: true,
-      all: false,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
@@ -439,9 +424,8 @@ describe("scripts/changed-lanes", () => {
     ]);
     const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
       tooling: true,
-      all: false,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
@@ -458,10 +442,9 @@ describe("scripts/changed-lanes", () => {
     ]);
     const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes).toMatchObject({
+    expectLanes(result.lanes, {
+      docs: true,
       liveDockerTooling: true,
-      all: false,
-      tooling: false,
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
