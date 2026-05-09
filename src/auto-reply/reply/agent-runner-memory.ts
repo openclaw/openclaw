@@ -277,6 +277,7 @@ async function appendPostCompactionRefreshPrompt(params: {
 }
 
 async function readSessionLogSnapshot(params: {
+  agentId?: string;
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
@@ -290,7 +291,7 @@ async function readSessionLogSnapshot(params: {
 
   const snapshot: SessionLogSnapshot = {};
   const scope = resolveSqliteSessionTranscriptScope({
-    agentId: params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined,
+    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
     sessionId,
   });
   if (!scope) {
@@ -338,6 +339,7 @@ type TranscriptTokenEstimate = {
 };
 
 async function estimatePromptTokensFromSessionTranscript(params: {
+  agentId?: string;
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
@@ -348,6 +350,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   }
   try {
     const snapshot = await readSessionLogSnapshot({
+      agentId: params.agentId,
       sessionId,
       sessionEntry: params.sessionEntry,
       sessionKey: params.sessionKey,
@@ -374,7 +377,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     }
     const messages = (await readSessionMessagesAsync(
       {
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
         sessionId,
       },
       {
@@ -450,6 +453,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
   const transcriptSizeSnapshot = shouldCheckActiveTranscriptBytes
     ? await readSessionLogSnapshot({
+        agentId: params.followupRun.run.agentId,
         sessionId: entry.sessionId,
         sessionEntry: entry,
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
@@ -473,6 +477,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof freshPersistedTokens === "number"
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
+          agentId: params.followupRun.run.agentId,
           sessionId: entry.sessionId,
           sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
@@ -705,6 +710,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldReadSessionLog = shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush;
   const sessionLogSnapshot = shouldReadSessionLog
     ? await readSessionLogSnapshot({
+        agentId: params.followupRun.run.agentId,
         sessionId: params.followupRun.run.sessionId,
         sessionEntry: entry,
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,

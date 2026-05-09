@@ -147,4 +147,37 @@ describe("resetReplyRunSession", () => {
     const persisted = readTestSessionRow("main");
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
   });
+
+  it("uses the prepared run agent when rotating a SQLite-only session", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+    };
+    const sessionKey = "agent:main:main";
+    await writeTestSessionRow(sessionKey, sessionEntry, "worker");
+
+    const followupRun = createTestFollowupRun({
+      agentId: "worker",
+      sessionKey,
+    });
+    let activeSessionEntry: SessionEntry | undefined;
+    const reset = await resetReplyRunSession({
+      options: {
+        failureLabel: "role ordering",
+        buildLogMessage: (next) => `reset ${next}`,
+      },
+      sessionKey,
+      queueKey: sessionKey,
+      followupRun,
+      onActiveSessionEntry: (entry) => {
+        activeSessionEntry = entry;
+      },
+      onNewSession: () => {},
+    });
+
+    expect(reset).toBe(true);
+    expect(activeSessionEntry?.sessionId).toBe("00000000-0000-0000-0000-000000000123");
+    expect(readTestSessionRow(sessionKey, "worker")?.sessionId).toBe(activeSessionEntry?.sessionId);
+    expect(readTestSessionRow(sessionKey, "main")).toBeUndefined();
+  });
 });

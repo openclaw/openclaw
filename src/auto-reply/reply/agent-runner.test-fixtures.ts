@@ -34,17 +34,24 @@ export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {
   } as unknown as FollowupRun;
 }
 
-export async function writeTestSessionRow(sessionKey: string, entry: SessionEntry): Promise<void> {
+export async function writeTestSessionRow(
+  sessionKey: string,
+  entry: SessionEntry,
+  agentId = resolveAgentIdFromSessionKey(sessionKey),
+): Promise<void> {
   upsertSessionEntry({
-    agentId: resolveAgentIdFromSessionKey(sessionKey),
+    agentId,
     sessionKey,
     entry,
   });
 }
 
-export function readTestSessionRow(sessionKey: string): SessionEntry | undefined {
+export function readTestSessionRow(
+  sessionKey: string,
+  agentId = resolveAgentIdFromSessionKey(sessionKey),
+): SessionEntry | undefined {
   return getSessionEntry({
-    agentId: resolveAgentIdFromSessionKey(sessionKey),
+    agentId,
     sessionKey,
   });
 }
