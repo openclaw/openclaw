@@ -826,7 +826,7 @@ struct SettingsTab: View {
             return false
         }
 
-        guard let link = GatewayConnectDeepLink.fromSetupInput(raw) else {
+        guard let link = GatewayConnectDeepLink.fromSetupCode(raw) else {
             self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
             return false
         }
