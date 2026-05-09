@@ -91,6 +91,59 @@ describe("legacy session maintenance migrate", () => {
   });
 });
 
+describe("legacy memory search store migrate", () => {
+  it("removes sidecar memory search index paths", () => {
+    const res = migrateLegacyConfigForTest({
+      memorySearch: {
+        provider: "openai",
+        store: {
+          path: "/tmp/openclaw-memory-{agentId}.sqlite",
+          vector: { enabled: false },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              path: "/tmp/default-memory.sqlite",
+              fts: { tokenizer: "trigram" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "ops",
+            memorySearch: {
+              store: {
+                path: "/tmp/ops-memory.sqlite",
+                vector: { enabled: true },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect((res.config as Record<string, unknown> | null)?.memorySearch).toBeUndefined();
+    expect(res.config?.agents?.defaults?.memorySearch?.store).toEqual({
+      fts: { tokenizer: "trigram" },
+      vector: { enabled: false },
+    });
+    expect(res.config?.agents?.list?.[0]?.memorySearch?.store).toEqual({
+      vector: { enabled: true },
+    });
+    expect(res.changes).toContain(
+      "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
+    );
+    expect(res.changes).toContain(
+      "Removed agents.defaults.memorySearch.store.path; memory indexes now use each agent database.",
+    );
+    expect(res.changes).toContain(
+      "Removed agents.list[0].memorySearch.store.path; memory indexes now use each agent database.",
+    );
+  });
+});
+
 describe("legacy session parent fork migrate", () => {
   it("removes ignored session.store", () => {
     const res = migrateLegacyConfigForTest({

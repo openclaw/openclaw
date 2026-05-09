@@ -7,7 +7,7 @@ import {
 } from "../memory-host-sdk/multimodal.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
-import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
+import { clampInt, clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
@@ -137,23 +137,13 @@ function normalizeSources(
   return Array.from(normalized);
 }
 
-function resolveMemoryStore(
-  agentId: string,
-  raw?: string,
-): {
+function resolveMemoryStore(agentId: string): {
   path: string;
   managedAgentDatabase: boolean;
 } {
-  if (!raw) {
-    return {
-      path: resolveOpenClawAgentSqlitePath({ agentId, env: process.env }),
-      managedAgentDatabase: true,
-    };
-  }
-  const withToken = raw.includes("{agentId}") ? raw.replaceAll("{agentId}", agentId) : raw;
   return {
-    path: resolveUserPath(withToken),
-    managedAgentDatabase: false,
+    path: resolveOpenClawAgentSqlitePath({ agentId, env: process.env }),
+    managedAgentDatabase: true,
   };
 }
 
@@ -265,10 +255,7 @@ function mergeConfig(
   const fts = {
     tokenizer: overrides?.store?.fts?.tokenizer ?? defaults?.store?.fts?.tokenizer ?? "unicode61",
   };
-  const resolvedStore = resolveMemoryStore(
-    agentId,
-    overrides?.store?.path ?? defaults?.store?.path,
-  );
+  const resolvedStore = resolveMemoryStore(agentId);
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
     path: resolvedStore.path,

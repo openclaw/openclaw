@@ -422,7 +422,6 @@ export type MemorySearchConfig = {
   /** Index storage configuration. */
   store?: {
     driver?: "sqlite";
-    path?: string;
     fts?: {
       /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
       tokenizer?: "unicode61" | "trigram";

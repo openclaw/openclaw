@@ -201,24 +201,6 @@ describe("memory search config", () => {
     expect(resolved?.store.managedAgentDatabase).toBe(true);
   });
 
-  it("keeps explicit memory store paths as sidecar indexes", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            enabled: true,
-            store: {
-              path: "/tmp/openclaw-memory-{agentId}.sqlite",
-            },
-          },
-        },
-      },
-    });
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.store.path).toBe("/tmp/openclaw-memory-main.sqlite");
-    expect(resolved?.store.managedAgentDatabase).toBe(false);
-  });
-
   it("resolves custom provider ids through their configured api owner", () => {
     const cfg = asConfig({
       models: {
