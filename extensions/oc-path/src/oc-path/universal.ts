@@ -47,14 +47,11 @@ import {
   unquoteSeg,
 } from "./oc-path.js";
 import { resolveMdOcPath } from "./resolve.js";
-import type { YamlAst } from "./yaml/ast.js";
-import { insertYamlOcPath, setYamlOcPath } from "./yaml/edit.js";
-import { resolveYamlOcPath } from "./yaml/resolve.js";
 
 // ---------- Public types ---------------------------------------------------
 
 /** Tagged-union of every AST kind the substrate supports. */
-export type OcAst = MdAst | JsoncAst | JsonlAst | YamlAst;
+export type OcAst = MdAst | JsoncAst | JsonlAst;
 
 /**
  * Universal resolve result. Same shape regardless of AST kind so
@@ -96,9 +93,7 @@ export type NodeDescriptor =
   | "md-item"
   | "jsonc-object"
   | "jsonc-array"
-  | "jsonl-line"
-  | "yaml-map"
-  | "yaml-seq";
+  | "jsonl-line";
 
 export type ContainerKind =
   | "md-section" // append item to a section
@@ -106,9 +101,7 @@ export type ContainerKind =
   | "md-frontmatter" // add a frontmatter key
   | "jsonc-object"
   | "jsonc-array"
-  | "jsonl-file" // append a line
-  | "yaml-map" // add key to YAML map
-  | "yaml-seq"; // append item to YAML seq
+  | "jsonl-file"; // append a line
 
 export type SetResult =
   | { readonly ok: true; readonly ast: OcAst }
@@ -216,115 +209,8 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
       return resolveJsoncToUniversal(ast, path);
     case "jsonl":
       return resolveJsonlToUniversal(ast, path);
-    case "yaml":
-      return resolveYamlToUniversal(ast, path);
   }
   return null;
-}
-
-function resolveYamlToUniversal(ast: YamlAst, path: OcPath): OcMatch | null {
-  const m = resolveYamlOcPath(ast, path);
-  if (m === null) {
-    return null;
-  }
-  if (m.kind === "root") {
-    return { kind: "root", ast, line: 1 };
-  }
-  // Walk the AST one more time to extract the matched node's range
-  // — the per-kind YamlOcPathMatch shape doesn't surface it directly.
-  // Cheap relative to the resolve cost; trades CPU for type cleanliness.
-  const line = locateYamlLine(ast, path);
-  if (m.kind === "map") {
-    return { kind: "node", descriptor: "yaml-map", line };
-  }
-  if (m.kind === "seq") {
-    return { kind: "node", descriptor: "yaml-seq", line };
-  }
-  if (m.kind === "scalar" || m.kind === "pair") {
-    const v = m.value;
-    if (v === null) {
-      return { kind: "leaf", valueText: "null", leafType: "null", line };
-    }
-    if (typeof v === "string") {
-      return { kind: "leaf", valueText: v, leafType: "string", line };
-    }
-    if (typeof v === "number") {
-      return { kind: "leaf", valueText: String(v), leafType: "number", line };
-    }
-    if (typeof v === "boolean") {
-      return { kind: "leaf", valueText: String(v), leafType: "boolean", line };
-    }
-    // Anything else (Date / BigInt / collection) — JSON-stringify so we
-    // don't end up with `[object Object]` in the leaf text. Falls back
-    // to literal "null" if JSON.stringify yields undefined.
-    const valueText = JSON.stringify(v) ?? "null";
-    return { kind: "leaf", valueText, leafType: "string", line };
-  }
-  return null;
-}
-
-function locateYamlLine(ast: YamlAst, path: OcPath): number {
-  // Re-walk the yaml CST to find the matched node's byte range, then
-  // convert via the AST's `lineCounter`. Quote-aware split + unquote so
-  // a quoted segment containing `.` survives as a single key (matches
-  // `resolveYamlOcPath`'s lookup behavior; without this a key like
-  // `"github.com/foo"` would shred and the line locator would fall back
-  // to line 1 silently).
-  const segments: string[] = [];
-  const collect = (slot: string | undefined) => {
-    if (slot === undefined) {
-      return;
-    }
-    for (const sub of splitRespectingBrackets(slot, ".")) {
-      segments.push(isQuotedSeg(sub) ? unquoteSeg(sub) : sub);
-    }
-  };
-  collect(path.section);
-  collect(path.item);
-  collect(path.field);
-  if (segments.length === 0) {
-    return 1;
-  }
-  let node: unknown = ast.doc.contents;
-  for (const seg of segments) {
-    if (node === null || node === undefined) {
-      return 1;
-    }
-    const n = node as { items?: unknown[] };
-    if (Array.isArray(n.items)) {
-      // Map or seq.
-      const items = n.items;
-      const isMap =
-        items.length > 0 && typeof items[0] === "object" && items[0] !== null && "key" in items[0];
-      if (isMap) {
-        const pair = (items as { key: { value?: unknown }; value: unknown }[]).find((p) => {
-          const k =
-            p.key !== null && typeof p.key === "object" && "value" in p.key ? p.key.value : p.key;
-          return String(k) === seg;
-        });
-        if (pair === undefined) {
-          return 1;
-        }
-        node = pair.value;
-      } else {
-        const idx = Number(seg);
-        if (!Number.isInteger(idx) || idx < 0 || idx >= items.length) {
-          return 1;
-        }
-        node = items[idx];
-      }
-    } else {
-      return 1;
-    }
-  }
-  if (node === null || typeof node !== "object") {
-    return 1;
-  }
-  const range = (node as { range?: readonly [number, number, number] }).range;
-  if (range === undefined) {
-    return 1;
-  }
-  return ast.lineCounter.linePos(range[0]).line;
 }
 
 function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
@@ -411,35 +297,6 @@ function resolveInsertion(ast: OcAst, info: InsertionInfo): OcMatch | null {
       return resolveJsoncInsertion(ast, info);
     case "jsonl":
       return resolveJsonlInsertion(ast, info);
-    case "yaml":
-      return resolveYamlInsertion(ast, info);
-  }
-  return null;
-}
-
-function resolveYamlInsertion(ast: YamlAst, info: InsertionInfo): OcMatch | null {
-  const m = resolveYamlOcPath(ast, info.parentPath);
-  if (m === null) {
-    return null;
-  }
-  const line = locateYamlLine(ast, info.parentPath);
-  if (m.kind === "map") {
-    return { kind: "insertion-point", container: "yaml-map", line };
-  }
-  if (m.kind === "seq") {
-    return { kind: "insertion-point", container: "yaml-seq", line };
-  }
-  if (m.kind === "root") {
-    // Top-level: inspect the document root.
-    const root = ast.doc.contents;
-    if (root === null) {
-      return null;
-    }
-    if ("items" in (root as object)) {
-      const isMapLike = (root as { items: { key?: unknown }[] }).items.every((p) => "key" in p);
-      return { kind: "insertion-point", container: isMapLike ? "yaml-map" : "yaml-seq", line: 1 };
-    }
-    return null;
   }
   return null;
 }
@@ -540,53 +397,8 @@ export function setOcPath(ast: OcAst, path: OcPath, value: string): SetResult {
       return setJsoncLeaf(ast, path, value);
     case "jsonl":
       return setJsonlLeaf(ast, path, value);
-    case "yaml":
-      return setYamlLeaf(ast, path, value);
   }
   throw new Error(`unreachable: setOcPath kind`);
-}
-
-function setYamlLeaf(ast: YamlAst, path: OcPath, value: string): SetResult {
-  const existing = resolveYamlOcPath(ast, path);
-  if (existing === null) {
-    return { ok: false, reason: "unresolved" };
-  }
-  if (existing.kind === "root") {
-    return {
-      ok: false,
-      reason: "not-writable",
-      detail: "root replacement not supported via setOcPath",
-    };
-  }
-  // Coerce value based on existing scalar type.
-  let coerced: unknown = value;
-  if (existing.kind === "scalar" || existing.kind === "pair") {
-    const cur = existing.value;
-    if (typeof cur === "number") {
-      const n = Number(value);
-      if (!Number.isFinite(n)) {
-        return { ok: false, reason: "parse-error" };
-      }
-      coerced = n;
-    } else if (typeof cur === "boolean") {
-      if (value === "true") {
-        coerced = true;
-      } else if (value === "false") {
-        coerced = false;
-      } else {
-        return { ok: false, reason: "parse-error" };
-      }
-    } else if (cur === null && value !== "null") {
-      return { ok: false, reason: "parse-error" };
-    } else if (cur === null && value === "null") {
-      coerced = null;
-    }
-  }
-  const r = setYamlOcPath(ast, path, coerced);
-  if (r.ok) {
-    return { ok: true, ast: r.ast };
-  }
-  return { ok: false, reason: r.reason };
 }
 
 function setMdLeaf(ast: MdAst, path: OcPath, value: string): SetResult {
@@ -675,25 +487,8 @@ function setInsertion(ast: OcAst, info: InsertionInfo, value: string): SetResult
       return setJsoncInsertion(ast, info, value);
     case "jsonl":
       return setJsonlInsertion(ast, info, value);
-    case "yaml":
-      return setYamlInsertion(ast, info, value);
   }
   throw new Error(`unreachable: setInsertion kind`);
-}
-
-function setYamlInsertion(ast: YamlAst, info: InsertionInfo, value: string): SetResult {
-  // YAML insertion accepts a JSON-shaped value string (so callers can
-  // insert structured nodes uniformly). For simple scalars the JSON
-  // form `"foo"` / `42` / `true` works; complex shapes use objects.
-  const parsed = tryParseJson(value);
-  if (parsed === undefined) {
-    return { ok: false, reason: "parse-error", detail: "yaml insertion requires JSON value" };
-  }
-  const r = insertYamlOcPath(ast, info.parentPath, info.marker, parsed);
-  if (r.ok) {
-    return { ok: true, ast: r.ast };
-  }
-  return { ok: false, reason: r.reason };
 }
 
 function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResult {

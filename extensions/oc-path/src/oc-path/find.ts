@@ -25,7 +25,6 @@
  * @module @openclaw/oc-path/find
  */
 
-import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
 import type { JsoncValue } from "./jsonc/ast.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
@@ -180,9 +179,6 @@ function expand(ast: OcAst, subs: readonly PatternSub[], pattern: OcPath): reado
     concretePaths.push(repackSlotSubs(pattern, slotSubs));
   };
   switch (ast.kind) {
-    case "yaml":
-      walkYaml(ast.doc.contents as Node | null, subs, 0, [], onMatch);
-      break;
     case "jsonc":
       if (ast.root !== null) {
         walkJsonc(ast.root, subs, 0, [], onMatch);
@@ -196,183 +192,6 @@ function expand(ast: OcAst, subs: readonly PatternSub[], pattern: OcPath): reado
       break;
   }
   return concretePaths;
-}
-
-// ---------- YAML walker ----------------------------------------------------
-
-function walkYaml(
-  node: Node | null,
-  subs: readonly PatternSub[],
-  i: number,
-  walked: readonly SlotSub[],
-  onMatch: (subs: readonly SlotSub[]) => void,
-): void {
-  // P-031 / P-033 (substrate pitfall taxonomy — see
-  // `oc-paths-substrate/PITFALLS.md`) — depth cap kills runaway
-  // recursion from `**` over deeply nested ASTs and from yaml-anchor
-  // cycles (a cycle just makes recursion unbounded). Cap is liberal
-  // (256) — real workspaces top out around 50 — and covers both
-  // pitfalls with one defense.
-  if (walked.length > MAX_TRAVERSAL_DEPTH) {
-    throw new OcPathError(
-      `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a cycle or pathological pattern`,
-      "",
-      "OC_PATH_DEPTH_EXCEEDED",
-    );
-  }
-  // Out of pattern → emit at whatever node we landed on.
-  if (i >= subs.length) {
-    onMatch(walked);
-    return;
-  }
-  if (node === null) {
-    return;
-  }
-  let cur = subs[i];
-
-  // Union `{a,b,c}` — fan out into one walk per alternative. Each
-  // alternative replaces `cur.value` with the chosen literal.
-  if (isUnionSeg(cur.value)) {
-    const alts = parseUnionSeg(cur.value);
-    if (alts === null) {
-      return;
-    }
-    for (const alt of alts) {
-      const altSubs = subs.slice();
-      altSubs[i] = { slot: cur.slot, value: alt };
-      walkYaml(node, altSubs, i, walked, onMatch);
-    }
-    return;
-  }
-
-  // Predicate `[key<op>value]` — like wildcard, but emit only children
-  // whose `key` field matches the predicate.
-  if (isPredicateSeg(cur.value)) {
-    const pred = parsePredicateSeg(cur.value);
-    if (pred === null) {
-      return;
-    }
-    if (isMap(node)) {
-      for (const pair of (node as { items: Pair[] }).items) {
-        const k = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
-        const childVal = pair.value as Node;
-        if (yamlChildMatchesPredicate(childVal, pred)) {
-          walkYaml(
-            childVal,
-            subs,
-            i + 1,
-            [...walked, { slot: cur.slot, value: quoteSeg(k) }],
-            onMatch,
-          );
-        }
-      }
-    } else if (isSeq(node)) {
-      (node as { items: Node[] }).items.forEach((child, idx) => {
-        if (yamlChildMatchesPredicate(child, pred)) {
-          walkYaml(
-            child,
-            subs,
-            i + 1,
-            [...walked, { slot: cur.slot, value: String(idx) }],
-            onMatch,
-          );
-        }
-      });
-    }
-    return;
-  }
-
-  // Positional tokens (`$first` / `$last` / `-N`) → resolve to a
-  // single concrete segment and descend as if the pattern had carried
-  // that literal. Walker then continues with the concrete value, so
-  // emitted paths carry the resolved index/key.
-  if (isPositionalSeg(cur.value)) {
-    const concrete = positionalForYamlNode(node, cur.value);
-    if (concrete === null) {
-      return;
-    }
-    cur = { slot: cur.slot, value: concrete };
-  }
-
-  // `**` — match 0 or more segments.
-  if (cur.value === WILDCARD_RECURSIVE) {
-    // 0-match: skip past `**`, retry pattern at this node.
-    walkYaml(node, subs, i + 1, walked, onMatch);
-    // 1+ match: descend one step, stay on this `**` slot.
-    if (isMap(node)) {
-      for (const pair of (node as { items: Pair[] }).items) {
-        const k = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
-        walkYaml(
-          pair.value as Node,
-          subs,
-          i,
-          [...walked, { slot: cur.slot, value: quoteSeg(k) }],
-          onMatch,
-        );
-      }
-    } else if (isSeq(node)) {
-      (node as { items: Node[] }).items.forEach((child, idx) => {
-        walkYaml(child, subs, i, [...walked, { slot: cur.slot, value: String(idx) }], onMatch);
-      });
-    }
-    return;
-  }
-
-  // `*` — match exactly one segment.
-  if (cur.value === WILDCARD_SINGLE) {
-    if (isMap(node)) {
-      for (const pair of (node as { items: Pair[] }).items) {
-        const k = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
-        walkYaml(
-          pair.value as Node,
-          subs,
-          i + 1,
-          [...walked, { slot: cur.slot, value: quoteSeg(k) }],
-          onMatch,
-        );
-      }
-    } else if (isSeq(node)) {
-      (node as { items: Node[] }).items.forEach((child, idx) => {
-        walkYaml(child, subs, i + 1, [...walked, { slot: cur.slot, value: String(idx) }], onMatch);
-      });
-    }
-    return;
-  }
-
-  // Literal — descend exactly into the matching key/index.
-  // Literal lookup — quoted segments unwrap to their literal key form.
-  const literal = isQuotedSeg(cur.value) ? unquoteSeg(cur.value) : cur.value;
-  if (isMap(node)) {
-    const pair = (node as { items: Pair[] }).items.find((p) => {
-      const k = isScalar(p.key) ? String(p.key.value) : String(p.key);
-      return k === literal;
-    });
-    if (pair === undefined) {
-      return;
-    }
-    walkYaml(
-      pair.value as Node,
-      subs,
-      i + 1,
-      [...walked, { slot: cur.slot, value: cur.value }],
-      onMatch,
-    );
-    return;
-  }
-  if (isSeq(node)) {
-    const idx = Number(literal);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= (node as { items: Node[] }).items.length) {
-      return;
-    }
-    walkYaml(
-      (node as { items: Node[] }).items[idx],
-      subs,
-      i + 1,
-      [...walked, { slot: cur.slot, value: cur.value }],
-      onMatch,
-    );
-    return;
-  }
 }
 
 // ---------- JSONC walker ---------------------------------------------------
@@ -533,7 +352,7 @@ function walkJsonl(
   // walkJsonc (which has its own guard) but the JSONL outer driver has
   // no per-walker depth bound. JSONL session logs are exactly the kind
   // of file that grows unbounded in production (replay, audit), so
-  // defense-in-depth at the outer layer mirrors the yaml/jsonc walkers.
+  // defense-in-depth at the outer layer mirrors the jsonc walker.
   if (walked.length > MAX_TRAVERSAL_DEPTH) {
     throw new OcPathError(
       `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological JSONL pattern`,
@@ -570,8 +389,8 @@ function walkJsonl(
       return;
     }
     if (isUnionSeg(cur.value)) {
-      // `{L1,L2}` enumerates each alternative independently — yaml /
-      // jsonc walkers handle union uniformly at every slot, so the
+      // `{L1,L2}` enumerates each alternative independently — the
+      // jsonc walker handles union uniformly at every slot, so the
       // jsonl line slot must too. Each alternative goes through the
       // same single-line resolution as a literal `Lnnn` / `$first` /
       // `-N` would (so unions of positional tokens, e.g. `{L1,$last}`,
@@ -728,19 +547,6 @@ function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
 }
 
 // Helpers shared by the walkers above.
-function positionalForYamlNode(node: Node, seg: string): string | null {
-  if (isMap(node)) {
-    const pairs = (node as { items: Pair[] }).items;
-    const keys = pairs.map((p) => String(isScalar(p.key) ? p.key.value : p.key));
-    return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
-  }
-  if (isSeq(node)) {
-    const items = (node as { items: Node[] }).items;
-    return resolvePositionalSeg(seg, { indexable: true, size: items.length });
-  }
-  return null;
-}
-
 function positionalForJsoncNode(node: JsoncValue, seg: string): string | null {
   if (node.kind === "object") {
     const keys = node.entries.map((e) => e.key);
@@ -755,41 +561,6 @@ function positionalForJsoncNode(node: JsoncValue, seg: string): string | null {
 // Predicate-evaluation helpers: look up `node[key]` and compare its
 // string-coerced leaf value via `evaluatePredicate`. Used by
 // `[key<op>value]` filtering in find walkers.
-function yamlChildMatchesPredicate(node: Node | null, pred: PredicateSpec): boolean {
-  return evaluatePredicate(yamlChildFieldText(node, pred.key), pred);
-}
-
-function yamlChildFieldText(node: Node | null, key: string): string | null {
-  if (node === null) {
-    return null;
-  }
-  if (!isMap(node)) {
-    return null;
-  }
-  for (const pair of (node as { items: Pair[] }).items) {
-    const k = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
-    if (k !== key) {
-      continue;
-    }
-    const v = pair.value;
-    if (isScalar(v)) {
-      const sv = v.value;
-      if (sv === null) {
-        return "null";
-      }
-      if (typeof sv === "string") {
-        return sv;
-      }
-      if (typeof sv === "number" || typeof sv === "boolean") {
-        return String(sv);
-      }
-      return JSON.stringify(sv) ?? "null";
-    }
-    return null;
-  }
-  return null;
-}
-
 function jsoncChildMatchesPredicate(node: JsoncValue, pred: PredicateSpec): boolean {
   return evaluatePredicate(jsoncChildFieldText(node, pred.key), pred);
 }
@@ -824,7 +595,7 @@ function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
 // pred.key and value satisfying the predicate. At the item slot the
 // item itself must match (kv.key === pred.key and value satisfies the
 // predicate). At the field slot the item's single kv is what's tested.
-// Cross-kind parity with yamlChildMatchesPredicate / jsoncChildMatchesPredicate.
+// Cross-kind parity with jsoncChildMatchesPredicate.
 function mdItemMatchesPredicate(
   item: { readonly kv?: { readonly key: string; readonly value: string } },
   pred: PredicateSpec,
@@ -903,9 +674,8 @@ function walkMd(
   }
 
   // Union `{a,b,c}` at the section slot — fan out into one walk per
-  // alternative. Cross-kind parity with the yaml / jsonc walkers; mirrors
-  // the same shape they dispatch (see find.ts:235-246 for yaml,
-  // find.ts:400-411 for jsonc).
+  // alternative. Cross-kind parity with the jsonc walker; mirrors
+  // the same dispatch shape (see find.ts ~219 for jsonc).
   if (walked.length === 0 && isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
     if (alts === null) {
@@ -921,7 +691,7 @@ function walkMd(
 
   // Predicate `[k=v]` at the section slot — emit only sections whose
   // items contain a kv pair matching the predicate. Cross-kind parity
-  // with the yaml / jsonc walkers (find.ts:250-283 / find.ts:413-444).
+  // with the jsonc walker (find.ts ~232).
   if (walked.length === 0 && isPredicateSeg(cur.value)) {
     const pred = parsePredicateSeg(cur.value);
     if (pred === null) {
@@ -957,10 +727,10 @@ function walkMd(
         // `**` retain-i branch: in addition to descending with `**`
         // consumed (i + 1), also descend with `**` still active (i)
         // so the next sub can match deeper. Without this, md `**`
-        // semantics diverged from yaml/jsonc — `oc://X.md/**/value`
+        // semantics diverged from jsonc — `oc://X.md/**/value`
         // only matched the immediate-block layer and silently missed
         // deeper hierarchies (cross-kind asymmetry — same lint rule
-        // worked on yaml but produced 0 matches on md).
+        // worked on jsonc but produced 0 matches on md).
         if (cur.value === WILDCARD_RECURSIVE) {
           walkMdInsideBlock(block, ast, subs, i, [{ slot: cur.slot, value: block.slug }], onMatch);
         }
@@ -1000,7 +770,7 @@ function walkMdInsideBlock(
   const cur = subs[i];
 
   // Union `{a,b,c}` at the item slot — fan out per alternative. Cross-
-  // kind parity with yaml / jsonc walkers.
+  // kind parity with the jsonc walker.
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
     if (alts === null) {
@@ -1126,7 +896,7 @@ function walkMdInsideItem(
   // Union `{a,b}` at the field slot — fan out per alternative. Md items
   // carry a single kv pair so the field-slot union is degenerate (at
   // most one alt matches), but the dispatch is included for cross-kind
-  // parity with the yaml / jsonc walkers.
+  // parity with the jsonc walker.
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
     if (alts === null) {

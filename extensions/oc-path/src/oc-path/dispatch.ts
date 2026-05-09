@@ -13,7 +13,7 @@
  * @module @openclaw/oc-path/dispatch
  */
 
-export type OcKind = "md" | "jsonc" | "jsonl" | "yaml";
+export type OcKind = "md" | "jsonc" | "jsonl";
 
 /**
  * Recommend a kind from a filename. Pure convention helper — returns
@@ -29,9 +29,6 @@ export function inferKind(filename: string): OcKind | null {
   }
   if (lower.endsWith(".jsonc") || lower.endsWith(".json")) {
     return "jsonc";
-  }
-  if (lower.endsWith(".yaml") || lower.endsWith(".yml") || lower.endsWith(".lobster")) {
-    return "yaml";
   }
   return null;
 }

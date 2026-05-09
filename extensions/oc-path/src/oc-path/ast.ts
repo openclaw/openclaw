@@ -100,8 +100,8 @@ export interface AstBlock {
  * prose before the first H2 (may be empty). `blocks` is the H2 tree in
  * document order.
  *
- * `kind: 'md'` discriminator matches the jsonc / jsonl / yaml AST
- * shapes; the universal `setOcPath` / `resolveOcPath` verbs dispatch
+ * `kind: 'md'` discriminator matches the jsonc / jsonl AST shapes;
+ * the universal `setOcPath` / `resolveOcPath` verbs dispatch
  * via this tag at runtime so callers don't have to thread kind
  * through the call site.
  *

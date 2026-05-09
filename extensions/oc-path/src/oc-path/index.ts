@@ -3,8 +3,8 @@
  *
  * **Strategic frame**: workspace files are byte-stable and addressable
  * via the `oc://` scheme — the addressing scheme is universal across
- * file kinds (md / jsonc / jsonl / yaml). Encoding (parse/emit) is
- * per-kind; addressing (resolve/set) is universal.
+ * file kinds (md / jsonc / jsonl). Encoding (parse/emit) is per-kind;
+ * addressing (resolve/set) is universal.
  *
  * **Public verbs**:
  *   - One `setOcPath(ast, path, value)` — universal, kind-dispatched
@@ -45,7 +45,6 @@ export type {
 } from "./ast.js";
 export type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
 export type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
-export type { YamlAst } from "./yaml/ast.js";
 
 // OcPath types + parser/formatter
 export type { OcPath, PathSegmentLayout, PositionalContainer, PredicateSpec } from "./oc-path.js";
@@ -84,10 +83,8 @@ export {
 export { parseMd } from "./parse.js";
 export { parseJsonc } from "./jsonc/parse.js";
 export { parseJsonl } from "./jsonl/parse.js";
-export { parseYaml } from "./yaml/parse.js";
 export type { JsoncParseResult } from "./jsonc/parse.js";
 export type { JsonlParseResult } from "./jsonl/parse.js";
-export type { YamlParseResult } from "./yaml/parse.js";
 
 export type { EmitOptions } from "./emit.js";
 export { emitMd, markDirty } from "./emit.js";
@@ -95,8 +92,6 @@ export type { JsoncEmitOptions } from "./jsonc/emit.js";
 export { emitJsonc } from "./jsonc/emit.js";
 export type { JsonlEmitOptions } from "./jsonl/emit.js";
 export { emitJsonl } from "./jsonl/emit.js";
-export type { YamlEmitOptions } from "./yaml/emit.js";
-export { emitYaml } from "./yaml/emit.js";
 
 // Universal verbs — the only public resolve / set on the surface.
 export type {

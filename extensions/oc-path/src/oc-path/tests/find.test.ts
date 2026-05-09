@@ -1,8 +1,8 @@
 /**
  * `findOcPaths` — multi-match search verb test surface.
  *
- * Tests cover: `*` single-segment expansion across all 4 kinds; `**`
- * recursive descent for jsonc + yaml; the wildcard guard on
+ * Tests cover: `*` single-segment expansion across the supported kinds;
+ * `**` recursive descent for jsonc; the wildcard guard on
  * `resolveOcPath` / `setOcPath`; the slot-shape preservation invariant
  * (a `*` in the `item` slot produces concrete paths whose `item` field
  * carries the matched value).
@@ -14,7 +14,6 @@ import { parseJsonl } from "../jsonl/parse.js";
 import { formatOcPath, hasWildcard, OcPathError, parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { resolveOcPath, setOcPath } from "../universal.js";
-import { parseYaml } from "../yaml/parse.js";
 
 // ---------- hasWildcard ----------------------------------------------------
 
@@ -49,7 +48,7 @@ describe("hasWildcard", () => {
 // ---------- Wildcard guard on resolveOcPath / setOcPath -------------------
 
 describe("wildcard guard", () => {
-  const yaml = parseYaml("steps:\n  - id: a\n    command: foo\n").ast;
+  const ast = parseJsonc('{"steps":[{"id":"a","command":"foo"}]}').ast;
 
   it("resolveOcPath throws OcPathError for wildcard pattern (F16)", () => {
     // Previously returned `null` — indistinguishable from "path doesn't
@@ -57,11 +56,11 @@ describe("wildcard guard", () => {
     // CLI / consumers can surface "use findOcPaths" rather than "not
     // found". setOcPath uses a discriminated `wildcard-not-allowed`
     // reason; this is the resolve-side analogue.
-    expect(() => resolveOcPath(yaml, parseOcPath("oc://wf/steps/*/command"))).toThrow(
+    expect(() => resolveOcPath(ast, parseOcPath("oc://wf/steps/*/command"))).toThrow(
       /findOcPaths/,
     );
     try {
-      resolveOcPath(yaml, parseOcPath("oc://wf/**"));
+      resolveOcPath(ast, parseOcPath("oc://wf/**"));
       expect.fail("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(OcPathError);
@@ -70,7 +69,7 @@ describe("wildcard guard", () => {
   });
 
   it("setOcPath returns wildcard-not-allowed for wildcard pattern", () => {
-    const r = setOcPath(yaml, parseOcPath("oc://wf/steps/*/command"), "bar");
+    const r = setOcPath(ast, parseOcPath("oc://wf/steps/*/command"), "bar");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toBe("wildcard-not-allowed");
@@ -78,7 +77,7 @@ describe("wildcard guard", () => {
   });
 
   it("setOcPath wildcard guard reason carries actionable detail", () => {
-    const r = setOcPath(yaml, parseOcPath("oc://wf/**"), "bar");
+    const r = setOcPath(ast, parseOcPath("oc://wf/**"), "bar");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.detail).toContain("findOcPaths");
@@ -90,7 +89,7 @@ describe("wildcard guard", () => {
 
 describe("findOcPaths — non-wildcard fast-path", () => {
   it("wraps resolveOcPath result for plain path", () => {
-    const ast = parseYaml("name: x\n").ast;
+    const ast = parseJsonc('{"name":"x"}').ast;
     const out = findOcPaths(ast, parseOcPath("oc://wf/name"));
     expect(out).toHaveLength(1);
     expect(out[0].match.kind).toBe("leaf");
@@ -98,73 +97,8 @@ describe("findOcPaths — non-wildcard fast-path", () => {
   });
 
   it("returns empty for unresolved plain path", () => {
-    const ast = parseYaml("name: x\n").ast;
+    const ast = parseJsonc('{"name":"x"}').ast;
     expect(findOcPaths(ast, parseOcPath("oc://wf/missing"))).toHaveLength(0);
-  });
-});
-
-// ---------- findOcPaths — YAML --------------------------------------------
-
-describe("findOcPaths — YAML kind", () => {
-  const yaml = parseYaml(
-    "steps:\n" +
-      "  - id: build\n" +
-      "    command: npm run build\n" +
-      "  - id: test\n" +
-      "    command: npm test\n" +
-      "  - id: lint\n" +
-      "    command: npm run lint\n",
-  ).ast;
-
-  it("* in item slot enumerates each step", () => {
-    const out = findOcPaths(yaml, parseOcPath("oc://wf.lobster/steps/*/command"));
-    expect(out).toHaveLength(3);
-    const paths = out.map((m) => formatOcPath(m.path));
-    expect(paths).toEqual([
-      "oc://wf.lobster/steps/0/command",
-      "oc://wf.lobster/steps/1/command",
-      "oc://wf.lobster/steps/2/command",
-    ]);
-  });
-
-  it("preserves slot shape — concrete path has matched value in item slot", () => {
-    const out = findOcPaths(yaml, parseOcPath("oc://wf/steps/*/id"));
-    expect(out).toHaveLength(3);
-    for (const m of out) {
-      expect(m.path.section).toBe("steps");
-      expect(m.path.field).toBe("id");
-      expect(m.path.item).toMatch(/^[0-2]$/);
-    }
-  });
-
-  it("returns leaf valueText for each match", () => {
-    const out = findOcPaths(yaml, parseOcPath("oc://wf/steps/*/id"));
-    const leaves = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : null));
-    expect(leaves).toEqual(["build", "test", "lint"]);
-  });
-
-  it("** descends recursively", () => {
-    const yaml2 = parseYaml("a:\n  b:\n    c: deep\n  d: shallow\n").ast;
-    const out = findOcPaths(yaml2, parseOcPath("oc://wf/**"));
-    // ** matches root + a + a.b + a.b.c + a.d
-    const leaves = out
-      .filter((m) => m.match.kind === "leaf")
-      .map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(leaves.toSorted()).toEqual(["deep", "shallow"]);
-  });
-
-  it("returns empty for path that does not match", () => {
-    const out = findOcPaths(yaml, parseOcPath("oc://wf/missing/*/x"));
-    expect(out).toHaveLength(0);
-  });
-
-  it("every returned path is consumable by resolveOcPath", () => {
-    const out = findOcPaths(yaml, parseOcPath("oc://wf/steps/*/command"));
-    for (const m of out) {
-      const r = resolveOcPath(yaml, m.path);
-      expect(r).not.toBeNull();
-      expect(r?.kind).toBe("leaf");
-    }
   });
 });
 
@@ -226,8 +160,8 @@ describe("findOcPaths — JSONL kind", () => {
     }
   });
 
-  // F8 — line-slot union and predicate. Without these, yaml/jsonc
-  // walkers handled them but JSONL fell through to `pickLine(addr)`
+  // F8 — line-slot union and predicate. Without these, the jsonc
+  // walker handled them but JSONL fell through to `pickLine(addr)`
   // which returns null for union/predicate shapes → silent zero matches.
   it("union {L1,L2} at line slot enumerates each alternative", () => {
     const out = findOcPaths(jsonl, parseOcPath("oc://session/{L1,L3}/event"));
@@ -259,55 +193,6 @@ describe("findOcPaths — JSONL kind", () => {
 
 // ---------- Positional primitives ($first / $last / -N) -------------------
 
-describe("positional primitives — yaml", () => {
-  const yaml = parseYaml("steps:\n  - id: a\n  - id: b\n  - id: c\n").ast;
-
-  it("resolveOcPath accepts $first", () => {
-    const m = resolveOcPath(yaml, parseOcPath("oc://wf/steps/$first/id"));
-    expect(m?.kind).toBe("leaf");
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("a");
-    }
-  });
-
-  it("resolveOcPath accepts $last", () => {
-    const m = resolveOcPath(yaml, parseOcPath("oc://wf/steps/$last/id"));
-    expect(m?.kind).toBe("leaf");
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("c");
-    }
-  });
-
-  it("resolveOcPath accepts negative index", () => {
-    const m = resolveOcPath(yaml, parseOcPath("oc://wf/steps/-2/id"));
-    expect(m?.kind).toBe("leaf");
-    if (m?.kind === "leaf") {
-      expect(m.valueText).toBe("b");
-    }
-  });
-
-  it("out-of-range positional returns null", () => {
-    expect(resolveOcPath(yaml, parseOcPath("oc://wf/steps/-99/id"))).toBeNull();
-  });
-
-  it("positional on empty container returns null", () => {
-    const empty = parseYaml("steps: []\n").ast;
-    expect(resolveOcPath(empty, parseOcPath("oc://wf/steps/$first/id"))).toBeNull();
-  });
-
-  it("findOcPaths emits concrete index for positional", () => {
-    const out = findOcPaths(yaml, parseOcPath("oc://wf/steps/$last/id"));
-    expect(out).toHaveLength(1);
-    expect(out[0].path.item).toBe("2");
-  });
-
-  it("hasWildcard returns false for positional patterns", () => {
-    // Positional ≠ wildcard — they resolve deterministically.
-    expect(hasWildcard(parseOcPath("oc://X/$last/id"))).toBe(false);
-    expect(hasWildcard(parseOcPath("oc://X/-1/id"))).toBe(false);
-  });
-});
-
 describe("positional primitives — jsonc", () => {
   const jsonc = parseJsonc('{"items":[10,20,30]}').ast;
 
@@ -334,6 +219,12 @@ describe("positional primitives — jsonc", () => {
     if (m?.kind === "leaf") {
       expect(m.valueText).toBe("1");
     }
+  });
+
+  it("hasWildcard returns false for positional patterns", () => {
+    // Positional ≠ wildcard — they resolve deterministically.
+    expect(hasWildcard(parseOcPath("oc://X/$last/id"))).toBe(false);
+    expect(hasWildcard(parseOcPath("oc://X/-1/id"))).toBe(false);
   });
 });
 
@@ -363,88 +254,6 @@ describe("positional primitives — jsonl", () => {
 });
 
 // ---------- Segment unions {a,b,c} -----------------------------------------
-
-describe("union segments — yaml", () => {
-  const yaml = parseYaml(
-    "steps:\n" +
-      "  - id: a\n    command: x\n" +
-      "  - id: b\n    run: y\n" +
-      "  - id: c\n    pipeline: z\n",
-  ).ast;
-
-  it("{command,run} matches each step that has either field", () => {
-    const out = findOcPaths(yaml, parseOcPath("oc://wf/steps/*/{command,run}"));
-    expect(out).toHaveLength(2);
-    const fields = out.map((m) => m.path.field);
-    expect(fields.toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))).toEqual(["command", "run"]);
-  });
-
-  it("preserves the chosen alternative in concrete paths", () => {
-    const out = findOcPaths(yaml, parseOcPath("oc://wf/steps/*/{command,pipeline}"));
-    expect(out).toHaveLength(2);
-    for (const m of out) {
-      expect(["command", "pipeline"]).toContain(m.path.field);
-    }
-  });
-
-  it("unions on top-level keys", () => {
-    const yaml2 = parseYaml("a: 1\nb: 2\nc: 3\n").ast;
-    const out = findOcPaths(yaml2, parseOcPath("oc://X/{a,c}"));
-    expect(out).toHaveLength(2);
-    const values = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(values.toSorted()).toEqual(["1", "3"]);
-  });
-
-  it("hasWildcard detects unions (single-match guard rejects them)", () => {
-    expect(hasWildcard(parseOcPath("oc://X/{a,b}"))).toBe(true);
-    // F16 — wildcard guard now throws OC_PATH_WILDCARD_IN_RESOLVE
-    // instead of returning silent null.
-    expect(() => resolveOcPath(parseYaml("a: 1\nb: 2\n").ast, parseOcPath("oc://X/{a,b}"))).toThrow(
-      /findOcPaths/,
-    );
-  });
-});
-
-// ---------- Value predicates [key=value] ----------------------------------
-
-describe("value predicates — yaml", () => {
-  const yaml = parseYaml(
-    "steps:\n" +
-      "  - id: build\n    command: npm run build\n" +
-      "  - id: test\n    command: npm test\n" +
-      "  - id: lint\n    command: npm run lint\n",
-  ).ast;
-
-  it("[id=test] selects the matching step", () => {
-    const out = findOcPaths(yaml, parseOcPath("oc://wf/steps/[id=test]/command"));
-    expect(out).toHaveLength(1);
-    if (out[0].match.kind === "leaf") {
-      expect(out[0].match.valueText).toBe("npm test");
-    }
-    expect(out[0].path.item).toBe("1"); // concrete index of the matched step
-  });
-
-  it("predicate yields no matches when key/value missing", () => {
-    expect(findOcPaths(yaml, parseOcPath("oc://wf/steps/[id=nonexistent]/command"))).toHaveLength(
-      0,
-    );
-  });
-
-  it("predicate concretizes the index — path round-trips through resolveOcPath", () => {
-    const out = findOcPaths(yaml, parseOcPath("oc://wf/steps/[id=build]/command"));
-    expect(out).toHaveLength(1);
-    const resolved = resolveOcPath(yaml, out[0].path);
-    expect(resolved?.kind).toBe("leaf");
-  });
-
-  it("predicate rejects single-match verbs (treated as wildcard)", () => {
-    // F16 — wildcard guard throws on predicate too (predicate is a
-    // multi-match shape; resolveOcPath is single-match only).
-    expect(() => resolveOcPath(yaml, parseOcPath("oc://wf/steps/[id=build]"))).toThrow(
-      /findOcPaths/,
-    );
-  });
-});
 
 describe("quoted segments (v1.0)", () => {
   // Evidence: openclaw#69004 — model alias `anthropic/claude-opus-4-7`.
@@ -679,7 +488,7 @@ describe("findOcPaths — Markdown kind", () => {
 
   it("** at section slot matches items at every depth (F14 — cross-kind symmetry)", () => {
     // Without the retain-i branch on `**`, walkMd only descended one
-    // level (i + 1, consumed `**`) — yaml/jsonc walkers also retain
+    // level (i + 1, consumed `**`) — the jsonc walker also retains
     // `**` to keep matching deeper. Lint rules expecting universal
     // `**` behavior across kinds (sweep all sections for `risk:`)
     // would silently get 0 md matches on a multi-block file.
@@ -745,11 +554,11 @@ describe("findOcPaths — quoted segments survive expansion (regression: resolve
 // ---------- I3: md walker union + predicate parity ------------------------
 
 describe("union segments — md", () => {
-  // Cross-kind parity: yaml/jsonc walkers already dispatch union at every
+  // Cross-kind parity: the jsonc walker already dispatches union at every
   // slot. The md walker previously dispatched only on wildcard / ordinal
   // / positional / literal — so `oc://X.md/{Boundaries,Limits}/...`
-  // matched zero items where the same shape on yaml/jsonc would match
-  // both. These tests pin the parity addition.
+  // matched zero items where the same shape on jsonc would match both.
+  // These tests pin the parity addition.
   const RAW = `## Boundaries
 
 - enabled: true
@@ -783,7 +592,7 @@ describe("union segments — md", () => {
 
   it("expands {a,b} at the field slot (degenerate but parity-preserving)", () => {
     // Md items hold a single kv field, so {alias,nope} matches at most
-    // one alt — the matching one. Mirrors yaml/jsonc dispatch shape.
+    // one alt — the matching one. Mirrors the jsonc dispatch shape.
     const ast = parseMd(RAW).ast;
     const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/alias/{alias,nope}"));
     expect(out.length).toBe(1);
