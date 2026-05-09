@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import {
   getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
@@ -15,20 +13,12 @@ import {
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
+import { loadPersistedAuthProfileStoreEntry } from "./auth-profiles/persisted.js";
 import { MODEL_CATALOG_STATE } from "./models-config-state.js";
 import { readStoredModelsConfigRaw, writeStoredModelsConfigRaw } from "./models-config-store.js";
 import { planOpenClawModelCatalog } from "./models-config.plan.js";
 
 export { resetModelCatalogReadyCacheForTest } from "./models-config-state.js";
-
-async function readFileMtimeMs(pathname: string): Promise<number | null> {
-  try {
-    const stat = await fs.stat(pathname);
-    return Number.isFinite(stat.mtimeMs) ? stat.mtimeMs : null;
-  } catch {
-    return null;
-  }
-}
 
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -55,9 +45,8 @@ async function buildModelCatalogFingerprint(params: {
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
 }): Promise<string> {
-  const authProfilesMtimeMs = await readFileMtimeMs(
-    path.join(params.agentDir, "auth-profiles.json"),
-  );
+  const authProfilesUpdatedAt =
+    loadPersistedAuthProfileStoreEntry(params.agentDir)?.updatedAt ?? null;
   const storedModelsConfig = readStoredModelsConfigRaw(params.agentDir);
   const envShape = createConfigRuntimeEnv(params.config, {});
   const pluginMetadataSnapshotIndexFingerprint = params.pluginMetadataSnapshot
@@ -67,7 +56,7 @@ async function buildModelCatalogFingerprint(params: {
     config: params.config,
     sourceConfigForSecrets: params.sourceConfigForSecrets,
     envShape,
-    authProfilesMtimeMs,
+    authProfilesUpdatedAt,
     storedModelsConfigUpdatedAt: storedModelsConfig?.updatedAt,
     workspaceDir: params.workspaceDir,
     pluginMetadataSnapshotIndexFingerprint,

@@ -11,14 +11,13 @@ import {
 } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import {
-  buildPersistedAuthProfileSecretsStore,
+  hasPersistedAuthProfileSecretsStore,
   loadPersistedAuthProfileStore,
+  savePersistedAuthProfileSecretsStore,
 } from "../agents/auth-profiles/persisted.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import { logConfigUpdated } from "../config/logging.js";
-import { pathExists } from "../infra/fs-safe.js";
-import { saveJsonFile } from "../infra/json-file.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -54,7 +53,7 @@ type AgentsAddOptions = {
 };
 
 async function copyPortableAuthProfiles(params: {
-  destAuthPath: string;
+  destAgentDir: string;
   sourceAgentDir: string;
 }): Promise<{ copied: number; skipped: number }> {
   const sourceStore = loadPersistedAuthProfileStore(params.sourceAgentDir);
@@ -65,13 +64,7 @@ async function copyPortableAuthProfiles(params: {
   if (portable.copiedProfileIds.length === 0) {
     return { copied: 0, skipped: portable.skippedProfileIds.length };
   }
-  await fs.mkdir(path.dirname(params.destAuthPath), { recursive: true });
-  saveJsonFile(
-    params.destAuthPath,
-    buildPersistedAuthProfileSecretsStore(portable.store, undefined, {
-      agentDir: path.dirname(params.destAuthPath),
-    }),
-  );
+  savePersistedAuthProfileSecretsStore(portable.store, params.destAgentDir);
   return {
     copied: portable.copiedProfileIds.length,
     skipped: portable.skippedProfileIds.length,
@@ -288,18 +281,17 @@ export async function agentsAddCommand(
     if (defaultAgentId !== agentId) {
       const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
       const sourceAuthPath = resolveAuthStorePath(sourceAgentDir);
-      const destAuthPath = resolveAuthStorePath(agentDir);
       const mainAuthPath = resolveAuthStorePath(undefined);
       const sameAuthPath =
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
-        normalizeLowercaseStringOrEmpty(path.resolve(destAuthPath));
+        normalizeLowercaseStringOrEmpty(path.resolve(resolveAuthStorePath(agentDir)));
       const sourceIsInheritedMain =
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
         normalizeLowercaseStringOrEmpty(path.resolve(mainAuthPath));
       if (
         !sameAuthPath &&
-        (await pathExists(sourceAuthPath)) &&
-        !(await pathExists(destAuthPath))
+        hasPersistedAuthProfileSecretsStore(sourceAgentDir) &&
+        !hasPersistedAuthProfileSecretsStore(agentDir)
       ) {
         const sourceStore = loadPersistedAuthProfileStore(sourceAgentDir);
         const portable = sourceStore
@@ -311,11 +303,7 @@ export async function agentsAddCommand(
             initialValue: false,
           });
           if (shouldCopy) {
-            await fs.mkdir(path.dirname(destAuthPath), { recursive: true });
-            saveJsonFile(
-              destAuthPath,
-              buildPersistedAuthProfileSecretsStore(portable.store, undefined, { agentDir }),
-            );
+            savePersistedAuthProfileSecretsStore(portable.store, agentDir);
             const skippedText =
               portable.skippedProfileIds.length > 0
                 ? ` ${formatSkippedOAuthProfilesMessage({
