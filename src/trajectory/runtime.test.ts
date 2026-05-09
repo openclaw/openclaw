@@ -14,8 +14,6 @@ import { listTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   createTrajectoryRuntimeRecorder,
-  resolveTrajectoryPointerOpenFlags,
-  resolveTrajectoryFilePath,
   toTrajectoryToolDefinitions,
 } from "./runtime.js";
 
@@ -46,10 +44,10 @@ afterEach(() => {
 function expectTrajectoryRuntimeRecorder(
   recorder: ReturnType<typeof createTrajectoryRuntimeRecorder>,
 ): TrajectoryRuntimeRecorder {
+  expect(recorder).toEqual(expect.objectContaining({ recordEvent: expect.any(Function) }));
   if (recorder === null) {
     throw new Error("Expected trajectory runtime recorder");
   }
-  expect(typeof recorder.recordEvent).toBe("function");
   return recorder;
 }
 
@@ -86,30 +84,11 @@ function useTempStateDir(): void {
 }
 
 describe("trajectory runtime", () => {
-  it("resolves a session-adjacent trajectory file by default", () => {
-    expect(
-      resolveTrajectoryFilePath({
-        sessionFile: "/tmp/session.jsonl",
-        sessionId: "session-1",
-      }),
-    ).toBe("/tmp/session.trajectory.jsonl");
-  });
-
-  it("sanitizes session ids when resolving an override directory", () => {
-    expect(
-      resolveTrajectoryFilePath({
-        env: { OPENCLAW_TRAJECTORY_DIR: "/tmp/traces" },
-        sessionId: "../evil/session",
-      }),
-    ).toBe("/tmp/traces/___evil_session.jsonl");
-  });
-
   it("records sanitized runtime events into the agent database by default", () => {
     useTempStateDir();
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "responses",
@@ -146,6 +125,25 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
+  it("uses explicit agent id when no session key is available", () => {
+    useTempStateDir();
+    const recorder = createTrajectoryRuntimeRecorder({
+      agentId: "worker",
+      sessionId: "session-1",
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", { ok: true });
+
+    expect(listTrajectoryRuntimeEvents({ agentId: "worker", sessionId: "session-1" })).toHaveLength(
+      1,
+    );
+    expect(listTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-1" })).toHaveLength(
+      0,
+    );
+    expect(runtimeRecorder.runtimeScope).toBe("sqlite:worker:trajectory:session-1");
+  });
+
   it("mirrors runtime trajectory capture into the artifact store on flush", async () => {
     useTempStateDir();
     const artifacts = createArtifactStoreRecorder();
@@ -153,7 +151,6 @@ describe("trajectory runtime", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
-      sessionFile: "/tmp/session.jsonl",
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "responses",
@@ -168,7 +165,7 @@ describe("trajectory runtime", () => {
     expect(artifacts.writes).toHaveLength(1);
     expect(artifacts.writes[0]).toMatchObject({
       artifactId: "trajectory-runtime",
-      kind: "trajectory/runtime-jsonl",
+      kind: "trajectory/runtime-events",
       metadata: {
         traceSchema: "openclaw-trajectory-artifact",
         schemaVersion: 1,
@@ -180,7 +177,7 @@ describe("trajectory runtime", () => {
         modelId: "gpt-5.4",
         modelApi: "responses",
         workspaceDir: "/tmp/workspace",
-        runtimeFile: "sqlite:main:trajectory:session-1",
+        runtimeScope: "sqlite:main:trajectory:session-1",
         eventCount: 2,
       },
     });
@@ -194,7 +191,6 @@ describe("trajectory runtime", () => {
     useTempStateDir();
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
     });
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
@@ -214,12 +210,11 @@ describe("trajectory runtime", () => {
     );
   });
 
-  it("stops runtime capture at the file budget and records a truncation event", async () => {
+  it("stops runtime capture at the byte budget and records a truncation event", async () => {
     useTempStateDir();
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      maxRuntimeFileBytes: 900,
+      maxRuntimeCaptureBytes: 900,
     });
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
@@ -240,20 +235,10 @@ describe("trajectory runtime", () => {
     expect(parsed.map((event) => event.type)).toContain("trace.truncated");
     const truncated = parsed.find((event) => event.type === "trace.truncated");
     expect(truncated?.data).toMatchObject({
-      reason: "trajectory-runtime-file-size-limit",
+      reason: "trajectory-runtime-size-limit",
       limitBytes: 900,
     });
     expect(truncated?.data?.droppedEvents).toBeGreaterThan(0);
-  });
-
-  it("keeps pointer write flags usable when O_NOFOLLOW is unavailable", () => {
-    expect(
-      resolveTrajectoryPointerOpenFlags({
-        O_CREAT: 0x01,
-        O_TRUNC: 0x02,
-        O_WRONLY: 0x04,
-      }),
-    ).toBe(0x07);
   });
 
   it("does not record runtime events when explicitly disabled", () => {
@@ -264,7 +249,6 @@ describe("trajectory runtime", () => {
       },
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
     });
 
     expect(recorder).toBeNull();
