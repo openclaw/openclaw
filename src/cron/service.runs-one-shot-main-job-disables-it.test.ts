@@ -15,7 +15,7 @@ import {
 
 const noopLogger = createNoopLogger();
 installCronTestHooks({ logger: noopLogger });
-const { makeStorePath } = createCronStoreHarness({
+const { makeStoreKey } = createCronStoreHarness({
   prefix: "openclaw-cron-runs-one-shot-",
 });
 
@@ -61,13 +61,13 @@ type CronHarnessOptions = {
 };
 
 async function createCronHarness(options: CronHarnessOptions = {}) {
-  const store = await makeStorePath();
+  const { storeKey } = await makeStoreKey();
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
   const events = options.withEvents === false ? undefined : createCronEventHarness();
 
   const cron = new CronService({
-    storeKey: store.storePath,
+    storeKey,
     cronEnabled: true,
     log: noopLogger,
     ...(options.nowMs ? { nowMs: options.nowMs } : {}),
@@ -88,6 +88,7 @@ async function createCronHarness(options: CronHarnessOptions = {}) {
     ...(events ? { onEvent: events.onEvent } : {}),
   });
   await cron.start();
+  const store = { storeKey, cleanup: async () => {} };
   return { store, cron, enqueueSystemEvent, requestHeartbeat, events };
 }
 
@@ -518,10 +519,11 @@ describe("CronService", () => {
   });
 
   it("rejects unsupported session/payload combinations", async () => {
-    const store = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
+    const store = { storeKey, cleanup: async () => {} };
 
     const cron = createStartedCronService(
-      store.storePath,
+      store.storeKey,
       vi.fn(async (_params: { job: unknown; message: string }) => ({
         status: "ok" as const,
       })) as unknown as CronServiceDeps["runIsolatedAgentJob"],

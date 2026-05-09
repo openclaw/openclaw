@@ -200,6 +200,7 @@ export async function withCronServiceForTest(
 }
 
 export function createRunningCronServiceState(params: {
+  storeKey?: string;
   storePath?: string;
   log: ReturnType<typeof createNoopLogger>;
   nowMs: () => number;
@@ -207,7 +208,7 @@ export function createRunningCronServiceState(params: {
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
-    storeKey: params.storePath ?? "default",
+    storeKey: params.storeKey ?? params.storePath ?? "default",
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),

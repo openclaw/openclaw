@@ -9,7 +9,7 @@ import {
 } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
+const { makeStoreKey } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
 type CronAddInput = Parameters<CronService["add"]>[0];
@@ -45,12 +45,14 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 }
 
 function createIsolatedCronWithFinishedBarrier(params: {
+  storeKey: string;
   delivered?: boolean;
   error?: string;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
 }) {
   const finished = createFinishedBarrier();
   const cron = new CronService({
+    storeKey: params.storeKey,
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
@@ -128,8 +130,9 @@ async function runIsolatedJobAndReadState(params: {
   error?: string;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
 }) {
-  const store = await makeStorePath();
+  const { storeKey } = await makeStoreKey();
   const { cron, finished } = createIsolatedCronWithFinishedBarrier({
+    storeKey,
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
     ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.onFinished ? { onFinished: params.onFinished } : {}),
@@ -210,8 +213,9 @@ describe("CronService persists delivered status", () => {
   });
 
   it("does not set lastDelivered for main session jobs", async () => {
-    const store = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      storeKey,
       logger: noopLogger,
     });
 
