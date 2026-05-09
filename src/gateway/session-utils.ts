@@ -635,7 +635,7 @@ function resolveTranscriptUsageFallback(params: {
     : resolveDefaultAgentId(params.cfg);
   const snapshot = readRecentSessionUsageFromTranscript(
     entry.sessionId,
-    entry.sessionFile,
+    undefined,
     agentId,
     typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
   );
@@ -1396,11 +1396,7 @@ export function buildGatewaySessionRow(params: {
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
-    const fields = readSessionTitleFieldsFromTranscript(
-      entry.sessionId,
-      entry.sessionFile,
-      sessionAgentId,
-    );
+    const fields = readSessionTitleFieldsFromTranscript(entry.sessionId, undefined, sessionAgentId);
     if (params.includeDerivedTitles) {
       derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
     }
@@ -1850,7 +1846,7 @@ export async function listSessionsFromStoreAsync(params: {
         : resolveDefaultAgentId(cfg);
       const fields = await readSessionTitleFieldsFromTranscriptAsync(
         entry.sessionId,
-        entry.sessionFile,
+        undefined,
         sessionAgentId,
       );
       if (includeDerivedTitles) {

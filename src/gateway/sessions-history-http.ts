@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/io.js";
 import { getSessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
@@ -155,9 +156,13 @@ export async function handleSessionHistoryHttpRequest(
     typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
       ? cfg.gateway.webchat.chatHistoryMaxChars
       : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  const transcriptLocator = createSqliteSessionTranscriptLocator({
+    agentId: target.agentId,
+    sessionId: entry.sessionId,
+  });
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
-      ? await readRecentSessionMessagesWithStatsAsync(entry.sessionId, entry.sessionFile, {
+      ? await readRecentSessionMessagesWithStatsAsync(entry.sessionId, transcriptLocator, {
           ...resolveSessionHistoryTailReadOptions(limit),
           agentId: target.agentId,
         })
@@ -167,7 +172,7 @@ export async function handleSessionHistoryHttpRequest(
   const rawSnapshot =
     boundedSnapshot?.messages ??
     (entry?.sessionId
-      ? await readSessionMessagesAsync(entry.sessionId, entry.sessionFile, {
+      ? await readSessionMessagesAsync(entry.sessionId, transcriptLocator, {
           agentId: target.agentId,
           mode: "full",
           reason: "session history cursor pagination",
@@ -193,7 +198,7 @@ export async function handleSessionHistoryHttpRequest(
 
   const transcriptCandidates = entry?.sessionId
     ? new Set(
-        resolveSessionTranscriptCandidates(entry.sessionId, entry.sessionFile, target.agentId)
+        resolveSessionTranscriptCandidates(entry.sessionId, transcriptLocator, target.agentId)
           .map((candidate) => canonicalizePath(candidate))
           .filter((candidate): candidate is string => typeof candidate === "string"),
       )
@@ -204,7 +209,7 @@ export async function handleSessionHistoryHttpRequest(
     target: {
       agentId: target.agentId,
       sessionId: entry.sessionId,
-      sessionFile: entry.sessionFile,
+      transcriptLocator,
     },
     rawMessages: rawSnapshot,
     rawTranscriptSeq: boundedSnapshot?.totalMessages,
@@ -305,7 +310,7 @@ export async function handleSessionHistoryHttpRequest(
     if (!entry?.sessionId) {
       return;
     }
-    const updatePath = canonicalizePath(update.sessionFile);
+    const updatePath = canonicalizePath(update.transcriptLocator);
     if (!updatePath || !transcriptCandidates.has(updatePath)) {
       return;
     }

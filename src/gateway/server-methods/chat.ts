@@ -1315,11 +1315,11 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
 
 function resolveTranscriptLocator(params: {
   sessionId: string;
-  sessionFile?: string;
+  transcriptLocator?: string;
   agentId?: string;
 }): string | null {
   const { sessionId, agentId } = params;
-  if (!agentId && !params.sessionFile) {
+  if (!agentId && !params.transcriptLocator) {
     return null;
   }
   try {
@@ -1334,7 +1334,7 @@ async function appendAssistantTranscriptMessage(params: {
   label?: string;
   content?: Array<Record<string, unknown>>;
   sessionId: string;
-  sessionFile?: string;
+  transcriptLocator?: string;
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
@@ -1347,7 +1347,7 @@ async function appendAssistantTranscriptMessage(params: {
 }): Promise<TranscriptAppendResult> {
   const transcriptLocator = resolveTranscriptLocator({
     sessionId: params.sessionId,
-    sessionFile: params.sessionFile,
+    transcriptLocator: params.transcriptLocator,
     agentId: params.agentId,
   });
   if (!transcriptLocator) {
@@ -1407,7 +1407,7 @@ async function persistAbortedPartials(params: {
     const appended = await appendAssistantTranscriptMessage({
       message: snapshot.text,
       sessionId,
-      sessionFile: entry?.sessionFile,
+      transcriptLocator: createSqliteSessionTranscriptLocator({ agentId, sessionId }),
       agentId,
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
@@ -1684,11 +1684,18 @@ export const chatHandlers: GatewayRequestHandlers = {
     const max = Math.min(hardMax, requested);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages = sessionId
-      ? await readRecentSessionMessagesAsync(sessionId, entry?.sessionFile, {
-          agentId: sessionAgentId,
-          maxMessages: max,
-          maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-        })
+      ? await readRecentSessionMessagesAsync(
+          sessionId,
+          createSqliteSessionTranscriptLocator({
+            agentId: sessionAgentId,
+            sessionId,
+          }),
+          {
+            agentId: sessionAgentId,
+            maxMessages: max,
+            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+          },
+        )
       : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
@@ -1842,7 +1849,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId?: string;
       message: string;
       thinking?: string;
-      fastMode?: boolean;
       deliver?: boolean;
       originatingChannel?: string;
       originatingTo?: string;
@@ -2261,7 +2267,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               }
               const transcriptLocator = resolveTranscriptLocator({
                 sessionId: resolvedSessionId,
-                sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
                 agentId,
               });
               if (!transcriptLocator) {
@@ -2271,7 +2276,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               emitSessionTranscriptUpdate({
                 agentId,
                 sessionId: resolvedSessionId,
-                sessionFile: transcriptLocator,
+                transcriptLocator: transcriptLocator,
                 sessionKey,
                 message: buildChatSendTranscriptMessage({
                   message: parsedMessage,
@@ -2301,7 +2306,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         const transcriptLocator = resolveTranscriptLocator({
           sessionId: resolvedSessionId,
-          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
           agentId,
         });
         if (!transcriptLocator) {
@@ -2336,7 +2340,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
         const resolvedTranscriptLocator = resolveTranscriptLocator({
           sessionId,
-          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
           agentId,
         });
         const mediaLocalRoots = appendLocalMediaParentRoots(
@@ -2382,7 +2385,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           message: transcriptReply,
           ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
           sessionId,
-          sessionFile: latestEntry?.sessionFile,
+          transcriptLocator: resolvedTranscriptLocator,
           agentId,
           createIfMissing: true,
           idempotencyKey: `${clientRunId}:assistant-media`,
@@ -2441,8 +2444,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               abortSignal: activeRunAbort.controller.signal,
               images: parsedImages.length > 0 ? parsedImages : undefined,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
-              thinkingLevelOverride: p.thinking,
-              fastModeOverride: p.fastMode,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 if (!hasBeforeAgentRunGate) {
@@ -2530,7 +2531,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
                   const resolvedTranscriptLocator = resolveTranscriptLocator({
                     sessionId,
-                    sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
                     agentId,
                   });
                   const mediaLocalRoots = appendLocalMediaParentRoots(
@@ -2614,7 +2614,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                         ? { content: persistedContentForAppend }
                         : {}),
                       sessionId,
-                      sessionFile: latestEntry?.sessionFile,
+                      transcriptLocator: resolvedTranscriptLocator,
                       agentId,
                       createIfMissing: true,
                       cfg,
@@ -2786,7 +2786,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: p.message,
       label: p.label,
       sessionId,
-      sessionFile: entry?.sessionFile,
+      transcriptLocator: createSqliteSessionTranscriptLocator({ agentId, sessionId }),
       agentId,
       createIfMissing: true,
       cfg,

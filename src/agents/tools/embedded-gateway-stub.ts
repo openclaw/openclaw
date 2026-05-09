@@ -1,3 +1,4 @@
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type { SessionsListParams, SessionsResolveParams } from "../../gateway/protocol/index.js";
@@ -51,7 +52,7 @@ interface EmbeddedGatewayRuntime {
   };
   readSessionMessagesAsync: (
     sessionId: string,
-    sessionFile: string | undefined,
+    transcriptLocator: string | undefined,
     opts: ReadSessionMessagesAsyncOptions,
   ) => Promise<unknown[]>;
   resolveSessionModelRef: (
@@ -119,11 +120,18 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
 
   const localMessages = sessionId
-    ? await rt.readSessionMessagesAsync(sessionId, entry?.sessionFile as string | undefined, {
-        mode: "recent",
-        maxMessages: max,
-        maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-      })
+    ? await rt.readSessionMessagesAsync(
+        sessionId,
+        createSqliteSessionTranscriptLocator({
+          agentId: sessionAgentId,
+          sessionId,
+        }),
+        {
+          mode: "recent",
+          maxMessages: max,
+          maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+        },
+      )
     : [];
 
   const rawMessages = rt.augmentChatHistoryWithCliSessionImports({
