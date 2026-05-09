@@ -14,7 +14,7 @@ describe("createAnthropicPayloadLogger", () => {
     const logger = createAnthropicPayloadLogger({
       env: { OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1" },
       writer: {
-        filePath: "memory",
+        destination: "memory",
         write: (line) => lines.push(line),
         flush: async () => undefined,
       },
