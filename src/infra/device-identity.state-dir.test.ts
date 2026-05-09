@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { importLegacyDeviceIdentityFileToSqlite } from "../commands/doctor/legacy/device-identity.js";
+import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   restoreStateDirEnv,
   setStateDirEnv,
@@ -11,6 +12,7 @@ import {
 } from "../test-helpers/state-dir-env.js";
 import {
   DeviceIdentityMigrationRequiredError,
+  DeviceIdentityStorageError,
   loadDeviceIdentityIfPresent,
   loadDeviceIdentityIfPresentForEnv,
   loadOrCreateDeviceIdentity,
@@ -98,6 +100,17 @@ describe("device identity state dir defaults", () => {
       await expect(() => loadOrCreateDeviceIdentity()).toThrow(
         DeviceIdentityMigrationRequiredError,
       );
+    });
+  });
+
+  it("fails closed when the SQLite identity row is invalid", async () => {
+    await withStateDirEnv("openclaw-identity-state-", async () => {
+      writeOpenClawStateKvJson("identity.device", "default", {
+        version: 1,
+        deviceId: "broken",
+      });
+
+      await expect(() => loadOrCreateDeviceIdentity()).toThrow(DeviceIdentityStorageError);
     });
   });
 

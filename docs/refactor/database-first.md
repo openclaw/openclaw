@@ -193,9 +193,9 @@ The branch already has a real shared SQLite base:
   SQLite snapshot readers/writers separate from doctor-only legacy JSON import
   helpers.
 - Device identity creation fails closed when legacy `identity/device.json`
-  exists but the SQLite identity row is missing. Doctor imports and removes that
-  file first, so runtime startup cannot silently rotate pairing identity before
-  migration.
+  exists, when the SQLite identity row is invalid, or when the SQLite identity
+  store cannot be opened. Doctor imports and removes that file first, so runtime
+  startup cannot silently rotate pairing identity before migration.
 - Web push, APNs, Voice Wake, and Voice Wake routing runtime modules now keep
   their SQLite snapshot readers/writers separate from doctor-only legacy JSON
   import helpers.

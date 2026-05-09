@@ -17,6 +17,10 @@ export type OpenClawStateKvEntry<TValue = unknown> = {
   updatedAt: number;
 };
 
+export type OpenClawStateKvJsonReadResult =
+  | { exists: false }
+  | { exists: true; value: OpenClawStateJsonValue | undefined; updatedAt: number };
+
 export type OpenClawStateJsonValue =
   | null
   | boolean
@@ -64,6 +68,15 @@ export function readOpenClawStateKvJson(
   key: string,
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateJsonValue | undefined {
+  const result = readOpenClawStateKvJsonResult(scope, key, options);
+  return result.exists ? result.value : undefined;
+}
+
+export function readOpenClawStateKvJsonResult(
+  scope: string,
+  key: string,
+  options: OpenClawStateDatabaseOptions = {},
+): OpenClawStateKvJsonReadResult {
   const database = openOpenClawStateDatabase(options);
   const db = getNodeSqliteKysely<OpenClawStateKvDatabase>(database.db);
   const row =
@@ -75,7 +88,9 @@ export function readOpenClawStateKvJson(
         .where("scope", "=", scope)
         .where("key", "=", key),
     ) ?? null;
-  return row ? parseKvValue(row) : undefined;
+  return row
+    ? { exists: true, value: parseKvValue(row), updatedAt: rowUpdatedAt(row) }
+    : { exists: false };
 }
 
 export function listOpenClawStateKvJson<TValue>(
