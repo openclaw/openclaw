@@ -417,6 +417,9 @@ The remaining cleanup is mostly consolidation and deletion:
 - Session-memory hook transcript lookup and context-engine transcript rewrite
   helpers are now named around SQLite transcript paths/state instead of runtime
   legacy-file reads or file rewrites.
+- The bundled session-memory hook now passes SQLite transcript locators through
+  its transcript reader helper instead of exposing file-shaped
+  `transcriptPath` options.
 - Codex app-server conversation bindings now key SQLite plugin state by
   OpenClaw session key when available, with transcript-path lookups kept only as
   a legacy fallback for existing bindings.

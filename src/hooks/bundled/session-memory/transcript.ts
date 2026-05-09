@@ -32,7 +32,7 @@ export async function getRecentTranscriptContent(
     | {
         agentId?: string;
         sessionId?: string;
-        transcriptPath?: string;
+        transcriptLocator?: string;
       },
   messageCount: number = 15,
 ): Promise<string | null> {
@@ -84,7 +84,7 @@ function resolveScopeForTranscriptTarget(
     | {
         agentId?: string;
         sessionId?: string;
-        transcriptPath?: string;
+        transcriptLocator?: string;
       },
 ): SqliteSessionTranscriptScope | undefined {
   if (typeof target !== "string") {
@@ -95,15 +95,14 @@ function resolveScopeForTranscriptTarget(
         sessionId,
       });
     }
-    if (!target.transcriptPath?.trim()) {
+    if (!target.transcriptLocator?.trim()) {
       return undefined;
     }
-    target = target.transcriptPath;
+    target = target.transcriptLocator;
   }
 
   if (!isSqliteSessionTranscriptLocator(target)) {
     return undefined;
   }
-  const byPath = resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: target });
-  return byPath;
+  return resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: target });
 }
