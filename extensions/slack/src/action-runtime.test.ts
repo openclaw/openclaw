@@ -113,6 +113,7 @@ describe("handleSlackAction", () => {
     { name: "raw channel id", channelId: "C1" },
     { name: "channel: prefixed id", channelId: "channel:C1" },
   ])("adds reactions for $name", async ({ channelId }) => {
+    const cfg = slackConfig();
     const result = await handleSlackAction(
       {
         action: "react",
@@ -120,14 +121,9 @@ describe("handleSlackAction", () => {
         messageId: "123.456",
         emoji: "✅",
       },
-      slackConfig(),
+      cfg,
     );
-    expect(reactSlackMessage).toHaveBeenCalledWith(
-      "C1",
-      "123.456",
-      "✅",
-      expect.objectContaining({ cfg: expect.any(Object) }),
-    );
+    expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅", { cfg });
     expect(JSON.parse((result.content?.[0] as { type: "text"; text: string }).text)).toEqual({
       ok: true,
       added: "✅",
@@ -135,6 +131,7 @@ describe("handleSlackAction", () => {
   });
 
   it("removes reactions on empty emoji", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "react",
@@ -142,16 +139,13 @@ describe("handleSlackAction", () => {
         messageId: "123.456",
         emoji: "",
       },
-      slackConfig(),
+      cfg,
     );
-    expect(removeOwnSlackReactions).toHaveBeenCalledWith(
-      "C1",
-      "123.456",
-      expect.objectContaining({ cfg: expect.any(Object) }),
-    );
+    expect(removeOwnSlackReactions).toHaveBeenCalledWith("C1", "123.456", { cfg });
   });
 
   it("removes reactions when remove flag set", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "react",
@@ -160,14 +154,9 @@ describe("handleSlackAction", () => {
         emoji: "✅",
         remove: true,
       },
-      slackConfig(),
+      cfg,
     );
-    expect(removeSlackReaction).toHaveBeenCalledWith(
-      "C1",
-      "123.456",
-      "✅",
-      expect.objectContaining({ cfg: expect.any(Object) }),
-    );
+    expect(removeSlackReaction).toHaveBeenCalledWith("C1", "123.456", "✅", { cfg });
   });
 
   it("rejects removes without emoji", async () => {
