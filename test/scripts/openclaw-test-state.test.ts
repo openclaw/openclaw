@@ -203,7 +203,7 @@ describe("scripts/lib/openclaw-test-state", () => {
       expect(payload.home).toContain("/openclaw-onboard-case-minimal-home.");
       expect(payload.agentDir).toBeNull();
       expect(payload.workspace).toBe(`${payload.home}/workspace`);
-      expect(payload.config).toEqual({});
+      expect(payload.config).toStrictEqual({});
 
       const existingHome = path.join(tempRoot, "existing-home");
       const existingProbe = await execFileAsync("bash", [

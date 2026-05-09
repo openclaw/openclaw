@@ -30,7 +30,7 @@ describe("openclaw test state", () => {
       expect(state.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
       expect(process.env.HOME).toBe(state.home);
       expect(process.env.OPENCLAW_HOME).toBe(state.home);
-      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual({});
+      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toStrictEqual({});
     } finally {
       await state.cleanup();
     }
