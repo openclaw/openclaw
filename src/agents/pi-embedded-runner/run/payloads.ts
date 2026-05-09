@@ -24,10 +24,7 @@ import {
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.js";
-import {
-  extractAssistantThinking,
-  extractAssistantVisibleText,
-} from "../../pi-embedded-utils.js";
+import { extractAssistantThinking, extractAssistantVisibleText } from "../../pi-embedded-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
@@ -375,6 +372,23 @@ export function buildEmbeddedRunPayloads(params: {
   let hasUserFacingAssistantReply = false;
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
+  // Collect plain-text blocks so they are joined into one reply item instead of
+  // emitting a separate channel message per accumulated assistant-text segment.
+  // Blocks that carry media or audioAsVoice directives are still emitted individually
+  // since they cannot be merged with text-only payloads.
+  const plainTextParts: string[] = [];
+  const flushPlainTextParts = () => {
+    if (plainTextParts.length === 0) {
+      return;
+    }
+    const joined = plainTextParts.join("\n\n");
+    plainTextParts.length = 0;
+    replyItems.push({ text: joined });
+    hasUserFacingAssistantReply = true;
+    if (hasExplicitMutatingToolFailureAcknowledgement(joined)) {
+      hasUserFacingFailureAcknowledgement = true;
+    }
+  };
   for (const text of answerTexts) {
     const {
       text: cleanedText,
@@ -387,6 +401,11 @@ export function buildEmbeddedRunPayloads(params: {
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }
+    if (!audioAsVoice && (!mediaUrls || mediaUrls.length === 0) && cleanedText) {
+      plainTextParts.push(cleanedText);
+      continue;
+    }
+    flushPlainTextParts();
     replyItems.push({
       text: cleanedText,
       media: mediaUrls,
@@ -400,6 +419,7 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingFailureAcknowledgement = true;
     }
   }
+  flushPlainTextParts();
 
   if (params.lastToolError) {
     const warningPolicy = resolveToolErrorWarningPolicy({
