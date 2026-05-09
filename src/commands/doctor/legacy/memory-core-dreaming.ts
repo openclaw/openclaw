@@ -1,7 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { upsertPluginStateMigrationEntry } from "../plugin-sdk/migration-runtime.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   createDreamingWorkspaceMapStorageEntry,
   createDreamingWorkspaceValueStorageEntry,
@@ -14,9 +14,11 @@ import {
   MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
-} from "./dreaming-state-store.js";
-import { resolveMemoryDreamingWorkspaces } from "./dreaming.js";
-import { importLegacyMemoryHostEventLogToSqlite, resolveMemoryHostEventLogPath } from "./events.js";
+} from "../../../memory-host-sdk/dreaming-state-store.js";
+import { resolveMemoryDreamingWorkspaces } from "../../../memory-host-sdk/dreaming.js";
+import type { MemoryHostEvent } from "../../../memory-host-sdk/events.js";
+import { upsertPluginStateMigrationEntry } from "../../../plugin-sdk/migration-runtime.js";
+import { createPluginStateKeyedStore } from "../../../plugin-state/plugin-state-store.js";
 
 const DREAMING_STATE_RELATIVE_PATHS = {
   dailyIngestion: path.join("memory", ".dreams", "daily-ingestion.json"),
@@ -27,6 +29,9 @@ const DREAMING_STATE_RELATIVE_PATHS = {
   sessionCorpusDir: path.join("memory", ".dreams", "session-corpus"),
   shortTermLock: path.join("memory", ".dreams", "short-term-promotion.lock"),
 } as const;
+const MEMORY_HOST_EVENTS_NAMESPACE = "memory-host.events";
+const MAX_MEMORY_HOST_EVENTS = 50_000;
+const WORKSPACE_HASH_BYTES = 24;
 
 type MigrationResult = {
   workspaces: number;
@@ -34,6 +39,12 @@ type MigrationResult = {
   rows: number;
   removedLocks: number;
   warnings: string[];
+};
+
+type StoredMemoryHostEvent = {
+  workspaceKey: string;
+  event: MemoryHostEvent;
+  recordedAt: number;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -144,6 +155,98 @@ function upsertSessionCorpusLine(params: {
 
 function configuredDreamingWorkspaces(cfg: OpenClawConfig): string[] {
   return resolveMemoryDreamingWorkspaces(cfg).map((entry) => entry.workspaceDir);
+}
+
+function normalizeWorkspaceKey(workspaceDir: string): string {
+  const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function hashValue(value: string, bytes = 32): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, bytes);
+}
+
+function workspacePrefix(workspaceDir: string): { prefix: string; workspaceKey: string } {
+  const workspaceKey = normalizeWorkspaceKey(workspaceDir);
+  return {
+    prefix: hashValue(workspaceKey, WORKSPACE_HASH_BYTES),
+    workspaceKey,
+  };
+}
+
+function legacyEventKey(workspaceDir: string, line: string, lineNumber: number): string {
+  const { prefix } = workspacePrefix(workspaceDir);
+  const digest = hashValue(`${lineNumber}\0${line}`);
+  return `${prefix}:legacy:${digest}`;
+}
+
+function eventTimestampMs(event: MemoryHostEvent): number | undefined {
+  const parsed = Date.parse(event.timestamp);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function getMemoryHostEventStore(env?: NodeJS.ProcessEnv) {
+  return createPluginStateKeyedStore<StoredMemoryHostEvent>(MEMORY_CORE_PLUGIN_ID, {
+    namespace: MEMORY_HOST_EVENTS_NAMESPACE,
+    maxEntries: MAX_MEMORY_HOST_EVENTS,
+    ...(env ? { env } : {}),
+  });
+}
+
+function resolveLegacyMemoryHostEventLogPath(workspaceDir: string): string {
+  return path.join(workspaceDir, DREAMING_STATE_RELATIVE_PATHS.events);
+}
+
+async function importLegacyMemoryHostEventLogToSqlite(params: {
+  workspaceDir: string;
+  eventLogPath?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ imported: number; warnings: string[] }> {
+  const eventLogPath =
+    params.eventLogPath ?? resolveLegacyMemoryHostEventLogPath(params.workspaceDir);
+  const raw = await fs.readFile(eventLogPath, "utf8").catch((err: unknown) => {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return "";
+    }
+    throw err;
+  });
+  if (!raw.trim()) {
+    await fs.rm(eventLogPath, { force: true });
+    return { imported: 0, warnings: [] };
+  }
+
+  const { workspaceKey } = workspacePrefix(params.workspaceDir);
+  const store = getMemoryHostEventStore(params.env);
+  const warnings: string[] = [];
+  let imported = 0;
+  const lines = raw.split(/\r?\n/u);
+  for (const [index, line] of lines.entries()) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const event = JSON.parse(trimmed) as MemoryHostEvent;
+      const inserted = await store.registerIfAbsent(
+        legacyEventKey(params.workspaceDir, trimmed, index + 1),
+        {
+          workspaceKey,
+          event,
+          recordedAt: eventTimestampMs(event) ?? Date.now(),
+        },
+      );
+      if (inserted) {
+        imported += 1;
+      }
+    } catch {
+      warnings.push(`Skipped invalid memory host event at ${eventLogPath}:${index + 1}`);
+    }
+  }
+
+  if (warnings.length === 0) {
+    await fs.rm(eventLogPath, { force: true });
+  }
+  return { imported, warnings };
 }
 
 export async function legacyMemoryCoreDreamingStateFilesExist(params: {
@@ -290,7 +393,7 @@ export async function importLegacyMemoryCoreDreamingStateFilesToSqlite(params: {
       touchedWorkspace = true;
     }
 
-    const eventsPath = resolveMemoryHostEventLogPath(workspaceDir);
+    const eventsPath = resolveLegacyMemoryHostEventLogPath(workspaceDir);
     if (await fileExists(eventsPath)) {
       const imported = await importLegacyMemoryHostEventLogToSqlite({
         workspaceDir,

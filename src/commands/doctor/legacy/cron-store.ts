@@ -1,13 +1,13 @@
 import fs from "node:fs";
-import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   extractCronStateFileForMigration,
   type CronStateFile,
   type CronStateFileEntry,
   writeCronJobRuntimeStateForMigration,
   writeCronJobsForMigration,
-} from "./store.js";
-import type { CronStoreFile } from "./types.js";
+} from "../../../cron/store.js";
+import type { CronStoreFile } from "../../../cron/types.js";
+import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
 function resolveStatePath(storePath: string): string {
   if (storePath.endsWith(".json")) {

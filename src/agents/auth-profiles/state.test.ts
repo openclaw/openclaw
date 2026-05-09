@@ -2,14 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { importLegacyAuthProfileStateFileToSqlite } from "../../commands/doctor/legacy/auth-profile-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { readOpenClawStateKvJson } from "../../state/openclaw-state-kv.js";
 import { resolveAuthStatePath } from "./paths.js";
-import {
-  importLegacyAuthProfileStateFileToSqlite,
-  loadPersistedAuthProfileState,
-  savePersistedAuthProfileState,
-} from "./state.js";
+import { loadPersistedAuthProfileState, savePersistedAuthProfileState } from "./state.js";
 
 const AUTH_PROFILE_STATE_KV_SCOPE = "auth-profile-state";
 

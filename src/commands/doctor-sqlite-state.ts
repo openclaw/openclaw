@@ -1,27 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  discoverLegacyAuthProfileStateAgentDirs,
-  importLegacyAuthProfileStateFileToSqlite,
-} from "../agents/auth-profiles/state.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { writeConfigHealthStateToSqlite, type ConfigHealthState } from "../config/health-state.js";
 import { resolveStateDir } from "../config/paths.js";
-import {
-  importLegacyManagedOutgoingImageRecordFilesToSqlite,
-  legacyManagedOutgoingImageRecordFilesExist,
-} from "../gateway/managed-image-attachments.js";
-import { importLegacyMediaFilesToSqlite, legacyMediaFilesExist } from "../media/store.js";
-import {
-  importLegacyMemoryCoreDreamingStateFilesToSqlite,
-  legacyMemoryCoreDreamingStateFilesExist,
-} from "../memory-host-sdk/dreaming-state-migration.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   importLegacyAcpEventLedgerFileToSqlite,
   legacyAcpEventLedgerFileExists,
 } from "./doctor/legacy/acp-event-ledger.js";
+import {
+  discoverLegacyAuthProfileStateAgentDirs,
+  importLegacyAuthProfileStateFileToSqlite,
+} from "./doctor/legacy/auth-profile-state.js";
 import {
   importLegacyChannelPairingFilesToSqlite,
   legacyChannelPairingFilesExist,
@@ -50,6 +41,15 @@ import {
   importLegacyInstalledPluginIndexFileToSqlite,
   legacyInstalledPluginIndexFileExists,
 } from "./doctor/legacy/installed-plugin-index.js";
+import {
+  importLegacyManagedOutgoingImageRecordFilesToSqlite,
+  legacyManagedOutgoingImageRecordFilesExist,
+} from "./doctor/legacy/managed-image-attachments.js";
+import { importLegacyMediaFilesToSqlite, legacyMediaFilesExist } from "./doctor/legacy/media.js";
+import {
+  importLegacyMemoryCoreDreamingStateFilesToSqlite,
+  legacyMemoryCoreDreamingStateFilesExist,
+} from "./doctor/legacy/memory-core-dreaming.js";
 import {
   importLegacyNodeHostConfigFileToSqlite,
   legacyNodeHostConfigFileExists,

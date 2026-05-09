@@ -5,7 +5,6 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { getSqliteSessionTranscriptStats } from "../config/sessions/transcript-store.sqlite.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
-import { tryReadJson } from "../infra/json-files.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import {
   getImageMetadata,
@@ -62,7 +61,7 @@ type ManagedImageAttachmentLimitsConfig = Partial<
   Pick<ManagedImageAttachmentLimits, "maxBytes" | "maxWidth" | "maxHeight" | "maxPixels">
 >;
 
-type ManagedImageRecordVariant = {
+export type ManagedImageRecordVariant = {
   path: string;
   contentType: string;
   width: number | null;
@@ -71,9 +70,9 @@ type ManagedImageRecordVariant = {
   filename: string | null;
 };
 
-type ManagedImageRetentionClass = "transient" | "history";
+export type ManagedImageRetentionClass = "transient" | "history";
 
-type ManagedImageRecord = {
+export type ManagedImageRecord = {
   attachmentId: string;
   sessionKey: string;
   messageId: string | null;
@@ -271,10 +270,6 @@ async function resizeManagedImageBufferToLimits(params: {
   };
 }
 
-function resolveOutgoingRecordsDir(stateDir = resolveStateDir()) {
-  return path.join(stateDir, "media", "outgoing", "records");
-}
-
 function resolveOutgoingOriginalsDir(stateDir = resolveStateDir()) {
   return path.join(stateDir, "media", "outgoing", "originals");
 }
@@ -365,7 +360,10 @@ async function getVariantStats(filePath: string) {
   };
 }
 
-async function writeManagedImageRecord(record: ManagedImageRecord, stateDir = resolveStateDir()) {
+export async function writeManagedImageRecord(
+  record: ManagedImageRecord,
+  stateDir = resolveStateDir(),
+) {
   writeOpenClawStateKvJson(
     MANAGED_OUTGOING_IMAGE_RECORD_SCOPE,
     record.attachmentId,
@@ -444,51 +442,6 @@ async function listManagedImageRecords(stateDir: string): Promise<ManagedImageRe
     recordsById.set(entry.key, entry.value);
   }
   return [...recordsById.values()];
-}
-
-async function listLegacyManagedImageRecordPaths(stateDir: string): Promise<string[]> {
-  const recordsDir = resolveOutgoingRecordsDir(stateDir);
-  let names: string[] = [];
-  try {
-    names = await fs.readdir(recordsDir);
-  } catch {
-    names = [];
-  }
-  const paths: string[] = [];
-  for (const name of names) {
-    if (!name.endsWith(".json")) {
-      continue;
-    }
-    paths.push(path.join(recordsDir, name));
-  }
-  return paths;
-}
-
-export async function legacyManagedOutgoingImageRecordFilesExist(
-  stateDir = resolveStateDir(),
-): Promise<boolean> {
-  return (await listLegacyManagedImageRecordPaths(stateDir)).length > 0;
-}
-
-export async function importLegacyManagedOutgoingImageRecordFilesToSqlite(
-  stateDir = resolveStateDir(),
-): Promise<{ files: number; records: number }> {
-  const recordPaths = await listLegacyManagedImageRecordPaths(stateDir);
-  let records = 0;
-  for (const recordPath of recordPaths) {
-    const record = await tryReadJson<ManagedImageRecord>(recordPath);
-    if (record?.attachmentId) {
-      writeOpenClawStateKvJson(
-        MANAGED_OUTGOING_IMAGE_RECORD_SCOPE,
-        record.attachmentId,
-        record,
-        managedImageRecordDbOptions(stateDir),
-      );
-      records += 1;
-    }
-    await fs.rm(recordPath, { force: true }).catch(() => {});
-  }
-  return { files: recordPaths.length, records };
 }
 
 export async function cleanupManagedOutgoingImageRecords(params?: {

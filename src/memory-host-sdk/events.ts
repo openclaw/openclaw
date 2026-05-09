@@ -1,11 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { MEMORY_CORE_PLUGIN_ID } from "./dreaming-state-store.js";
 import type { MemoryDreamingPhaseName } from "./dreaming.js";
 
-export const MEMORY_HOST_EVENT_LOG_RELATIVE_PATH = path.join("memory", ".dreams", "events.jsonl");
 const MEMORY_HOST_EVENTS_NAMESPACE = "memory-host.events";
 const MAX_MEMORY_HOST_EVENTS = 50_000;
 const WORKSPACE_HASH_BYTES = 24;
@@ -92,19 +90,9 @@ function nextEventKey(workspaceDir: string, recordedAt: number): string {
   return `${prefix}:${recordedAt.toString(36)}:${process.pid.toString(36)}:${eventSequence.toString(36)}:${randomUUID()}`;
 }
 
-function legacyEventKey(workspaceDir: string, line: string, lineNumber: number): string {
-  const { prefix } = workspacePrefix(workspaceDir);
-  const digest = hashValue(`${lineNumber}\0${line}`);
-  return `${prefix}:legacy:${digest}`;
-}
-
 function eventTimestampMs(event: MemoryHostEvent): number | undefined {
   const parsed = Date.parse(event.timestamp);
   return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-export function resolveMemoryHostEventLogPath(workspaceDir: string): string {
-  return path.join(workspaceDir, MEMORY_HOST_EVENT_LOG_RELATIVE_PATH);
 }
 
 export async function appendMemoryHostEvent(
@@ -151,55 +139,4 @@ export async function readMemoryHostEvents(params: {
 
 export function renderMemoryHostEventsJsonl(events: readonly MemoryHostEvent[]): string {
   return events.length === 0 ? "" : `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
-}
-
-export async function importLegacyMemoryHostEventLogToSqlite(params: {
-  workspaceDir: string;
-  eventLogPath?: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ imported: number; warnings: string[] }> {
-  const eventLogPath = params.eventLogPath ?? resolveMemoryHostEventLogPath(params.workspaceDir);
-  const raw = await fs.readFile(eventLogPath, "utf8").catch((err: unknown) => {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return "";
-    }
-    throw err;
-  });
-  if (!raw.trim()) {
-    await fs.rm(eventLogPath, { force: true });
-    return { imported: 0, warnings: [] };
-  }
-
-  const { workspaceKey } = workspacePrefix(params.workspaceDir);
-  const store = getMemoryHostEventStore(params.env);
-  const warnings: string[] = [];
-  let imported = 0;
-  const lines = raw.split(/\r?\n/u);
-  for (const [index, line] of lines.entries()) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const event = JSON.parse(trimmed) as MemoryHostEvent;
-      const inserted = await store.registerIfAbsent(
-        legacyEventKey(params.workspaceDir, trimmed, index + 1),
-        {
-          workspaceKey,
-          event,
-          recordedAt: eventTimestampMs(event) ?? Date.now(),
-        },
-      );
-      if (inserted) {
-        imported += 1;
-      }
-    } catch {
-      warnings.push(`Skipped invalid memory host event at ${eventLogPath}:${index + 1}`);
-    }
-  }
-
-  if (warnings.length === 0) {
-    await fs.rm(eventLogPath, { force: true });
-  }
-  return { imported, warnings };
 }
