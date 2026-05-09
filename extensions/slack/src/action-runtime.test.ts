@@ -333,6 +333,7 @@ describe("handleSlackAction", () => {
       expectedBlocks: [{ type: "divider" }],
     },
   ])("accepts $name and allows empty content", async ({ blocks, expectedBlocks }) => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "sendMessage",
@@ -340,13 +341,13 @@ describe("handleSlackAction", () => {
         content: "",
         blocks,
       },
-      slackConfig(),
+      cfg,
     );
     expect(sendSlackMessage).toHaveBeenCalledWith(
       "channel:C123",
       "",
       expect.objectContaining({
-        cfg: expect.any(Object),
+        cfg,
         mediaUrl: undefined,
         threadTs: undefined,
         blocks: expectedBlocks,
@@ -389,6 +390,7 @@ describe("handleSlackAction", () => {
   });
 
   it("routes uploadFile through sendSlackMessage with upload metadata", async () => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "uploadFile",
@@ -399,14 +401,14 @@ describe("handleSlackAction", () => {
         title: "Report Final",
         threadTs: "111.222",
       },
-      slackConfig(),
+      cfg,
     );
 
     expect(sendSlackMessage).toHaveBeenCalledWith(
       "user:U123",
       "fresh report",
       expect.objectContaining({
-        cfg: expect.any(Object),
+        cfg,
         mediaUrl: "/tmp/report.png",
         threadTs: "111.222",
         uploadFileName: "report-final.png",
@@ -419,6 +421,7 @@ describe("handleSlackAction", () => {
     sendSlackMessage.mockResolvedValueOnce({ channelId: "C123" });
     sendSlackMessage.mockResolvedValueOnce({ channelId: "C123" });
 
+    const cfg = slackConfig();
     const result = await handleSlackAction(
       {
         action: "sendMessage",
@@ -427,7 +430,7 @@ describe("handleSlackAction", () => {
         mediaUrl: "https://example.com/file.png",
         blocks: JSON.stringify([{ type: "divider" }]),
       },
-      slackConfig(),
+      cfg,
     );
 
     expect(sendSlackMessage).toHaveBeenCalledTimes(2);
@@ -436,7 +439,7 @@ describe("handleSlackAction", () => {
       "channel:C123",
       "",
       expect.objectContaining({
-        cfg: expect.any(Object),
+        cfg,
         mediaUrl: "https://example.com/file.png",
         threadTs: undefined,
       }),
@@ -447,7 +450,7 @@ describe("handleSlackAction", () => {
       "channel:C123",
       "hello",
       expect.objectContaining({
-        cfg: expect.any(Object),
+        cfg,
         blocks: [{ type: "divider" }],
         threadTs: undefined,
       }),
@@ -471,6 +474,7 @@ describe("handleSlackAction", () => {
       expectedBlocks: [{ type: "section", text: { type: "mrkdwn", text: "updated" } }],
     },
   ])("passes $name to editSlackMessage", async ({ blocks, expectedBlocks }) => {
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "editMessage",
@@ -479,14 +483,14 @@ describe("handleSlackAction", () => {
         content: "",
         blocks,
       },
-      slackConfig(),
+      cfg,
     );
     expect(editSlackMessage).toHaveBeenCalledWith(
       "C123",
       "123.456",
       "",
       expect.objectContaining({
-        cfg: expect.any(Object),
+        cfg,
         blocks: expectedBlocks,
       }),
     );
@@ -687,15 +691,16 @@ describe("handleSlackAction", () => {
   it("passes threadId through to readSlackMessages", async () => {
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
 
+    const cfg = slackConfig();
     await handleSlackAction(
       { action: "readMessages", channelId: "C1", threadId: "1712345678.123456" },
-      slackConfig(),
+      cfg,
     );
 
     expect(readSlackMessages).toHaveBeenCalledWith(
       "C1",
       expect.objectContaining({
-        cfg: expect.any(Object),
+        cfg,
         threadId: "1712345678.123456",
         limit: undefined,
         before: undefined,
@@ -707,6 +712,7 @@ describe("handleSlackAction", () => {
   it("passes messageId through to readSlackMessages", async () => {
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
 
+    const cfg = slackConfig();
     await handleSlackAction(
       {
         action: "readMessages",
@@ -714,13 +720,13 @@ describe("handleSlackAction", () => {
         threadId: "1712345678.123456",
         messageId: "1712345678.654321",
       },
-      slackConfig(),
+      cfg,
     );
 
     expect(readSlackMessages).toHaveBeenCalledWith(
       "C1",
       expect.objectContaining({
-        cfg: expect.any(Object),
+        cfg,
         threadId: "1712345678.123456",
         messageId: "1712345678.654321",
       }),
