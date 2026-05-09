@@ -167,6 +167,18 @@ function resolveStatusAuthProvider(params: {
   return params.provider;
 }
 
+function resolveStatusUsageProvider(params: {
+  provider: string;
+  effectiveHarness?: string;
+}): string {
+  const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
+  const provider = normalizeOptionalLowercaseString(params.provider);
+  if (harness === "codex" && provider === "openai") {
+    return "openai-codex";
+  }
+  return params.provider;
+}
+
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
   if (snapshot.totalCount === 0) {
@@ -257,9 +269,14 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           includeExternalProfiles: false,
         })
       : selectedModelAuth;
+  const usageStatusProvider = resolveStatusUsageProvider({
+    provider: modelRefs.active.provider || provider,
+    effectiveHarness,
+  });
+  const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
   const currentUsageProvider = (() => {
     try {
-      return resolveUsageProviderId(provider);
+      return resolveUsageProviderId(usageStatusProvider);
     } catch {
       return undefined;
     }
@@ -269,7 +286,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     currentUsageProvider &&
     shouldLoadUsageSummary({
       provider: currentUsageProvider,
-      selectedModelAuth,
+      selectedModelAuth: usageAuthLabel,
     })
   ) {
     try {
