@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
-  closeOpenClawStateDatabaseForTest,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -18,6 +17,7 @@ import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
+import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachCodexMirrorIdentity, mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
@@ -69,6 +69,14 @@ function readTranscriptEvents(sessionFile: string, sessionId = sessionIdFromFile
 function readTranscriptRaw(sessionFile: string, sessionId = sessionIdFromFile(sessionFile)) {
   const lines = readTranscriptEvents(sessionFile, sessionId).map((event) => JSON.stringify(event));
   return lines.length ? `${lines.join("\n")}\n` : "";
+}
+
+function parseJsonLines<T>(raw: string): T[] {
+  return raw
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as T);
 }
 
 describe("mirrorCodexAppServerTranscript", () => {

@@ -169,6 +169,8 @@ export { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";
+export { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+export { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js";
 export { createMockServerResponse } from "../test-utils/mock-http-response.js";
 export {
