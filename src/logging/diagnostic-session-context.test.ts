@@ -37,7 +37,7 @@ async function writeCronJob(id: string, name: string) {
       },
     ],
   };
-  await saveCronStore(path.join(tempDir!, "cron", "jobs.json"), store);
+  await saveCronStore("default", store);
 }
 
 function appendAssistantEvent(params: { sessionId: string; text: string; id: string }) {

@@ -101,7 +101,7 @@ function warnLogMessages(): string[] {
   });
 }
 
-async function writeCronJob(stateDir: string, id: string, name: string) {
+async function writeCronJob(id: string, name: string) {
   const now = Date.now();
   const store: CronStoreFile = {
     version: 1,
@@ -120,7 +120,7 @@ async function writeCronJob(stateDir: string, id: string, name: string) {
       },
     ],
   };
-  await saveCronStore(path.join(stateDir, "cron", "jobs.json"), store);
+  await saveCronStore("default", store);
 }
 
 describe("stuck session recovery", () => {
@@ -171,7 +171,7 @@ describe("stuck session recovery", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-recovery-context-"));
     try {
       process.env.OPENCLAW_STATE_DIR = tempDir;
-      await writeCronJob(tempDir, "job-123", "Twitter Mention Moderation Agent");
+      await writeCronJob("job-123", "Twitter Mention Moderation Agent");
       appendSqliteSessionTranscriptEvent({
         agentId: "clawblocker",
         sessionId: "run-456",
