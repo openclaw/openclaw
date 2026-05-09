@@ -1040,7 +1040,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
         `Found open DM/group access at:\n${openAccessPaths.map((p) => `- ${p}`).join("\n")}\n` +
         "With tools.elevated enabled, prompt injection through those chats can become a high-impact incident.",
       remediation:
-        'Set dmPolicy/groupPolicy to stricter values such as "pairing", "allowlist", or "disabled", and keep elevated allowlists extremely tight.',
+        'Set dmPolicy to "pairing", "allowlist", or "disabled"; set groupPolicy to "allowlist" or "disabled"; and keep elevated allowlists extremely tight.',
     });
   }
 

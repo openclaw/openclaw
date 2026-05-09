@@ -30,13 +30,16 @@ describe("security audit trust model findings", () => {
         } satisfies OpenClawConfig,
         assert: () => {
           const findings = audit(cases[0].cfg);
-          expect(
-            findings.some(
-              (finding) =>
-                finding.checkId === "security.exposure.open_groups_with_elevated" &&
-                finding.severity === "critical",
-            ),
-          ).toBe(true);
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_elevated",
+          );
+          expect(finding?.severity).toBe("critical");
+          expect(finding?.remediation).toContain(
+            'Set dmPolicy to "pairing", "allowlist", or "disabled"',
+          );
+          expect(finding?.remediation).toContain('set groupPolicy to "allowlist" or "disabled"');
+          expect(finding?.remediation).not.toContain('groupPolicy to "pairing"');
+          expect(finding?.remediation).not.toContain("dmPolicy/groupPolicy");
         },
       },
       {
