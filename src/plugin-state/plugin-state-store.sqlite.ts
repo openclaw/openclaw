@@ -82,15 +82,6 @@ function wrapPluginStateError(
     return error;
   }
   const errorMessage = error instanceof Error ? error.message : String(error);
-  if (errorMessage.includes("schema version")) {
-    return createPluginStateError({
-      code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED",
-      operation: "ensure-schema",
-      message: errorMessage,
-      path: pathname,
-      cause: error,
-    });
-  }
   return createPluginStateError({
     code: fallbackCode,
     operation,
@@ -313,16 +304,6 @@ function openPluginStateDatabase(
     };
     return cachedDatabase;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("schema version")) {
-      throw createPluginStateError({
-        code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED",
-        operation: "ensure-schema",
-        message,
-        path: pathname,
-        cause: error,
-      });
-    }
     throw wrapPluginStateError(
       error,
       operation,
