@@ -45,7 +45,6 @@ function resolveInjectedAssistantContent(params: {
 }
 
 export async function appendInjectedAssistantMessageToTranscript(params: {
-  transcriptLocator?: string;
   message: string;
   agentId?: string;
   sessionId: string;
