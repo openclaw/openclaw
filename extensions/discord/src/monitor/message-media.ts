@@ -317,7 +317,11 @@ async function appendResolvedMediaFromAttachments(params: {
       }
     },
   );
-  params.out.push(...resolved.filter((media): media is DiscordMediaInfo => media !== undefined));
+  for (const media of resolved) {
+    if (media !== undefined) {
+      params.out.push(media);
+    }
+  }
 }
 
 async function mapWithConcurrency<T, R>(

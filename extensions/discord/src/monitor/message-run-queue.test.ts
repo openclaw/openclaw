@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiscordInboundJob } from "./inbound-job.js";
-import type { RuntimeEnv } from "./message-handler.preflight.types.js";
+import type {
+  DiscordMessagePreflightContext,
+  RuntimeEnv,
+} from "./message-handler.preflight.types.js";
 import { createDiscordMessageRunQueue } from "./message-run-queue.js";
 
 function createDeferred() {
@@ -46,9 +49,9 @@ describe("createDiscordMessageRunQueue", () => {
     const queue = createDiscordMessageRunQueue({
       runtime: createRuntime(),
       __testing: {
-        processDiscordMessage: vi.fn(async (ctx: { messageId?: string }) => {
-          processed.push(ctx.messageId ?? "unknown");
-          if (ctx.messageId === "m-1") {
+        processDiscordMessage: vi.fn(async (ctx: DiscordMessagePreflightContext) => {
+          processed.push(ctx.message.id ?? "unknown");
+          if (ctx.message.id === "m-1") {
             await firstRun.promise;
           }
         }),
@@ -76,9 +79,9 @@ describe("createDiscordMessageRunQueue", () => {
       runtime,
       maxPendingPerSession: 1,
       __testing: {
-        processDiscordMessage: vi.fn(async (ctx: { messageId?: string }) => {
-          processed.push(ctx.messageId ?? "unknown");
-          if (ctx.messageId === "m-1") {
+        processDiscordMessage: vi.fn(async (ctx: DiscordMessagePreflightContext) => {
+          processed.push(ctx.message.id ?? "unknown");
+          if (ctx.message.id === "m-1") {
             await firstRun.promise;
           }
         }),
@@ -113,9 +116,9 @@ describe("createDiscordMessageRunQueue", () => {
         runtime,
         maxQueuedAgeMs: 100,
         __testing: {
-          processDiscordMessage: vi.fn(async (ctx: { messageId?: string }) => {
-            processed.push(ctx.messageId ?? "unknown");
-            if (ctx.messageId === "m-1") {
+          processDiscordMessage: vi.fn(async (ctx: DiscordMessagePreflightContext) => {
+            processed.push(ctx.message.id ?? "unknown");
+            if (ctx.message.id === "m-1") {
               await firstRun.promise;
             }
           }),
