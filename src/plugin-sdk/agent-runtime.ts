@@ -60,6 +60,7 @@ export {
   markAuthProfileCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
+  refreshOAuthCredentialForRuntime,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
   resolveApiKeyForProfile,
