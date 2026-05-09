@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveAuthStatePath } from "../../../agents/auth-profiles/paths.js";
-import { loadPersistedAuthProfileState } from "../../../agents/auth-profiles/state.js";
+import {
+  authProfileStateKey,
+  loadPersistedAuthProfileState,
+} from "../../../agents/auth-profiles/state.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { readOpenClawStateKvJson } from "../../../state/openclaw-state-kv.js";
+import { resolveLegacyAuthProfileStatePath } from "./auth-profile-paths.js";
 import {
   importLegacyAuthProfileStateFileToSqlite,
   legacyAuthProfileStateFileExists,
@@ -31,7 +34,7 @@ describe("legacy auth profile state migration", () => {
   });
 
   it("imports legacy auth-state.json into SQLite and removes the source", async () => {
-    const statePath = resolveAuthStatePath(agentDir);
+    const statePath = resolveLegacyAuthProfileStatePath(agentDir);
     await fs.writeFile(
       statePath,
       `${JSON.stringify({
@@ -49,7 +52,10 @@ describe("legacy auth profile state migration", () => {
       lastGood: { anthropic: "anthropic:default" },
     });
 
-    const sqliteState = readOpenClawStateKvJson(AUTH_PROFILE_STATE_KV_SCOPE, statePath);
+    const sqliteState = readOpenClawStateKvJson(
+      AUTH_PROFILE_STATE_KV_SCOPE,
+      authProfileStateKey(agentDir),
+    );
     expect(sqliteState).toMatchObject({
       order: { anthropic: ["anthropic:default"] },
       lastGood: { anthropic: "anthropic:default" },

@@ -1,9 +1,5 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-export {
-  AUTH_PROFILE_FILENAME,
-  AUTH_PROFILE_STORE_KV_SCOPE,
-  AUTH_STATE_FILENAME,
-} from "./path-constants.js";
+export { AUTH_PROFILE_STORE_KV_SCOPE } from "./path-constants.js";
 
 export const AUTH_STORE_VERSION = 1;
 

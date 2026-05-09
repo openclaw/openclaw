@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
+import { savePersistedAuthProfileSecretsStore } from "../agents/auth-profiles/persisted.js";
 import { getSessionEntry } from "../config/sessions.js";
 import { __testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
@@ -83,25 +83,18 @@ async function expectSchemaLookupInvalid(path: unknown) {
 
 async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
   delete process.env[missingEnvVar];
-  const authStorePath = path.join(resolveDefaultAgentDir({}), AUTH_PROFILE_FILENAME);
-  await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-  await fs.writeFile(
-    authStorePath,
-    `${JSON.stringify(
-      {
-        version: 1,
-        profiles: {
-          "custom:token": {
-            type: "token",
-            provider: "custom",
-            tokenRef: { source: "env", provider: "default", id: missingEnvVar },
-          },
+  savePersistedAuthProfileSecretsStore(
+    {
+      version: 1,
+      profiles: {
+        "custom:token": {
+          type: "token",
+          provider: "custom",
+          tokenRef: { source: "env", provider: "default", id: missingEnvVar },
         },
       },
-      null,
-      2,
-    )}\n`,
-    "utf-8",
+    },
+    resolveDefaultAgentDir({}),
   );
 }
 

@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import {
-  resolveAuthStatePath,
-  resolveAuthStatePathForDisplay,
-  resolveAuthStorePath,
-  resolveAuthStorePathForDisplay,
+  resolveAuthProfileStoreAgentDir,
+  resolveAuthProfileStoreKey,
+  resolveAuthProfileStoreLocationForDisplay,
+  resolveOAuthRefreshLockKey,
 } from "./path-resolve.js";
 
 // Direct-import sanity tests. These helpers are exercised transitively by the
@@ -19,7 +19,7 @@ import {
 // calls it at least once so the coverage report is honest about what is and
 // isn't tested.
 
-describe("path-resolve helpers (direct-import coverage attribution)", () => {
+describe("auth profile path helpers (direct-import coverage attribution)", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let stateDir = "";
 
@@ -33,50 +33,36 @@ describe("path-resolve helpers (direct-import coverage attribution)", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("resolveAuthStorePath joins agentDir with the auth-profiles filename", () => {
+  it("resolves the auth profile store key from agentDir", () => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveAuthStorePath(agentDir);
-    expect(path.dirname(resolved)).toBe(agentDir);
-    expect(path.basename(resolved)).toMatch(/auth-profiles/);
+    expect(resolveAuthProfileStoreKey(agentDir)).toBe(agentDir);
   });
 
-  it("resolveAuthStorePath falls back to the default agent dir when agentDir is omitted", () => {
-    // Omitting agentDir exercises the default agent-dir branch. With
-    // OPENCLAW_STATE_DIR set to our tempdir, the resolved path must live under it.
-    const resolved = resolveAuthStorePath();
+  it("resolves the default auth profile store key when agentDir is omitted", () => {
+    const resolved = resolveAuthProfileStoreKey();
     expect(resolved.startsWith(stateDir)).toBe(true);
-    expect(path.basename(resolved)).toMatch(/auth-profiles/);
+    expect(resolved.endsWith(path.join("agents", "main", "agent"))).toBe(true);
   });
 
-  it("resolveAuthStatePath joins agentDir with the auth-state filename", () => {
+  it("resolves the display location as a SQLite KV target", () => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveAuthStatePath(agentDir);
-    expect(path.dirname(resolved)).toBe(agentDir);
+    const resolved = resolveAuthProfileStoreLocationForDisplay(agentDir, {
+      OPENCLAW_STATE_DIR: stateDir,
+    });
+    expect(resolved).toContain("openclaw.sqlite#kv/auth-profiles/");
+    expect(resolved).toContain(agentDir);
   });
 
-  it("resolveAuthStatePath falls back to the default agent dir", () => {
-    const resolved = resolveAuthStatePath();
-    expect(resolved.startsWith(stateDir)).toBe(true);
-  });
-
-  it("resolveAuthStorePathForDisplay returns the resolved path for a non-tilde input", () => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveAuthStorePathForDisplay(agentDir);
-    expect(resolved.startsWith(stateDir)).toBe(true);
-  });
-
-  it("resolveAuthStorePathForDisplay preserves a tilde-rooted path unchanged", () => {
-    // Exercises the `pathname.startsWith(\"~\")` branch. We use a contrived
-    // agentDir that already starts with `~` so the resolver echoes the
-    // tilde path back instead of expanding it via resolveUserPath.
+  it("expands tilde auth profile store agent dirs", () => {
     const tildeAgentDir = "~fake-openclaw-no-expand";
-    const resolved = resolveAuthStorePathForDisplay(tildeAgentDir);
-    expect(resolved).toBe(path.resolve(tildeAgentDir, "auth-profiles.json"));
+    const resolved = resolveAuthProfileStoreAgentDir(tildeAgentDir);
+    expect(resolved.startsWith("~")).toBe(false);
   });
 
-  it("resolveAuthStatePathForDisplay returns the auth-state path for a non-tilde input", () => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveAuthStatePathForDisplay(agentDir);
-    expect(resolved).toBe(path.join(agentDir, "auth-state.json"));
+  it("hashes OAuth refresh lock keys without filesystem path material", () => {
+    const first = resolveOAuthRefreshLockKey("openai-codex", "default");
+    const second = resolveOAuthRefreshLockKey("openai-codex", "default");
+    expect(first).toBe(second);
+    expect(first).toMatch(/^sha256-[a-f0-9]{64}$/);
   });
 });

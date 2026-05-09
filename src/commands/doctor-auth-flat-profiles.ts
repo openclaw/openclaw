@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import {
   coercePersistedAuthProfileStore,
   loadPersistedAuthProfileStore,
@@ -25,6 +24,7 @@ import { loadJsonFile } from "../infra/json-file.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { resolveLegacyAuthProfilePath } from "./doctor/legacy/auth-profile-paths.js";
 
 type AuthProfileRepairCandidate = {
   agentDir?: string;
@@ -201,7 +201,7 @@ function addCandidate(
   candidates: Map<string, AuthProfileRepairCandidate>,
   agentDir: string | undefined,
 ): void {
-  const authPath = resolveAuthStorePath(agentDir);
+  const authPath = resolveLegacyAuthProfilePath(agentDir);
   candidates.set(path.resolve(authPath), { agentDir, authPath });
 }
 
@@ -343,7 +343,7 @@ function resolveLegacyOAuthJsonStore(cfg: OpenClawConfig): LegacyOAuthJsonStore 
   const agentDir = resolveDefaultAgentDir(cfg);
   return {
     agentDir,
-    authPath: resolveAuthStorePath(agentDir),
+    authPath: resolveLegacyAuthProfilePath(agentDir),
     legacyPath,
     store,
   };

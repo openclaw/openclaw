@@ -10,13 +10,13 @@ import {
   type OpenClawStateJsonValue,
 } from "../../state/openclaw-state-kv.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { resolveAuthStatePath } from "./paths.js";
+import { resolveAuthProfileStoreKey } from "./paths.js";
 import type { AuthProfileState, AuthProfileStateStore, ProfileUsageStats } from "./types.js";
 
 export const AUTH_PROFILE_STATE_KV_SCOPE = "auth-profile-state";
 
 export function authProfileStateKey(agentDir?: string): string {
-  return resolveAuthStatePath(agentDir);
+  return resolveAuthProfileStoreKey(agentDir);
 }
 
 function normalizeAuthProfileOrder(raw: unknown): AuthProfileState["order"] {

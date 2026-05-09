@@ -1,17 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { AUTH_STATE_FILENAME } from "../../../agents/auth-profiles/path-constants.js";
-import { resolveAuthStatePath } from "../../../agents/auth-profiles/paths.js";
 import {
   coerceAuthProfileState,
   savePersistedAuthProfileState,
 } from "../../../agents/auth-profiles/state.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { loadJsonFile } from "../../../infra/json-file.js";
+import {
+  LEGACY_AUTH_STATE_FILENAME,
+  resolveLegacyAuthProfileStatePath,
+} from "./auth-profile-paths.js";
 
 export function legacyAuthProfileStateFileExists(agentDir?: string): boolean {
   try {
-    return fs.statSync(resolveAuthStatePath(agentDir)).isFile();
+    return fs.statSync(resolveLegacyAuthProfileStatePath(agentDir)).isFile();
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
       return false;
@@ -21,7 +23,7 @@ export function legacyAuthProfileStateFileExists(agentDir?: string): boolean {
 }
 
 export function importLegacyAuthProfileStateFileToSqlite(agentDir?: string): { imported: boolean } {
-  const statePath = resolveAuthStatePath(agentDir);
+  const statePath = resolveLegacyAuthProfileStatePath(agentDir);
   if (!legacyAuthProfileStateFileExists(agentDir)) {
     return { imported: false };
   }
@@ -46,7 +48,7 @@ export function discoverLegacyAuthProfileStateAgentDirs(
         continue;
       }
       const agentDir = path.join(agentsDir, entry.name, "agent");
-      if (fs.existsSync(path.join(agentDir, AUTH_STATE_FILENAME))) {
+      if (fs.existsSync(path.join(agentDir, LEGACY_AUTH_STATE_FILENAME))) {
         out.push(agentDir);
       }
     }

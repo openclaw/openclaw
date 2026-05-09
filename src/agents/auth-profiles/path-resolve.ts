@@ -1,13 +1,8 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveDefaultAgentDir } from "../agent-scope-config.js";
-import {
-  AUTH_PROFILE_FILENAME,
-  AUTH_PROFILE_STORE_KV_SCOPE,
-  AUTH_STATE_FILENAME,
-} from "./path-constants.js";
+import { AUTH_PROFILE_STORE_KV_SCOPE } from "./path-constants.js";
 
 export function resolveAuthProfileStoreAgentDir(agentDir?: string): string {
   return resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
@@ -22,26 +17,6 @@ export function resolveAuthProfileStoreLocationForDisplay(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   return `${resolveOpenClawStateSqlitePath(env)}#kv/${AUTH_PROFILE_STORE_KV_SCOPE}/${resolveAuthProfileStoreKey(agentDir)}`;
-}
-
-export function resolveAuthStorePath(agentDir?: string): string {
-  const resolved = resolveAuthProfileStoreAgentDir(agentDir);
-  return path.join(resolved, AUTH_PROFILE_FILENAME);
-}
-
-export function resolveAuthStatePath(agentDir?: string): string {
-  const resolved = resolveAuthProfileStoreAgentDir(agentDir);
-  return path.join(resolved, AUTH_STATE_FILENAME);
-}
-
-export function resolveAuthStorePathForDisplay(agentDir?: string): string {
-  const pathname = resolveAuthStorePath(agentDir);
-  return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
-}
-
-export function resolveAuthStatePathForDisplay(agentDir?: string): string {
-  const pathname = resolveAuthStatePath(agentDir);
-  return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 
 export const OAUTH_REFRESH_LOCK_SCOPE = "auth.oauth-refresh";
