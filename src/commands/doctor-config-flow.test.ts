@@ -1311,7 +1311,9 @@ vi.mock("./doctor-config-analysis.js", () => {
   }
 
   return {
+    collectImplicitFallbackClobberWarnings: vi.fn(() => []),
     formatConfigPath,
+    noteImplicitFallbackClobberWarnings: vi.fn(),
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
     resolveConfigPathTarget,

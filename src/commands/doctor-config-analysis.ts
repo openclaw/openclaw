@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { ZodIssue } from "zod";
 import { CONFIG_PATH } from "../config/config.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { note } from "../terminal/note.js";
@@ -129,6 +130,52 @@ export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
     "- Remove these entries to restore per-model API routing + costs (then re-run setup if needed).",
   );
   note(lines.join("\n"), "OpenCode");
+}
+
+function isImplicitFallbackClobber(model: unknown): boolean {
+  if (typeof model === "string") {
+    return Boolean(model.trim());
+  }
+  if (model !== null && typeof model === "object" && !Array.isArray(model)) {
+    const obj = model as Record<string, unknown>;
+    // Object with primary but no fallbacks key — intent is ambiguous; warn.
+    // Object with fallbacks: [] — explicit no-fallbacks; no warn.
+    return Object.hasOwn(obj, "primary") && !Object.hasOwn(obj, "fallbacks");
+  }
+  return false;
+}
+
+export function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
+  const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+  if (defaultFallbacks.length === 0) {
+    return [];
+  }
+  const warnings: string[] = [];
+  for (const [index, agent] of (cfg.agents?.list ?? []).entries()) {
+    if (!agent || !isImplicitFallbackClobber(agent.model)) {
+      continue;
+    }
+    const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
+    const modelStr =
+      typeof agent.model === "string"
+        ? `"${agent.model}"`
+        : `{ primary: "${(agent.model as Record<string, unknown>).primary}" }`;
+    warnings.push(
+      [
+        `- agents.list[${id}].model is ${modelStr} with no explicit fallbacks key. At runtime this clobbers agents.defaults.model.fallbacks (${defaultFallbacks.join(", ")}), leaving the agent with no fallbacks.`,
+        `  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.`,
+      ].join("\n"),
+    );
+  }
+  return warnings;
+}
+
+export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
+  const warnings = collectImplicitFallbackClobberWarnings(cfg);
+  if (warnings.length === 0) {
+    return;
+  }
+  note(warnings.join("\n"), "Doctor warnings");
 }
 
 export function noteIncludeConfinementWarning(snapshot: {
