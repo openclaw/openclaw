@@ -1010,6 +1010,22 @@ function createEmbeddedLifecycleTerminalBackstop(params: { runId: string; sessio
   return { emit, note };
 }
 
+function emitModelFallbackStepLifecycle(params: {
+  runId: string;
+  sessionKey?: string;
+  step: Record<string, unknown>;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    stream: "lifecycle",
+    data: {
+      phase: "fallback_step",
+      ...params.step,
+    },
+  });
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -1362,6 +1378,13 @@ export async function runAgentTurnWithFallback(params: {
         runId,
         sessionId: params.followupRun.run.sessionId,
         lane: runLane,
+        onFallbackStep: (step) => {
+          emitModelFallbackStepLifecycle({
+            runId,
+            sessionKey: params.sessionKey,
+            step,
+          });
+        },
         classifyResult: async ({ result, provider, model }) => {
           const classification = outcomePlan.classifyRunResult({
             result,
