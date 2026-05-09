@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { Type } from "typebox";
 import { isRestartEnabled } from "../../config/commands.flags.js";
+import { getConfigValueAtPath, parseConfigPath } from "../../config/config-paths.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
@@ -95,6 +96,18 @@ function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
   return config as Record<string, unknown>;
 }
 
+function selectConfigGetPathResult(snapshot: unknown, path: string): unknown {
+  const parsed = parseConfigPath(path);
+  if (!parsed.ok || !parsed.path) {
+    throw new Error(parsed.error ?? "Invalid config path.");
+  }
+  const config = getSnapshotConfig(snapshot);
+  const value = getConfigValueAtPath(config, parsed.path);
+  if (value === undefined) {
+    throw new Error("Config path not found: " + path);
+  }
+  return { path, value, hash: resolveBaseHashFromSnapshot(snapshot) };
+}
 // Direct RPC callers need the validated config echoed after writes; the
 // agent-facing gateway tool does not, and replaying it bloats transcripts.
 function stripConfigWriteResultPayload(result: unknown): unknown {
@@ -347,7 +360,7 @@ const GatewayToolSchema = Type.Object({
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),
-  // config.schema.lookup
+  // config.get, config.schema.lookup
   path: Type.Optional(Type.String()),
   // config.apply, config.patch
   raw: Type.Optional(Type.String()),
@@ -473,7 +486,11 @@ export function createGatewayTool(opts?: {
 
       if (action === "config.get") {
         const result = await callGatewayTool("config.get", gatewayOpts, {});
-        return jsonResult({ ok: true, result });
+        const path = readStringParam(params, "path");
+        return jsonResult({
+          ok: true,
+          result: path ? selectConfigGetPathResult(result, path) : result,
+        });
       }
       if (action === "config.schema.lookup") {
         const path = readStringParam(params, "path", {

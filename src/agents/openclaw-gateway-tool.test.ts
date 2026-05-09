@@ -730,6 +730,75 @@ describe("gateway tool", () => {
     expect(params).toMatchObject({ timeoutMs: 20 * 60_000 });
   });
 
+  it("returns the full config snapshot when config.get has no path", async () => {
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute("call-config-get-full", {
+      action: "config.get",
+    });
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      result: {
+        hash: "hash-1",
+        config: {
+          tools: {
+            exec: {
+              ask: "on-miss",
+              security: "allowlist",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("returns only the requested config subtree for path-scoped config.get", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          raw: JSON.stringify({ large: "snapshot" }),
+          config: {
+            gateway: {
+              auth: { mode: "token", token: "redacted" },
+              mode: "local",
+            },
+            plugins: { entries: { postclaw: { enabled: true } } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute("call-config-get-path", {
+      action: "config.get",
+      path: "gateway.auth",
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(result.details).toEqual({
+      ok: true,
+      result: {
+        path: "gateway.auth",
+        value: { mode: "token", token: "redacted" },
+        hash: "hash-1",
+      },
+    });
+  });
+
+  it("rejects path-scoped config.get when the config path is missing", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-config-get-missing-path", {
+        action: "config.get",
+        path: "gateway.missing",
+      }),
+    ).rejects.toThrow("Config path not found: gateway.missing");
+  });
+
   it("returns a path-scoped schema lookup result", async () => {
     const tool = requireGatewayTool();
 
