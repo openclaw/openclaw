@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -20,7 +20,9 @@ async function makeTempTranscriptLocator(name = "session.jsonl"): Promise<string
 }
 
 function readSessionEntries(transcriptLocator: string) {
-  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: transcriptLocator });
+  const scope = resolveSqliteSessionTranscriptScopeForLocator({
+    transcriptLocator: transcriptLocator,
+  });
   if (!scope) {
     return [];
   }
@@ -113,7 +115,7 @@ describe("TranscriptSessionManager", () => {
 
     expect(sessionManager.getTranscriptLocator()).toBe(transcriptLocator);
     expect(
-      resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: transcriptLocator }),
+      resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: transcriptLocator }),
     ).toMatchObject({
       agentId: "main",
       sessionId: "virtual-session",
@@ -237,7 +239,7 @@ describe("TranscriptSessionManager", () => {
     const branchFile = sessionManager.createBranchedSession(userId);
     expect(branchFile).toMatch(/^sqlite-transcript:\/\/qa\//);
     expect(
-      resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: branchFile! }),
+      resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: branchFile! }),
     ).toMatchObject({
       agentId: "qa",
     });
@@ -245,8 +247,8 @@ describe("TranscriptSessionManager", () => {
     const forked = SessionManager.forkFrom(transcriptLocator, "/tmp/qa-fork");
     expect(forked.getTranscriptLocator()).toMatch(/^sqlite-transcript:\/\/qa\//);
     expect(
-      resolveSqliteSessionTranscriptScopeForPath({
-        transcriptPath: forked.getTranscriptLocator()!,
+      resolveSqliteSessionTranscriptScopeForLocator({
+        transcriptLocator: forked.getTranscriptLocator()!,
       }),
     ).toMatchObject({
       agentId: "qa",

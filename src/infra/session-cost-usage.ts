@@ -6,7 +6,7 @@ import {
   listSqliteSessionTranscriptLocators,
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
   type SqliteSessionTranscriptEvent,
 } from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -308,8 +308,8 @@ function resolveUsageSessionScope(params: {
     };
   }
   if (params.transcriptLocator) {
-    const scope = resolveSqliteSessionTranscriptScopeForPath({
-      transcriptPath: params.transcriptLocator,
+    const scope = resolveSqliteSessionTranscriptScopeForLocator({
+      transcriptLocator: params.transcriptLocator,
     });
     if (scope) {
       return {

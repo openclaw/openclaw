@@ -12,7 +12,7 @@ import {
 } from "../config/sessions/store.js";
 import {
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -73,7 +73,9 @@ function parseTranscriptMessageEvent(event: unknown): { role: string; content?: 
 function summarizeTranscriptHeartbeatMessages(
   transcriptPath: string,
 ): TranscriptHeartbeatSummary | null {
-  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
+  const scope = resolveSqliteSessionTranscriptScopeForLocator({
+    transcriptLocator: transcriptPath,
+  });
   if (!scope) {
     return null;
   }

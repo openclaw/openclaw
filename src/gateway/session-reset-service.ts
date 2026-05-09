@@ -668,7 +668,6 @@ export async function performGatewaySessionReset(params: {
     appendSqliteSessionTranscriptEvent({
       agentId: target.agentId,
       sessionId: next.sessionId,
-      transcriptPath,
       event: header,
     });
   }

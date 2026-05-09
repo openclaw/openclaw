@@ -117,38 +117,38 @@ export function buildCliSessionHistoryPrompt(params: {
   ].join("\n");
 }
 
-function resolveSafeCliSessionFile(params: {
+function resolveSafeCliTranscriptLocator(params: {
   sessionId: string;
-  sessionFile: string;
+  transcriptLocator: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
-}): { sessionFile: string } {
+}): { transcriptLocator: string } {
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,
   });
-  const sessionFile = createSqliteSessionTranscriptLocator({
+  const transcriptLocator = createSqliteSessionTranscriptLocator({
     agentId: sessionAgentId ?? defaultAgentId,
     sessionId: params.sessionId,
   });
-  return { sessionFile };
+  return { transcriptLocator };
 }
 
 async function loadCliSessionEntries(params: {
   sessionId: string;
-  sessionFile: string;
+  transcriptLocator: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
 }): Promise<unknown[]> {
   try {
-    const { sessionFile } = resolveSafeCliSessionFile(params);
+    const { transcriptLocator } = resolveSafeCliTranscriptLocator(params);
     const scope = resolveSqliteSessionTranscriptScope({
       agentId: params.agentId,
       sessionId: params.sessionId,
-      transcriptPath: sessionFile,
+      transcriptLocator: transcriptLocator,
     });
     if (!scope) {
       return [];
@@ -168,7 +168,7 @@ async function loadCliSessionEntries(params: {
 
 export async function loadCliSessionHistoryMessages(params: {
   sessionId: string;
-  sessionFile: string;
+  transcriptLocator: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
@@ -182,7 +182,7 @@ export async function loadCliSessionHistoryMessages(params: {
 
 export async function loadCliSessionReseedMessages(params: {
   sessionId: string;
-  sessionFile: string;
+  transcriptLocator: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;

@@ -32,7 +32,6 @@ export type SqliteSessionTranscriptStoreOptions = OpenClawStateDatabaseOptions &
 
 export type AppendSqliteSessionTranscriptEventOptions = SqliteSessionTranscriptStoreOptions & {
   event: unknown;
-  transcriptPath?: string;
   now?: () => number;
 };
 
@@ -41,12 +40,10 @@ export type AppendSqliteSessionTranscriptMessageOptions = SqliteSessionTranscrip
   message: unknown;
   now?: () => number;
   sessionVersion: number;
-  transcriptPath?: string;
 };
 
 export type ReplaceSqliteSessionTranscriptEventsOptions = SqliteSessionTranscriptStoreOptions & {
   events: unknown[];
-  transcriptPath?: string;
   now?: () => number;
 };
 
@@ -226,10 +223,10 @@ function insertTranscriptEvent(params: {
   upsertTranscriptEventIdentity(params);
 }
 
-export function resolveSqliteSessionTranscriptScopeForPath(
-  options: OpenClawStateDatabaseOptions & { transcriptPath: string },
+export function resolveSqliteSessionTranscriptScopeForLocator(
+  options: OpenClawStateDatabaseOptions & { transcriptLocator: string },
 ): SqliteSessionTranscriptScope | undefined {
-  const parsedLocator = parseSqliteSessionTranscriptLocator(options.transcriptPath);
+  const parsedLocator = parseSqliteSessionTranscriptLocator(options.transcriptLocator);
   if (parsedLocator) {
     return parsedLocator;
   }
@@ -240,7 +237,7 @@ export function resolveSqliteSessionTranscriptScope(
   options: OpenClawStateDatabaseOptions & {
     agentId?: string;
     sessionId: string;
-    transcriptPath?: string;
+    transcriptLocator?: string;
   },
 ): SqliteSessionTranscriptScope | undefined {
   const sessionId = normalizeSessionId(options.sessionId);
@@ -250,13 +247,13 @@ export function resolveSqliteSessionTranscriptScope(
       sessionId,
     };
   }
-  if (options.transcriptPath?.trim()) {
-    const byPath = resolveSqliteSessionTranscriptScopeForPath({
+  if (options.transcriptLocator?.trim()) {
+    const byLocator = resolveSqliteSessionTranscriptScopeForLocator({
       ...options,
-      transcriptPath: options.transcriptPath,
+      transcriptLocator: options.transcriptLocator,
     });
-    if (byPath?.sessionId === sessionId) {
-      return byPath;
+    if (byLocator?.sessionId === sessionId) {
+      return byLocator;
     }
   }
   const latest = listSqliteSessionTranscripts(options).find(

@@ -1,10 +1,9 @@
-import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
 import {
   hasSqliteSessionTranscriptEvents,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 
@@ -84,7 +83,6 @@ export async function replayRecentUserAssistantMessages(params: {
     replaceSqliteSessionTranscriptEvents({
       agentId: targetAgentId,
       sessionId: params.newSessionId,
-      transcriptPath: path.resolve(params.targetTranscript),
       events: targetEvents,
     });
     return tail.length;
@@ -111,7 +109,7 @@ function loadReplaySourceEvents(params: {
   if (!src) {
     return undefined;
   }
-  const sourceScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: src });
+  const sourceScope = resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: src });
   if (!sourceScope) {
     return undefined;
   }

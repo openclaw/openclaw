@@ -16,7 +16,7 @@ import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import {
   hasSqliteSessionTranscriptEvents,
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "./transcript-store.sqlite.js";
 import type { SessionEntry } from "./types.js";
 
@@ -53,12 +53,12 @@ function hasTranscriptQueryScope(scope?: TranscriptQueryScope): scope is {
 
 function loadScopedSqliteTranscriptEvents(
   scope?: TranscriptQueryScope,
-  transcriptPath?: string,
+  transcriptLocator?: string,
 ): unknown[] | undefined {
   const resolvedScope = hasTranscriptQueryScope(scope)
     ? scope
-    : transcriptPath?.trim()
-      ? resolveSqliteSessionTranscriptScopeForPath({ transcriptPath })
+    : transcriptLocator?.trim()
+      ? resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator })
       : undefined;
   if (!resolvedScope) {
     return undefined;
@@ -278,7 +278,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   };
   const { messageId } = await appendSessionTranscriptMessage({
-    transcriptPath: transcriptLocator,
+    transcriptLocator: transcriptLocator,
     agentId,
     message,
     sessionId: entry.sessionId,
@@ -334,7 +334,7 @@ function extractAssistantMessageText(message: SessionTranscriptAssistantMessage)
 }
 
 async function findLatestEquivalentAssistantMessageId(
-  transcriptPath: string,
+  transcriptLocator: string,
   message: SessionTranscriptAssistantMessage,
   scope?: TranscriptQueryScope,
 ): Promise<string | undefined> {
@@ -343,7 +343,7 @@ async function findLatestEquivalentAssistantMessageId(
     return undefined;
   }
 
-  const scopedEvents = loadScopedSqliteTranscriptEvents(scope, transcriptPath);
+  const scopedEvents = loadScopedSqliteTranscriptEvents(scope, transcriptLocator);
   if (scopedEvents) {
     return findLatestEquivalentAssistantMessageIdInEvents(scopedEvents, expectedText);
   }

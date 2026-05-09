@@ -126,7 +126,7 @@ export {
   hasSqliteSessionTranscriptEvents,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../config/sessions/transcript-store.sqlite.js";
 export { loadCommitmentStore, saveCommitmentStore } from "../commitments/store.js";
 export type { CommitmentRecord, CommitmentStoreFile } from "../commitments/types.js";

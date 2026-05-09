@@ -11,7 +11,7 @@ import {
 } from "../../auto-reply/tokens.js";
 import {
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import {
   type ClaudeCliFallbackSeed,
@@ -72,11 +72,13 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
   }
 }
 
-function sqliteTranscriptHasAssistantMessage(sessionFile: string | undefined): boolean {
-  if (!sessionFile) {
+function sqliteTranscriptHasAssistantMessage(transcriptLocator: string | undefined): boolean {
+  if (!transcriptLocator) {
     return false;
   }
-  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile });
+  const scope = resolveSqliteSessionTranscriptScopeForLocator({
+    transcriptLocator: transcriptLocator,
+  });
   if (!scope) {
     return false;
   }

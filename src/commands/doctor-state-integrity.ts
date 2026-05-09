@@ -15,7 +15,7 @@ import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store
 import {
   hasSqliteSessionTranscriptEvents,
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -223,7 +223,9 @@ function resolveTranscriptSqliteScope(params: {
   transcriptPath: string;
 }): { agentId: string; sessionId: string } {
   return (
-    resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: params.transcriptPath }) ?? {
+    resolveSqliteSessionTranscriptScopeForLocator({
+      transcriptLocator: params.transcriptPath,
+    }) ?? {
       agentId: params.agentId,
       sessionId: params.sessionId,
     }

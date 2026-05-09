@@ -2,7 +2,7 @@ import { isSqliteSessionTranscriptLocator } from "../../../config/sessions/paths
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
   type SqliteSessionTranscriptScope,
 } from "../../../config/sessions/transcript-store.sqlite.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
@@ -104,6 +104,6 @@ function resolveScopeForTranscriptTarget(
   if (!isSqliteSessionTranscriptLocator(target)) {
     return undefined;
   }
-  const byPath = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: target });
+  const byPath = resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: target });
   return byPath;
 }

@@ -1,6 +1,6 @@
 import type { SessionManager } from "../../agents/transcript/session-transcript-contract.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
-import { resolveSqliteSessionTranscriptScopeForPath } from "../../config/sessions/transcript-store.sqlite.js";
+import { resolveSqliteSessionTranscriptScopeForLocator } from "../../config/sessions/transcript-store.sqlite.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -106,13 +106,13 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const existingScope = resolveSqliteSessionTranscriptScopeForPath({
-      transcriptPath: params.transcriptPath,
+    const existingScope = resolveSqliteSessionTranscriptScopeForLocator({
+      transcriptLocator: params.transcriptPath,
     });
     const agentId = params.agentId ?? existingScope?.agentId ?? DEFAULT_AGENT_ID;
     const sessionId = params.sessionId ?? existingScope?.sessionId;
     const { messageId } = await appendSessionTranscriptMessage({
-      transcriptPath: params.transcriptPath,
+      transcriptLocator: params.transcriptPath,
       agentId,
       sessionId,
       message: messageBody,

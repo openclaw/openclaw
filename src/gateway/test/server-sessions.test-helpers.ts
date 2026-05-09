@@ -333,7 +333,6 @@ export async function writeSingleLineSession(
   replaceSqliteSessionTranscriptEvents({
     agentId: opts.agentId ?? "main",
     sessionId,
-    transcriptPath,
     events: [
       {
         type: "message",

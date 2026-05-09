@@ -232,7 +232,6 @@ export async function migrateSessionTranscriptFileToSqlite(params: {
     replaceSqliteSessionTranscriptEvents({
       agentId: params.agentId ?? resolveAgentIdFromTranscriptPath(transcriptPath),
       sessionId,
-      transcriptPath,
       events,
     });
     await fs.rm(params.filePath, { force: true });

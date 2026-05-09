@@ -139,7 +139,7 @@ export async function runPreparedCliAgent(
     hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks
       ? await loadCliSessionHistoryMessages({
           sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
+          transcriptLocator: params.transcriptLocator,
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           config: params.config,
@@ -245,7 +245,7 @@ export async function runPreparedCliAgent(
       await appendSessionTranscriptMessage({
         agentId: params.agentId ?? DEFAULT_AGENT_ID,
         sessionId: params.sessionId,
-        transcriptPath: params.sessionFile,
+        transcriptLocator: params.transcriptLocator,
         cwd: params.workspaceDir,
         now: nowMs,
         message: {
@@ -537,7 +537,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     trigger: params.trigger,
-    sessionFile: params.sessionFile,
+    transcriptLocator: params.transcriptLocator,
     workspaceDir: params.workspaceDir,
     config: params.config,
     prompt: params.prompt,

@@ -12,7 +12,7 @@ export {
   onSessionTranscriptUpdate,
   closeOpenClawStateDatabaseForTest,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime.js";
