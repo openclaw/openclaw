@@ -178,6 +178,9 @@ function normalizeStoredIdentity(parsed: unknown): NormalizedStoredIdentity | nu
     }
     const publicKeyPem = publicKeyPemFromRaw(publicKeyRaw);
     const privateKeyPem = privateKeyPemFromRaw(privateKeyRaw);
+    if (!keyPairMatches(publicKeyPem, privateKeyPem)) {
+      return { kind: "recognized-invalid" };
+    }
     const derivedId = fingerprintPublicKey(publicKeyPem);
     const validForReadOnly = derivedId === stored.deviceId;
     const migrated: StoredIdentity = {

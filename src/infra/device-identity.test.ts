@@ -15,6 +15,7 @@ import {
 const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
 const SWIFT_RAW_PUBLIC_KEY = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
 const SWIFT_RAW_PRIVATE_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="; // pragma: allowlist secret
+const MISMATCHED_SWIFT_RAW_PRIVATE_KEY = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="; // pragma: allowlist secret
 
 async function withIdentity(
   run: (identity: ReturnType<typeof loadOrCreateDeviceIdentity>) => void,
@@ -128,6 +129,34 @@ describe("device identity crypto helpers", () => {
       const loaded = loadOrCreateDeviceIdentity(identityPath);
 
       expect(loaded.deviceId).not.toBe("stale-device-id");
+      expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
+    });
+  });
+
+  it("does not migrate Swift raw-key identity files with mismatched key material", async () => {
+    await withTempDir("openclaw-device-identity-swift-invalid-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+      fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+      fs.writeFileSync(
+        identityPath,
+        `${JSON.stringify(
+          {
+            deviceId: SWIFT_RAW_DEVICE_ID,
+            publicKey: SWIFT_RAW_PUBLIC_KEY,
+            privateKey: MISMATCHED_SWIFT_RAW_PRIVATE_KEY,
+            createdAtMs: 1_700_000_000_000,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const before = fs.readFileSync(identityPath, "utf8");
+
+      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      const loaded = loadOrCreateDeviceIdentity(identityPath);
+
+      expect(loaded.deviceId).not.toBe(SWIFT_RAW_DEVICE_ID);
       expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
     });
   });
