@@ -321,13 +321,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
       },
       {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
-        imageKind: "live",
+        imageKind: "bare",
         live: true,
         name: "live-plugin-tool",
         resources: ["docker", "live", "live:openai", "npm"],
         stateScenario: "empty",
         timeoutMs: 1_200_000,
-        weight: 4,
+        weight: 3,
       },
       {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
@@ -441,6 +441,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
     expect(packageUpdate.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-openai",
+      "codex-on-demand",
       "install-e2e-anthropic",
       "npm-onboard-channel-agent",
       "npm-onboard-discord-channel-agent",
@@ -456,6 +457,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ...bundledPluginSweepLanes,
       "cron-mcp-cleanup",
       "openai-web-search-minimal",
+      "live-plugin-tool",
       "openwebui",
     ]);
     expect(legacy.lanes.map((lane) => lane.name)).toEqual([
@@ -463,6 +465,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ...bundledPluginSweepLanes,
       "cron-mcp-cleanup",
       "openai-web-search-minimal",
+      "live-plugin-tool",
       "plugin-update",
       "openwebui",
     ]);
