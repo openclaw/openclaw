@@ -13,10 +13,7 @@ import type { SessionEntry } from "./types.js";
 
 const CANONICAL_KEY = "agent:main:webchat:dm:mixed-user";
 const MIXED_CASE_KEY = "Agent:Main:WebChat:DM:MiXeD-User";
-type SessionEntriesTestDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  "session_entries" | "session_routes" | "sessions"
->;
+type SessionEntriesTestDatabase = Pick<OpenClawAgentKyselyDatabase, "sessions" | "session_entries">;
 
 function createInboundContext(): MsgContext {
   return {
@@ -90,17 +87,9 @@ describe("SQLite session row key normalization", () => {
     executeSqliteQuerySync(
       database.db,
       db.insertInto("session_entries").values({
-        session_id: entry.sessionId,
         session_key: sessionKey,
+        session_id: entry.sessionId,
         entry_json: JSON.stringify(entry),
-        updated_at: updatedAt,
-      }),
-    );
-    executeSqliteQuerySync(
-      database.db,
-      db.insertInto("session_routes").values({
-        session_key: sessionKey,
-        session_id: entry.sessionId,
         updated_at: updatedAt,
       }),
     );
@@ -122,7 +111,7 @@ describe("SQLite session row key normalization", () => {
     expect(store[CANONICAL_KEY]?.origin).toBeUndefined();
   });
 
-  it("does not create a duplicate mixed-case key when last route is updated", async () => {
+  it("does not create a duplicate mixed-case key when route metadata is updated", async () => {
     await recordSessionMetaFromInbound({
       agentId: "main",
       sessionKey: CANONICAL_KEY,
@@ -138,8 +127,11 @@ describe("SQLite session row key normalization", () => {
 
     const store = readMainSessionRows();
     expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
-    expect(store[CANONICAL_KEY]?.lastChannel).toBe("webchat");
-    expect(store[CANONICAL_KEY]?.lastTo).toBe("webchat:user-1");
+    expect(store[CANONICAL_KEY]?.channel).toBe("webchat");
+    expect(store[CANONICAL_KEY]?.deliveryContext).toMatchObject({
+      channel: "webchat",
+      to: "webchat:user-1",
+    });
   });
 
   it("does not migrate legacy mixed-case entries during runtime updates", async () => {
