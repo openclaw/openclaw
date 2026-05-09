@@ -1,0 +1,53 @@
+Bootstrap-token DoS rate-limit proof (PR 76322)
+Imports real patched resolveConnectAuthDecision + createAuthRateLimiter
+from security/bootstrap-dos-poc worktree.
+
+maxAttempts=5  windowMs=60s  lockoutMs=60s  exemptLoopback=false
+simulated mutex hold per verify call: 5ms
+
+=== Phase 1: 20 sequential attacker attempts from a single IP ===
+attempt | reason                  | rateLimited | verifier?
+--------|-------------------------|-------------|--------------
+    1   | bootstrap_token_invalid | false       | ENTERED
+    2   | bootstrap_token_invalid | false       | ENTERED
+    3   | bootstrap_token_invalid | false       | ENTERED
+    4   | bootstrap_token_invalid | false       | ENTERED
+    5   | bootstrap_token_invalid | false       | ENTERED
+    6   | rate_limited            | true        | skipped
+    7   | rate_limited            | true        | skipped
+    8   | rate_limited            | true        | skipped
+    9   | rate_limited            | true        | skipped
+   10   | rate_limited            | true        | skipped
+   11   | rate_limited            | true        | skipped
+   12   | rate_limited            | true        | skipped
+   13   | rate_limited            | true        | skipped
+   14   | rate_limited            | true        | skipped
+   15   | rate_limited            | true        | skipped
+   16   | rate_limited            | true        | skipped
+   17   | rate_limited            | true        | skipped
+   18   | rate_limited            | true        | skipped
+   19   | rate_limited            | true        | skipped
+   20   | rate_limited            | true        | skipped
+
+attacker verifier-call total: 5 of 20 attempts
+
+=== Phase 2: legitimate victim under sustained attack ===
+
+victim attempt 1: 5.28ms  authOk=true  method=bootstrap-token
+victim attempt 2: 5.32ms  authOk=true  method=bootstrap-token
+victim attempt 3: 5.24ms  authOk=true  method=bootstrap-token
+victim attempt 4: 5.19ms  authOk=true  method=bootstrap-token
+victim attempt 5: 5.20ms  authOk=true  method=bootstrap-token
+
+victim average latency under attack: 5.24ms
+attacker verifier entries during 500ms attack: 5
+attacker call rate during attack: ~12 verifier-acquisitions/sec
+
+=== Phase 3: IP isolation — victim from clean IP ===
+
+clean victim IP: 5.26ms  authOk=true  method=bootstrap-token
+
+=== Summary ===
+Phase 1: after 5 failures, attempts 6-20 short-circuit before mutex (verifier=5/20)
+Phase 2: under sustained attacker flood, victim latency stayed at 5ms (verifier hold = 5ms)
+Phase 3: clean victim IP unaffected by attacker lockout (5ms; authOk=true)

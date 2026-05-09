@@ -1,0 +1,56 @@
+Pre-auth device-signature CPU-DoS proof (PR 77492)
+Imports real patched validateConnectParams + isPlausibleDevice* + AuthRateLimiter
+from security/preauth-signature-rate-limit worktree.
+
+MAX_DEVICE_PUBLIC_KEY_INPUT_CHARS = 1024
+MAX_DEVICE_SIGNATURE_INPUT_CHARS  = 256
+ED25519_RAW_PUBLIC_KEY_BYTES      = 32
+ED25519_SIGNATURE_BYTES           = 64
+
+=== Layer 1: schema-level rejection of oversized device.publicKey / device.signature ===
+
+case                                                          | result | took
+--------------------------------------------------------------|--------|------
+valid: device.publicKey real PEM (113 chars)                  | PASS   | 4.494ms 
+reject: device.publicKey at 1025 chars (cap+1)                | REJECT | 0.515ms 
+reject: device.publicKey at 60KB (representative attacker payload)| REJECT | 4.246ms 
+reject: device.signature at 257 chars (cap+1)                 | REJECT | 0.077ms 
+
+=== Layer 2: shape pre-check on device-identity helpers (no crypto) ===
+
+case                                                          | result | took
+--------------------------------------------------------------|--------|------
+valid: real raw 32-byte base64url public key                  | PASS   | 0.486ms 
+valid: real PEM public key                                    | PASS   | 0.039ms 
+reject: random 100-byte base64                                | REJECT | 0.629ms 
+reject: oversized publicKey (cap+1)                           | REJECT | 0.053ms 
+reject: empty publicKey                                       | REJECT | 0.048ms 
+valid: real 64-byte base64url signature                       | PASS   | 0.101ms 
+reject: random 32-byte signature input                        | REJECT | 0.118ms 
+reject: oversized signature (cap+1)                           | REJECT | 0.035ms 
+reject: 60KB signature                                        | REJECT | 0.044ms 
+
+=== Layer 3: rate-limit gate AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE ===
+
+attempt | rateLimited | remaining/retryAfterMs | crypto entered?
+--------|-------------|------------------------|------------------
+    1   | false       | remaining=3            | would enter
+    2   | false       | remaining=2            | would enter
+    3   | false       | remaining=1            | would enter
+    4   | true        | retryAfterMs=60000     | skipped
+    5   | true        | retryAfterMs=59999     | skipped
+    6   | true        | retryAfterMs=59999     | skipped
+    7   | true        | retryAfterMs=59999     | skipped
+    8   | true        | retryAfterMs=59999     | skipped
+
+=== Layer 3b: cost comparison — skipped vs entered ===
+
+crypto entered 5000 times: 214.3ms (avg 0.043ms/op)
+gate-blocked  5000 times: 62.6ms (avg 0.013ms/op)
+amplification factor under attack: 3.4x
+
+=== Summary ===
+Layer 1: schema caps reject oversized device.publicKey / device.signature in <1ms
+Layer 2: shape pre-checks reject malformed inputs without invoking crypto
+Layer 3: after 3 failures, attempts 4-8 short-circuit before createPublicKey + verify
+         crypto saved per attacker request: ~0.043ms

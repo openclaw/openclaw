@@ -1,0 +1,51 @@
+Pre-auth bootstrap-token rate-limit proof (PR 77527)
+Imports real patched resolveConnectAuthDecision + createAuthRateLimiter
+from security/preauth-bootstrap-token-rate-limit worktree.
+
+maxAttempts=3  windowMs=60s  lockoutMs=60s  exemptLoopback=false
+simulated mutex hold per verify call: 5ms
+(maxAttempts=3 mirrors the in-process WS integration test in this PR)
+
+=== Phase 1: 12 sequential attacker attempts from a single IP ===
+attempt | reason                  | rateLimited | verifier?
+--------|-------------------------|-------------|--------------
+    1   | bootstrap_token_invalid | false       | ENTERED
+    2   | bootstrap_token_invalid | false       | ENTERED
+    3   | bootstrap_token_invalid | false       | ENTERED
+    4   | rate_limited            | true        | skipped
+    5   | rate_limited            | true        | skipped
+    6   | rate_limited            | true        | skipped
+    7   | rate_limited            | true        | skipped
+    8   | rate_limited            | true        | skipped
+    9   | rate_limited            | true        | skipped
+   10   | rate_limited            | true        | skipped
+   11   | rate_limited            | true        | skipped
+   12   | rate_limited            | true        | skipped
+
+attacker verifier-call total: 3 of 12 attempts
+
+=== Phase 2: legitimate victim under sustained attack ===
+
+victim attempt 1: 5.31ms  authOk=true  method=bootstrap-token
+victim attempt 2: 5.24ms  authOk=true  method=bootstrap-token
+victim attempt 3: 5.21ms  authOk=true  method=bootstrap-token
+victim attempt 4: 5.15ms  authOk=true  method=bootstrap-token
+victim attempt 5: 5.25ms  authOk=true  method=bootstrap-token
+
+victim average latency under attack: 5.23ms
+attacker verifier entries during 500ms attack: 5
+
+=== Phase 3: IP isolation — victim from clean IP ===
+
+clean victim IP: 5.16ms  authOk=true  method=bootstrap-token
+
+=== Phase 4: immediate-failure-recording vs PR #76322 deferred behavior ===
+
+after 2 invalid attempts (no device-token fallback): allowed=true remaining=1
+expected: remaining ≤ 1 because this PR records each bootstrap failure immediately (vs #76322 which defers)
+
+=== Summary ===
+Phase 1: 3 of 12 attacker attempts entered verifier; 9 short-circuited before mutex
+Phase 2: under sustained attacker flood, victim avg latency 5ms (vs verifier hold 5ms)
+Phase 3: clean victim IP unaffected by attacker lockout (5ms)
+Phase 4: this PR records bootstrap failures immediately on rejection

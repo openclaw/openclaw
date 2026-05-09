@@ -1,0 +1,28 @@
+Connect-frame auth bounds proof (PR 77538)
+Imports real ajv-compiled validateConnectParams + cap constants
+from security/connect-schema-auth-bounds worktree.
+
+HANDSHAKE_BOOTSTRAP_TOKEN_MAX_LENGTH = 256
+HANDSHAKE_SHARED_SECRET_MAX_LENGTH   = 4096
+
+case                                              | result | took
+--------------------------------------------------|--------|------
+valid: empty auth                                 | PASS   | 0.928ms 
+valid: bootstrapToken at cap (256 chars)          | PASS   | 0.038ms 
+valid: deviceToken at cap (256 chars)             | PASS   | 0.026ms 
+valid: token at cap (4096 chars)                  | PASS   | 0.318ms 
+valid: password at cap (4096 chars)               | PASS   | 0.323ms 
+reject: bootstrapToken cap+1 (257 chars)          | REJECT | 0.062ms 
+reject: deviceToken cap+1                         | REJECT | 0.352ms 
+reject: token cap+1 (4097 chars)                  | REJECT | 0.210ms 
+reject: password cap+1                            | REJECT | 0.029ms 
+reject: 60KB bootstrapToken (representative attacker payload)| REJECT | 0.189ms 
+reject: 60KB token                                | REJECT | 0.194ms 
+reject: 60KB password                             | REJECT | 0.200ms 
+
+=== Comparison: schema rejection vs full safeEqualSecret allocation ===
+
+60KB bootstrapToken rejected 591 times in 100.1ms
+per-rejection cost: 0.1693ms
+(without these caps, every oversized value would propagate to safeEqualSecret
+ which pads both operands to Math.max and runs timingSafeEqual once per stored entry)
