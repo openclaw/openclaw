@@ -1,7 +1,7 @@
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import type { AgentMessage } from "../agent-core-contract.js";
 import type { SessionEntry, SessionHeader } from "../transcript/session-transcript-contract.js";
@@ -75,8 +75,8 @@ export async function hardenManualCompactionBoundary(params: {
   transcriptLocator: string;
   preserveRecentTail?: boolean;
 }): Promise<HardenedManualCompactionBoundary> {
-  const scope = resolveSqliteSessionTranscriptScopeForPath({
-    transcriptPath: params.transcriptLocator,
+  const scope = resolveSqliteSessionTranscriptScopeForLocator({
+    transcriptLocator: params.transcriptLocator,
   });
   if (!scope) {
     throw new Error(
@@ -155,7 +155,6 @@ export async function hardenManualCompactionBoundary(params: {
   });
   replaceSqliteSessionTranscriptEvents({
     ...scope,
-    transcriptPath: params.transcriptLocator,
     events: [header, ...replacedEntries],
   });
 

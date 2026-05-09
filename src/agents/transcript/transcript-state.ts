@@ -4,7 +4,7 @@ import {
   appendSqliteSessionTranscriptEvent,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import {
   buildSessionContext,
@@ -59,7 +59,7 @@ function transcriptStateFromEntries(fileEntries: FileEntry[]): TranscriptState {
 }
 
 function transcriptStateFromSqlite(transcriptLocator: string): TranscriptState | undefined {
-  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: transcriptLocator });
+  const scope = resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator });
   if (!scope) {
     return undefined;
   }
@@ -75,15 +75,17 @@ function transcriptStateFromSqlite(transcriptLocator: string): TranscriptState |
 function resolveTranscriptWriteScope(
   transcriptLocator: string,
   entries: Array<SessionHeader | SessionEntry>,
-): { agentId: string; sessionId: string; transcriptPath: string } | undefined {
-  const transcriptPath = transcriptLocator.trim();
-  if (!isSqliteSessionTranscriptLocator(transcriptPath)) {
+): { agentId: string; sessionId: string } | undefined {
+  const normalizedTranscriptLocator = transcriptLocator.trim();
+  if (!isSqliteSessionTranscriptLocator(normalizedTranscriptLocator)) {
     throw new Error(
-      `Transcript locator must be SQLite-backed: ${transcriptPath}. Run "openclaw doctor --fix" to import legacy transcript files.`,
+      `Transcript locator must be SQLite-backed: ${normalizedTranscriptLocator}. Run "openclaw doctor --fix" to import legacy transcript files.`,
     );
   }
   const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
-  const existing = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
+  const existing = resolveSqliteSessionTranscriptScopeForLocator({
+    transcriptLocator: normalizedTranscriptLocator,
+  });
   if (!existing) {
     return undefined;
   }
@@ -94,7 +96,6 @@ function resolveTranscriptWriteScope(
   return {
     agentId: existing.agentId,
     sessionId,
-    transcriptPath,
   };
 }
 

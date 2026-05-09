@@ -350,7 +350,7 @@ export function rewriteTranscriptEntriesInState(params: {
  * transcript update when the active branch changed.
  */
 export async function rewriteTranscriptEntriesInSqliteTranscript(params: {
-  transcriptPath: string;
+  transcriptLocator: string;
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -358,21 +358,21 @@ export async function rewriteTranscriptEntriesInSqliteTranscript(params: {
   config?: unknown;
 }): Promise<TranscriptRewriteResult> {
   try {
-    const state = await readTranscriptState(params.transcriptPath);
+    const state = await readTranscriptState(params.transcriptLocator);
     const result = rewriteTranscriptEntriesInState({
       state,
       replacements: params.request.replacements,
     });
     if (result.changed) {
       await persistTranscriptStateMutation({
-        sessionFile: params.transcriptPath,
+        transcriptLocator: params.transcriptLocator,
         state,
         appendedEntries: result.appendedEntries,
       });
       emitSessionTranscriptUpdate({
         ...(params.agentId ? { agentId: params.agentId } : {}),
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        sessionFile: params.transcriptPath,
+        transcriptLocator: params.transcriptLocator,
         sessionKey: params.sessionKey,
       });
       log.info(

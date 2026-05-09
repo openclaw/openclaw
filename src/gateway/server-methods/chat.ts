@@ -1063,7 +1063,7 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
     ...mediaFields,
   };
   await rewriteTranscriptEntriesInSqliteTranscript({
-    transcriptPath: params.transcriptPath,
+    transcriptLocator: params.transcriptPath,
     agentId: params.agentId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,

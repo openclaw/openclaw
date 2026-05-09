@@ -1,7 +1,7 @@
 import path from "node:path";
 import {
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../config/sessions/transcript-store.sqlite.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -60,7 +60,9 @@ export function resolveContextInjectionMode(config?: OpenClawConfig): AgentConte
 export async function hasCompletedBootstrapTranscriptTurn(
   transcriptLocator: string,
 ): Promise<boolean> {
-  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: transcriptLocator });
+  const scope = resolveSqliteSessionTranscriptScopeForLocator({
+    transcriptLocator: transcriptLocator,
+  });
   if (!scope) {
     return false;
   }

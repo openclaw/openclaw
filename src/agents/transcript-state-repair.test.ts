@@ -6,7 +6,7 @@ import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.j
 import {
   exportSqliteSessionTranscriptJsonl,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -68,13 +68,13 @@ function writeTranscriptEvents(file: string, events: unknown[]) {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
-    transcriptPath: file,
+    transcriptLocator: file,
     events,
   });
 }
 
 async function readTranscriptJsonl(file: string): Promise<string> {
-  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: file });
+  const scope = resolveSqliteSessionTranscriptScopeForLocator({ transcriptLocator: file });
   return scope ? exportSqliteSessionTranscriptJsonl(scope) : "";
 }
 

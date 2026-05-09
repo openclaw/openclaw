@@ -1,11 +1,10 @@
-import path from "node:path";
 import { isSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import {
   appendSqliteSessionTranscriptEvent,
   hasSqliteSessionTranscriptEvents,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
@@ -251,18 +250,20 @@ function clampToBudget(content: string, budget: number): string {
 }
 
 export async function ensureSessionHeader(params: {
-  sessionFile: string;
+  transcriptLocator: string;
   sessionId: string;
   cwd: string;
   agentId?: string;
   env?: OpenClawStateDatabaseOptions["env"];
 }) {
-  const trimmedSessionFile = params.sessionFile.trim();
-  const transcriptPath = isSqliteSessionTranscriptLocator(trimmedSessionFile)
-    ? trimmedSessionFile
-    : path.resolve(trimmedSessionFile);
-  const existingScope = resolveSqliteSessionTranscriptScopeForPath({
-    transcriptPath,
+  const trimmedTranscriptLocator = params.transcriptLocator.trim();
+  if (!isSqliteSessionTranscriptLocator(trimmedTranscriptLocator)) {
+    throw new Error(
+      `Transcript locator must be SQLite-backed: ${trimmedTranscriptLocator}. Run "openclaw doctor --fix" to import legacy transcript files.`,
+    );
+  }
+  const existingScope = resolveSqliteSessionTranscriptScopeForLocator({
+    transcriptLocator: trimmedTranscriptLocator,
     env: params.env,
   });
   const agentId = normalizeAgentId(params.agentId ?? existingScope?.agentId ?? DEFAULT_AGENT_ID);
@@ -276,7 +277,6 @@ export async function ensureSessionHeader(params: {
     if (!existingScope) {
       replaceSqliteSessionTranscriptEvents({
         ...existingEventsScope,
-        transcriptPath,
         events: loadSqliteSessionTranscriptEvents(existingEventsScope).map((entry) => entry.event),
       });
     }
@@ -293,7 +293,6 @@ export async function ensureSessionHeader(params: {
   appendSqliteSessionTranscriptEvent({
     agentId,
     sessionId,
-    transcriptPath,
     event: entry,
     env: params.env,
   });

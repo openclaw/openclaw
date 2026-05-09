@@ -240,6 +240,9 @@ The remaining cleanup is mostly consolidation and deletion:
   transcript files. Gateway chat/media/history paths read transcript rows from
   SQLite; JSONL is now a legacy doctor input or in-memory export
   encoding, not a runtime state file.
+- Runtime transcript store APIs resolve SQLite transcript locators, not
+  filesystem paths. The old `resolve...ForPath` helper and unused
+  `transcriptPath` write options are gone from runtime callers.
 - Runtime session resolution now uses `{agentId, sessionId}`. It may derive a
   `sqlite-transcript://<agent>/<session>` handle for external boundaries, but it
   must not store that derived value in active session rows. Legacy absolute

@@ -1,7 +1,7 @@
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
+  resolveSqliteSessionTranscriptScopeForLocator,
 } from "../config/sessions/transcript-store.sqlite.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 
@@ -194,7 +194,9 @@ export async function repairTranscriptStateIfNeeded(params: {
     return { repaired: false, droppedLines: 0, reason: "missing session transcript" };
   }
 
-  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: transcriptLocator });
+  const scope = resolveSqliteSessionTranscriptScopeForLocator({
+    transcriptLocator: transcriptLocator,
+  });
   if (!scope) {
     return { repaired: false, droppedLines: 0, reason: "missing SQLite transcript" };
   }
@@ -262,7 +264,6 @@ export async function repairTranscriptStateIfNeeded(params: {
   try {
     replaceSqliteSessionTranscriptEvents({
       ...scope,
-      transcriptPath: transcriptLocator,
       events: entries,
     });
   } catch (err) {

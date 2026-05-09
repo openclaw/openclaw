@@ -2,7 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
-import { isSqliteSessionTranscriptLocator } from "./paths.js";
+import { parseSqliteSessionTranscriptLocator } from "./paths.js";
 import { appendSqliteSessionTranscriptMessage as appendSqliteSessionTranscriptMessageAtomically } from "./transcript-store.sqlite.js";
 
 async function loadCurrentSessionVersion(): Promise<number> {
@@ -11,7 +11,7 @@ async function loadCurrentSessionVersion(): Promise<number> {
 }
 
 function normalizeRequiredScope(params: {
-  transcriptPath?: string;
+  transcriptLocator?: string;
   agentId?: string;
   sessionId?: string;
 }): { agentId: string; sessionId: string } {
@@ -20,6 +20,15 @@ function normalizeRequiredScope(params: {
   if (!agentId || !sessionId) {
     throw new Error("SQLite transcript appends require agentId and sessionId.");
   }
+  const locator = params.transcriptLocator?.trim()
+    ? parseSqliteSessionTranscriptLocator(params.transcriptLocator)
+    : undefined;
+  if (params.transcriptLocator?.trim() && !locator) {
+    throw new Error("SQLite transcript appends require a SQLite transcript locator.");
+  }
+  if (locator && (locator.agentId !== agentId || locator.sessionId !== sessionId)) {
+    throw new Error("SQLite transcript locator does not match the append scope.");
+  }
   return {
     agentId,
     sessionId,
@@ -27,7 +36,7 @@ function normalizeRequiredScope(params: {
 }
 
 export async function appendSessionTranscriptMessage(params: {
-  transcriptPath?: string;
+  transcriptLocator?: string;
   message: unknown;
   agentId?: string;
   now?: number;
@@ -45,9 +54,6 @@ export async function appendSessionTranscriptMessage(params: {
     agentId: scope.agentId,
     sessionId: scope.sessionId,
     sessionVersion,
-    ...(params.transcriptPath && isSqliteSessionTranscriptLocator(params.transcriptPath)
-      ? { transcriptPath: params.transcriptPath }
-      : {}),
     cwd: params.cwd,
     message,
     now: () => params.now ?? Date.now(),

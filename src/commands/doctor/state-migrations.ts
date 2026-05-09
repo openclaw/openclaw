@@ -304,7 +304,6 @@ function importLegacyTranscriptFileToSqlite(params: {
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId,
     sessionId,
-    transcriptPath: params.transcriptPath,
     events,
     env: params.env,
   });

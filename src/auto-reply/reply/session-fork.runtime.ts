@@ -58,7 +58,7 @@ async function estimateParentTranscriptTokensFromSqlite(params: {
     const scope = resolveSqliteSessionTranscriptScope({
       agentId: params.agentId,
       sessionId: params.parentEntry.sessionId,
-      transcriptPath: transcriptLocator,
+      transcriptLocator,
     });
     if (!scope) {
       return undefined;
@@ -256,7 +256,6 @@ async function writeForkHeaderOnly(params: {
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId,
     sessionId,
-    transcriptPath: childTranscriptLocator,
     events: [header],
   });
   return { sessionId, transcriptLocator: childTranscriptLocator };
@@ -295,7 +294,6 @@ async function writeBranchedSession(params: {
     replaceSqliteSessionTranscriptEvents({
       agentId: params.source.agentId,
       sessionId,
-      transcriptPath: childTranscriptLocator,
       events: entries,
     });
   }

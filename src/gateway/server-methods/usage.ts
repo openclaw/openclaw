@@ -19,7 +19,7 @@ import {
   loadSessionCostSummaryFromCache,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
-  resolveExistingUsageSessionFile,
+  resolveExistingUsageTranscriptLocator,
   type DiscoveredSession,
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
@@ -67,12 +67,12 @@ type CostUsageCacheEntry = {
 function readSessionTranscriptUpdatedAt(params: {
   agentId?: string;
   sessionId: string;
-  sessionFile?: string;
+  transcriptLocator?: string;
 }): number | undefined {
   const scope = resolveSqliteSessionTranscriptScope({
     agentId: params.agentId,
     sessionId: params.sessionId,
-    transcriptPath: params.sessionFile,
+    transcriptLocator: params.transcriptLocator,
   });
   if (!scope) {
     return undefined;
@@ -116,7 +116,7 @@ function resolveSessionUsageFileOrRespond(
   entry: SessionEntry | undefined;
   agentId: string | undefined;
   sessionId: string;
-  sessionFile: string;
+  transcriptLocator: string;
 } | null {
   const { entry, agentId: loadedAgentId } = loadSessionEntry(key);
 
@@ -125,9 +125,9 @@ function resolveSessionUsageFileOrRespond(
   const agentId = parsed?.agentId ?? loadedAgentId;
   const rawSessionId = parsed?.rest ?? key;
   const sessionId = entry?.sessionId ?? rawSessionId;
-  let sessionFile: string;
+  let transcriptLocator: string;
   try {
-    sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
+    transcriptLocator = createSqliteSessionTranscriptLocator({ agentId, sessionId });
   } catch {
     respond(
       false,
@@ -137,7 +137,7 @@ function resolveSessionUsageFileOrRespond(
     return null;
   }
 
-  return { config, entry, agentId, sessionId, sessionFile };
+  return { config, entry, agentId, sessionId, transcriptLocator };
 }
 
 const parseDateParts = (
@@ -328,7 +328,7 @@ type UsageGroupingMode = "instance" | "family";
 type MergedEntry = {
   key: string;
   sessionId: string;
-  sessionFile: string;
+  transcriptLocator: string;
   label?: string;
   updatedAt: number;
   storeEntry?: SessionEntry;
@@ -876,12 +876,12 @@ export const usageHandlers: GatewayRequestHandlers = {
       const sessionId = storeEntry?.sessionId ?? keyRest;
 
       // Resolve the SQLite transcript locator.
-      let sessionFile: string | undefined;
+      let transcriptLocator: string | undefined;
       try {
-        sessionFile = resolveExistingUsageSessionFile({
+        transcriptLocator = resolveExistingUsageTranscriptLocator({
           sessionId,
           sessionEntry: storeEntry,
-          sessionFile: createSqliteSessionTranscriptLocator({ agentId, sessionId }),
+          transcriptLocator: createSqliteSessionTranscriptLocator({ agentId, sessionId }),
           agentId,
         });
       } catch {
@@ -893,11 +893,11 @@ export const usageHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      if (sessionFile) {
+      if (transcriptLocator) {
         const transcriptUpdatedAt = readSessionTranscriptUpdatedAt({
           agentId,
           sessionId,
-          sessionFile,
+          transcriptLocator,
         });
         if (transcriptUpdatedAt !== undefined) {
           maybeMergeFamilyEntry({
@@ -906,7 +906,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             base: {
               key: resolvedStoreKey,
               sessionId,
-              sessionFile,
+              transcriptLocator,
               label: storeEntry?.label,
               updatedAt: storeEntry?.updatedAt ?? transcriptUpdatedAt,
               storeEntry,
@@ -943,7 +943,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             base: {
               key: storeMatch.key,
               sessionId: discovered.sessionId,
-              sessionFile: discovered.sessionFile,
+              transcriptLocator: discovered.transcriptLocator,
               label: storeMatch.entry.label,
               updatedAt: storeMatch.entry.updatedAt ?? discovered.mtime,
               storeEntry: storeMatch.entry,
@@ -958,7 +958,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             // Keep agentId in the key so the dashboard can attribute sessions and later fetch logs.
             key: `agent:${discovered.agentId}:${discovered.sessionId}`,
             sessionId: discovered.sessionId,
-            sessionFile: discovered.sessionFile,
+            transcriptLocator: discovered.transcriptLocator,
             label: undefined, // No label for unnamed sessions
             updatedAt: discovered.mtime,
             scope: "instance",
@@ -1062,19 +1062,19 @@ export const usageHandlers: GatewayRequestHandlers = {
       const includedSessionIds = merged.includedSessionIds ?? [merged.sessionId];
       for (const includedSessionId of includedSessionIds) {
         const isCurrentSession = includedSessionId === merged.sessionId;
-        const includedSessionFile = isCurrentSession
-          ? merged.sessionFile
-          : resolveExistingUsageSessionFile({
+        const includedTranscriptLocator = isCurrentSession
+          ? merged.transcriptLocator
+          : resolveExistingUsageTranscriptLocator({
               sessionId: includedSessionId,
               agentId,
             });
-        if (!includedSessionFile) {
+        if (!includedTranscriptLocator) {
           continue;
         }
         const cachedUsage = await loadSessionCostSummaryFromCache({
           sessionId: includedSessionId,
           sessionEntry: isCurrentSession ? merged.storeEntry : undefined,
-          sessionFile: includedSessionFile,
+          transcriptLocator: includedTranscriptLocator,
           config,
           agentId,
           startMs,
@@ -1089,7 +1089,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         if (!usage) {
           usage = createEmptySessionCostSummary();
           usage.sessionId = merged.sessionId;
-          usage.sessionFile = merged.sessionFile;
+          usage.transcriptLocator = merged.transcriptLocator;
         }
         mergeSessionUsageInto(usage, includedUsage);
       }
@@ -1321,12 +1321,12 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, entry, agentId, sessionId, sessionFile } = resolved;
+    const { config, entry, agentId, sessionId, transcriptLocator } = resolved;
 
     const timeseries = await loadSessionUsageTimeSeries({
       sessionId,
       sessionEntry: entry,
-      sessionFile,
+      transcriptLocator,
       config,
       agentId,
       maxPoints: 200,
@@ -1359,12 +1359,12 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, entry, agentId, sessionId, sessionFile } = resolved;
+    const { config, entry, agentId, sessionId, transcriptLocator } = resolved;
 
     const logs = await loadSessionLogs({
       sessionId,
       sessionEntry: entry,
-      sessionFile,
+      transcriptLocator,
       config,
       agentId,
       limit,

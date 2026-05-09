@@ -46,7 +46,7 @@ type DeferredTurnMaintenanceScheduleParams = {
   sessionAgentId?: string;
   sessionId: string;
   sessionKey: string;
-  sessionFile: string;
+  transcriptLocator: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
@@ -277,7 +277,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionAgentId?: string;
   sessionId: string;
   sessionKey?: string;
-  sessionFile: string;
+  transcriptLocator: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
@@ -306,7 +306,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
       }
       const rewriteTranscriptEntriesInFile = async () =>
         await rewriteTranscriptEntriesInSqliteTranscript({
-          transcriptPath: params.sessionFile,
+          transcriptLocator: params.transcriptLocator,
           agentId: params.sessionAgentId,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
@@ -330,7 +330,7 @@ async function executeContextEngineMaintenance(params: {
   sessionAgentId?: string;
   sessionId: string;
   sessionKey?: string;
-  sessionFile: string;
+  transcriptLocator: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -344,12 +344,12 @@ async function executeContextEngineMaintenance(params: {
   const result = await params.contextEngine.maintain({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
+    transcriptLocator: params.transcriptLocator,
     runtimeContext: buildContextEngineMaintenanceRuntimeContext({
       sessionAgentId: params.sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
+      transcriptLocator: params.transcriptLocator,
       sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
       runtimeContext: params.runtimeContext,
       agentId: params.agentId,
@@ -375,7 +375,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
   sessionAgentId?: string;
   sessionId: string;
   sessionKey: string;
-  sessionFile: string;
+  transcriptLocator: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
@@ -456,7 +456,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
       sessionAgentId: params.sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
+      transcriptLocator: params.transcriptLocator,
       reason: "turn",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
@@ -582,7 +582,7 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
         sessionAgentId: params.sessionAgentId,
         sessionId: params.sessionId,
         sessionKey,
-        sessionFile: params.sessionFile,
+        transcriptLocator: params.transcriptLocator,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
         agentId: params.agentId,
@@ -639,7 +639,7 @@ export async function runContextEngineMaintenance(params: {
   sessionAgentId?: string;
   sessionId: string;
   sessionKey?: string;
-  sessionFile: string;
+  transcriptLocator: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -664,7 +664,7 @@ export async function runContextEngineMaintenance(params: {
         sessionAgentId: params.sessionAgentId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
-        sessionFile: params.sessionFile,
+        transcriptLocator: params.transcriptLocator,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
         agentId: params.agentId,
@@ -682,7 +682,7 @@ export async function runContextEngineMaintenance(params: {
       sessionAgentId: params.sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
+      transcriptLocator: params.transcriptLocator,
       reason: params.reason,
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,

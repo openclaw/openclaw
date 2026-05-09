@@ -194,7 +194,7 @@ async function persistTextTurnTranscript(
     return params.sessionEntry;
   }
 
-  const { sessionFile, sessionEntry } = await resolveSessionTranscriptTarget({
+  const { transcriptLocator, sessionEntry } = await resolveSessionTranscriptTarget({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry: params.sessionEntry,
@@ -204,7 +204,7 @@ async function persistTextTurnTranscript(
   });
   if (promptText) {
     await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
+      transcriptLocator: transcriptLocator,
       agentId: params.sessionAgentId,
       sessionId: params.sessionId,
       cwd: params.sessionCwd,
@@ -220,7 +220,7 @@ async function persistTextTurnTranscript(
   if (replyText) {
     let appendAssistant = true;
     if (params.embeddedAssistantGapFill) {
-      const latest = await readTailAssistantTextFromSessionTranscript(sessionFile, {
+      const latest = await readTailAssistantTextFromSessionTranscript(transcriptLocator, {
         agentId: params.sessionAgentId,
         sessionId: params.sessionId,
       });
@@ -232,7 +232,7 @@ async function persistTextTurnTranscript(
     }
     if (appendAssistant) {
       await appendSessionTranscriptMessage({
-        transcriptPath: sessionFile,
+        transcriptLocator: transcriptLocator,
         agentId: params.sessionAgentId,
         sessionId: params.sessionId,
         cwd: params.sessionCwd,
@@ -254,7 +254,7 @@ async function persistTextTurnTranscript(
   emitSessionTranscriptUpdate({
     agentId: params.sessionAgentId,
     sessionId: params.sessionId,
-    sessionFile,
+    transcriptLocator,
     sessionKey: params.sessionKey,
   });
   return sessionEntry;
@@ -350,7 +350,7 @@ export function runAgentAttempt(params: {
   sessionId: string;
   sessionKey: string | undefined;
   sessionAgentId: string;
-  sessionFile: string;
+  transcriptLocator: string;
   workspaceDir: string;
   body: string;
   isFallbackRetry: boolean;
@@ -487,7 +487,7 @@ export function runAgentAttempt(params: {
         sessionKey: params.sessionKey,
         agentId: params.sessionAgentId,
         trigger: "user",
-        sessionFile: params.sessionFile,
+        transcriptLocator: params.transcriptLocator,
         workspaceDir: params.workspaceDir,
         config: params.cfg,
         prompt: effectivePrompt,
@@ -590,7 +590,7 @@ export function runAgentAttempt(params: {
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
     senderIsOwner: params.opts.senderIsOwner,
-    sessionFile: params.sessionFile,
+    transcriptLocator: params.transcriptLocator,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
     agentHarnessId: requestedAgentHarnessId,

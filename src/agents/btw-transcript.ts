@@ -97,14 +97,14 @@ function isTrailingUserMessage(entry: PiSessionEntry | undefined): boolean {
 }
 
 export async function readBtwTranscriptMessages(params: {
-  sessionFile: string;
+  transcriptLocator: string;
   sessionId: string;
   snapshotLeafId?: string | null;
 }): Promise<unknown[]> {
   try {
     const scope = resolveSqliteSessionTranscriptScope({
       sessionId: params.sessionId,
-      transcriptPath: params.sessionFile,
+      transcriptLocator: params.transcriptLocator,
     });
     if (!scope) {
       return [];
