@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync } from "node:fs";
 import {
   createServer,
   request as httpRequest,
@@ -7,13 +7,17 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
-import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
+import {
+  deleteOpenClawStateKvJson,
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../../state/openclaw-state-kv.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
 import { normalizeToolName } from "../tool-policy.js";
 import { callGatewayTool } from "../tools/gateway.js";
@@ -170,6 +174,7 @@ const MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES = 512;
 const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
 const MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES = 5_000_000;
 const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
+const NATIVE_HOOK_RELAY_BRIDGE_SCOPE = "native-hook-relay.bridge";
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 const relays = new Map<string, NativeHookRelayRegistration>();
 const relayBridges = new Map<string, NativeHookRelayBridgeRegistration>();
@@ -209,7 +214,6 @@ type NativeHookRelayPermissionApprovalRequester = (
 
 type NativeHookRelayBridgeRegistration = {
   relayId: string;
-  registryPath: string;
   token: string;
   server: Server;
 };
@@ -503,9 +507,6 @@ function pruneExpiredNativeHookRelays(now = Date.now()): void {
 function registerNativeHookRelayBridge(registration: NativeHookRelayRegistration): void {
   unregisterNativeHookRelayBridge(registration.relayId);
   const token = randomUUID();
-  const bridgeDir = ensureNativeHookRelayBridgeDir();
-  const bridgeKey = nativeHookRelayBridgeKey(registration.relayId);
-  const registryPath = path.join(bridgeDir, `${bridgeKey}.json`);
   const server = createServer((req, res) => {
     void handleNativeHookRelayBridgeRequest(req, res, {
       provider: registration.provider,
@@ -515,7 +516,6 @@ function registerNativeHookRelayBridge(registration: NativeHookRelayRegistration
   });
   const bridge: NativeHookRelayBridgeRegistration = {
     relayId: registration.relayId,
-    registryPath,
     token,
     server,
   };
@@ -543,7 +543,7 @@ function registerNativeHookRelayBridge(registration: NativeHookRelayRegistration
       token,
       expiresAtMs: registration.expiresAtMs,
     };
-    writeNativeHookRelayBridgeRecord(registryPath, record);
+    writeNativeHookRelayBridgeRecord(record);
   });
   server.unref();
 }
@@ -557,7 +557,7 @@ function unregisterNativeHookRelayBridge(relayId: string): void {
   bridge.server.close();
   const record = readNativeHookRelayBridgeRecordIfExists(relayId);
   if (record?.token === bridge.token) {
-    rmSync(bridge.registryPath, { force: true });
+    deleteNativeHookRelayBridgeRecord(relayId);
   }
 }
 
@@ -644,16 +644,16 @@ function readNativeHookRelayBridgeRecord(relayId: string): NativeHookRelayBridge
 function readNativeHookRelayBridgeRecordIfExists(
   relayId: string,
 ): NativeHookRelayBridgeRecord | undefined {
-  const registryPath = nativeHookRelayBridgeRegistryPath(relayId);
   try {
-    const parsed: unknown = JSON.parse(readFileSync(registryPath, "utf8"));
+    const parsed: unknown = readOpenClawStateKvJson(
+      NATIVE_HOOK_RELAY_BRIDGE_SCOPE,
+      nativeHookRelayBridgeKey(relayId),
+    );
     if (isNativeHookRelayBridgeRecord(parsed, relayId)) {
       return parsed;
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      log.debug("failed to read native hook relay bridge registry", { error, relayId });
-    }
+    log.debug("failed to read native hook relay bridge record", { error, relayId });
   }
   return undefined;
 }
@@ -790,44 +790,16 @@ function isRetryableNativeHookRelayBridgeError(error: unknown): boolean {
   );
 }
 
-function nativeHookRelayBridgeDir(): string {
-  const uid = typeof process.getuid === "function" ? process.getuid() : "nouid";
-  return path.join(tmpdir(), `openclaw-native-hook-relays-${uid}`);
-}
-
-function ensureNativeHookRelayBridgeDir(): string {
-  const bridgeDir = nativeHookRelayBridgeDir();
-  mkdirSync(bridgeDir, { recursive: true, mode: 0o700 });
-  const stats = lstatSync(bridgeDir);
-  const expectedUid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  if (!stats.isDirectory() || stats.isSymbolicLink()) {
-    throw new Error("unsafe native hook relay bridge directory");
-  }
-  if (expectedUid !== undefined && stats.uid !== expectedUid) {
-    throw new Error("unsafe native hook relay bridge directory owner");
-  }
-  if (process.platform !== "win32" && (stats.mode & 0o077) !== 0) {
-    chmodSync(bridgeDir, 0o700);
-    const repaired = lstatSync(bridgeDir);
-    if ((repaired.mode & 0o077) !== 0) {
-      throw new Error("unsafe native hook relay bridge directory permissions");
-    }
-  }
-  return bridgeDir;
-}
-
-function writeNativeHookRelayBridgeRecord(
-  registryPath: string,
-  record: NativeHookRelayBridgeRecord,
-): void {
-  privateFileStoreSync(path.dirname(registryPath)).writeText(
-    path.basename(registryPath),
-    `${JSON.stringify(record)}\n`,
+function writeNativeHookRelayBridgeRecord(record: NativeHookRelayBridgeRecord): void {
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    NATIVE_HOOK_RELAY_BRIDGE_SCOPE,
+    nativeHookRelayBridgeKey(record.relayId),
+    record as unknown as OpenClawStateJsonValue,
   );
 }
 
-function nativeHookRelayBridgeRegistryPath(relayId: string): string {
-  return path.join(nativeHookRelayBridgeDir(), `${nativeHookRelayBridgeKey(relayId)}.json`);
+function deleteNativeHookRelayBridgeRecord(relayId: string): void {
+  deleteOpenClawStateKvJson(NATIVE_HOOK_RELAY_BRIDGE_SCOPE, nativeHookRelayBridgeKey(relayId));
 }
 
 function nativeHookRelayBridgeKey(relayId: string): string {
@@ -1708,15 +1680,16 @@ export const __testing = {
   getNativeHookRelayRegistrationForTests(relayId: string): NativeHookRelayRegistration | undefined {
     return relays.get(relayId);
   },
-  getNativeHookRelayBridgeDirForTests(): string {
-    return nativeHookRelayBridgeDir();
-  },
-  getNativeHookRelayBridgeRegistryPathForTests(relayId: string): string {
-    return nativeHookRelayBridgeRegistryPath(relayId);
-  },
   getNativeHookRelayBridgeRecordForTests(relayId: string): Record<string, unknown> | undefined {
     const record = readNativeHookRelayBridgeRecordIfExists(relayId);
     return record ? { ...record } : undefined;
+  },
+  setNativeHookRelayBridgeRecordForTests(relayId: string, record: Record<string, unknown>): void {
+    writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+      NATIVE_HOOK_RELAY_BRIDGE_SCOPE,
+      nativeHookRelayBridgeKey(relayId),
+      record as OpenClawStateJsonValue,
+    );
   },
   formatPermissionApprovalDescriptionForTests(
     request: NativeHookRelayPermissionApprovalRequest,

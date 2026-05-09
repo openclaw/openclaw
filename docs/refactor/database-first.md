@@ -114,8 +114,8 @@ interfaces that still look like the old file world:
 - Session writes no longer pass through the old in-process `store-writer.ts`
   queue. SQLite patch writes use conflict detection and bounded retry instead.
 - Legacy path discovery still has valid migration uses, but runtime code should
-  stop treating `sessions.json`, transcript JSONL files, and sandbox registry
-  JSON as possible write targets.
+  stop treating `sessions.json` and transcript JSONL files as possible write
+  targets.
 - Agent-owned tables live in per-agent SQLite databases. The global DB keeps
   registry/control-plane rows; transcript identity is `{agentId, sessionId}` in
   the per-agent transcript rows. Runtime code must not persist transcript file
@@ -259,6 +259,9 @@ The remaining cleanup is mostly consolidation and deletion:
 - Runtime session resolution now uses `{agentId, sessionId}` and must not derive
   `sqlite-transcript://<agent>/<session>` strings for external boundaries.
   Legacy absolute JSONL paths are doctor migration inputs only.
+- Native hook relay direct-bridge records now live in shared SQLite KV rows
+  keyed by relay id. Runtime no longer writes a `/tmp` JSON registry for those
+  short-lived bridge records.
 - `runEmbeddedPiAgent(...)` no longer has a transcript-locator parameter.
   Prepared worker descriptors also omit transcript locators. Runtime session
   state and queued follow-up runs carry `{agentId, sessionId}` instead of
