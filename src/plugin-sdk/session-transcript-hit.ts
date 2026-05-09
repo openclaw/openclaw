@@ -26,6 +26,7 @@ function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: stri
 /**
  * Derive transcript stem `S` from a memory search hit path for `source === "sessions"`.
  * Builtin index uses `sessions/<agent>/<session>`; QMD exports use `<stem>.md`.
+ * Legacy JSONL source paths are ignored; active transcript identity is SQLite.
  */
 export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): string | null {
   return extractTranscriptIdentityFromSessionsMemoryHit(hitPath)?.stem ?? null;
@@ -54,13 +55,12 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
  * `createSessionVisibilityGuard`), including cross-agent cases.
  */
 export function resolveTranscriptStemToSessionKeys(params: {
-  store: Record<string, SessionEntry>;
+  entries: Record<string, SessionEntry>;
   stem: string;
 }): string[] {
-  const { store } = params;
   const matches: string[] = [];
 
-  for (const [sessionKey, entry] of Object.entries(store)) {
+  for (const [sessionKey, entry] of Object.entries(params.entries)) {
     if (entry.sessionId === params.stem) {
       matches.push(sessionKey);
     }

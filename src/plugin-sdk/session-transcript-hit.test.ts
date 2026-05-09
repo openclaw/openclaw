@@ -38,17 +38,17 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     ...overrides,
   });
 
-  it("returns keys for every agent whose store entry matches the stem", () => {
-    const store: Record<string, SessionEntry> = {
+  it("returns keys for every agent whose session row matches the stem", () => {
+    const entries: Record<string, SessionEntry> = {
       "agent:main:s1": baseEntry({}),
       "agent:peer:s2": baseEntry({}),
     };
-    const keys = resolveTranscriptStemToSessionKeys({ store, stem: "stem-a" }).toSorted();
+    const keys = resolveTranscriptStemToSessionKeys({ entries, stem: "stem-a" }).toSorted();
     expect(keys).toEqual(["agent:main:s1", "agent:peer:s2"]);
   });
 
-  it("does not synthesize keys when the live store has no matching transcript", () => {
-    const keys = resolveTranscriptStemToSessionKeys({ store: {}, stem: "deleted-stem" });
+  it("does not synthesize keys when live rows have no matching transcript", () => {
+    const keys = resolveTranscriptStemToSessionKeys({ entries: {}, stem: "deleted-stem" });
 
     expect(keys).toEqual([]);
   });
