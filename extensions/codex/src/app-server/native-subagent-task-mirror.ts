@@ -2,7 +2,7 @@ import {
   createRunningTaskRun,
   finalizeTaskRunByRunId,
   recordTaskRunProgressByRunId,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+} from "openclaw/plugin-sdk/codex-native-task-runtime";
 import type {
   CodexServerNotification,
   CodexSessionSource,

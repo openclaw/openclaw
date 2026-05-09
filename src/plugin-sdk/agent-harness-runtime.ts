@@ -73,11 +73,6 @@ export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 export { log as embeddedAgentLog } from "../agents/pi-embedded-runner/logger.js";
-export {
-  createRunningTaskRun,
-  finalizeTaskRunByRunId,
-  recordTaskRunProgressByRunId,
-} from "../tasks/detached-task-runtime.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export { classifyEmbeddedPiRunResultForModelFallback } from "../agents/pi-embedded-runner/result-fallback-classifier.js";
 export { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
