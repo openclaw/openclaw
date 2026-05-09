@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Slack/ACP: add configured ACP binding support for Slack channels and DMs so `bindings[].type="acp"` can compile against Slack peer ids, route inbound messages through configured bindings when no runtime binding exists, and drop unavailable configured targets instead of falling back to `main`. (#73101) Thanks @Raasl.
+
 ### Changes
 
 - Active Memory: support concrete `plugins.entries.active-memory.config.toolsAllow` recall tool names for custom memory plugins while keeping the built-in memory-core default on `memory_search`/`memory_get` and preserving `memory_recall` automatically for `plugins.slots.memory: "memory-lancedb"`.
