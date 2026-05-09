@@ -1129,13 +1129,14 @@ describe("loadOpenClawPlugins", () => {
     });
 
     expect(registry.textTransforms).toHaveLength(1);
-    expect(registry.textTransforms[0]).toMatchObject({
-      pluginId: "text-shim",
-      transforms: {
-        input: expect.any(Array),
-        output: expect.any(Array),
-      },
-    });
+    const transformRegistration = registry.textTransforms[0];
+    expect(transformRegistration?.pluginId).toBe("text-shim");
+    expect(transformRegistration?.transforms.input).toEqual([
+      { from: /red basket/g, to: "blue basket" },
+    ]);
+    expect(transformRegistration?.transforms.output).toEqual([
+      { from: /blue basket/g, to: "red basket" },
+    ]);
   });
 
   it.each([
