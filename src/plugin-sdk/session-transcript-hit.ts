@@ -26,7 +26,6 @@ function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: stri
 /**
  * Derive transcript stem `S` from a memory search hit path for `source === "sessions"`.
  * Builtin index uses `sessions/<agent>/<session>`; QMD exports use `<stem>.md`.
- * Legacy JSONL source paths are ignored; active transcript identity is SQLite.
  */
 export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): string | null {
   return extractTranscriptIdentityFromSessionsMemoryHit(hitPath)?.stem ?? null;
@@ -39,9 +38,6 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
   if (base.endsWith(".md")) {
     const stem = base.slice(0, -".md".length);
     return stem ? { stem } : null;
-  }
-  if (base.includes(".jsonl")) {
-    return null;
   }
   if (hitPath.replace(/\\/g, "/").startsWith("sessions/") && base) {
     return { stem: base, ownerAgentId };
