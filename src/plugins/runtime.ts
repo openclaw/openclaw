@@ -123,9 +123,6 @@ function collectLivePluginAgentEventRegistries(): PluginRegistry[] {
       return;
     }
     seen.add(registry);
-    if ((registry.agentEventSubscriptions?.length ?? 0) === 0) {
-      return;
-    }
     registries.push(registry);
   };
   addRegistry(asPluginRegistry(state.activeRegistry));
