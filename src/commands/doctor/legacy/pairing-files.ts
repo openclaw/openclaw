@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
-import { readJsonIfExists } from "./json-files.js";
+import { readJsonIfExists } from "../../../infra/json-files.js";
 import {
   coercePairingStateRecord,
   resolvePairingPaths,
   writePairingStateRecord,
-} from "./pairing-files.js";
+} from "../../../infra/pairing-files.js";
 
 export async function legacyPairingStateFilesExist(params: {
   baseDir?: string;

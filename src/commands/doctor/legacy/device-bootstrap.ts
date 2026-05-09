@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { type DeviceBootstrapState } from "./device-bootstrap.js";
-import { resolvePairingPaths, writePairingStateRecord } from "./pairing-files.js";
+import { type DeviceBootstrapState } from "../../../infra/device-bootstrap.js";
+import { resolvePairingPaths, writePairingStateRecord } from "../../../infra/pairing-files.js";
 
 function resolveBootstrapPath(baseDir?: string): string {
   return path.join(resolvePairingPaths(baseDir, "devices").dir, "bootstrap.json");

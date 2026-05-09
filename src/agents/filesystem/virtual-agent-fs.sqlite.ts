@@ -85,15 +85,6 @@ function rowToEntry(row: VirtualAgentFsRow): VirtualAgentFsEntry {
   };
 }
 
-function virtualAgentFsRowFromDb(
-  row: Omit<Selectable<VfsEntriesTable>, "kind"> & { kind: string },
-) {
-  return {
-    ...row,
-    kind: row.kind as VirtualAgentFsEntryKind,
-  };
-}
-
 function bindEntry(params: {
   namespace: string;
   path: string;
@@ -134,7 +125,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
         .where("namespace", "=", this.#options.namespace)
         .where("path", "=", normalizeVfsPath(filePath)),
     );
-    return row ? virtualAgentFsRowFromDb(row) : null;
+    return row ?? null;
   }
 
   #allRows(): VirtualAgentFsRow[] {
@@ -147,7 +138,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
         .select(["namespace", "path", "kind", "content_blob", "metadata_json", "updated_at"])
         .where("namespace", "=", this.#options.namespace)
         .orderBy("path", "asc"),
-    ).rows.map(virtualAgentFsRowFromDb);
+    ).rows;
   }
 
   #upsert(params: {
@@ -201,7 +192,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
 
   readFile(filePath: string): Buffer {
     const row = this.#selectRow(filePath);
-    if (!row || row.kind !== "file") {
+    if (!row || parseVirtualAgentFsEntryKind(row.kind) !== "file") {
       throw new Error(`VFS file not found: ${normalizeVfsPath(filePath)}`);
     }
     return Buffer.from(row.content_blob ?? Buffer.alloc(0));

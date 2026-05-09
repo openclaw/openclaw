@@ -2,6 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { importLegacyVoiceWakeRoutingConfigFileToSqlite } from "../commands/doctor/legacy/voicewake-routing.js";
+import { importLegacyVoiceWakeConfigFileToSqlite } from "../commands/doctor/legacy/voicewake.js";
+import { readSessionStoreJson5 } from "../commands/doctor/state-migrations.fs.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   getChannelActivity,
@@ -14,9 +17,6 @@ import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "./diagnostic-events.js";
-import { readSessionStoreJson5 } from "./state-migrations.fs.js";
-import { importLegacyVoiceWakeConfigFileToSqlite } from "./voicewake-legacy.js";
-import { importLegacyVoiceWakeRoutingConfigFileToSqlite } from "./voicewake-routing-legacy.js";
 import {
   loadVoiceWakeRoutingConfig,
   normalizeVoiceWakeTriggerWord,

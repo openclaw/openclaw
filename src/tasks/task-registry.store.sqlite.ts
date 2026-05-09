@@ -192,18 +192,7 @@ function selectTaskRows(db: DatabaseSync): TaskRegistryRow[] {
     ])
     .orderBy("created_at", "asc")
     .orderBy("task_id", "asc");
-  return executeSqliteQuerySync(db, query).rows.map((row) => ({
-    ...row,
-    runtime: row.runtime as TaskRecord["runtime"],
-    scope_kind: row.scope_kind as TaskRecord["scopeKind"],
-    status: row.status as TaskRecord["status"],
-    delivery_status: row.delivery_status as TaskRecord["deliveryStatus"],
-    notify_policy: row.notify_policy as TaskRecord["notifyPolicy"],
-    terminal_outcome: row.terminal_outcome as Exclude<
-      TaskRecord["terminalOutcome"],
-      undefined
-    > | null,
-  }));
+  return executeSqliteQuerySync(db, query).rows;
 }
 
 function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {

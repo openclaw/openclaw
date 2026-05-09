@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { VirtualAgentFsEntry } from "./agent-filesystem.js";
 import { parseVirtualAgentFsEntryKind } from "./agent-filesystem.js";
@@ -145,5 +148,25 @@ describe("SqliteVirtualAgentFs", () => {
         contentBase64: "aGVsbG8=",
       },
     ]);
+  });
+
+  it("rejects corrupt persisted entry kinds from public sqlite methods", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const scratch = createSqliteVirtualAgentFs({
+      agentId: "main",
+      namespace: "scratch",
+      env,
+      now: () => 5000,
+    });
+
+    scratch.writeFile("/reports/summary.txt", "hello");
+    openOpenClawAgentDatabase({ agentId: "main", env })
+      .db.prepare("UPDATE vfs_entries SET kind = ? WHERE namespace = ? AND path = ?")
+      .run("socket", "scratch", "/reports/summary.txt");
+
+    expect(() => scratch.stat("/reports/summary.txt")).toThrow("Invalid persisted VFS entry kind");
+    expect(() => scratch.readFile("/reports/summary.txt")).toThrow(
+      "Invalid persisted VFS entry kind",
+    );
   });
 });

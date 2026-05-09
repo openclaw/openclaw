@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import {
   normalizeApnsRegistrationStateForMigration,
   writeApnsRegistrationStateForMigration,
-} from "./push-apns.js";
+} from "../../../infra/push-apns.js";
 
 const LEGACY_APNS_STATE_FILENAME = "push/apns-registrations.json";
 

@@ -4,10 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
-  importLegacyTuiLastSessionStoreToSqlite,
-  resolveLegacyTuiLastSessionStatePath,
-} from "./tui-last-session-legacy.js";
-import {
   buildTuiLastSessionScopeKey,
   clearTuiLastSessionPointers,
   isHeartbeatLikeTuiSession,
@@ -22,6 +18,10 @@ async function makeTempStateDir() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tui-last-session-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function legacyTuiLastSessionStatePath(stateDir: string): string {
+  return path.join(stateDir, "tui", "last-session.json");
 }
 
 afterEach(async () => {
@@ -45,7 +45,7 @@ describe("tui last session state", () => {
     });
 
     await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe("agent:main:tui-123");
-    await expect(fs.access(resolveLegacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
+    await expect(fs.access(legacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
@@ -63,7 +63,7 @@ describe("tui last session state", () => {
       sessionKey: "agent:main:tui-sqlite",
       stateDir,
     });
-    await expect(fs.access(resolveLegacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
+    await expect(fs.access(legacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
       code: "ENOENT",
     });
 
@@ -72,45 +72,7 @@ describe("tui last session state", () => {
     );
   });
 
-  it("imports legacy JSON into SQLite through the doctor migration helper", async () => {
-    const stateDir = await makeTempStateDir();
-    const scopeKey = buildTuiLastSessionScopeKey({
-      connectionUrl: "legacy",
-      agentId: "main",
-      sessionScope: "per-sender",
-    });
-    const statePath = resolveLegacyTuiLastSessionStatePath(stateDir);
-    await fs.mkdir(path.dirname(statePath), { recursive: true });
-    await fs.writeFile(
-      statePath,
-      JSON.stringify({ [scopeKey]: { sessionKey: "agent:main:legacy-json", updatedAt: 1000 } }),
-    );
-
-    await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBeNull();
-    await expect(importLegacyTuiLastSessionStoreToSqlite({ stateDir })).resolves.toEqual({
-      imported: true,
-      pointers: 1,
-    });
-    await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe(
-      "agent:main:legacy-json",
-    );
-  });
-
-  it("removes empty legacy JSON through the doctor migration helper", async () => {
-    const stateDir = await makeTempStateDir();
-    const statePath = resolveLegacyTuiLastSessionStatePath(stateDir);
-    await fs.mkdir(path.dirname(statePath), { recursive: true });
-    await fs.writeFile(statePath, "{}\n", "utf8");
-
-    await expect(importLegacyTuiLastSessionStoreToSqlite({ stateDir })).resolves.toEqual({
-      imported: true,
-      pointers: 0,
-    });
-    await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("clears stale pointers from SQLite after legacy JSON import", async () => {
+  it("clears stale pointers from SQLite", async () => {
     const stateDir = await makeTempStateDir();
     const staleScope = buildTuiLastSessionScopeKey({
       connectionUrl: "stale",
@@ -132,32 +94,18 @@ describe("tui last session state", () => {
       sessionKey: "agent:main:tui-live",
       stateDir,
     });
-    const legacyScope = buildTuiLastSessionScopeKey({
-      connectionUrl: "legacy-stale",
-      agentId: "main",
-      sessionScope: "per-sender",
-    });
-    const statePath = resolveLegacyTuiLastSessionStatePath(stateDir);
-    await fs.mkdir(path.dirname(statePath), { recursive: true });
-    await fs.writeFile(
-      statePath,
-      JSON.stringify({ [legacyScope]: { sessionKey: "agent:main:legacy-stale", updatedAt: 1000 } }),
-    );
-    await importLegacyTuiLastSessionStoreToSqlite({ stateDir });
 
     await expect(
       clearTuiLastSessionPointers({
         stateDir,
-        sessionKeys: new Set(["agent:main:main", "agent:main:legacy-stale"]),
+        sessionKeys: new Set(["agent:main:main"]),
       }),
-    ).resolves.toBe(2);
+    ).resolves.toBe(1);
 
     await expect(readTuiLastSessionKey({ scopeKey: staleScope, stateDir })).resolves.toBeNull();
-    await expect(readTuiLastSessionKey({ scopeKey: legacyScope, stateDir })).resolves.toBeNull();
     await expect(readTuiLastSessionKey({ scopeKey: liveScope, stateDir })).resolves.toBe(
       "agent:main:tui-live",
     );
-    await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("restores only a remembered session that still belongs to the current agent", () => {

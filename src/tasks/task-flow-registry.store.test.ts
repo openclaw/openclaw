@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow,
@@ -14,6 +15,7 @@ import {
   resolveTaskFlowRegistrySqlitePath,
 } from "./task-flow-registry.paths.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
+import { loadTaskFlowRegistryStateFromSqlite } from "./task-flow-registry.store.sqlite.js";
 import {
   parseOptionalTaskFlowSyncMode,
   parseTaskFlowStatus,
@@ -141,6 +143,28 @@ describe("task-flow-registry store runtime", () => {
     );
     expect(() => parseTaskFlowStatus("done")).toThrow("Invalid persisted task flow status");
     expect(() => parseTaskNotifyPolicy("verbose")).toThrow("Invalid persisted task notify policy");
+  });
+
+  it("rejects corrupt persisted flow rows during sqlite restore", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskFlowRegistryForTests();
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/corrupt-flow",
+        goal: "Corrupt flow",
+        status: "running",
+      });
+
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE flow_runs SET status = ? WHERE flow_id = ?")
+        .run("done", created.flowId);
+
+      expect(() => loadTaskFlowRegistryStateFromSqlite()).toThrow(
+        "Invalid persisted task flow status",
+      );
+    });
   });
 
   it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {

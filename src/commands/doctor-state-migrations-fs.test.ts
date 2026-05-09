@@ -9,7 +9,7 @@ import {
   isLegacyWhatsAppAuthFile,
   readSessionStoreJson5,
   safeReadDir,
-} from "./state-migrations.fs.js";
+} from "./doctor/state-migrations.fs.js";
 
 describe("state migration fs helpers", () => {
   it("reads directories safely and creates missing directories", async () => {

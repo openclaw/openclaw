@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { assertSqliteIntegrityOk } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
@@ -317,12 +318,10 @@ async function verifyDatabaseSnapshots(params: {
       const extractedPath = path.join(tempDir, ...snapshotPath.split("/"));
       const db = new sqlite.DatabaseSync(extractedPath, { readOnly: true });
       try {
-        const row = db.prepare("PRAGMA integrity_check").get() as
-          | { integrity_check?: string }
-          | undefined;
-        if (row?.integrity_check !== "ok") {
-          throw new Error(`SQLite integrity check failed for backup snapshot: ${snapshotPath}`);
-        }
+        assertSqliteIntegrityOk(
+          db,
+          `SQLite integrity check failed for backup snapshot: ${snapshotPath}`,
+        );
       } finally {
         db.close();
       }

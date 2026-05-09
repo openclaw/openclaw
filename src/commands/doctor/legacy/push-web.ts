@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import {
   writeWebPushRegistrationStateForMigration,
   writeWebPushVapidKeysForMigration,
   type VapidKeyPair,
   type WebPushRegistrationState,
-} from "./push-web.js";
+} from "../../../infra/push-web.js";
 
 const LEGACY_WEB_PUSH_STATE_FILENAME = "push/web-push-subscriptions.json";
 const LEGACY_VAPID_KEYS_FILENAME = "push/vapid-keys.json";
