@@ -270,7 +270,7 @@ describe("loadCliSessionReseedMessages", () => {
   it("reseeds safe invalidated sessions from a bounded raw message tail when explicitly opted in", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionFile = createSessionTranscript({
+    createSessionTranscript({
       rootDir: stateDir,
       sessionId: "session-opt-in-raw-tail",
       messages: Array.from(
@@ -304,7 +304,7 @@ describe("loadCliSessionReseedMessages", () => {
   it("does not raw-reseed auth-boundary invalidations even when opted in", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionFile = createSessionTranscript({
+    createSessionTranscript({
       rootDir: stateDir,
       sessionId: "session-auth-boundary",
       messages: ["previous account context"],
