@@ -1,8 +1,5 @@
 import { randomBytes } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -27,16 +24,11 @@ import type {
 
 const STORE_VERSION = 1 as const;
 const ROLLING_DAY_MS = 24 * 60 * 60 * 1000;
-const LEGACY_COMMITMENT_STORE_RELATIVE_PATH = path.join("commitments", "commitments.json");
 
 type LoadedCommitmentStore = {
   store: CommitmentStoreFile;
   hadLegacySourceText: boolean;
 };
-
-function defaultCommitmentStorePath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), LEGACY_COMMITMENT_STORE_RELATIVE_PATH);
-}
 
 export function resolveCommitmentStorePath(storePath?: string): string {
   void storePath;
@@ -139,19 +131,6 @@ function coerceCommitmentStore(parsed: unknown): LoadedCommitmentStore {
   };
 }
 
-async function loadCommitmentStoreFromFile(resolved: string): Promise<LoadedCommitmentStore> {
-  try {
-    const raw = await fs.readFile(resolved, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    return coerceCommitmentStore(parsed);
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return { store: emptyStore(), hadLegacySourceText: false };
-    }
-    throw err;
-  }
-}
-
 function loadCommitmentStoreFromSqlite(
   env: NodeJS.ProcessEnv = process.env,
 ): LoadedCommitmentStore {
@@ -224,27 +203,6 @@ export async function saveCommitmentStore(
 ): Promise<void> {
   void storePath;
   replaceCommitmentRows(store, options.env ?? process.env);
-}
-
-export async function legacyCommitmentStoreFileExists(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<boolean> {
-  try {
-    await fs.access(defaultCommitmentStorePath(env));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function importLegacyCommitmentStoreFileToSqlite(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<{ imported: boolean; commitments: number }> {
-  const filePath = defaultCommitmentStorePath(env);
-  const { store } = await loadCommitmentStoreFromFile(filePath);
-  replaceCommitmentRows(store, env);
-  await fs.rm(filePath, { force: true }).catch(() => undefined);
-  return { imported: true, commitments: store.commitments.length };
 }
 
 function generateCommitmentId(nowMs: number): string {

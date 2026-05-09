@@ -2,15 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
-  ensureNodeHostConfig,
   importLegacyNodeHostConfigFileToSqlite,
   legacyNodeHostConfigFileExists,
-  loadNodeHostConfig,
-  saveNodeHostConfig,
-} from "./config.js";
+} from "../commands/doctor/legacy/node-host-config.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import { ensureNodeHostConfig, loadNodeHostConfig, saveNodeHostConfig } from "./config.js";
 
 const tempRoots: string[] = [];
 

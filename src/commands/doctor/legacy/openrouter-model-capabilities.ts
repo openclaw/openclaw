@@ -1,11 +1,11 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
 import {
   parseOpenRouterModelCapabilitiesCachePayload,
   writeOpenRouterModelCapabilitiesCacheForMigration,
   type OpenRouterModelCapabilities,
-} from "./openrouter-model-capabilities.js";
+} from "../../../agents/pi-embedded-runner/openrouter-model-capabilities.js";
+import { resolveStateDir } from "../../../config/paths.js";
 
 const LEGACY_JSON_CACHE_FILENAME = "openrouter-models.json";
 

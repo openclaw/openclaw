@@ -1,7 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   readOpenClawStateKvJson,
@@ -24,16 +21,11 @@ export type NodeHostConfig = {
   gateway?: NodeHostGatewayConfig;
 };
 
-const NODE_HOST_FILE = "node.json";
 const NODE_HOST_CONFIG_SCOPE = "node-host.config";
 const NODE_HOST_CONFIG_KEY = "current";
 
 function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
   return { env };
-}
-
-function resolveLegacyNodeHostConfigPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), NODE_HOST_FILE);
 }
 
 function coercePartialConfig(value: unknown): Partial<NodeHostConfig> | null {
@@ -87,34 +79,4 @@ export async function ensureNodeHostConfig(
   const normalized = normalizeConfig(existing);
   await saveNodeHostConfig(normalized, env);
   return normalized;
-}
-
-export async function legacyNodeHostConfigFileExists(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<boolean> {
-  try {
-    await fs.access(resolveLegacyNodeHostConfigPath(env));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function importLegacyNodeHostConfigFileToSqlite(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<{ imported: boolean }> {
-  const filePath = resolveLegacyNodeHostConfigPath(env);
-  let raw: string;
-  try {
-    raw = await fs.readFile(filePath, "utf8");
-  } catch (error) {
-    if ((error as { code?: unknown })?.code === "ENOENT") {
-      return { imported: false };
-    }
-    throw error;
-  }
-  const parsed = coercePartialConfig(JSON.parse(raw));
-  await saveNodeHostConfig(normalizeConfig(parsed), env);
-  await fs.rm(filePath, { force: true }).catch(() => undefined);
-  return { imported: true };
 }

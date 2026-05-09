@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
+import {
+  importLegacySubagentRegistryFileToSqlite,
+  resolveLegacySubagentRegistryPath,
+} from "../commands/doctor/legacy/subagent-registry.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -26,10 +30,6 @@ import {
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import {
-  importLegacySubagentRegistryFileToSqlite,
-  resolveLegacySubagentRegistryPath,
-} from "./subagent-registry.store-legacy.js";
 import {
   loadSubagentRegistryFromState,
   saveSubagentRegistryToState,

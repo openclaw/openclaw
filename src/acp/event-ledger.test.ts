@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   importLegacyAcpEventLedgerFileToSqlite,
   resolveLegacyAcpEventLedgerPath,
-} from "./event-ledger-legacy.js";
+} from "../commands/doctor/legacy/acp-event-ledger.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { createInMemoryAcpEventLedger, createSqliteAcpEventLedger } from "./event-ledger.js";
 
 describe("ACP event ledger", () => {
