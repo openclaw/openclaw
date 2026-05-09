@@ -133,6 +133,10 @@ Keep helpers composable:
 - Accept a transaction-capable database object when work may run inside a
   transaction.
 - Alias computed selections explicitly.
+- Kysely reference strings such as `"host"`, `"path"`, and
+  `"flow_id as flowId"` are acceptable when they are compile-time literals. They
+  are checked against the `DB` type and usually read better than column constant
+  indirection.
 - Let Kysely carry selected row shapes through builder queries. Avoid passing a
   broad row generic to a sync execution helper when the builder already knows
   the result type; use exact boundary types or a mapper instead.
@@ -156,6 +160,9 @@ Rules:
 - Interpolate values through `${value}` so the driver receives parameters.
 - Use identifier helpers only for validated, closed-set identifiers. Prefer
   normal builder methods when the table or column is known at compile time.
+- Do not pass unconstrained runtime `string` values as table, column, `groupBy`,
+  `orderBy`, `sql.ref`, or `sql.table` identifiers. Narrow them to a local union
+  or a `keyof` generated table type first.
 - Raw snippets are fine for SQLite pragmas, virtual tables, FTS, JSON functions,
   and migrations, but wrap repeated raw expressions in typed helpers.
 
@@ -244,6 +251,8 @@ Minimum coverage for the native adapter:
 
 - builder `select`
 - sync helper type inference for aliases, aggregates, and driver-specific values
+- negative type assertions for important column/preset mistakes using
+  `@ts-expect-error`
 - raw row-returning SQL
 - non-returning insert metadata
 - `INSERT ... RETURNING`

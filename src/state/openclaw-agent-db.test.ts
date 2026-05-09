@@ -18,7 +18,17 @@ function createTempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-"));
 }
 
-function readPragmaNumber(db: import("node:sqlite").DatabaseSync, pragma: string): number {
+type AgentDatabasePragma =
+  | "busy_timeout"
+  | "foreign_keys"
+  | "synchronous"
+  | "user_version"
+  | "wal_autocheckpoint";
+
+function readPragmaNumber(
+  db: import("node:sqlite").DatabaseSync,
+  pragma: AgentDatabasePragma,
+): number {
   const row = db.prepare(`PRAGMA ${pragma}`).get() as Record<string, unknown> | undefined;
   const value = row?.[pragma] ?? row?.timeout;
   return typeof value === "bigint" ? Number(value) : Number(value);

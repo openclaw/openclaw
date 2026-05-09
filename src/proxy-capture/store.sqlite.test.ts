@@ -33,7 +33,12 @@ function makeStore() {
   return new DebugProxyCaptureStore(path.join(root, "capture.sqlite"), path.join(root, "blobs"));
 }
 
-function readPragmaNumber(db: import("node:sqlite").DatabaseSync, pragma: string): number {
+type CaptureStorePragma = "busy_timeout" | "foreign_keys" | "synchronous";
+
+function readPragmaNumber(
+  db: import("node:sqlite").DatabaseSync,
+  pragma: CaptureStorePragma,
+): number {
   const row = db.prepare(`PRAGMA ${pragma}`).get() as Record<string, unknown> | undefined;
   const value = row?.[pragma] ?? row?.timeout;
   return typeof value === "bigint" ? Number(value) : Number(value);
@@ -50,6 +55,12 @@ describe("DebugProxyCaptureStore", () => {
       expectTypeOf(store.queryPreset("missing-ack")).toEqualTypeOf<
         CaptureQueryRowsByPreset["missing-ack"][]
       >();
+
+      // @ts-expect-error Preset-specific rows do not expose other preset columns.
+      store.queryPreset("double-sends")[0]?.outboundFrames;
+
+      // @ts-expect-error Preset-specific rows do not expose other preset columns.
+      store.queryPreset("missing-ack")[0]?.duplicateCount;
     }
 
     expect(true).toBe(true);
