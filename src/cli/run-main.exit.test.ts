@@ -23,6 +23,8 @@ const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
 const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => ({})));
 const resolvePluginCliRootOwnerIdsMock = vi.hoisted(() => vi.fn());
+const resolveManifestCommandAliasOwnerMock = vi.hoisted(() => vi.fn());
+const resolveManifestToolOwnerMock = vi.hoisted(() => vi.fn());
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
@@ -170,6 +172,11 @@ vi.mock("../plugins/cli-registry-loader.js", () => ({
   resolvePluginCliRootOwnerIds: resolvePluginCliRootOwnerIdsMock,
 }));
 
+vi.mock("../plugins/manifest-command-aliases.runtime.js", () => ({
+  resolveManifestCommandAliasOwner: resolveManifestCommandAliasOwnerMock,
+  resolveManifestToolOwner: resolveManifestToolOwnerMock,
+}));
+
 vi.mock("../terminal/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
@@ -237,6 +244,8 @@ describe("runCli exit behavior", () => {
       ({ primaryCommand }: { primaryCommand?: string }) =>
         primaryCommand === "googlemeet" ? ["google-meet"] : [],
     );
+    resolveManifestCommandAliasOwnerMock.mockReturnValue(undefined);
+    resolveManifestToolOwnerMock.mockReturnValue(undefined);
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
   });
@@ -459,6 +468,22 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).not.toHaveBeenCalled();
     expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("reports plugin tool command mistakes before proxy startup", async () => {
+    resolveManifestToolOwnerMock.mockReturnValueOnce({
+      toolName: "lcm_recent",
+      pluginId: "lossless-claw",
+      availability: "loaded",
+    });
+
+    await expect(runCli(["node", "openclaw", "lcm_recent"])).rejects.toThrow(
+      '"lcm_recent" is an agent tool available from the "lossless-claw" plugin',
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   });
 

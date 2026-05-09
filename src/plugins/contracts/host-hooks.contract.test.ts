@@ -419,6 +419,234 @@ describe("host-hook fixture plugin contract", () => {
     expect(seenParams).toEqual([{ command: "patched" }]);
   });
 
+  it("preserves trusted policy derived paths when params are unchanged", async () => {
+    const seenDerivedPaths: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-inspector",
+        pluginName: "Trusted Inspector",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenDerivedPaths.push(event.derivedPaths);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        {
+          toolName: "apply_patch",
+          params: { input: "*** Update File: old.ts" },
+          derivedPaths: ["old.ts"],
+        },
+        { toolName: "apply_patch" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(seenDerivedPaths).toEqual([["old.ts"]]);
+  });
+
+  it("ignores non-plain trusted policy params when re-deriving paths", async () => {
+    const seenParams: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-bad",
+        pluginName: "Trusted Bad",
+        source: "test",
+        policy: {
+          id: "bad",
+          description: "bad",
+          evaluate: () => ({ params: "not-a-plain-object" as never }),
+        },
+      },
+      {
+        pluginId: "trusted-inspector",
+        pluginName: "Trusted Inspector",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenParams.push(event.params);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        { toolName: "apply_patch", params: { input: "*** Add File: old.ts" } },
+        { toolName: "apply_patch" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(seenParams).toEqual([{ input: "*** Add File: old.ts" }]);
+  });
+
+  it("does not let trusted policies mutate derived paths for later policies", async () => {
+    const seenDerivedPaths: unknown[] = [];
+    let mutationRejected = false;
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-a",
+        pluginName: "Trusted A",
+        source: "test",
+        policy: {
+          id: "mutate",
+          description: "mutate",
+          evaluate: (event) => {
+            try {
+              (event.derivedPaths as string[] | undefined)?.push("mutated.ts");
+            } catch {
+              mutationRejected = true;
+            }
+            return undefined;
+          },
+        },
+      },
+      {
+        pluginId: "trusted-b",
+        pluginName: "Trusted B",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenDerivedPaths.push(event.derivedPaths);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        {
+          toolName: "apply_patch",
+          params: { input: "*** Update File: old.ts" },
+          derivedPaths: ["old.ts"],
+        },
+        { toolName: "apply_patch" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(mutationRejected).toBe(true);
+    expect(seenDerivedPaths).toEqual([["old.ts"]]);
+  });
+
+  it("clears stale derived paths when trusted policy rewrites remove targets", async () => {
+    const seenDerivedPaths: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-a",
+        pluginName: "Trusted A",
+        source: "test",
+        policy: {
+          id: "params",
+          description: "params",
+          evaluate: () => ({ params: { input: "not a patch" } }),
+        },
+      },
+      {
+        pluginId: "trusted-b",
+        pluginName: "Trusted B",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenDerivedPaths.push(event.derivedPaths);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        {
+          toolName: "apply_patch",
+          params: { patch: "*** Update File: old.ts" },
+          derivedPaths: ["old.ts"],
+        },
+        { toolName: "apply_patch" },
+        {
+          deriveEvent(params) {
+            return typeof params.patch === "string" ? { derivedPaths: ["old.ts"] } : {};
+          },
+        },
+      ),
+    ).resolves.toEqual({ params: { input: "not a patch" } });
+    expect(seenDerivedPaths).toEqual([undefined]);
+  });
+
+  it("does not let derived param callbacks override core trusted policy event fields", async () => {
+    const seenEvents: Array<{ params: unknown; derivedPaths: unknown }> = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-a",
+        pluginName: "Trusted A",
+        source: "test",
+        policy: {
+          id: "params",
+          description: "params",
+          evaluate: () => ({ params: { input: "*** Update File: new.ts" } }),
+        },
+      },
+      {
+        pluginId: "trusted-b",
+        pluginName: "Trusted B",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenEvents.push({ params: event.params, derivedPaths: event.derivedPaths });
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        {
+          toolName: "apply_patch",
+          params: { input: "*** Update File: old.ts" },
+          derivedPaths: ["old.ts"],
+        },
+        { toolName: "apply_patch" },
+        {
+          deriveEvent() {
+            return {
+              params: { input: "malicious override" },
+              derivedPaths: ["new.ts"],
+            } as never;
+          },
+        },
+      ),
+    ).resolves.toEqual({ params: { input: "*** Update File: new.ts" } });
+    expect(seenEvents).toEqual([
+      {
+        params: { input: "*** Update File: new.ts" },
+        derivedPaths: ["new.ts"],
+      },
+    ]);
+  });
+
   it("validates plugin-owned JSON values as plain JSON-compatible data", () => {
     expect(
       isPluginJsonValue({
