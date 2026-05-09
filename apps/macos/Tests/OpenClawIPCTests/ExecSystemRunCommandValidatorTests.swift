@@ -50,6 +50,83 @@ struct ExecSystemRunCommandValidatorTests {
         }
     }
 
+    @Test func `validator keeps canonical wrapper text out of allowlist raw parsing`() {
+        let command = ["/bin/sh", "-lc", "/usr/bin/printf ok"]
+        let rawCommand = "/bin/sh -lc \"/usr/bin/printf ok\""
+        let result = ExecSystemRunCommandValidator.resolve(command: command, rawCommand: rawCommand)
+
+        switch result {
+        case let .ok(resolved):
+            #expect(resolved.displayCommand == rawCommand)
+            #expect(resolved.evaluationRawCommand == nil)
+        case let .invalid(message):
+            Issue.record("unexpected invalid result: \(message)")
+        }
+    }
+
+    @Test func `env dash shell wrapper requires canonical raw command binding`() {
+        let command = ["/usr/bin/env", "-", "bash", "-lc", "echo hi"]
+
+        let legacy = ExecSystemRunCommandValidator.resolve(command: command, rawCommand: "echo hi")
+        switch legacy {
+        case .ok:
+            Issue.record("expected rawCommand mismatch for env dash prelude")
+        case let .invalid(message):
+            #expect(message.contains("rawCommand does not match command"))
+        }
+
+        let canonicalRaw = "/usr/bin/env - bash -lc \"echo hi\""
+        let canonical = ExecSystemRunCommandValidator.resolve(command: command, rawCommand: canonicalRaw)
+        switch canonical {
+        case let .ok(resolved):
+            #expect(resolved.displayCommand == canonicalRaw)
+        case let .invalid(message):
+            Issue.record("unexpected invalid result for canonical raw command: \(message)")
+        }
+    }
+
+    @Test func `fish attached c command requires canonical raw command binding`() {
+        let command = ["/usr/bin/fish", "-c/tmp/payload.fish", "/usr/bin/printf safe_marker"]
+        let result = ExecSystemRunCommandValidator.resolve(
+            command: command,
+            rawCommand: "/usr/bin/printf safe_marker")
+
+        switch result {
+        case .ok:
+            Issue.record("expected rawCommand mismatch for attached fish command payload")
+        case let .invalid(message):
+            #expect(message.contains("rawCommand does not match command"))
+        }
+    }
+
+    @Test func `startup shell wrappers require canonical raw command binding`() {
+        for command in [
+            ["/bin/bash", "-lc", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "--rcfile", "/tmp/payload.sh", "-i", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "--login", "-c", "/usr/bin/printf safe_marker"],
+            ["/usr/bin/fish", "--init-command=/tmp/payload.fish", "-c", "/usr/bin/printf safe_marker"],
+        ] {
+            let legacy = ExecSystemRunCommandValidator.resolve(
+                command: command,
+                rawCommand: "/usr/bin/printf safe_marker")
+            switch legacy {
+            case .ok:
+                Issue.record("expected rawCommand mismatch for startup shell wrapper")
+            case let .invalid(message):
+                #expect(message.contains("rawCommand does not match command"))
+            }
+
+            let canonicalRaw = ExecCommandFormatter.displayString(for: command)
+            let canonical = ExecSystemRunCommandValidator.resolve(command: command, rawCommand: canonicalRaw)
+            switch canonical {
+            case let .ok(resolved):
+                #expect(resolved.displayCommand == canonicalRaw)
+            case let .invalid(message):
+                Issue.record("unexpected invalid result for canonical raw command: \(message)")
+            }
+        }
+    }
+
     private static func loadContractCases() throws -> [SystemRunCommandContractCase] {
         let fixtureURL = try self.findContractFixtureURL()
         let data = try Data(contentsOf: fixtureURL)

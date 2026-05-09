@@ -1,10 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import type { WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";
+import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
-  readJsonWebhookBodyOrReject,
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
-  type WebhookInFlightLimiter,
-} from "openclaw/plugin-sdk/googlechat";
+} from "openclaw/plugin-sdk/webhook-targets";
 import { verifyGoogleChatRequest } from "./auth.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import type {
@@ -15,11 +16,20 @@ import type {
 } from "./types.js";
 
 function extractBearerToken(header: unknown): string {
-  const authHeader = Array.isArray(header) ? String(header[0] ?? "") : String(header ?? "");
-  return authHeader.toLowerCase().startsWith("bearer ")
+  const authHeader = Array.isArray(header)
+    ? typeof header[0] === "string"
+      ? header[0]
+      : ""
+    : typeof header === "string"
+      ? header
+      : "";
+  return normalizeLowercaseStringOrEmpty(authHeader).startsWith("bearer ")
     ? authHeader.slice("bearer ".length).trim()
     : "";
 }
+
+const ADD_ON_PREAUTH_MAX_BYTES = 16 * 1024;
+const ADD_ON_PREAUTH_TIMEOUT_MS = 3_000;
 
 type ParsedGoogleChatInboundPayload =
   | { ok: true; event: GoogleChatEvent; addOnBearerToken: string }
@@ -60,7 +70,10 @@ function parseGoogleChatInboundPayload(
       user: chat.user,
       eventTime: chat.eventTime,
     };
-    addOnBearerToken = String(rawObj.authorizationEventObject?.systemIdToken ?? "").trim();
+    addOnBearerToken =
+      typeof rawObj.authorizationEventObject?.systemIdToken === "string"
+        ? rawObj.authorizationEventObject.systemIdToken.trim()
+        : "";
   }
 
   const event = eventPayload as GoogleChatEvent;
@@ -88,6 +101,86 @@ function parseGoogleChatInboundPayload(
   return { ok: true, event, addOnBearerToken };
 }
 
+type GoogleChatWebhookAuthRejection = {
+  target: WebhookTarget;
+  reason: string;
+};
+
+async function verifyGoogleChatTargetAuth(
+  target: WebhookTarget,
+  bearer: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const verification = await verifyGoogleChatRequest({
+    bearer,
+    audienceType: target.audienceType,
+    audience: target.audience,
+    expectedAddOnPrincipal: target.account.config.appPrincipal,
+  });
+  return verification.ok ? { ok: true } : { ok: false, reason: verification.reason ?? "unknown" };
+}
+
+function logGoogleChatWebhookAuthRejections(rejections: GoogleChatWebhookAuthRejection[]): void {
+  for (const rejection of rejections) {
+    rejection.target.runtime.log?.(
+      `[${rejection.target.account.accountId}] Google Chat webhook auth rejected: ${rejection.reason}`,
+    );
+  }
+}
+
+function logGoogleChatWebhookAuthRejectedForTargets(
+  targets: readonly WebhookTarget[],
+  reason: string,
+): void {
+  logGoogleChatWebhookAuthRejections(targets.map((target) => ({ target, reason })));
+}
+
+async function resolveGoogleChatWebhookTargetWithAuthOrReject(params: {
+  targets: readonly WebhookTarget[];
+  res: ServerResponse;
+  bearer: string;
+}): Promise<WebhookTarget | null> {
+  const rejections: GoogleChatWebhookAuthRejection[] = [];
+  let verifiedTargetCount = 0;
+  const selectedTarget = await resolveWebhookTargetWithAuthOrReject({
+    targets: params.targets,
+    res: params.res,
+    isMatch: async (target) => {
+      const verification = await verifyGoogleChatTargetAuth(target, params.bearer);
+      if (verification.ok) {
+        verifiedTargetCount += 1;
+        return true;
+      }
+      rejections.push({ target, reason: verification.reason });
+      return false;
+    },
+  });
+  if (!selectedTarget && verifiedTargetCount === 0) {
+    logGoogleChatWebhookAuthRejections(rejections);
+  }
+  return selectedTarget;
+}
+
+export function warnAppPrincipalMisconfiguration(params: {
+  accountId: string;
+  audienceType?: string;
+  appPrincipal?: string | null;
+  log?: (message: string) => void;
+}): void {
+  if (params.audienceType !== "app-url") {
+    return;
+  }
+  const principal = params.appPrincipal?.trim();
+  if (!principal) {
+    params.log?.(
+      `[${params.accountId}] appPrincipal is missing for audienceType "app-url"; add-on token verification will fail. Set appPrincipal to the numeric OAuth 2.0 client ID (uniqueId, 21 digits), not an email.`,
+    );
+  } else if (principal.includes("@")) {
+    params.log?.(
+      `[${params.accountId}] appPrincipal "${principal}" looks like an email address. Set appPrincipal to the numeric OAuth 2.0 client ID (uniqueId, 21 digits), not an email.`,
+    );
+  }
+}
+
 export function createGoogleChatWebhookRequestHandler(params: {
   webhookTargets: Map<string, WebhookTarget[]>;
   webhookInFlightLimiter: WebhookInFlightLimiter;
@@ -112,6 +205,12 @@ export function createGoogleChatWebhookRequestHandler(params: {
             req,
             res,
             profile,
+            ...(profile === "pre-auth"
+              ? {
+                  maxBytes: ADD_ON_PREAUTH_MAX_BYTES,
+                  timeoutMs: ADD_ON_PREAUTH_TIMEOUT_MS,
+                }
+              : {}),
             emptyObjectOnEmpty: false,
             invalidJsonMessage: "invalid payload",
           });
@@ -124,17 +223,10 @@ export function createGoogleChatWebhookRequestHandler(params: {
         };
 
         if (headerBearer) {
-          selectedTarget = await resolveWebhookTargetWithAuthOrReject({
+          selectedTarget = await resolveGoogleChatWebhookTargetWithAuthOrReject({
             targets,
             res,
-            isMatch: async (target) => {
-              const verification = await verifyGoogleChatRequest({
-                bearer: headerBearer,
-                audienceType: target.audienceType,
-                audience: target.audience,
-              });
-              return verification.ok;
-            },
+            bearer: headerBearer,
           });
           if (!selectedTarget) {
             return true;
@@ -153,22 +245,16 @@ export function createGoogleChatWebhookRequestHandler(params: {
           parsedEvent = parsed.event;
 
           if (!parsed.addOnBearerToken) {
+            logGoogleChatWebhookAuthRejectedForTargets(targets, "missing token");
             res.statusCode = 401;
             res.end("unauthorized");
             return true;
           }
 
-          selectedTarget = await resolveWebhookTargetWithAuthOrReject({
+          selectedTarget = await resolveGoogleChatWebhookTargetWithAuthOrReject({
             targets,
             res,
-            isMatch: async (target) => {
-              const verification = await verifyGoogleChatRequest({
-                bearer: parsed.addOnBearerToken,
-                audienceType: target.audienceType,
-                audience: target.audience,
-              });
-              return verification.ok;
-            },
+            bearer: parsed.addOnBearerToken,
           });
           if (!selectedTarget) {
             return true;

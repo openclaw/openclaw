@@ -1,1 +1,10 @@
-export { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
+export {
+  AuthStorage,
+  addEnvBackedPiCredentials,
+  discoverAuthStorage,
+  discoverModels,
+  ModelRegistry,
+  normalizeDiscoveredPiModel,
+  resolvePiCredentialsForDiscovery,
+  scrubLegacyStaticAuthJsonEntriesForDiscovery,
+} from "./pi-model-discovery.js";

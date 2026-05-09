@@ -1,15 +1,24 @@
-export const ADMIN_SCOPE = "operator.admin" as const;
-export const READ_SCOPE = "operator.read" as const;
-export const WRITE_SCOPE = "operator.write" as const;
-export const APPROVALS_SCOPE = "operator.approvals" as const;
-export const PAIRING_SCOPE = "operator.pairing" as const;
+import { getPluginRegistryState } from "../plugins/runtime-state.js";
+import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+} from "./operator-scopes.js";
 
-export type OperatorScope =
-  | typeof ADMIN_SCOPE
-  | typeof READ_SCOPE
-  | typeof WRITE_SCOPE
-  | typeof APPROVALS_SCOPE
-  | typeof PAIRING_SCOPE;
+export {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+};
 
 export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   ADMIN_SCOPE,
@@ -17,27 +26,38 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   WRITE_SCOPE,
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
+  TALK_SECRETS_SCOPE,
 ];
 
 const NODE_ROLE_METHODS = new Set([
   "node.invoke.result",
   "node.event",
-  "node.canvas.capability.refresh",
+  "node.pluginSurface.refresh",
+  "node.pending.drain",
+  "node.pending.pull",
+  "node.pending.ack",
   "skills.bins",
 ]);
 
 const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [APPROVALS_SCOPE]: [
+    "exec.approval.get",
+    "exec.approval.list",
     "exec.approval.request",
     "exec.approval.waitDecision",
     "exec.approval.resolve",
+    "plugin.approval.list",
+    "plugin.approval.request",
+    "plugin.approval.waitDecision",
+    "plugin.approval.resolve",
   ],
   [PAIRING_SCOPE]: [
     "node.pair.request",
     "node.pair.list",
-    "node.pair.approve",
     "node.pair.reject",
+    "node.pair.remove",
     "node.pair.verify",
+    "node.pair.approve",
     "device.pair.list",
     "device.pair.approve",
     "device.pair.reject",
@@ -47,8 +67,12 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.rename",
   ],
   [READ_SCOPE]: [
+    "assistant.media.get",
     "health",
+    "diagnostics.stability",
     "doctor.memory.status",
+    "doctor.memory.dreamDiary",
+    "doctor.memory.remHarness",
     "logs.tail",
     "channels.status",
     "status",
@@ -56,52 +80,110 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "usage.cost",
     "tts.status",
     "tts.providers",
+    "tts.personas",
+    "commands.list",
     "models.list",
+    "models.authStatus",
     "tools.catalog",
+    "tools.effective",
+    "tasks.list",
+    "tasks.get",
+    "plugins.uiDescriptors",
     "agents.list",
     "agent.identity.get",
     "skills.status",
+    "skills.search",
+    "skills.detail",
     "voicewake.get",
+    "voicewake.routing.get",
     "sessions.list",
     "sessions.get",
     "sessions.preview",
+    "sessions.describe",
     "sessions.resolve",
+    "sessions.compaction.list",
+    "sessions.compaction.get",
+    "sessions.subscribe",
+    "sessions.unsubscribe",
+    "sessions.messages.subscribe",
+    "sessions.messages.unsubscribe",
     "sessions.usage",
     "sessions.usage.timeseries",
     "sessions.usage.logs",
     "cron.list",
     "cron.status",
     "cron.runs",
+    "gateway.identity.get",
+    "gateway.restart.preflight",
     "system-presence",
     "last-heartbeat",
     "node.list",
     "node.describe",
+    "environments.list",
+    "environments.status",
     "chat.history",
     "config.get",
     "config.schema.lookup",
+    "talk.catalog",
     "talk.config",
     "agents.files.list",
     "agents.files.get",
+    "artifacts.list",
+    "artifacts.get",
+    "artifacts.download",
   ],
   [WRITE_SCOPE]: [
+    "message.action",
     "send",
     "poll",
     "agent",
     "agent.wait",
     "wake",
     "talk.mode",
+    "talk.client.create",
+    "talk.client.toolCall",
+    "talk.session.create",
+    "talk.session.join",
+    "talk.session.appendAudio",
+    "talk.session.startTurn",
+    "talk.session.endTurn",
+    "talk.session.cancelTurn",
+    "talk.session.cancelOutput",
+    "talk.session.submitToolResult",
+    "talk.session.close",
+    "talk.speak",
     "tts.enable",
     "tts.disable",
     "tts.convert",
     "tts.setProvider",
+    "tts.setPersona",
     "voicewake.set",
+    "voicewake.routing.set",
     "node.invoke",
+    "tools.invoke",
     "chat.send",
     "chat.abort",
-    "browser.request",
+    "sessions.create",
+    "sessions.send",
+    "sessions.steer",
+    "sessions.abort",
+    "tasks.cancel",
+    "sessions.compaction.branch",
+    "doctor.memory.backfillDreamDiary",
+    "doctor.memory.resetDreamDiary",
+    "doctor.memory.resetGroundedShortTerm",
+    "doctor.memory.repairDreamingArtifacts",
+    "doctor.memory.dedupeDreamDiary",
     "push.test",
+    "push.web.vapidPublicKey",
+    "push.web.subscribe",
+    "push.web.unsubscribe",
+    "push.web.test",
+    "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
+    "channels.start",
+    "channels.stop",
     "channels.logout",
     "agents.create",
     "agents.update",
@@ -115,20 +197,25 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "cron.remove",
     "cron.run",
     "sessions.patch",
+    "sessions.pluginPatch",
+    "sessions.cleanup",
     "sessions.reset",
     "sessions.delete",
     "sessions.compact",
+    "sessions.compaction.restore",
     "connect",
     "chat.inject",
+    "nativeHook.invoke",
     "web.login.start",
     "web.login.wait",
     "set-heartbeats",
     "system-event",
     "agents.files.set",
+    "update.status",
+    "gateway.restart.request",
   ],
+  [TALK_SECRETS_SCOPE]: [],
 };
-
-const ADMIN_METHOD_PREFIXES = ["exec.approvals.", "config.", "wizard.", "update."] as const;
 
 const METHOD_SCOPE_BY_NAME = new Map<string, OperatorScope>(
   Object.entries(METHOD_SCOPE_GROUPS).flatMap(([scope, methods]) =>
@@ -141,8 +228,13 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (explicitScope) {
     return explicitScope;
   }
-  if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
-    return ADMIN_SCOPE;
+  const reservedScope = resolveReservedGatewayMethodScope(method);
+  if (reservedScope) {
+    return reservedScope;
+  }
+  const pluginScope = getPluginRegistryState()?.activeRegistry?.gatewayMethodScopes?.[method];
+  if (pluginScope) {
+    return pluginScope;
   }
   return undefined;
 }

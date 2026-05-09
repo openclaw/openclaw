@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectWithPlugins } from "./config.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 describe("config hooks module paths", () => {
   const expectRejectedIssuePath = (config: Record<string, unknown>, expectedPath: string) => {
@@ -8,7 +8,7 @@ describe("config hooks module paths", () => {
     if (res.ok) {
       throw new Error("expected validation failure");
     }
-    expect(res.issues.some((iss) => iss.path === expectedPath)).toBe(true);
+    expect(res.issues.map((issue) => issue.path)).toContain(expectedPath);
   };
 
   it("rejects absolute hooks.mappings[].transform.module", () => {
@@ -74,6 +74,41 @@ describe("config hooks module paths", () => {
         },
       },
       "hooks.internal.handlers.0.module",
+    );
+  });
+
+  it("accepts hooks.mappings[].channel runtime plugin ids", () => {
+    const res = validateConfigObjectWithPlugins({
+      agents: { list: [{ id: "pi" }] },
+      hooks: {
+        mappings: [
+          {
+            match: { path: "custom" },
+            action: "agent",
+            channel: "collabchat",
+            messageTemplate: "hello",
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects blank hooks.mappings[].channel values", () => {
+    expectRejectedIssuePath(
+      {
+        agents: { list: [{ id: "pi" }] },
+        hooks: {
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              channel: "   ",
+            },
+          ],
+        },
+      },
+      "hooks.mappings.0.channel",
     );
   });
 });

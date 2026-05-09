@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AcpRuntimeError } from "./errors.js";
 import {
   __testing,
@@ -11,21 +11,27 @@ import type { AcpRuntime } from "./types.js";
 
 function createRuntimeStub(): AcpRuntime {
   return {
-    ensureSession: vi.fn(async (input) => ({
-      sessionKey: input.sessionKey,
-      backend: "stub",
-      runtimeSessionName: `${input.sessionKey}:runtime`,
-    })),
-    runTurn: vi.fn(async function* () {
+    async ensureSession(input) {
+      return {
+        sessionKey: input.sessionKey,
+        backend: "stub",
+        runtimeSessionName: `${input.sessionKey}:runtime`,
+      };
+    },
+    async *runTurn() {
       // no-op stream
-    }),
-    cancel: vi.fn(async () => {}),
-    close: vi.fn(async () => {}),
+    },
+    async cancel() {},
+    async close() {},
   };
 }
 
 describe("acp runtime registry", () => {
   beforeEach(() => {
+    __testing.resetAcpRuntimeBackendsForTests();
+  });
+
+  afterEach(() => {
     __testing.resetAcpRuntimeBackendsForTests();
   });
 
@@ -60,6 +66,26 @@ describe("acp runtime registry", () => {
   it("throws a typed missing-backend error when no backend is registered", () => {
     expect(() => requireAcpRuntimeBackend()).toThrowError(AcpRuntimeError);
     expect(() => requireAcpRuntimeBackend()).toThrowError(/ACP runtime backend is not configured/i);
+  });
+
+  it("resolves the first healthy backend when requireAcpRuntimeBackend has no explicit id", () => {
+    const unhealthyRuntime = createRuntimeStub();
+    const healthyRuntime = createRuntimeStub();
+
+    registerAcpRuntimeBackend({
+      id: "unhealthy",
+      runtime: unhealthyRuntime,
+      healthy: () => false,
+    });
+    registerAcpRuntimeBackend({
+      id: "healthy",
+      runtime: healthyRuntime,
+      healthy: () => true,
+    });
+
+    const backend = requireAcpRuntimeBackend();
+    expect(backend.id).toBe("healthy");
+    expect(backend.runtime).toBe(healthyRuntime);
   });
 
   it("throws a typed unavailable error when the requested backend is unhealthy", () => {

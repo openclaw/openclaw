@@ -1,5 +1,7 @@
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
+const HEADER_HIDE_SCROLL_DELTA = 12;
+const HEADER_SHOW_TOP_THRESHOLD = 24;
 
 type ScrollHost = {
   updateComplete: Promise<unknown>;
@@ -7,13 +9,19 @@ type ScrollHost = {
   style: CSSStyleDeclaration;
   chatScrollFrame: number | null;
   chatScrollTimeout: number | null;
+  chatLastScrollTop: number;
   chatHasAutoScrolled: boolean;
   chatUserNearBottom: boolean;
+  chatHeaderControlsHidden: boolean;
   chatNewMessagesBelow: boolean;
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
   topbarObserver: ResizeObserver | null;
 };
+
+function queryHost(host: Partial<ScrollHost>, selectors: string): Element | null {
+  return typeof host.querySelector === "function" ? host.querySelector(selectors) : null;
+}
 
 export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
   if (host.chatScrollFrame) {
@@ -24,7 +32,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
     host.chatScrollTimeout = null;
   }
   const pickScrollTarget = () => {
-    const container = host.querySelector(".chat-thread") as HTMLElement | null;
+    const container = queryHost(host, ".chat-thread") as HTMLElement | null;
     if (container) {
       const overflowY = getComputedStyle(container).overflowY;
       const canScroll =
@@ -104,7 +112,7 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
   void host.updateComplete.then(() => {
     host.logsScrollFrame = requestAnimationFrame(() => {
       host.logsScrollFrame = null;
-      const container = host.querySelector(".log-stream") as HTMLElement | null;
+      const container = queryHost(host, ".log-stream") as HTMLElement | null;
       if (!container) {
         return;
       }
@@ -124,8 +132,21 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   if (!container) {
     return;
   }
+  const scrollTop = Math.max(0, container.scrollTop);
+  const delta = scrollTop - host.chatLastScrollTop;
+  host.chatLastScrollTop = scrollTop;
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   host.chatUserNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+  const hasUsefulScroll = container.scrollHeight - container.clientHeight > NEAR_BOTTOM_THRESHOLD;
+
+  if (!hasUsefulScroll || scrollTop <= HEADER_SHOW_TOP_THRESHOLD || host.chatUserNearBottom) {
+    host.chatHeaderControlsHidden = false;
+  } else if (delta > HEADER_HIDE_SCROLL_DELTA) {
+    host.chatHeaderControlsHidden = true;
+  } else if (delta < -HEADER_HIDE_SCROLL_DELTA) {
+    host.chatHeaderControlsHidden = false;
+  }
+
   // Clear the "new messages below" indicator when user scrolls back to bottom.
   if (host.chatUserNearBottom) {
     host.chatNewMessagesBelow = false;
@@ -144,6 +165,8 @@ export function handleLogsScroll(host: ScrollHost, event: Event) {
 export function resetChatScroll(host: ScrollHost) {
   host.chatHasAutoScrolled = false;
   host.chatUserNearBottom = true;
+  host.chatLastScrollTop = 0;
+  host.chatHeaderControlsHidden = false;
   host.chatNewMessagesBelow = false;
 }
 
@@ -165,7 +188,7 @@ export function observeTopbar(host: ScrollHost) {
   if (typeof ResizeObserver === "undefined") {
     return;
   }
-  const topbar = host.querySelector(".topbar");
+  const topbar = queryHost(host, ".topbar");
   if (!topbar) {
     return;
   }

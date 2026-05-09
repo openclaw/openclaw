@@ -23,8 +23,9 @@ export function unknownTargetError(provider: string, raw: string, hint?: string)
 }
 
 function formatTargetHint(hint?: string, withLabel = false): string {
-  if (!hint) {
+  const normalized = hint?.trim();
+  if (!normalized) {
     return "";
   }
-  return withLabel ? ` Hint: ${hint}` : ` ${hint}`;
+  return withLabel ? ` Hint: ${normalized}` : ` ${normalized}`;
 }

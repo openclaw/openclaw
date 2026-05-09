@@ -9,8 +9,12 @@
  * 2. Environment variable: OPENCLAW_TWITCH_ACCESS_TOKEN (default account only)
  */
 
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  resolveNormalizedAccountEntry,
+} from "openclaw/plugin-sdk/account-resolution";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 
 export type TwitchTokenSource = "env" | "config" | "none";
 
@@ -56,10 +60,8 @@ export function resolveTwitchToken(
 
   // Get merged account config (handles both simplified and multi-account patterns)
   const twitchCfg = cfg?.channels?.twitch;
-  const accountCfg =
-    accountId === DEFAULT_ACCOUNT_ID
-      ? (twitchCfg?.accounts?.[DEFAULT_ACCOUNT_ID] as Record<string, unknown> | undefined)
-      : (twitchCfg?.accounts?.[accountId] as Record<string, unknown> | undefined);
+  const accounts = twitchCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
+  const accountCfg = resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId);
 
   // For default account, also check base-level config
   let token: string | undefined;

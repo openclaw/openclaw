@@ -26,5 +26,10 @@ import Testing
             _ = try await transport.requestHealth(timeoutMs: 250)
             Issue.record("Expected requestHealth to throw when gateway not connected")
         } catch {}
+
+        do {
+            try await transport.resetSession(sessionKey: "node-test")
+            Issue.record("Expected resetSession to throw when gateway not connected")
+        } catch {}
     }
 }

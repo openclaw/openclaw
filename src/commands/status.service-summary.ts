@@ -1,5 +1,9 @@
+import {
+  summarizeGatewayServiceLayout,
+  type GatewayServiceLayoutSummary,
+} from "../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
-import type { GatewayService } from "../daemon/service.js";
+import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
 
 export type ServiceStatusSummary = {
   label: string;
@@ -9,6 +13,7 @@ export type ServiceStatusSummary = {
   externallyManaged: boolean;
   loadedText: string;
   runtime: GatewayServiceRuntime | undefined;
+  layout?: GatewayServiceLayoutSummary;
 };
 
 export async function readServiceStatusSummary(
@@ -16,27 +21,25 @@ export async function readServiceStatusSummary(
   fallbackLabel: string,
 ): Promise<ServiceStatusSummary> {
   try {
-    const [loaded, runtime, command] = await Promise.all([
-      service.isLoaded({ env: process.env }).catch(() => false),
-      service.readRuntime(process.env).catch(() => undefined),
-      service.readCommand(process.env).catch(() => null),
-    ]);
-    const managedByOpenClaw = command != null;
-    const externallyManaged = !managedByOpenClaw && runtime?.status === "running";
+    const state = await readGatewayServiceState(service, { env: process.env });
+    const layout = await summarizeGatewayServiceLayout(state.command);
+    const managedByOpenClaw = state.installed;
+    const externallyManaged = !managedByOpenClaw && state.running;
     const installed = managedByOpenClaw || externallyManaged;
     const loadedText = externallyManaged
       ? "running (externally managed)"
-      : loaded
+      : state.loaded
         ? service.loadedText
         : service.notLoadedText;
     return {
       label: service.label,
       installed,
-      loaded,
+      loaded: state.loaded,
       managedByOpenClaw,
       externallyManaged,
       loadedText,
-      runtime,
+      runtime: state.runtime,
+      ...(layout ? { layout } : {}),
     };
   } catch {
     return {

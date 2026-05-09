@@ -19,14 +19,15 @@ import type {
 } from "./types.js";
 
 export class FakeProvider implements VoiceCallProvider {
-  readonly name: "plivo" | "twilio";
+  readonly name: "plivo" | "twilio" | "telnyx";
+  twilioStreamConnectEnabled = true;
   readonly playTtsCalls: PlayTtsInput[] = [];
   readonly hangupCalls: HangupCallInput[] = [];
   readonly startListeningCalls: StartListeningInput[] = [];
   readonly stopListeningCalls: StopListeningInput[] = [];
   getCallStatusResult: GetCallStatusResult = { status: "in-progress", isTerminal: false };
 
-  constructor(name: "plivo" | "twilio" = "plivo") {
+  constructor(name: "plivo" | "twilio" | "telnyx" = "plivo") {
     this.name = name;
   }
 
@@ -61,13 +62,14 @@ export class FakeProvider implements VoiceCallProvider {
   async getCallStatus(_input: GetCallStatusInput): Promise<GetCallStatusResult> {
     return this.getCallStatusResult;
   }
+
+  isConversationStreamConnectEnabled(): boolean {
+    return this.name === "twilio" && this.twilioStreamConnectEnabled;
+  }
 }
 
-let storeSeq = 0;
-
 export function createTestStorePath(): string {
-  storeSeq += 1;
-  return path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}-${storeSeq}`);
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-test-"));
 }
 
 export async function createManagerHarness(

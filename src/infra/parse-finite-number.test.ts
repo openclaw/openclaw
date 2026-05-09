@@ -6,48 +6,66 @@ import {
   parseStrictPositiveInteger,
 } from "./parse-finite-number.js";
 
+function expectParserCases<T>(
+  parse: (value: unknown) => T | undefined,
+  cases: Array<{ value: unknown; expected: T | undefined }>,
+) {
+  for (const { value, expected } of cases) {
+    expect(parse(value)).toBe(expected);
+  }
+}
+
 describe("parseFiniteNumber", () => {
-  it("returns finite numbers", () => {
-    expect(parseFiniteNumber(42)).toBe(42);
-  });
-
-  it("parses numeric strings", () => {
-    expect(parseFiniteNumber("3.14")).toBe(3.14);
-  });
-
-  it("returns undefined for non-finite or non-numeric values", () => {
-    expect(parseFiniteNumber(Number.NaN)).toBeUndefined();
-    expect(parseFiniteNumber(Number.POSITIVE_INFINITY)).toBeUndefined();
-    expect(parseFiniteNumber("not-a-number")).toBeUndefined();
-    expect(parseFiniteNumber(null)).toBeUndefined();
+  it("parses finite values and rejects invalid inputs", () => {
+    expectParserCases(parseFiniteNumber, [
+      { value: 42, expected: 42 },
+      { value: "3.14", expected: 3.14 },
+      { value: " 3.14ms", expected: 3.14 },
+      { value: "+7", expected: 7 },
+      { value: "1e3", expected: 1000 },
+      { value: Number.NaN, expected: undefined },
+      { value: Number.POSITIVE_INFINITY, expected: undefined },
+      { value: "not-a-number", expected: undefined },
+      { value: " ", expected: undefined },
+      { value: "", expected: undefined },
+      { value: null, expected: undefined },
+    ]);
   });
 });
 
 describe("parseStrictInteger", () => {
-  it("parses exact integers", () => {
-    expect(parseStrictInteger("42")).toBe(42);
-    expect(parseStrictInteger(" -7 ")).toBe(-7);
-  });
-
-  it("rejects junk prefixes and suffixes", () => {
-    expect(parseStrictInteger("42ms")).toBeUndefined();
-    expect(parseStrictInteger("0abc")).toBeUndefined();
-    expect(parseStrictInteger("1.5")).toBeUndefined();
+  it("parses strict integers and rejects non-integers", () => {
+    expectParserCases(parseStrictInteger, [
+      { value: "42", expected: 42 },
+      { value: " -7 ", expected: -7 },
+      { value: 12, expected: 12 },
+      { value: "+9", expected: 9 },
+      { value: "42ms", expected: undefined },
+      { value: "0abc", expected: undefined },
+      { value: "1.5", expected: undefined },
+      { value: "1e3", expected: undefined },
+      { value: " ", expected: undefined },
+      { value: Number.MAX_SAFE_INTEGER + 1, expected: undefined },
+    ]);
   });
 });
 
 describe("parseStrictPositiveInteger", () => {
-  it("accepts only positive integers", () => {
-    expect(parseStrictPositiveInteger("9")).toBe(9);
-    expect(parseStrictPositiveInteger("0")).toBeUndefined();
-    expect(parseStrictPositiveInteger("-1")).toBeUndefined();
+  it("enforces positive integers", () => {
+    expectParserCases(parseStrictPositiveInteger, [
+      { value: "9", expected: 9 },
+      { value: "0", expected: undefined },
+      { value: "-1", expected: undefined },
+    ]);
   });
 });
 
 describe("parseStrictNonNegativeInteger", () => {
-  it("accepts zero and positive integers only", () => {
-    expect(parseStrictNonNegativeInteger("0")).toBe(0);
-    expect(parseStrictNonNegativeInteger("9")).toBe(9);
-    expect(parseStrictNonNegativeInteger("-1")).toBeUndefined();
+  it("allows zero and positive integers only", () => {
+    expectParserCases(parseStrictNonNegativeInteger, [
+      { value: "0", expected: 0 },
+      { value: "9", expected: 9 },
+      { value: "-1", expected: undefined },
+    ]);
   });
 });

@@ -74,4 +74,25 @@ struct TailscaleServeGatewayDiscoveryTests {
         #expect(TailscaleServeGatewayDiscovery
             .resolveExecutablePath("definitely-not-here", env: ["PATH": "/tmp"]) == nil)
     }
+
+    @Test func `adds TERM for GUI-launched tailscale subprocesses`() {
+        let env = TailscaleServeGatewayDiscovery.commandEnvironment(base: [
+            "HOME": "/Users/tester",
+            "PATH": "/usr/bin:/bin",
+        ])
+
+        #expect(env["TERM"] == "dumb")
+        #expect(env["HOME"] == "/Users/tester")
+        #expect(env["PATH"] == "/usr/bin:/bin")
+    }
+
+    @Test func `preserves existing TERM when building tailscale subprocess environment`() {
+        let env = TailscaleServeGatewayDiscovery.commandEnvironment(base: [
+            "TERM": "xterm-256color",
+            "HOME": "/Users/tester",
+        ])
+
+        #expect(env["TERM"] == "xterm-256color")
+        #expect(env["HOME"] == "/Users/tester")
+    }
 }

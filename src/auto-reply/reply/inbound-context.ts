@@ -1,5 +1,6 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
@@ -81,9 +82,9 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
     normalizeInboundTextNewlines(bodyForCommandsSource),
   );
 
-  const explicitLabel = normalized.ConversationLabel?.trim();
+  const explicitLabel = normalizeOptionalString(normalized.ConversationLabel);
   if (opts.forceConversationLabel || !explicitLabel) {
-    const resolved = resolveConversationLabel(normalized)?.trim();
+    const resolved = normalizeOptionalString(resolveConversationLabel(normalized));
     if (resolved) {
       normalized.ConversationLabel = resolved;
     }

@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAuthProfileMetadata } from "./identity.js";
 import type { AuthProfileStore } from "./types.js";
 
 export function resolveAuthProfileDisplayLabel(params: {
@@ -6,12 +7,12 @@ export function resolveAuthProfileDisplayLabel(params: {
   store: AuthProfileStore;
   profileId: string;
 }): string {
-  const { cfg, store, profileId } = params;
-  const profile = store.profiles[profileId];
-  const configEmail = cfg?.auth?.profiles?.[profileId]?.email?.trim();
-  const email = configEmail || (profile && "email" in profile ? profile.email?.trim() : undefined);
-  if (email) {
-    return `${profileId} (${email})`;
+  const { displayName, email } = resolveAuthProfileMetadata(params);
+  if (displayName) {
+    return `${params.profileId} (${displayName})`;
   }
-  return profileId;
+  if (email) {
+    return `${params.profileId} (${email})`;
+  }
+  return params.profileId;
 }

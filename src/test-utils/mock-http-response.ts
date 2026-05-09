@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import { lowercasePreservingWhitespace } from "../shared/string-coerce.js";
 
 export function createMockServerResponse(): ServerResponse & { body?: string } {
   const headers: Record<string, string> = {};
@@ -13,10 +14,10 @@ export function createMockServerResponse(): ServerResponse & { body?: string } {
     headersSent: false,
     statusCode: 200,
     setHeader: (key: string, value: string) => {
-      headers[key.toLowerCase()] = value;
+      headers[lowercasePreservingWhitespace(key)] = value;
       return res;
     },
-    getHeader: (key: string) => headers[key.toLowerCase()],
+    getHeader: (key: string) => headers[lowercasePreservingWhitespace(key)],
     end: (body?: string) => {
       res.headersSent = true;
       res.body = body;

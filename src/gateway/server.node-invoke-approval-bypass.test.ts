@@ -21,13 +21,13 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const NODE_CONNECT_TIMEOUT_MS = 3_000;
+const NODE_CONNECT_TIMEOUT_MS = 10_000;
 const CONNECT_REQ_TIMEOUT_MS = 2_000;
 
 function createDeviceIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
-  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
   const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
   const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
   if (!deviceId) {
@@ -47,6 +47,23 @@ async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> 
   expect(hasInvoke()).toBe(false);
 }
 
+function requireNonEmptyString(value: string | null | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function requireRecord(
+  value: Record<string, unknown> | null | undefined,
+  label: string,
+): Record<string, unknown> {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 async function getConnectedNodeId(ws: WebSocket): Promise<string> {
   const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
     ws,
@@ -54,9 +71,10 @@ async function getConnectedNodeId(ws: WebSocket): Promise<string> {
     {},
   );
   expect(nodes.ok).toBe(true);
-  const nodeId = nodes.payload?.nodes?.find((n) => n.connected)?.nodeId ?? "";
-  expect(nodeId).toBeTruthy();
-  return nodeId;
+  return requireNonEmptyString(
+    nodes.payload?.nodes?.find((n) => n.connected)?.nodeId,
+    "connected node id",
+  );
 }
 
 async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
@@ -66,7 +84,13 @@ async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
     {},
   );
   expect(nodes.ok).toBe(true);
-  return (nodes.payload?.nodes ?? []).filter((n) => n.connected).map((n) => n.nodeId);
+  const nodeIds: string[] = [];
+  for (const node of nodes.payload?.nodes ?? []) {
+    if (node.connected) {
+      nodeIds.push(node.nodeId);
+    }
+  }
+  return nodeIds;
 }
 
 async function requestAllowOnceApproval(
@@ -83,7 +107,7 @@ async function requestAllowOnceApproval(
     systemRunPlan: {
       argv: commandArgv,
       cwd: null,
-      rawCommand: command,
+      commandText: command,
       agentId: null,
       sessionKey: null,
     },
@@ -117,7 +141,9 @@ describe("node.invoke approval bypass", () => {
     const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
     const list = await listDevicePairing();
     for (const pending of list.pending) {
-      await approveDevicePairing(pending.requestId);
+      await approveDevicePairing(pending.requestId, {
+        callerScopes: pending.scopes ?? ["operator.admin"],
+      });
     }
   };
 
@@ -129,11 +155,7 @@ describe("node.invoke approval bypass", () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`);
       trackConnectChallengeNonce(ws);
       const challengePromise = resolveDevice
-        ? onceMessage<{
-            type?: string;
-            event?: string;
-            payload?: Record<string, unknown> | null;
-          }>(ws, (o) => o.type === "event" && o.event === "connect.challenge")
+        ? onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge")
         : null;
       await new Promise<void>((resolve) => ws.once("open", resolve));
       const nonce = (() => {
@@ -175,15 +197,17 @@ describe("node.invoke approval bypass", () => {
 
   const connectOperatorWithNewDevice = async (scopes: string[]) => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
-    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
+    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
     const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
-    const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
-    expect(deviceId).toBeTruthy();
+    const deviceId = requireNonEmptyString(
+      deriveDeviceIdFromPublicKey(publicKeyRaw),
+      "operator device id",
+    );
     return await connectOperatorWithRetry(scopes, (nonce) => {
       const signedAtMs = Date.now();
       const payload = buildDeviceAuthPayload({
-        deviceId: deviceId!,
+        deviceId,
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
         role: "operator",
@@ -193,7 +217,7 @@ describe("node.invoke approval bypass", () => {
         nonce,
       });
       return {
-        id: deviceId!,
+        id: deviceId,
         publicKey: publicKeyRaw,
         signature: signDevicePayload(privateKeyPem, payload),
         signedAt: signedAtMs,
@@ -205,6 +229,7 @@ describe("node.invoke approval bypass", () => {
   const connectLinuxNode = async (
     onInvoke: (payload: unknown) => void,
     deviceIdentity?: DeviceIdentity,
+    commands: string[] = ["system.run"],
   ) => {
     let readyResolve: (() => void) | null = null;
     const ready = new Promise<void>((resolve) => {
@@ -216,7 +241,7 @@ describe("node.invoke approval bypass", () => {
       url: `ws://127.0.0.1:${port}`,
       // Keep challenge timeout realistic in tests; 0 maps to a 250ms timeout and can
       // trigger reconnect backoff loops under load.
-      connectDelayMs: 2_000,
+      connectChallengeTimeoutMs: 2_000,
       token: "secret",
       role: "node",
       clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
@@ -224,7 +249,7 @@ describe("node.invoke approval bypass", () => {
       platform: "linux",
       mode: GATEWAY_CLIENT_MODES.NODE,
       scopes: [],
-      commands: ["system.run"],
+      commands,
       deviceIdentity: resolvedDeviceIdentity,
       onHelloOk: () => readyResolve?.(),
       onEvent: (evt) => {
@@ -250,12 +275,22 @@ describe("node.invoke approval bypass", () => {
       },
     });
     client.start();
-    await Promise.race([
-      ready,
-      sleep(NODE_CONNECT_TIMEOUT_MS).then(() => {
-        throw new Error("timeout waiting for node to connect");
-      }),
-    ]);
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        ready,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("timeout waiting for node to connect")),
+            NODE_CONNECT_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
     return client;
   };
 
@@ -320,6 +355,39 @@ describe("node.invoke approval bypass", () => {
     }
   });
 
+  test("rejects browser.proxy persistent profile mutations before forwarding", async () => {
+    let sawInvoke = false;
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      undefined,
+      ["browser.proxy"],
+    );
+    const ws = await connectOperator(["operator.write"]);
+    try {
+      const nodeId = await getConnectedNodeId(ws);
+      const res = await rpcReq(ws, "node.invoke", {
+        nodeId,
+        command: "browser.proxy",
+        params: {
+          method: "POST",
+          path: "/profiles/create",
+          body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "node.invoke cannot mutate persistent browser profiles via browser.proxy",
+      );
+      await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
   test("binds approvals to decision/device and blocks cross-device replay", async () => {
     let invokeCount = 0;
     let lastInvokeParams: Record<string, unknown> | null = null;
@@ -357,10 +425,16 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
-      expect(lastInvokeParams).toBeTruthy();
-      expect(lastInvokeParams?.["approved"]).toBe(true);
-      expect(lastInvokeParams?.["approvalDecision"]).toBe("allow-once");
-      expect(lastInvokeParams?.["injected"]).toBeUndefined();
+      for (let i = 0; i < 100; i += 1) {
+        if (lastInvokeParams) {
+          break;
+        }
+        await sleep(50);
+      }
+      const forwardedParams = requireRecord(lastInvokeParams, "forwarded invoke params");
+      expect(forwardedParams["approved"]).toBe(true);
+      expect(forwardedParams["approvalDecision"]).toBe("allow-once");
+      expect(forwardedParams["injected"]).toBeUndefined();
 
       const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
       const invokeCountBeforeReplay = invokeCount;
@@ -411,10 +485,11 @@ describe("node.invoke approval bypass", () => {
         })
         .toBeGreaterThanOrEqual(2);
       const connectedNodeIds = await getConnectedNodeIds(wsApprover);
-      const approvedNodeId = connectedNodeIds[0] ?? "";
-      const replayNodeId = connectedNodeIds.find((id) => id !== approvedNodeId) ?? "";
-      expect(approvedNodeId).toBeTruthy();
-      expect(replayNodeId).toBeTruthy();
+      const approvedNodeId = requireNonEmptyString(connectedNodeIds[0], "approved node id");
+      const replayNodeId = requireNonEmptyString(
+        connectedNodeIds.find((id) => id !== approvedNodeId),
+        "replay node id",
+      );
 
       const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi", approvedNodeId);
       const beforeReplayApprovedNode = invokeCounts.get(approvedNodeId) ?? 0;

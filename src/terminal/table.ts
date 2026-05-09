@@ -1,5 +1,5 @@
 import { displayString } from "../utils.js";
-import { visibleWidth } from "./ansi.js";
+import { splitGraphemes, visibleWidth } from "./ansi.js";
 
 type Align = "left" | "right" | "center";
 
@@ -19,6 +19,26 @@ export type RenderTableOptions = {
   padding?: number;
   border?: "unicode" | "ascii" | "none";
 };
+
+function resolveDefaultBorder(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): "unicode" | "ascii" {
+  if (platform !== "win32") {
+    return "unicode";
+  }
+
+  const term = env.TERM ?? "";
+  const termProgram = env.TERM_PROGRAM ?? "";
+  const isModernTerminal =
+    Boolean(env.WT_SESSION) ||
+    term.includes("xterm") ||
+    term.includes("cygwin") ||
+    term.includes("msys") ||
+    termProgram === "vscode";
+
+  return isModernTerminal ? "unicode" : "ascii";
+}
 
 function repeat(ch: string, n: number): string {
   if (n <= 0) {
@@ -94,13 +114,22 @@ function wrapLine(text: string, width: number): string[] {
       }
     }
 
-    const cp = text.codePointAt(i);
-    if (!cp) {
-      break;
+    let nextEsc = text.indexOf(ESC, i);
+    if (nextEsc < 0) {
+      nextEsc = text.length;
     }
-    const ch = String.fromCodePoint(cp);
-    tokens.push({ kind: "char", value: ch });
-    i += ch.length;
+    if (nextEsc === i) {
+      // Consume unsupported escape bytes as plain characters so wrapping
+      // cannot stall on unknown ANSI/control sequences.
+      tokens.push({ kind: "char", value: ESC });
+      i += ESC.length;
+      continue;
+    }
+    const plainChunk = text.slice(i, nextEsc);
+    for (const grapheme of splitGraphemes(plainChunk)) {
+      tokens.push({ kind: "char", value: grapheme });
+    }
+    i = nextEsc;
   }
 
   const firstCharIndex = tokens.findIndex((t) => t.kind === "char");
@@ -139,7 +168,7 @@ function wrapLine(text: string, width: number): string[] {
   const bufToString = (slice?: Token[]) => (slice ?? buf).map((t) => t.value).join("");
 
   const bufVisibleWidth = (slice: Token[]) =>
-    slice.reduce((acc, t) => acc + (t.kind === "char" ? 1 : 0), 0);
+    slice.reduce((acc, t) => acc + (t.kind === "char" ? visibleWidth(t.value) : 0), 0);
 
   const pushLine = (value: string) => {
     const cleaned = value.replace(/\s+$/, "");
@@ -147,6 +176,20 @@ function wrapLine(text: string, width: number): string[] {
       return;
     }
     lines.push(cleaned);
+  };
+
+  const trimLeadingSpaces = (tokens: Token[]) => {
+    while (true) {
+      const firstCharIndex = tokens.findIndex((token) => token.kind === "char");
+      if (firstCharIndex < 0) {
+        return;
+      }
+      const firstChar = tokens[firstCharIndex];
+      if (!firstChar || !isSpaceChar(firstChar.value)) {
+        return;
+      }
+      tokens.splice(firstCharIndex, 1);
+    }
   };
 
   const flushAt = (breakAt: number | null) => {
@@ -164,10 +207,7 @@ function wrapLine(text: string, width: number): string[] {
     const left = buf.slice(0, breakAt);
     const rest = buf.slice(breakAt);
     pushLine(bufToString(left));
-
-    while (rest.length > 0 && rest[0]?.kind === "char" && isSpaceChar(rest[0].value)) {
-      rest.shift();
-    }
+    trimLeadingSpaces(rest);
 
     buf.length = 0;
     buf.push(...rest);
@@ -195,12 +235,16 @@ function wrapLine(text: string, width: number): string[] {
       }
       continue;
     }
-    if (bufVisible + 1 > width && bufVisible > 0) {
+    const charWidth = visibleWidth(ch);
+    if (bufVisible + charWidth > width && bufVisible > 0) {
       flushAt(lastBreakIndex);
+    }
+    if (bufVisible === 0 && isSpaceChar(ch)) {
+      continue;
     }
 
     buf.push(token);
-    bufVisible += 1;
+    bufVisible += charWidth;
     if (isBreakChar(ch)) {
       lastBreakIndex = buf.length;
     }
@@ -231,6 +275,10 @@ function normalizeWidth(n: number | undefined): number | undefined {
   return Math.floor(n);
 }
 
+export function getTerminalTableWidth(minWidth = 60, fallbackWidth = 120): number {
+  return Math.max(minWidth, process.stdout.columns ?? fallbackWidth);
+}
+
 export function renderTable(opts: RenderTableOptions): string {
   const rows = opts.rows.map((row) => {
     const next: Record<string, string> = {};
@@ -239,7 +287,7 @@ export function renderTable(opts: RenderTableOptions): string {
     }
     return next;
   });
-  const border = opts.border ?? "unicode";
+  const border = opts.border ?? resolveDefaultBorder(process.platform, process.env);
   if (border === "none") {
     const columns = opts.columns;
     const header = columns.map((c) => c.header).join(" | ");

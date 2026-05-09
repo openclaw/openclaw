@@ -6,6 +6,8 @@ import tls from "node:tls";
 import { promisify } from "node:util";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
+import { pathExists } from "../fs-safe.js";
+import { resolveSystemBin } from "../resolve-system-bin.js";
 import { normalizeFingerprint } from "./fingerprint.js";
 
 const execFileAsync = promisify(execFile);
@@ -21,15 +23,6 @@ export type GatewayTlsRuntime = {
   error?: string;
 };
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function generateSelfSignedCert(params: {
   certPath: string;
   keyPath: string;
@@ -41,7 +34,13 @@ async function generateSelfSignedCert(params: {
   if (keyDir !== certDir) {
     await ensureDir(keyDir);
   }
-  await execFileAsync("openssl", [
+  const opensslBin = resolveSystemBin("openssl");
+  if (!opensslBin) {
+    throw new Error(
+      "openssl not found in trusted system directories. Install it in an OS-managed location.",
+    );
+  }
+  await execFileAsync(opensslBin, [
     "req",
     "-x509",
     "-newkey",
@@ -78,8 +77,8 @@ export async function loadGatewayTlsRuntime(
   const keyPath = resolveUserPath(cfg.keyPath ?? path.join(baseDir, "gateway-key.pem"));
   const caPath = cfg.caPath ? resolveUserPath(cfg.caPath) : undefined;
 
-  const hasCert = await fileExists(certPath);
-  const hasKey = await fileExists(keyPath);
+  const hasCert = await pathExists(certPath);
+  const hasKey = await pathExists(keyPath);
 
   if (!hasCert && !hasKey && autoGenerate) {
     try {
@@ -95,7 +94,7 @@ export async function loadGatewayTlsRuntime(
     }
   }
 
-  if (!(await fileExists(certPath)) || !(await fileExists(keyPath))) {
+  if (!(await pathExists(certPath)) || !(await pathExists(keyPath))) {
     return {
       enabled: false,
       required: true,

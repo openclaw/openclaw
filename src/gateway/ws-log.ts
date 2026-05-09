@@ -1,9 +1,11 @@
 import chalk from "chalk";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose } from "../globals.js";
 import { shouldLogSubsystemToConsole } from "../logging/console.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { readStringValue } from "../shared/string-coerce.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
 const LOG_VALUE_LIMIT = 240;
@@ -168,10 +170,10 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
     return {};
   }
   const rec = payload as Record<string, unknown>;
-  const runId = typeof rec.runId === "string" ? rec.runId : undefined;
-  const stream = typeof rec.stream === "string" ? rec.stream : undefined;
+  const runId = readStringValue(rec.runId);
+  const stream = readStringValue(rec.stream);
   const seq = typeof rec.seq === "number" ? rec.seq : undefined;
-  const sessionKey = typeof rec.sessionKey === "string" ? rec.sessionKey : undefined;
+  const sessionKey = readStringValue(rec.sessionKey);
   const data =
     rec.data && typeof rec.data === "object" ? (rec.data as Record<string, unknown>) : undefined;
 
@@ -200,28 +202,30 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
   }
 
   if (stream === "assistant") {
-    const text = typeof data.text === "string" ? data.text : undefined;
+    const text = readStringValue(data.text);
     if (text?.trim()) {
       extra.text = compactPreview(text);
     }
-    const mediaUrls = Array.isArray(data.mediaUrls) ? data.mediaUrls : undefined;
-    if (mediaUrls && mediaUrls.length > 0) {
-      extra.media = mediaUrls.length;
+    const mediaCount = resolveSendableOutboundReplyParts({
+      mediaUrls: Array.isArray(data.mediaUrls) ? data.mediaUrls : undefined,
+    }).mediaCount;
+    if (mediaCount > 0) {
+      extra.media = mediaCount;
     }
     return extra;
   }
 
   if (stream === "tool") {
-    const phase = typeof data.phase === "string" ? data.phase : undefined;
-    const name = typeof data.name === "string" ? data.name : undefined;
+    const phase = readStringValue(data.phase);
+    const name = readStringValue(data.name);
     if (phase || name) {
       extra.tool = `${phase ?? "?"}:${name ?? "?"}`;
     }
-    const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : undefined;
+    const toolCallId = readStringValue(data.toolCallId);
     if (toolCallId) {
       extra.call = shortId(toolCallId);
     }
-    const meta = typeof data.meta === "string" ? data.meta : undefined;
+    const meta = readStringValue(data.meta);
     if (meta?.trim()) {
       extra.meta = meta;
     }

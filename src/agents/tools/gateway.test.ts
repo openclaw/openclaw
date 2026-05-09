@@ -1,29 +1,39 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CallGatewayScopedOptions } from "../../gateway/call.js";
 import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
 
-const callGatewayMock = vi.fn();
-const configState = vi.hoisted(() => ({
-  value: {} as Record<string, unknown>,
+const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+  configState: {
+    value: {} as Record<string, unknown>,
+  },
 }));
 vi.mock("../../config/config.js", () => ({
-  loadConfig: () => configState.value,
+  getRuntimeConfig: () => mocks.configState.value,
   resolveGatewayPort: () => 18789,
 }));
 vi.mock("../../gateway/call.js", () => ({
-  callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  callGateway: (...args: unknown[]) => mocks.callGateway(...args),
 }));
+
+function capturedGatewayCall(): CallGatewayScopedOptions {
+  expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+  const call = mocks.callGateway.mock.calls[0];
+  if (!call) {
+    throw new Error("expected callGateway to be called");
+  }
+  return call[0] as CallGatewayScopedOptions;
+}
 
 describe("gateway tool defaults", () => {
   const envSnapshot = {
     openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
-    clawdbot: process.env.CLAWDBOT_GATEWAY_TOKEN,
   };
 
   beforeEach(() => {
-    callGatewayMock.mockClear();
-    configState.value = {};
+    mocks.callGateway.mockClear();
+    mocks.configState.value = {};
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
   });
 
   afterAll(() => {
@@ -31,11 +41,6 @@ describe("gateway tool defaults", () => {
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
     } else {
       process.env.OPENCLAW_GATEWAY_TOKEN = envSnapshot.openclaw;
-    }
-    if (envSnapshot.clawdbot === undefined) {
-      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
-    } else {
-      process.env.CLAWDBOT_GATEWAY_TOKEN = envSnapshot.clawdbot;
     }
   });
 
@@ -45,20 +50,19 @@ describe("gateway tool defaults", () => {
   });
 
   it("accepts allowlisted gatewayUrl overrides (SSRF hardening)", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
     await callGatewayTool(
       "health",
       { gatewayUrl: "ws://127.0.0.1:18789", gatewayToken: "t", timeoutMs: 5000 },
       {},
     );
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        token: "t",
-        timeoutMs: 5000,
-        scopes: ["operator.read"],
-      }),
-    );
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("health");
+    expect(call.params).toEqual({});
+    expect(call.url).toBe("ws://127.0.0.1:18789");
+    expect(call.token).toBe("t");
+    expect(call.timeoutMs).toBe(5000);
+    expect(call.scopes).toEqual(["operator.read"]);
   });
 
   it("uses OPENCLAW_GATEWAY_TOKEN for allowlisted local overrides", () => {
@@ -69,7 +73,7 @@ describe("gateway tool defaults", () => {
   });
 
   it("falls back to config gateway.auth.token when env is unset for local overrides", () => {
-    configState.value = {
+    mocks.configState.value = {
       gateway: {
         auth: { token: "config-token" },
       },
@@ -79,7 +83,7 @@ describe("gateway tool defaults", () => {
   });
 
   it("uses gateway.remote.token for allowlisted remote overrides", () => {
-    configState.value = {
+    mocks.configState.value = {
       gateway: {
         remote: {
           url: "wss://gateway.example",
@@ -94,8 +98,7 @@ describe("gateway tool defaults", () => {
 
   it("does not leak local env/config tokens to remote overrides", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "local-env-token";
-    process.env.CLAWDBOT_GATEWAY_TOKEN = "legacy-env-token";
-    configState.value = {
+    mocks.configState.value = {
       gateway: {
         auth: { token: "local-config-token" },
         remote: {
@@ -108,7 +111,7 @@ describe("gateway tool defaults", () => {
   });
 
   it("ignores unresolved local token SecretRef for strict remote overrides", () => {
-    configState.value = {
+    mocks.configState.value = {
       gateway: {
         auth: {
           mode: "token",
@@ -130,7 +133,7 @@ describe("gateway tool defaults", () => {
 
   it("explicit gatewayToken overrides fallback token resolution", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "local-env-token";
-    configState.value = {
+    mocks.configState.value = {
       gateway: {
         remote: {
           url: "wss://gateway.example",
@@ -146,36 +149,44 @@ describe("gateway tool defaults", () => {
   });
 
   it("uses least-privilege write scope for write methods", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
     await callGatewayTool("wake", {}, { mode: "now", text: "hi" });
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "wake",
-        scopes: ["operator.write"],
-      }),
-    );
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("wake");
+    expect(call.params).toEqual({ mode: "now", text: "hi" });
+    expect(call.scopes).toEqual(["operator.write"]);
   });
 
   it("uses admin scope only for admin methods", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
     await callGatewayTool("cron.add", {}, { id: "job-1" });
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "cron.add",
-        scopes: ["operator.admin"],
-      }),
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("cron.add");
+    expect(call.params).toEqual({ id: "job-1" });
+    expect(call.scopes).toEqual(["operator.admin"]);
+  });
+
+  it("allows explicit scope overrides for dynamic callers", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool(
+      "node.pair.approve",
+      {},
+      { requestId: "req-1" },
+      { scopes: ["operator.admin"] },
     );
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("node.pair.approve");
+    expect(call.params).toEqual({ requestId: "req-1" });
+    expect(call.scopes).toEqual(["operator.admin"]);
   });
 
   it("default-denies unknown methods by sending no scopes", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
     await callGatewayTool("nonexistent.method", {}, {});
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "nonexistent.method",
-        scopes: [],
-      }),
-    );
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("nonexistent.method");
+    expect(call.params).toEqual({});
+    expect(call.scopes).toEqual([]);
   });
 
   it("rejects non-allowlisted overrides (SSRF hardening)", async () => {

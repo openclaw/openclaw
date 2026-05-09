@@ -1,21 +1,40 @@
-import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import type {
+  ExecApprovalCommandSpan,
+  ExecAsk,
+  ExecSecurity,
+  SystemRunApprovalPlan,
+} from "../infra/exec-approvals.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
+type ExecApprovalCommandSpansRuntime =
+  typeof import("./bash-tools.exec-approval-request.runtime.js");
+
+let execApprovalCommandSpansRuntimePromise: Promise<ExecApprovalCommandSpansRuntime> | null = null;
+
+function loadExecApprovalCommandSpansRuntime(): Promise<ExecApprovalCommandSpansRuntime> {
+  execApprovalCommandSpansRuntimePromise ??=
+    import("./bash-tools.exec-approval-request.runtime.js");
+  return execApprovalCommandSpansRuntimePromise;
+}
+
 export type RequestExecApprovalDecisionParams = {
   id: string;
-  command: string;
+  command?: string;
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
-  cwd: string;
+  cwd: string | undefined;
   nodeId?: string;
   host: "gateway" | "node";
   security: ExecSecurity;
   ask: ExecAsk;
+  warningText?: string;
+  commandSpans?: ExecApprovalCommandSpan[];
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -35,8 +54,8 @@ function buildExecApprovalRequestToolParams(
 ): ExecApprovalRequestToolParams {
   return {
     id: params.id,
-    command: params.command,
-    commandArgv: params.commandArgv,
+    ...(params.command ? { command: params.command } : {}),
+    ...(params.commandArgv ? { commandArgv: params.commandArgv } : {}),
     systemRunPlan: params.systemRunPlan,
     env: params.env,
     cwd: params.cwd,
@@ -44,6 +63,8 @@ function buildExecApprovalRequestToolParams(
     host: params.host,
     security: params.security,
     ask: params.ask,
+    warningText: params.warningText,
+    commandSpans: params.commandSpans,
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
     sessionKey: params.sessionKey,
@@ -90,11 +111,7 @@ export async function registerExecApprovalRequest(
 ): Promise<ExecApprovalRegistration> {
   // Two-phase registration is critical: the ID must be registered server-side
   // before exec returns `approval-pending`, otherwise `/approve` can race and orphan.
-  const registrationResult = await callGatewayTool<{
-    id?: string;
-    expiresAtMs?: number;
-    decision?: string;
-  }>(
+  const registrationResult = await callGatewayTool(
     "exec.approval.request",
     { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
     buildExecApprovalRequestToolParams(params),
@@ -120,7 +137,7 @@ export async function waitForExecApprovalDecision(id: string): Promise<string | 
     return parseDecision(decisionResult).value;
   } catch (err) {
     // Timeout/cleanup path: treat missing/expired as no decision so askFallback applies.
-    const message = String(err).toLowerCase();
+    const message = normalizeLowercaseStringOrEmpty(String(err));
     if (message.includes("approval expired or not found")) {
       return null;
     }
@@ -150,15 +167,17 @@ export async function requestExecApprovalDecision(
 
 type HostExecApprovalParams = {
   approvalId: string;
-  command: string;
+  command?: string;
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
-  workdir: string;
+  workdir: string | undefined;
   host: "gateway" | "node";
   nodeId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
+  warningText?: string;
+  commandSpans?: ExecApprovalCommandSpan[];
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -201,9 +220,26 @@ export function buildExecApprovalTurnSourceContext(
   };
 }
 
-function buildHostApprovalDecisionParams(
+async function resolveCommandSpans(
+  command: string | undefined,
+): Promise<ExecApprovalCommandSpan[] | undefined> {
+  if (!command) {
+    return undefined;
+  }
+  try {
+    const { resolveExecApprovalCommandSpans } = await loadExecApprovalCommandSpansRuntime();
+    return await resolveExecApprovalCommandSpans(command);
+  } catch {
+    return undefined;
+  }
+}
+
+async function buildHostApprovalDecisionParams(
   params: HostExecApprovalParams,
-): RequestExecApprovalDecisionParams {
+): Promise<RequestExecApprovalDecisionParams> {
+  const commandSpans =
+    params.commandSpans ??
+    (await resolveCommandSpans(params.command ?? params.systemRunPlan?.commandText));
   return {
     id: params.approvalId,
     command: params.command,
@@ -215,6 +251,8 @@ function buildHostApprovalDecisionParams(
     host: params.host,
     security: params.security,
     ask: params.ask,
+    warningText: params.warningText,
+    commandSpans,
     ...buildExecApprovalRequesterContext({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -227,13 +265,13 @@ function buildHostApprovalDecisionParams(
 export async function requestExecApprovalDecisionForHost(
   params: HostExecApprovalParams,
 ): Promise<string | null> {
-  return await requestExecApprovalDecision(buildHostApprovalDecisionParams(params));
+  return await requestExecApprovalDecision(await buildHostApprovalDecisionParams(params));
 }
 
 export async function registerExecApprovalRequestForHost(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
-  return await registerExecApprovalRequest(buildHostApprovalDecisionParams(params));
+  return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
 }
 
 export async function registerExecApprovalRequestForHostOrThrow(

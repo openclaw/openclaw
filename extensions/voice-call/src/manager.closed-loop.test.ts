@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { createManagerHarness, FakeProvider, markCallAnswered } from "./manager.test-harness.js";
 
+function requireCall(
+  manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
+  callId: string,
+) {
+  const call = manager.getCall(callId);
+  if (!call) {
+    throw new Error(`expected active call ${callId}`);
+  }
+  return call;
+}
+
+function requireTurnToken(provider: Awaited<ReturnType<typeof createManagerHarness>>["provider"]) {
+  const firstStart = provider.startListeningCalls[0];
+  if (!firstStart?.turnToken) {
+    throw new Error("expected closed-loop turn to capture a turn token");
+  }
+  return firstStart.turnToken;
+}
+
 describe("CallManager closed-loop turns", () => {
   it("completes a closed-loop turn without live audio", async () => {
     const { manager, provider } = await createManagerHarness({
@@ -31,12 +50,12 @@ describe("CallManager closed-loop turns", () => {
     expect(provider.startListeningCalls).toHaveLength(1);
     expect(provider.stopListeningCalls).toHaveLength(1);
 
-    const call = manager.getCall(started.callId);
-    expect(call?.transcript.map((entry) => entry.text)).toEqual([
+    const call = requireCall(manager, started.callId);
+    expect(call.transcript.map((entry) => entry.text)).toEqual([
       "How can I help?",
       "Please check status",
     ]);
-    const metadata = (call?.metadata ?? {}) as Record<string, unknown>;
+    const metadata = call.metadata ?? {};
     expect(typeof metadata.lastTurnLatencyMs).toBe("number");
     expect(typeof metadata.lastTurnListenWaitMs).toBe("number");
     expect(metadata.turnCount).toBe(1);
@@ -90,8 +109,7 @@ describe("CallManager closed-loop turns", () => {
     const turnPromise = manager.continueCall(started.callId, "Prompt");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const expectedTurnToken = provider.startListeningCalls[0]?.turnToken;
-    expect(typeof expectedTurnToken).toBe("string");
+    const expectedTurnToken = requireTurnToken(provider);
 
     manager.processEvent({
       id: "evt-turn-token-bad",
@@ -125,8 +143,8 @@ describe("CallManager closed-loop turns", () => {
     expect(turnResult.success).toBe(true);
     expect(turnResult.transcript).toBe("final answer");
 
-    const call = manager.getCall(started.callId);
-    expect(call?.transcript.map((entry) => entry.text)).toEqual(["Prompt", "final answer"]);
+    const call = requireCall(manager, started.callId);
+    expect(call.transcript.map((entry) => entry.text)).toEqual(["Prompt", "final answer"]);
   });
 
   it("tracks latency metadata across multiple closed-loop turns", async () => {
@@ -167,14 +185,14 @@ describe("CallManager closed-loop turns", () => {
 
     expect(secondResult.success).toBe(true);
 
-    const call = manager.getCall(started.callId);
-    expect(call?.transcript.map((entry) => entry.text)).toEqual([
+    const call = requireCall(manager, started.callId);
+    expect(call.transcript.map((entry) => entry.text)).toEqual([
       "First question",
       "First answer",
       "Second question",
       "Second answer",
     ]);
-    const metadata = (call?.metadata ?? {}) as Record<string, unknown>;
+    const metadata = call.metadata ?? {};
     expect(metadata.turnCount).toBe(2);
     expect(typeof metadata.lastTurnLatencyMs).toBe("number");
     expect(typeof metadata.lastTurnListenWaitMs).toBe("number");
@@ -209,8 +227,8 @@ describe("CallManager closed-loop turns", () => {
       expect(result.transcript).toBe(`Answer ${i}`);
     }
 
-    const call = manager.getCall(started.callId);
-    const metadata = (call?.metadata ?? {}) as Record<string, unknown>;
+    const call = requireCall(manager, started.callId);
+    const metadata = call.metadata ?? {};
     expect(metadata.turnCount).toBe(5);
     expect(provider.startListeningCalls).toHaveLength(5);
     expect(provider.stopListeningCalls).toHaveLength(5);

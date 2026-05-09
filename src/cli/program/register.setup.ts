@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { onboardCommand } from "../../commands/onboard.js";
+import { setupWizardCommand } from "../../commands/onboard.js";
 import { setupCommand } from "../../commands/setup.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -10,7 +10,7 @@ import { hasExplicitOptions } from "../command-options.js";
 export function registerSetupCommand(program: Command) {
   program
     .command("setup")
-    .description("Initialize ~/.openclaw/openclaw.json and the agent workspace")
+    .description("Initialize the active OpenClaw config and agent workspace")
     .addHelpText(
       "after",
       () =>
@@ -20,9 +20,12 @@ export function registerSetupCommand(program: Command) {
       "--workspace <dir>",
       "Agent workspace directory (default: ~/.openclaw/workspace; stored as agents.defaults.workspace)",
     )
-    .option("--wizard", "Run the interactive onboarding wizard", false)
-    .option("--non-interactive", "Run the wizard without prompts", false)
-    .option("--mode <mode>", "Wizard mode: local|remote")
+    .option("--wizard", "Run interactive onboarding", false)
+    .option("--non-interactive", "Run onboarding without prompts", false)
+    .option("--mode <mode>", "Onboard mode: local|remote")
+    .option("--import-from <provider>", "Migration provider to run during onboarding")
+    .option("--import-source <path>", "Source agent home for --import-from")
+    .option("--import-secrets", "Import supported secrets during onboarding migration", false)
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
     .action(async (opts, command) => {
@@ -31,15 +34,21 @@ export function registerSetupCommand(program: Command) {
           "wizard",
           "nonInteractive",
           "mode",
+          "importFrom",
+          "importSource",
+          "importSecrets",
           "remoteUrl",
           "remoteToken",
         ]);
         if (opts.wizard || hasWizardFlags) {
-          await onboardCommand(
+          await setupWizardCommand(
             {
               workspace: opts.workspace as string | undefined,
               nonInteractive: Boolean(opts.nonInteractive),
               mode: opts.mode as "local" | "remote" | undefined,
+              importFrom: opts.importFrom as string | undefined,
+              importSource: opts.importSource as string | undefined,
+              importSecrets: Boolean(opts.importSecrets),
               remoteUrl: opts.remoteUrl as string | undefined,
               remoteToken: opts.remoteToken as string | undefined,
             },

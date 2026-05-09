@@ -1,8 +1,19 @@
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseBooleanValue } from "../utils/boolean.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-const log = createSubsystemLogger("env");
+let log: SubsystemLogger | null = null;
+let logPromise: Promise<SubsystemLogger> | null = null;
 const loggedEnv = new Set<string>();
+
+async function getLog(): Promise<SubsystemLogger> {
+  if (!log) {
+    logPromise ??= import("../logging/subsystem.js").then(({ createSubsystemLogger }) =>
+      createSubsystemLogger("env"),
+    );
+    log = await logPromise;
+  }
+  return log;
+}
 
 type AcceptedEnvOption = {
   key: string;
@@ -34,7 +45,15 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
     return;
   }
   loggedEnv.add(option.key);
-  log.info(`env: ${option.key}=${formatEnvValue(rawValue, option.redact)} (${option.description})`);
+  void getLog()
+    .then((logger) => {
+      logger.info(
+        `env: ${option.key}=${formatEnvValue(rawValue, option.redact)} (${option.description})`,
+      );
+    })
+    .catch(() => {
+      // Best-effort diagnostics only.
+    });
 }
 
 export function normalizeZaiEnv(): void {
@@ -44,7 +63,28 @@ export function normalizeZaiEnv(): void {
 }
 
 export function isTruthyEnvValue(value?: string): boolean {
-  return parseBooleanValue(value) === true;
+  if (typeof value !== "string") {
+    return false;
+  }
+  switch (normalizeLowercaseStringOrEmpty(value)) {
+    case "1":
+    case "on":
+    case "true":
+    case "yes":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function isVitestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    env.VITEST === "true" ||
+    env.VITEST === "1" ||
+    env.VITEST_POOL_ID !== undefined ||
+    env.VITEST_WORKER_ID !== undefined ||
+    env.NODE_ENV === "test"
+  );
 }
 
 export function normalizeEnv(): void {

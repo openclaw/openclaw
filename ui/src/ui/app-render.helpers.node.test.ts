@@ -1,15 +1,159 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment node
+import { beforeEach, describe, expect, it, vi } from "vitest";
+const {
+  refreshChatMock,
+  refreshChatAvatarMock,
+  refreshSlashCommandsMock,
+  loadChatHistoryMock,
+  createSessionAndRefreshMock,
+  loadSessionsMock,
+} = vi.hoisted(() => ({
+  refreshChatMock: vi.fn(),
+  refreshChatAvatarMock: vi.fn(),
+  refreshSlashCommandsMock: vi.fn(),
+  loadChatHistoryMock: vi.fn(),
+  createSessionAndRefreshMock: vi.fn(),
+  loadSessionsMock: vi.fn(),
+}));
+
+vi.mock("./app-chat.ts", () => ({
+  refreshChat: refreshChatMock,
+  refreshChatAvatar: refreshChatAvatarMock,
+}));
+
+vi.mock("./chat/slash-commands.ts", () => ({
+  refreshSlashCommands: (...args: unknown[]) => refreshSlashCommandsMock(...args),
+}));
+
+vi.mock("./controllers/chat.ts", () => ({
+  loadChatHistory: loadChatHistoryMock,
+}));
+
+vi.mock("./controllers/sessions.ts", () => ({
+  createSessionAndRefresh: createSessionAndRefreshMock,
+  loadSessions: loadSessionsMock,
+}));
+
 import {
+  createChatSession,
+  dismissChatError,
+  handleChatManualRefresh,
   isCronSessionKey,
   parseSessionKey,
+  resolveAssistantAttachmentAuthToken,
+  resolveDashboardHeaderContext,
+  resolveSessionOptionGroups,
   resolveSessionDisplayName,
+  switchChatSession,
 } from "./app-render.helpers.ts";
+import type { AppViewState } from "./app-view-state.ts";
 import type { SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
+beforeEach(() => {
+  refreshChatMock.mockReset();
+  refreshChatAvatarMock.mockReset();
+  refreshSlashCommandsMock.mockReset();
+  loadChatHistoryMock.mockReset();
+  createSessionAndRefreshMock.mockReset();
+  loadSessionsMock.mockReset();
+});
+
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
   return { kind: "direct", updatedAt: 0, ...overrides };
+}
+
+function labelsForSessionOptions(params: {
+  sessionKey: string;
+  sessions?: SessionRow[];
+  agentsList?: AppViewState["agentsList"];
+}) {
+  const groups = resolveSessionOptionGroups(
+    {
+      sessionsHideCron: true,
+      agentsList: params.agentsList ?? null,
+    } as AppViewState,
+    params.sessionKey,
+    {
+      ts: 0,
+      path: "",
+      count: params.sessions?.length ?? 0,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: params.sessions ?? [],
+    },
+  );
+  return groups.flatMap((group) => group.options.map((option) => option.label));
+}
+
+function createSettings(): AppViewState["settings"] {
+  return {
+    gatewayUrl: "",
+    token: "",
+    locale: "en",
+    sessionKey: "main",
+    lastActiveSessionKey: "main",
+    theme: "claw",
+    themeMode: "dark",
+    splitRatio: 0.6,
+    navWidth: 280,
+    navCollapsed: false,
+    navGroupsCollapsed: {},
+    borderRadius: 50,
+    chatFocusMode: false,
+    chatShowThinking: false,
+    chatShowToolCalls: true,
+  };
+}
+
+function createChatSessionState(overrides: Partial<AppViewState> = {}) {
+  const settings = createSettings();
+  const state = {
+    sessionKey: "agent:ops:main",
+    chatMessage: "draft prompt",
+    chatAttachments: [{ id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" }],
+    chatMessages: [{ role: "assistant", content: "old" }],
+    chatToolMessages: [{ id: "tool-1" }],
+    chatStreamSegments: [],
+    chatThinkingLevel: null,
+    chatStream: null,
+    chatSideResult: null,
+    lastError: null,
+    compactionStatus: null,
+    fallbackStatus: null,
+    chatAvatarUrl: null,
+    chatAvatarSource: null,
+    chatAvatarStatus: null,
+    chatAvatarReason: null,
+    chatQueue: [],
+    chatRunId: null,
+    chatSending: false,
+    chatLoading: false,
+    chatSideResultTerminalRuns: new Set<string>(),
+    chatStreamStartedAt: null,
+    connected: true,
+    client: { request: vi.fn() },
+    sessionsLoading: false,
+    sessionsError: null,
+    sessionsShowArchived: false,
+    sessionsResult: {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [row({ key: "agent:ops:main" })],
+    },
+    settings,
+    applySettings(next: typeof settings) {
+      state.settings = next;
+    },
+    loadAssistantIdentity: vi.fn(),
+    resetToolStream: vi.fn(),
+    resetChatScroll: vi.fn(),
+    resetChatInputHistoryNavigation: vi.fn(),
+    ...overrides,
+  } as unknown as AppViewState;
+  return state;
 }
 
 /* ================================================================
@@ -47,7 +191,7 @@ describe("parseSessionKey", () => {
   });
 
   it("identifies direct chat with known channel", () => {
-    expect(parseSessionKey("agent:main:bluebubbles:direct:+19257864429")).toEqual({
+    expect(parseSessionKey("agent:main:imessage:direct:+19257864429")).toEqual({
       prefix: "",
       fallbackName: "iMessage · +19257864429",
     });
@@ -75,7 +219,7 @@ describe("parseSessionKey", () => {
   });
 
   it("identifies channel-prefixed legacy keys", () => {
-    expect(parseSessionKey("bluebubbles:g-agent-main-bluebubbles-direct-+19257864429")).toEqual({
+    expect(parseSessionKey("imessage:g-agent-main-imessage-direct-+19257864429")).toEqual({
       prefix: "",
       fallbackName: "iMessage Session",
     });
@@ -92,11 +236,53 @@ describe("parseSessionKey", () => {
     });
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown parse patterns", () => {
     expect(parseSessionKey("something-unknown")).toEqual({
       prefix: "",
       fallbackName: "something-unknown",
     });
+  });
+});
+
+describe("resolveAssistantAttachmentAuthToken", () => {
+  it("prefers the paired device token when present", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        hello: { auth: { deviceToken: "device-token" } } as AppViewState["hello"],
+        settings: { token: "session-token" } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("device-token");
+  });
+
+  it("prefers the explicit gateway token when present", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        hello: null,
+        settings: { token: "session-token" } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("session-token");
+  });
+
+  it("falls back to the shared password when token is blank", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        hello: null,
+        settings: { token: "   " } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("shared-password");
+  });
+
+  it("returns null when neither auth secret is available", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        hello: null,
+        settings: { token: "" } as AppViewState["settings"],
+        password: "   ",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -124,7 +310,7 @@ describe("resolveSessionDisplayName", () => {
   });
 
   it("parses direct chat key with channel", () => {
-    expect(resolveSessionDisplayName("agent:main:bluebubbles:direct:+19257864429")).toBe(
+    expect(resolveSessionDisplayName("agent:main:imessage:direct:+19257864429")).toBe(
       "iMessage · +19257864429",
     );
   });
@@ -133,7 +319,7 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("discord:123:456")).toBe("Discord Session");
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown display-name patterns", () => {
     expect(resolveSessionDisplayName("something-custom")).toBe("something-custom");
   });
 
@@ -263,10 +449,54 @@ describe("resolveSessionDisplayName", () => {
   it("does not prefix non-typed sessions with labels", () => {
     expect(
       resolveSessionDisplayName(
-        "agent:main:bluebubbles:direct:+19257864429",
-        row({ key: "agent:main:bluebubbles:direct:+19257864429", label: "Tyler" }),
+        "agent:main:imessage:direct:+19257864429",
+        row({ key: "agent:main:imessage:direct:+19257864429", label: "Tyler" }),
       ),
     ).toBe("Tyler");
+  });
+});
+
+describe("resolveDashboardHeaderContext", () => {
+  it("uses the active agent identity name", () => {
+    expect(
+      resolveDashboardHeaderContext({
+        sessionKey: "agent:deep-chat:imessage:sample-thread",
+        agentsList: {
+          defaultId: "deep-chat",
+          mainKey: "main",
+          scope: "user",
+          agents: [{ id: "deep-chat", identity: { name: "Deep Chat" } }],
+        },
+      } as unknown as AppViewState),
+    ).toEqual({ agentLabel: "Deep Chat" });
+  });
+
+  it("falls back to the configured agent name", () => {
+    expect(
+      resolveDashboardHeaderContext({
+        sessionKey: "agent:beta:main",
+        agentsList: {
+          defaultId: "beta",
+          mainKey: "main",
+          scope: "user",
+          agents: [{ id: "beta", name: "Coding" }],
+        },
+      } as unknown as AppViewState),
+    ).toEqual({ agentLabel: "Coding" });
+  });
+
+  it("falls back to the agent id", () => {
+    expect(
+      resolveDashboardHeaderContext({
+        sessionKey: "agent:beta:subagent:maintainer-v2",
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "user",
+          agents: [],
+        },
+      } as unknown as AppViewState),
+    ).toEqual({ agentLabel: "beta" });
   });
 });
 
@@ -282,5 +512,562 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("resolveSessionOptionGroups", () => {
+  it("prefers grouped session labels over display names", () => {
+    const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+    const labels = labelsForSessionOptions({
+      sessionKey,
+      sessions: [
+        row({
+          key: sessionKey,
+          label: "cron-config-check",
+          displayName: "webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
+        }),
+      ],
+    });
+
+    expect(labels).toContain("Subagent: cron-config-check");
+    expect(labels).not.toContain(sessionKey);
+    expect(labels).not.toContain(
+      "subagent:4f2146de-887b-4176-9abe-91140082959b · webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
+    );
+  });
+
+  it("does not synthesize active grouped sessions without a listed row", () => {
+    const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+
+    expect(labelsForSessionOptions({ sessionKey })).toStrictEqual([]);
+    expect(
+      labelsForSessionOptions({
+        sessionKey,
+        sessions: [row({ key: sessionKey })],
+      }),
+    ).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
+  });
+
+  it("keeps the active agent main session visible when no row exists yet", () => {
+    expect(labelsForSessionOptions({ sessionKey: "agent:main:main" })).toEqual(["main"]);
+  });
+
+  it("disambiguates duplicate grouped labels with scoped suffixes", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
+      sessions: [
+        row({
+          key: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
+          label: "cron-config-check",
+        }),
+        row({
+          key: "agent:main:subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
+          label: "cron-config-check",
+        }),
+      ],
+    });
+
+    expect(labels).toContain(
+      "Subagent: cron-config-check · subagent:4f2146de-887b-4176-9abe-91140082959b",
+    );
+    expect(labels).toContain(
+      "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
+    );
+    expect(labels).not.toContain("Subagent: cron-config-check");
+  });
+
+  it("filters the chat session options to the active agent", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:alpha:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "agent:alpha:main",
+        scope: "all",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [
+        row({ key: "agent:alpha:main" }),
+        row({ key: "agent:beta:main" }),
+        row({
+          key: "agent:alpha:named-main",
+          label: "Deep Chat (alpha) / main",
+        }),
+      ],
+    });
+
+    expect(labels).toContain("main");
+    expect(labels).toContain("Deep Chat (alpha) / main");
+    expect(labels).not.toContain("Coding (beta) / main");
+  });
+
+  it("shows sessions for the selected agent after switching agent scope", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:beta:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "agent:alpha:main",
+        scope: "all",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [
+        row({ key: "agent:alpha:main" }),
+        row({ key: "agent:beta:main" }),
+        row({ key: "agent:beta:dashboard:recent", label: "Bug triage" }),
+      ],
+    });
+
+    expect(labels).toEqual(["main", "Bug triage"]);
+  });
+
+  it("keeps bare legacy sessions scoped to the default agent only", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:beta:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "agent:alpha:main",
+        scope: "all",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [
+        row({ key: "main", label: "Legacy main" }),
+        row({ key: "agent:alpha:main", label: "Alpha main" }),
+        row({ key: "agent:beta:main", label: "Beta main" }),
+      ],
+    });
+
+    expect(labels).toEqual(["Beta main"]);
+  });
+});
+
+describe("handleChatManualRefresh", () => {
+  it("waits for chat history before scrolling and clearing refresh state", async () => {
+    const animationFrame = { callback: undefined as FrameRequestCallback | undefined };
+    const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: vi.fn((callback: FrameRequestCallback) => {
+        animationFrame.callback = callback;
+        return 1;
+      }),
+    });
+    try {
+      let resolveRefresh: (() => void) | undefined;
+      refreshChatMock.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+      );
+      const state = {
+        chatManualRefreshInFlight: false,
+        chatNewMessagesBelow: true,
+        updateComplete: Promise.resolve(),
+        resetToolStream: vi.fn(),
+        scrollToBottom: vi.fn(),
+      } as unknown as Parameters<typeof handleChatManualRefresh>[0];
+
+      const run = handleChatManualRefresh(state);
+      await Promise.resolve();
+
+      expect(state.scrollToBottom).not.toHaveBeenCalled();
+      if (!resolveRefresh) {
+        throw new Error("Expected chat refresh resolver to be initialized");
+      }
+      resolveRefresh();
+      await run;
+
+      expect(refreshChatMock).toHaveBeenCalledWith(state, {
+        awaitHistory: true,
+        scheduleScroll: false,
+      });
+      expect(state.scrollToBottom).toHaveBeenCalledWith({ smooth: true });
+      expect(state.chatManualRefreshInFlight).toBe(true);
+      expect(animationFrame.callback).toBeTypeOf("function");
+
+      const callback = animationFrame.callback;
+      if (!callback) {
+        throw new Error("expected manual refresh to schedule a frame callback");
+      }
+      callback(0);
+
+      expect(state.chatManualRefreshInFlight).toBe(false);
+      expect(state.chatNewMessagesBelow).toBe(false);
+    } finally {
+      if (previousRequestAnimationFrame === undefined) {
+        Reflect.deleteProperty(globalThis, "requestAnimationFrame");
+      } else {
+        Object.defineProperty(globalThis, "requestAnimationFrame", {
+          configurable: true,
+          writable: true,
+          value: previousRequestAnimationFrame,
+        });
+      }
+    }
+  });
+});
+
+describe("createChatSession", () => {
+  it("creates a dashboard session, switches to it, and preserves the current composer", async () => {
+    const state = createChatSessionState();
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:new-chat");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state);
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
+      state,
+      {
+        agentId: "ops",
+        parentSessionKey: "agent:ops:main",
+        emitCommandHooks: true,
+      },
+      {
+        activeMinutes: 0,
+        limit: 0,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: false,
+      },
+    );
+    expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
+    expect(state.settings.sessionKey).toBe("agent:ops:dashboard:new-chat");
+    expect(state.chatMessage).toBe("draft prompt");
+    expect(state.chatAttachments).toEqual([
+      { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" },
+    ]);
+    expect(state.chatMessages).toStrictEqual([]);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+  });
+
+  it("preserves draft and attachment edits made while session creation is in flight", async () => {
+    const state = createChatSessionState();
+    const updatedAttachments = [
+      { id: "att-2", mimeType: "image/png", dataUrl: "data:image/png;base64,BBB" },
+    ];
+    createSessionAndRefreshMock.mockImplementation(async () => {
+      state.chatMessage = "updated draft";
+      state.chatAttachments = updatedAttachments;
+      return "agent:ops:dashboard:new-chat";
+    });
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state);
+
+    expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
+    expect(state.chatMessage).toBe("updated draft");
+    expect(state.chatAttachments).toBe(updatedAttachments);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+  });
+
+  it("ignores a stale create response after the active session changes", async () => {
+    const state = createChatSessionState();
+    createSessionAndRefreshMock.mockImplementation(async () => {
+      state.sessionKey = "agent:ops:other";
+      return "agent:ops:dashboard:new-chat";
+    });
+
+    await createChatSession(state);
+
+    expect(state.sessionKey).toBe("agent:ops:other");
+    expect(state.chatMessage).toBe("draft prompt");
+    expect(state.chatMessages).toEqual([{ role: "assistant", content: "old" }]);
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("does not create or switch while a run is active", async () => {
+    const state = createChatSessionState({
+      chatRunId: "run-1",
+      chatQueue: [{ id: "queued-1", text: "follow up", createdAt: 1 }],
+    });
+
+    await createChatSession(state);
+
+    expect(createSessionAndRefreshMock).not.toHaveBeenCalled();
+    expect(state.sessionKey).toBe("agent:ops:main");
+    expect(state.chatMessage).toBe("draft prompt");
+    expect(state.chatQueue).toEqual([{ id: "queued-1", text: "follow up", createdAt: 1 }]);
+    expect(state.lastError).toBe(
+      "Start a new session after the active run or queued messages finish.",
+    );
+  });
+
+  it("shows feedback instead of clearing errors when session loading blocks creation", async () => {
+    const state = createChatSessionState({
+      sessionsLoading: true,
+      lastError: "previous error",
+    });
+
+    await createChatSession(state);
+
+    expect(createSessionAndRefreshMock).not.toHaveBeenCalled();
+    expect(state.sessionKey).toBe("agent:ops:main");
+    expect(state.chatMessage).toBe("draft prompt");
+    expect(state.lastError).toBe(
+      "Session list is still refreshing. Try New Chat again in a moment.",
+    );
+  });
+
+  it("shows creation failure feedback when creation is skipped without a session error", async () => {
+    const state = createChatSessionState({ lastError: "previous error" });
+    createSessionAndRefreshMock.mockResolvedValue(null);
+
+    await createChatSession(state);
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledTimes(1);
+    expect(state.sessionKey).toBe("agent:ops:main");
+    expect(state.chatMessage).toBe("draft prompt");
+    expect(state.sessionsError).toBeNull();
+    expect(state.lastError).toBe("New Chat could not create a new session. Try again in a moment.");
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps refresh feedback when a queued session refresh skips creation", async () => {
+    const state = createChatSessionState({ lastError: "previous error" });
+    createSessionAndRefreshMock.mockImplementation(async () => {
+      state.sessionsLoading = true;
+      return null;
+    });
+
+    await createChatSession(state);
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledTimes(1);
+    expect(state.sessionKey).toBe("agent:ops:main");
+    expect(state.chatMessage).toBe("draft prompt");
+    expect(state.sessionsError).toBeNull();
+    expect(state.lastError).toBe(
+      "Session list is still refreshing. Try New Chat again in a moment.",
+    );
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("switchChatSession", () => {
+  it("refreshes the chat avatar after clearing session-scoped state", async () => {
+    const settings = createSettings();
+    const state = {
+      sessionKey: "main",
+      chatMessage: "draft",
+      chatAttachments: [
+        { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" },
+      ],
+      chatMessages: [{ role: "assistant", content: "old" }],
+      chatToolMessages: [{ id: "tool-1" }],
+      chatStreamSegments: [{ text: "segment", ts: 1 }],
+      chatThinkingLevel: "high",
+      chatStream: "stream",
+      chatSideResult: {
+        kind: "btw",
+        runId: "btw-run-1",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "draft answer",
+        isError: false,
+        ts: 1,
+      },
+      lastError: "oops",
+      compactionStatus: { phase: "active" },
+      fallbackStatus: { phase: "active" },
+      chatAvatarUrl: "/avatar/old",
+      chatQueue: [{ id: "queued", text: "message B", createdAt: 1 }],
+      chatQueueBySession: {},
+      chatRunId: "run-1",
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set(["btw-run-1"]),
+      chatStreamStartedAt: 1,
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          row({ key: "main" }),
+          row({ key: "agent:main:test-b", label: "Review Session" }),
+        ],
+      },
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "agent:main:test-b");
+    await Promise.resolve();
+
+    expect(state.chatQueue).toStrictEqual([]);
+    expect(state.chatQueueBySession.main).toEqual([
+      { id: "queued", text: "message B", createdAt: 1 },
+    ]);
+    expect(state.chatSideResult).toBeNull();
+    expect(state.chatSideResultTerminalRuns.size).toBe(0);
+    expect(
+      (state as unknown as { resetChatInputHistoryNavigation: ReturnType<typeof vi.fn> })
+        .resetChatInputHistoryNavigation,
+    ).toHaveBeenCalled();
+    expect(refreshChatAvatarMock).toHaveBeenCalledWith(state);
+    expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
+      client: undefined,
+      agentId: "main",
+    });
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+    expect(loadSessionsMock).toHaveBeenCalledWith(state, {
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: true,
+      includeUnknown: true,
+      showArchived: false,
+    });
+    expect(
+      (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
+        .announceSessionSwitch,
+    ).toHaveBeenCalledWith("agent:main:test-b", "Review Session");
+  });
+
+  it("restores queued messages when switching back to their session", () => {
+    const settings = createSettings();
+    const state = {
+      sessionKey: "main",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: [],
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: "stream",
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [{ id: "queued-1", text: "message B", createdAt: 1 }],
+      chatQueueBySession: {},
+      chatRunId: "run-1",
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: 1,
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "agent:main:other");
+    expect(state.chatQueue).toStrictEqual([]);
+
+    switchChatSession(state, "main");
+
+    expect(state.chatQueue).toEqual([{ id: "queued-1", text: "message B", createdAt: 1 }]);
+  });
+
+  it("does not force agentId=main for plain session keys", async () => {
+    const settings = createSettings();
+    const state = {
+      sessionKey: "main",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: [],
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [],
+      chatQueueBySession: {},
+      chatRunId: null,
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+      client: { request: vi.fn() },
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "main");
+    await Promise.resolve();
+
+    expect(
+      (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
+        .announceSessionSwitch,
+    ).not.toHaveBeenCalled();
+    expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
+      client: state.client,
+      agentId: undefined,
+    });
+  });
+});
+
+describe("dismissChatError", () => {
+  it("clears persistent Talk error state", () => {
+    const stop = vi.fn();
+    const state = {
+      lastError: 'Realtime voice provider "openai" is not configured',
+      lastErrorCode: "UNAVAILABLE",
+      realtimeTalkActive: true,
+      realtimeTalkSession: { stop },
+      realtimeTalkStatus: "error",
+      realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
+      realtimeTalkTranscript: "partial transcript",
+    } as unknown as AppViewState & { realtimeTalkSession: { stop(): void } | null };
+
+    dismissChatError(state);
+
+    expect(state.lastError).toBeNull();
+    expect(state.lastErrorCode).toBeNull();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.realtimeTalkSession).toBeNull();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalkTranscript).toBeNull();
   });
 });

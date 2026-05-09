@@ -15,6 +15,7 @@ import {
   onceMessage,
   rpcReq,
   startGatewayServer,
+  startServer,
   startServerWithClient,
   trackConnectChallengeNonce,
   testTailscaleWhois,
@@ -63,25 +64,25 @@ const readConnectChallengeNonce = async (ws: WebSocket) => {
   if (cached) {
     return cached;
   }
-  const challenge = await onceMessage<{
+  const challenge: {
     type?: string;
     event?: string;
     payload?: Record<string, unknown> | null;
-  }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
+  } = await onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge");
   const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
   expect(typeof nonce).toBe("string");
   return String(nonce);
 };
 
-const openTailscaleWs = async (port: number) => {
+const openTailscaleWs = async (port: number, headers?: Record<string, string>) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
     headers: {
-      origin: "https://gateway.tailnet.ts.net",
       "x-forwarded-for": "100.64.0.1",
       "x-forwarded-proto": "https",
       "x-forwarded-host": "gateway.tailnet.ts.net",
       "tailscale-user-login": "peter",
       "tailscale-user-name": "Peter",
+      ...headers,
     },
   });
   trackConnectChallengeNonce(ws);
@@ -203,34 +204,54 @@ function resolveGatewayTokenOrEnv(): string {
     typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
       ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
       : process.env.OPENCLAW_GATEWAY_TOKEN;
-  expect(typeof token).toBe("string");
-  return String(token ?? "");
+  if (typeof token !== "string") {
+    throw new Error("expected gateway token in test state or OPENCLAW_GATEWAY_TOKEN");
+  }
+  return token;
 }
 
 async function approvePendingPairingIfNeeded() {
   const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
   const list = await listDevicePairing();
   const pending = list.pending.at(0);
-  expect(pending?.requestId).toBeDefined();
-  if (pending?.requestId) {
-    await approveDevicePairing(pending.requestId);
+  if (!pending?.requestId) {
+    throw new Error("expected pending pairing request");
   }
+  await approveDevicePairing(pending.requestId, {
+    callerScopes: pending.scopes ?? ["operator.admin"],
+  });
 }
 
 async function configureTrustedProxyControlUiAuth() {
-  testState.gatewayAuth = {
-    mode: "trusted-proxy",
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-    },
+  const { replaceConfigFile } = await import("../config/config.js");
+  testState.gatewayAuth = undefined;
+  testState.gatewayControlUi = {
+    ...testState.gatewayControlUi,
+    allowedOrigins: ["https://localhost"],
   };
-  await writeTrustedProxyControlUiConfig();
+  await replaceConfigFile({
+    nextConfig: {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: ["https://localhost"],
+        },
+      },
+    },
+    afterWrite: { mode: "auto" },
+  });
 }
 
 async function writeTrustedProxyControlUiConfig(params?: { allowInsecureAuth?: boolean }) {
-  const { writeConfigFile } = await import("../config/config.js");
-  await writeConfigFile({
+  const { replaceConfigFile } = await import("../config/config.js");
+  const nextConfig = {
     gateway: {
       trustedProxies: ["127.0.0.1"],
       controlUi: {
@@ -238,8 +259,11 @@ async function writeTrustedProxyControlUiConfig(params?: { allowInsecureAuth?: b
         ...(params?.allowInsecureAuth ? { allowInsecureAuth: true } : {}),
       },
     },
-    // oxlint-disable-next-line typescript/no-explicit-any
-  } as any);
+  };
+  await replaceConfigFile({
+    nextConfig,
+    afterWrite: { mode: "auto" },
+  });
 }
 
 function isConnectResMessage(id: string) {
@@ -276,7 +300,7 @@ async function sendRawConnectReq(
       },
     }),
   );
-  return onceMessage<{
+  const response: {
     type?: string;
     id?: string;
     ok?: boolean;
@@ -288,7 +312,8 @@ async function sendRawConnectReq(
         reason?: string;
       };
     };
-  }>(ws, isConnectResMessage(params.id));
+  } = await onceMessage(ws, isConnectResMessage(params.id));
+  return response;
 }
 
 async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: string): Promise<{
@@ -302,8 +327,10 @@ async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: strin
   const paired = await getPairedDevice(identity.deviceId);
   const deviceToken = paired?.tokens?.operator?.token;
   expect(paired?.deviceId).toBe(identity.deviceId);
-  expect(deviceToken).toBeDefined();
-  return { identity: { deviceId: identity.deviceId }, deviceToken: String(deviceToken ?? "") };
+  if (!deviceToken) {
+    throw new Error(`expected operator token for paired device ${identity.deviceId}`);
+  }
+  return { identity: { deviceId: identity.deviceId }, deviceToken };
 }
 
 async function startRateLimitedTokenServerWithPairedDeviceToken() {
@@ -311,10 +338,11 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
     mode: "token",
     token: "secret",
     rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
-    // oxlint-disable-next-line typescript/no-explicit-any
-  } as any;
+  } satisfies Record<string, unknown>;
 
-  const { server, ws, port, prevToken } = await startServerWithClient();
+  const { server, ws, port, prevToken } = await startServerWithClient(undefined, {
+    controlUiEnabled: true,
+  });
   const deviceIdentityPath = nextAuthIdentityPath("openclaw-auth-rate-limit");
   try {
     const initial = await connectReq(ws, { token: "secret", deviceIdentityPath });
@@ -324,7 +352,7 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
     const { deviceToken } = await resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath);
 
     ws.close();
-    return { server, port, prevToken, deviceToken: String(deviceToken ?? ""), deviceIdentityPath };
+    return { server, port, prevToken, deviceToken: deviceToken ?? "", deviceIdentityPath };
   } catch (err) {
     ws.close();
     await server.close();
@@ -379,6 +407,7 @@ export {
   sendRawConnectReq,
   startGatewayServer,
   startRateLimitedTokenServerWithPairedDeviceToken,
+  startServer,
   startServerWithClient,
   TEST_OPERATOR_CLIENT,
   trackConnectChallengeNonce,
@@ -391,6 +420,6 @@ export {
   writeTrustedProxyControlUiConfig,
 };
 export { ConnectErrorDetailCodes } from "./protocol/connect-error-details.js";
-export { getHandshakeTimeoutMs } from "./server-constants.js";
+export { getPreauthHandshakeTimeoutMsFromEnv } from "./handshake-timeouts.js";
 export { PROTOCOL_VERSION } from "./protocol/index.js";
 export { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";

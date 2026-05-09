@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -39,6 +38,32 @@ export function resolvePowerShellPath(): string {
   return "powershell.exe";
 }
 
+// Non-interactive placeholder shells that reject "-c"-style invocations.
+// macOS LaunchDaemon service users commonly use /usr/bin/false so login sessions
+// cannot be opened; honoring SHELL in that case causes every exec to exit 1.
+// See https://github.com/openclaw/openclaw/issues/69077.
+const NON_INTERACTIVE_SHELLS = new Set(["false", "nologin"]);
+
+function isNonInteractiveShell(shellPath: string): boolean {
+  if (!shellPath) {
+    return false;
+  }
+  return NON_INTERACTIVE_SHELLS.has(path.basename(shellPath));
+}
+
+function getPosixShellArgs(shellPath: string): string[] {
+  switch (path.basename(shellPath)) {
+    case "bash":
+      return ["--noprofile", "--norc", "-c"];
+    case "zsh":
+      return ["-f", "-c"];
+    case "fish":
+      return ["--no-config", "-c"];
+    default:
+      return ["-c"];
+  }
+}
+
 export function getShellConfig(): { shell: string; args: string[] } {
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
@@ -52,21 +77,27 @@ export function getShellConfig(): { shell: string; args: string[] } {
     };
   }
 
-  const envShell = process.env.SHELL?.trim();
+  const rawEnvShell = process.env.SHELL?.trim();
+  const envShell = rawEnvShell && !isNonInteractiveShell(rawEnvShell) ? rawEnvShell : undefined;
   const shellName = envShell ? path.basename(envShell) : "";
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
   if (shellName === "fish") {
     const bash = resolveShellFromPath("bash");
     if (bash) {
-      return { shell: bash, args: ["-c"] };
+      return { shell: bash, args: getPosixShellArgs(bash) };
     }
     const sh = resolveShellFromPath("sh");
     if (sh) {
-      return { shell: sh, args: ["-c"] };
+      return { shell: sh, args: getPosixShellArgs(sh) };
     }
   }
-  const shell = envShell && envShell.length > 0 ? envShell : "sh";
-  return { shell, args: ["-c"] };
+  if (envShell) {
+    return { shell: envShell, args: getPosixShellArgs(envShell) };
+  }
+  // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
+  // re-invoke the placeholder and get a spurious exitCode=1.
+  const shell = resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
+  return { shell, args: getPosixShellArgs(shell) };
 }
 
 export function resolveShellFromPath(name: string): string | undefined {
@@ -99,7 +130,7 @@ function normalizeShellName(value: string): string {
 }
 
 export function detectRuntimeShell(): string | undefined {
-  const overrideShell = process.env.CLAWDBOT_SHELL?.trim();
+  const overrideShell = process.env.OPENCLAW_SHELL?.trim();
   if (overrideShell) {
     const name = normalizeShellName(overrideShell);
     if (name) {
@@ -115,7 +146,7 @@ export function detectRuntimeShell(): string | undefined {
   }
 
   const envShell = process.env.SHELL?.trim();
-  if (envShell) {
+  if (envShell && !isNonInteractiveShell(envShell)) {
     const name = normalizeShellName(envShell);
     if (name) {
       return name;
@@ -165,28 +196,4 @@ export function sanitizeBinaryOutput(text: string): string {
     chunks.push(char);
   }
   return chunks.join("");
-}
-
-export function killProcessTree(pid: number): void {
-  if (process.platform === "win32") {
-    try {
-      spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
-        stdio: "ignore",
-        detached: true,
-      });
-    } catch {
-      // ignore errors if taskkill fails
-    }
-    return;
-  }
-
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // process already dead
-    }
-  }
 }

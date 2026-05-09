@@ -15,7 +15,6 @@ type JsonSchema = {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const outPaths = [
-  path.join(repoRoot, "apps", "macos", "Sources", "OpenClawProtocol", "GatewayModels.swift"),
   path.join(
     repoRoot,
     "apps",
@@ -72,6 +71,9 @@ function camelCase(input: string) {
 
 function safeName(name: string) {
   const cc = camelCase(name.replace(/-/g, "_"));
+  if (/^\d/.test(cc)) {
+    return `_${cc}`;
+  }
   if (reserved.has(cc)) {
     return `_${cc}`;
   }
@@ -80,12 +82,54 @@ function safeName(name: string) {
 
 // filled later once schemas are loaded
 const schemaNameByObject = new Map<object, string>();
+const schemaNameBySignature = new Map<string, string>();
+const duplicateSchemaSignatures = new Set<string>();
 
-function swiftType(schema: JsonSchema, required: boolean): string {
+function stableJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableJson);
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .toSorted()
+        .map((key) => [key, stableJson(record[key])]),
+    );
+  }
+  return value;
+}
+
+function schemaSignature(schema: JsonSchema): string {
+  return JSON.stringify(stableJson(schema));
+}
+
+function registerNamedSchema(name: string, schema: JsonSchema): void {
+  schemaNameByObject.set(schema as object, name);
+  const signature = schemaSignature(schema);
+  if (duplicateSchemaSignatures.has(signature)) {
+    return;
+  }
+  if (schemaNameBySignature.has(signature)) {
+    schemaNameBySignature.delete(signature);
+    duplicateSchemaSignatures.add(signature);
+    return;
+  }
+  schemaNameBySignature.set(signature, name);
+}
+
+function namedSchema(schema: JsonSchema, allowStructuralFallback = false): string | undefined {
+  return (
+    schemaNameByObject.get(schema as object) ??
+    (allowStructuralFallback ? schemaNameBySignature.get(schemaSignature(schema)) : undefined)
+  );
+}
+
+function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed = false): string {
   const t = schema.type;
   const isOptional = !required;
   let base: string;
-  const named = schemaNameByObject.get(schema as object);
+  const named = namedSchema(schema, allowStructuralNamed);
   if (named) {
     base = named;
   } else if (t === "string") {
@@ -97,7 +141,7 @@ function swiftType(schema: JsonSchema, required: boolean): string {
   } else if (t === "boolean") {
     base = "Bool";
   } else if (t === "array") {
-    base = `[${swiftType(schema.items ?? { type: "Any" }, true)}]`;
+    base = `[${swiftType(schema.items ?? { type: "Any" }, true, true)}]`;
   } else if (schema.enum) {
     base = "String";
   } else if (schema.patternProperties) {
@@ -108,6 +152,16 @@ function swiftType(schema: JsonSchema, required: boolean): string {
     base = "AnyCodable";
   }
   return isOptional ? `${base}?` : base;
+}
+
+function emitEnum(name: string, schema: JsonSchema): string {
+  const cases = schema.enum ?? [];
+  return [
+    `public enum ${name}: String, Codable, Sendable {`,
+    ...cases.map((value) => `    case ${safeName(value)} = "${value}"`),
+    "}",
+    "",
+  ].join("\n");
 }
 
 function emitStruct(name: string, schema: JsonSchema): string {
@@ -121,7 +175,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
   const codingKeys: string[] = [];
   for (const [key, propSchema] of Object.entries(props)) {
     const propName = safeName(key);
-    const propType = swiftType(propSchema, required.has(key));
+    const propType = swiftType(propSchema, required.has(key), true);
     lines.push(`    public let ${propName}: ${propType}`);
     if (propName !== key) {
       codingKeys.push(`        case ${propName} = "${key}"`);
@@ -135,7 +189,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
         .map(([key, prop]) => {
           const propName = safeName(key);
           const req = required.has(key);
-          return `        ${propName}: ${swiftType(prop, true)}${req ? "" : "?"}`;
+          return `        ${propName}: ${swiftType(prop, true, true)}${req ? "" : "?"}`;
         })
         .join(",\n") +
       ")\n" +
@@ -214,13 +268,22 @@ async function generate() {
   const definitions = Object.entries(ProtocolSchemas) as Array<[string, JsonSchema]>;
 
   for (const [name, schema] of definitions) {
-    schemaNameByObject.set(schema as object, name);
+    registerNamedSchema(name, schema);
   }
 
   const parts: string[] = [];
   parts.push(header);
 
-  // Value structs
+  // Named enums and value structs
+  for (const [name, schema] of definitions) {
+    if (name === "GatewayFrame") {
+      continue;
+    }
+    if (schema.type === "string" && schema.enum) {
+      parts.push(emitEnum(name, schema));
+    }
+  }
+
   for (const [name, schema] of definitions) {
     if (name === "GatewayFrame") {
       continue;

@@ -11,18 +11,18 @@ function createFlushOnParagraphChunker(params: { minChars: number; maxChars: num
   });
 }
 
-function drainChunks(chunker: EmbeddedBlockChunker) {
+function drainChunks(chunker: EmbeddedBlockChunker, force = false) {
   const chunks: string[] = [];
-  chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+  chunker.drain({ force, emit: (chunk) => chunks.push(chunk) });
   return chunks;
 }
 
-function expectFlushAtFirstParagraphBreak(text: string) {
-  const chunker = createFlushOnParagraphChunker({ minChars: 100, maxChars: 200 });
-  chunker.append(text);
-  const chunks = drainChunks(chunker);
-  expect(chunks).toEqual(["First paragraph."]);
-  expect(chunker.bufferedText).toBe("Second paragraph.");
+function expectChunksWithinLength(chunks: string[], maxLength: number) {
+  expect(
+    chunks
+      .map((chunk, index) => ({ index, length: chunk.length }))
+      .filter((entry) => entry.length > maxLength),
+  ).toStrictEqual([]);
 }
 
 describe("EmbeddedBlockChunker", () => {
@@ -54,12 +54,25 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.bufferedText).toMatch(/^After/);
   });
 
-  it("flushes paragraph boundaries before minChars when flushOnParagraph is set", () => {
-    expectFlushAtFirstParagraphBreak("First paragraph.\n\nSecond paragraph.");
+  it("waits until minChars before flushing paragraph boundaries when flushOnParagraph is set", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 30, maxChars: 200 });
+
+    chunker.append("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.");
+
+    const chunks = drainChunks(chunker);
+
+    expect(chunks).toEqual(["First paragraph.\n\nSecond paragraph."]);
+    expect(chunker.bufferedText).toBe("Third paragraph.");
   });
 
-  it("treats blank lines with whitespace as paragraph boundaries when flushOnParagraph is set", () => {
-    expectFlushAtFirstParagraphBreak("First paragraph.\n \nSecond paragraph.");
+  it("still force flushes buffered paragraphs below minChars at the end", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 100, maxChars: 200 });
+
+    chunker.append("First paragraph.\n \nSecond paragraph.");
+
+    expect(drainChunks(chunker)).toStrictEqual([]);
+    expect(drainChunks(chunker, true)).toEqual(["First paragraph.\n \nSecond paragraph."]);
+    expect(chunker.bufferedText).toBe("");
   });
 
   it("falls back to maxChars when flushOnParagraph is set and no paragraph break exists", () => {
@@ -90,14 +103,14 @@ describe("EmbeddedBlockChunker", () => {
 
     const chunks = drainChunks(chunker);
 
-    expect(chunks.every((chunk) => chunk.length <= 10)).toBe(true);
+    expectChunksWithinLength(chunks, 10);
     expect(chunks).toEqual(["abcdefghij", "k"]);
     expect(chunker.bufferedText).toBe("Rest");
   });
 
   it("ignores paragraph breaks inside fences when flushOnParagraph is set", () => {
     const chunker = new EmbeddedBlockChunker({
-      minChars: 100,
+      minChars: 10,
       maxChars: 200,
       breakPreference: "paragraph",
       flushOnParagraph: true,
@@ -136,5 +149,23 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunks.length).toBeGreaterThan(2);
     expect(parseSpy).toHaveBeenCalledTimes(1);
     parseSpy.mockRestore();
+  });
+
+  it("does not split inside the closing fence marker when clamping at maxChars", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(`\`\`\`txt\n${"a".repeat(80)}\n\`\`\``);
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks.length).toBeGreaterThan(2);
+    for (const chunk of chunks) {
+      expect(chunk.startsWith("```txt")).toBe(true);
+      expect(chunk.match(/```/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+      expect(chunk).not.toContain("``\n```");
+    }
   });
 });

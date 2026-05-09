@@ -1,4 +1,13 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
+import { ENV_SECRET_REF_ID_RE } from "../../../config/types.secrets.js";
+import {
+  EXEC_SECRET_REF_ID_JSON_SCHEMA_PATTERN,
+  FILE_SECRET_REF_ID_ABSOLUTE_JSON_SCHEMA_PATTERN,
+  FILE_SECRET_REF_ID_INVALID_ESCAPE_JSON_SCHEMA_PATTERN,
+  SECRET_PROVIDER_ALIAS_PATTERN,
+  SINGLE_VALUE_FILE_REF_ID,
+} from "../../../secrets/ref-contract.js";
+import { INPUT_PROVENANCE_KIND_VALUES } from "../../../sessions/input-provenance.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../../sessions/session-label.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 
@@ -12,14 +21,20 @@ export const SessionLabelString = Type.String({
   minLength: 1,
   maxLength: SESSION_LABEL_MAX_LENGTH,
 });
-
-export const GatewayClientIdSchema = Type.Union(
-  Object.values(GATEWAY_CLIENT_IDS).map((value) => Type.Literal(value)),
+export const InputProvenanceSchema = Type.Object(
+  {
+    kind: Type.String({ enum: [...INPUT_PROVENANCE_KIND_VALUES] }),
+    originSessionId: Type.Optional(Type.String()),
+    sourceSessionKey: Type.Optional(Type.String()),
+    sourceChannel: Type.Optional(Type.String()),
+    sourceTool: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
 );
 
-export const GatewayClientModeSchema = Type.Union(
-  Object.values(GATEWAY_CLIENT_MODES).map((value) => Type.Literal(value)),
-);
+export const GatewayClientIdSchema = Type.Enum(GATEWAY_CLIENT_IDS);
+
+export const GatewayClientModeSchema = Type.Enum(GATEWAY_CLIENT_MODES);
 
 export const SecretRefSourceSchema = Type.Union([
   Type.Literal("env"),
@@ -27,13 +42,54 @@ export const SecretRefSourceSchema = Type.Union([
   Type.Literal("exec"),
 ]);
 
-export const SecretRefSchema = Type.Object(
+const SecretProviderAliasString = Type.String({
+  pattern: SECRET_PROVIDER_ALIAS_PATTERN.source,
+});
+
+const EnvSecretRefSchema = Type.Object(
   {
-    source: SecretRefSourceSchema,
-    provider: NonEmptyString,
-    id: NonEmptyString,
+    source: Type.Literal("env"),
+    provider: SecretProviderAliasString,
+    id: Type.String({ pattern: ENV_SECRET_REF_ID_RE.source }),
   },
   { additionalProperties: false },
 );
+
+const FileSecretRefIdSchema = Type.Unsafe<string>({
+  type: "string",
+  anyOf: [
+    { const: SINGLE_VALUE_FILE_REF_ID },
+    {
+      allOf: [
+        { pattern: FILE_SECRET_REF_ID_ABSOLUTE_JSON_SCHEMA_PATTERN },
+        { not: { pattern: FILE_SECRET_REF_ID_INVALID_ESCAPE_JSON_SCHEMA_PATTERN } },
+      ],
+    },
+  ],
+});
+
+const FileSecretRefSchema = Type.Object(
+  {
+    source: Type.Literal("file"),
+    provider: SecretProviderAliasString,
+    id: FileSecretRefIdSchema,
+  },
+  { additionalProperties: false },
+);
+
+const ExecSecretRefSchema = Type.Object(
+  {
+    source: Type.Literal("exec"),
+    provider: SecretProviderAliasString,
+    id: Type.String({ pattern: EXEC_SECRET_REF_ID_JSON_SCHEMA_PATTERN }),
+  },
+  { additionalProperties: false },
+);
+
+export const SecretRefSchema = Type.Union([
+  EnvSecretRefSchema,
+  FileSecretRefSchema,
+  ExecSecretRefSchema,
+]);
 
 export const SecretInputSchema = Type.Union([Type.String(), SecretRefSchema]);

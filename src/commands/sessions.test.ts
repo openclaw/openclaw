@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeRuntime,
   mockSessionsConfig,
+  resetMockSessionsConfig,
   runSessionsJson,
+  setMockSessionsConfig,
   writeStore,
 } from "./sessions.test-helpers.js";
 
@@ -12,7 +14,7 @@ process.env.FORCE_COLOR = "0";
 
 mockSessionsConfig();
 
-import { sessionsCommand } from "./sessions.js";
+import { sessionsCommand, __testing } from "./sessions.js";
 
 describe("sessionsCommand", () => {
   beforeEach(() => {
@@ -21,6 +23,7 @@ describe("sessionsCommand", () => {
   });
 
   afterEach(() => {
+    resetMockSessionsConfig();
     vi.useRealTimers();
   });
 
@@ -42,8 +45,7 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
 
-    const tableHeader = logs.find((line) => line.includes("Tokens (ctx %"));
-    expect(tableHeader).toBeTruthy();
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("Tokens (ctx %")]));
 
     const row = logs.find((line) => line.includes("+15555550123")) ?? "";
     expect(row).toContain("2.0k/32k (6%)");
@@ -51,9 +53,79 @@ describe("sessionsCommand", () => {
     expect(row).toContain("pi:opus");
   });
 
+  it("renders the agent runtime in the tabular view", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-7",
+        },
+      },
+      "sessions-runtime-table",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    fs.rmSync(store);
+
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("Runtime")]));
+
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toContain("claude-opus-4-7");
+    expect(row).toContain("Claude CLI");
+  });
+
+  it("renders configured CLI runtime when the session stores a canonical provider", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      },
+      "sessions-runtime-canonical-provider",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    fs.rmSync(store);
+
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toContain("claude-opus-4-7");
+    expect(row).toContain("Claude CLI");
+  });
+
   it("shows placeholder rows when tokens are missing", async () => {
     const store = writeStore({
-      "discord:group:demo": {
+      "quietchat:group:demo": {
         sessionId: "xyz",
         updatedAt: Date.now() - 5 * 60_000,
         thinkingLevel: "high",
@@ -65,7 +137,7 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
 
-    const row = logs.find((line) => line.includes("discord:group:demo")) ?? "";
+    const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
     expect(row).toContain("unknown/32k (?%)");
     expect(row).toContain("think:high");
     expect(row).toContain("5m ago");
@@ -82,7 +154,7 @@ describe("sessionsCommand", () => {
         totalTokensFresh: true,
         model: "pi:opus",
       },
-      "discord:group:demo": {
+      "quietchat:group:demo": {
         sessionId: "xyz",
         updatedAt: Date.now() - 5 * 60_000,
         inputTokens: 20,
@@ -99,11 +171,34 @@ describe("sessionsCommand", () => {
       }>;
     }>(sessionsCommand, store);
     const main = payload.sessions?.find((row) => row.key === "main");
-    const group = payload.sessions?.find((row) => row.key === "discord:group:demo");
+    const group = payload.sessions?.find((row) => row.key === "quietchat:group:demo");
     expect(main?.totalTokens).toBe(2000);
     expect(main?.totalTokensFresh).toBe(true);
     expect(group?.totalTokens).toBeNull();
     expect(group?.totalTokensFresh).toBe(false);
+  });
+
+  it("shows preserved stale totals in JSON output", async () => {
+    const store = writeStore({
+      main: {
+        sessionId: "abc123",
+        updatedAt: Date.now() - 10 * 60_000,
+        totalTokens: 2000,
+        totalTokensFresh: false,
+        model: "pi:opus",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        totalTokens: number | null;
+        totalTokensFresh: boolean;
+      }>;
+    }>(sessionsCommand, store);
+    const main = payload.sessions?.find((row) => row.key === "main");
+    expect(main?.totalTokens).toBe(2000);
+    expect(main?.totalTokensFresh).toBe(false);
   });
 
   it("applies --active filtering in JSON output", async () => {
@@ -131,6 +226,83 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.map((row) => row.key)).toEqual(["recent"]);
   });
 
+  it("uses a default JSON output limit of 100 sessions", () => {
+    expect(__testing.parseSessionsLimit(undefined)).toBe(100);
+  });
+
+  it("honors explicit JSON output limits", async () => {
+    const store = writeStore(
+      {
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "pi:opus" },
+        middle: { sessionId: "middle", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+      },
+      "sessions-explicit-limit",
+    );
+
+    const payload = await runSessionsJson<{
+      count?: number;
+      totalCount?: number;
+      limitApplied?: number | null;
+      hasMore?: boolean;
+      sessions?: Array<{ key: string }>;
+    }>(sessionsCommand, store, { limit: "2" });
+
+    expect(payload.count).toBe(2);
+    expect(payload.totalCount).toBe(3);
+    expect(payload.limitApplied).toBe(2);
+    expect(payload.hasMore).toBe(true);
+    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "middle"]);
+  });
+
+  it("allows full JSON output with --limit all", async () => {
+    const store = writeStore(
+      {
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "pi:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+      },
+      "sessions-limit-all",
+    );
+
+    const payload = await runSessionsJson<{
+      count?: number;
+      totalCount?: number;
+      limitApplied?: number | null;
+      hasMore?: boolean;
+      sessions?: Array<{ key: string }>;
+    }>(sessionsCommand, store, { limit: "all" });
+
+    expect(payload.count).toBe(2);
+    expect(payload.totalCount).toBe(2);
+    expect(payload.limitApplied).toBeNull();
+    expect(payload.hasMore).toBe(false);
+    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "oldest"]);
+  });
+
+  it("sorts and slices large explicit limits instead of using top-N insertion", async () => {
+    const store = writeStore(
+      {
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "pi:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+      },
+      "sessions-large-limit",
+    );
+
+    const payload = await runSessionsJson<{
+      count?: number;
+      totalCount?: number;
+      limitApplied?: number | null;
+      hasMore?: boolean;
+      sessions?: Array<{ key: string }>;
+    }>(sessionsCommand, store, { limit: "100000" });
+
+    expect(payload.count).toBe(2);
+    expect(payload.totalCount).toBe(2);
+    expect(payload.limitApplied).toBe(100000);
+    expect(payload.hasMore).toBe(false);
+    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "oldest"]);
+  });
+
   it("rejects invalid --active values", async () => {
     const store = writeStore(
       {
@@ -145,6 +317,24 @@ describe("sessionsCommand", () => {
 
     await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
     expect(errors[0]).toContain("--active must be a positive integer");
+
+    fs.rmSync(store);
+  });
+
+  it("rejects invalid --limit values", async () => {
+    const store = writeStore(
+      {
+        demo: {
+          sessionId: "demo",
+          updatedAt: Date.now() - 5 * 60_000,
+        },
+      },
+      "sessions-limit-invalid",
+    );
+    const { runtime, errors } = makeRuntime();
+
+    await expect(sessionsCommand({ store, limit: "0" }, runtime)).rejects.toThrow("exit 1");
+    expect(errors[0]).toContain('--limit must be a positive integer or "all"');
 
     fs.rmSync(store);
   });

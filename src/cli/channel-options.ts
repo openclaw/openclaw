@@ -1,11 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
-import { CHAT_CHANNEL_ORDER } from "../channels/registry.js";
-import { isTruthyEnvValue } from "../infra/env.js";
-import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
+import { CHAT_CHANNEL_ORDER } from "../channels/ids.js";
+import { readCliStartupMetadata } from "./startup-metadata.js";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -27,14 +21,8 @@ function loadPrecomputedChannelOptions(): string[] | null {
     return precomputedChannelOptions;
   }
   try {
-    const metadataPath = path.resolve(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "cli-startup-metadata.json",
-    );
-    const raw = fs.readFileSync(metadataPath, "utf8");
-    const parsed = JSON.parse(raw) as { channelOptions?: unknown };
-    if (Array.isArray(parsed.channelOptions)) {
+    const parsed = readCliStartupMetadata(import.meta.url) as { channelOptions?: unknown } | null;
+    if (parsed && Array.isArray(parsed.channelOptions)) {
       precomputedChannelOptions = dedupe(
         parsed.channelOptions.filter((value): value is string => typeof value === "string"),
       );
@@ -48,21 +36,16 @@ function loadPrecomputedChannelOptions(): string[] | null {
 }
 
 export function resolveCliChannelOptions(): string[] {
-  if (isTruthyEnvValue(process.env.OPENCLAW_EAGER_CHANNEL_OPTIONS)) {
-    const catalog = listChannelPluginCatalogEntries().map((entry) => entry.id);
-    const base = dedupe([...CHAT_CHANNEL_ORDER, ...catalog]);
-    ensurePluginRegistryLoaded();
-    const pluginIds = listChannelPlugins().map((plugin) => plugin.id);
-    return dedupe([...base, ...pluginIds]);
-  }
   const precomputed = loadPrecomputedChannelOptions();
-  const catalog = listChannelPluginCatalogEntries().map((entry) => entry.id);
-  const base = precomputed
-    ? dedupe([...precomputed, ...catalog])
-    : dedupe([...CHAT_CHANNEL_ORDER, ...catalog]);
-  return base;
+  return precomputed ?? [...CHAT_CHANNEL_ORDER];
 }
 
 export function formatCliChannelOptions(extra: string[] = []): string {
   return [...extra, ...resolveCliChannelOptions()].join("|");
 }
+
+export const __testing = {
+  resetPrecomputedChannelOptionsForTests(): void {
+    precomputedChannelOptions = undefined;
+  },
+};

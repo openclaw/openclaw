@@ -1,6 +1,7 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveGatewayService } from "../../../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../daemon-runtime.js";
@@ -13,24 +14,34 @@ export async function installGatewayDaemonNonInteractive(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   port: number;
-}) {
+}): Promise<
+  | {
+      installed: true;
+    }
+  | {
+      installed: false;
+      skippedReason?: "systemd-user-unavailable";
+    }
+> {
   const { opts, runtime, port } = params;
   if (!opts.installDaemon) {
-    return;
+    return { installed: false };
   }
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   const systemdAvailable =
     process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
   if (process.platform === "linux" && !systemdAvailable) {
-    runtime.log("Systemd user services are unavailable; skipping service install.");
-    return;
+    runtime.log(
+      "Systemd user services are unavailable; skipping service install. Use a direct shell run (`openclaw gateway run`) or rerun without --install-daemon on this session.",
+    );
+    return { installed: false, skippedReason: "systemd-user-unavailable" };
   }
 
   if (!isGatewayDaemonRuntime(daemonRuntimeRaw)) {
-    runtime.error("Invalid --daemon-runtime (use node or bun)");
+    runtime.error('Invalid --daemon-runtime. Use "node" or "bun".');
     runtime.exit(1);
-    return;
+    return { installed: false };
   }
 
   const service = resolveGatewayService();
@@ -46,19 +57,20 @@ export async function installGatewayDaemonNonInteractive(params: {
       [
         "Gateway install blocked:",
         tokenResolution.unavailableReason,
-        "Fix gateway auth config/token input and rerun onboarding.",
+        "Fix gateway auth config/token input and rerun setup.",
       ].join(" "),
     );
     runtime.exit(1);
-    return;
+    return { installed: false };
   }
-  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
-    port,
-    runtime: daemonRuntimeRaw,
-    warn: (message) => runtime.log(message),
-    config: params.nextConfig,
-  });
+  const { programArguments, workingDirectory, environment, environmentValueSources } =
+    await buildGatewayInstallPlan({
+      env: process.env,
+      port,
+      runtime: daemonRuntimeRaw,
+      warn: (message) => runtime.log(message),
+      config: params.nextConfig,
+    });
   try {
     await service.install({
       env: process.env,
@@ -66,11 +78,13 @@ export async function installGatewayDaemonNonInteractive(params: {
       programArguments,
       workingDirectory,
       environment,
+      environmentValueSources,
     });
   } catch (err) {
-    runtime.error(`Gateway service install failed: ${String(err)}`);
+    runtime.error(`Gateway service install failed: ${formatErrorMessage(err)}`);
     runtime.log(gatewayInstallErrorHint());
-    return;
+    return { installed: false };
   }
   await ensureSystemdUserLingerNonInteractive({ runtime });
+  return { installed: true };
 }

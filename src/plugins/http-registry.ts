@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "./registry.js";
-import { requireActivePluginRegistry } from "./runtime.js";
+import { requireActivePluginHttpRouteRegistry } from "./runtime.js";
 
 export type PluginHttpRouteHandler = (
   req: IncomingMessage,
@@ -15,6 +15,7 @@ export function registerPluginHttpRoute(params: {
   handler: PluginHttpRouteHandler;
   auth: PluginHttpRouteRegistration["auth"];
   match?: PluginHttpRouteRegistration["match"];
+  gatewayRuntimeScopeSurface?: PluginHttpRouteRegistration["gatewayRuntimeScopeSurface"];
   replaceExisting?: boolean;
   pluginId?: string;
   source?: string;
@@ -22,7 +23,7 @@ export function registerPluginHttpRoute(params: {
   log?: (message: string) => void;
   registry?: PluginRegistry;
 }): () => void {
-  const registry = params.registry ?? requireActivePluginRegistry();
+  const registry = params.registry ?? requireActivePluginHttpRouteRegistry();
   const routes = registry.httpRoutes ?? [];
   registry.httpRoutes = routes;
 
@@ -78,6 +79,9 @@ export function registerPluginHttpRoute(params: {
     handler: params.handler,
     auth: params.auth,
     match: routeMatch,
+    ...(params.gatewayRuntimeScopeSurface
+      ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
+      : {}),
     pluginId: params.pluginId,
     source: params.source,
   };

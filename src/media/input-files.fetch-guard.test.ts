@@ -33,149 +33,189 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("HEIC input image normalization", () => {
-  it("converts base64 HEIC images to JPEG before returning them", async () => {
-    const normalized = Buffer.from("jpeg-normalized");
-    detectMimeMock.mockResolvedValueOnce("image/heic");
-    convertHeicToJpegMock.mockResolvedValueOnce(normalized);
+function createImageSourceLimits(allowedMimes: string[], allowUrl = false) {
+  return {
+    allowUrl,
+    allowedMimes: new Set(allowedMimes),
+    maxBytes: 1024 * 1024,
+    maxRedirects: 0,
+    timeoutMs: allowUrl ? 1000 : 1,
+  };
+}
 
-    const image = await extractImageContentFromSource(
+function mockUrlFetchResponse(params: {
+  source: Parameters<typeof extractImageContentFromSource>[0];
+  fetchedUrl?: string;
+  fetchedContentType?: string;
+  fetchedBody?: Uint8Array;
+}) {
+  if (params.source.type !== "url") {
+    return null;
+  }
+
+  const release = vi.fn(async () => {});
+  const responseBody = Uint8Array.from(params.fetchedBody ?? Buffer.from("url-source"));
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    response: new Response(
+      responseBody.buffer.slice(
+        responseBody.byteOffset,
+        responseBody.byteOffset + responseBody.byteLength,
+      ),
       {
+        status: 200,
+        headers: { "content-type": params.fetchedContentType ?? "application/octet-stream" },
+      },
+    ),
+    release,
+    finalUrl: params.fetchedUrl ?? params.source.url,
+  });
+
+  return release;
+}
+
+async function expectRejectedImageMimeCase(params: {
+  source: Parameters<typeof extractImageContentFromSource>[0];
+  limits: Parameters<typeof extractImageContentFromSource>[1];
+  expectedError: string;
+  fetchedUrl?: string;
+  fetchedContentType?: string;
+  fetchedBody?: Uint8Array;
+}) {
+  const release = mockUrlFetchResponse(params);
+  await expect(extractImageContentFromSource(params.source, params.limits)).rejects.toThrow(
+    params.expectedError,
+  );
+  if (release) {
+    expect(release).toHaveBeenCalledTimes(1);
+  }
+}
+
+type ImageSourceLimits = Parameters<typeof extractImageContentFromSource>[1];
+
+async function expectResolvedImageContentCase(params: {
+  source: Parameters<typeof extractImageContentFromSource>[0];
+  limits: ImageSourceLimits;
+  detectedMime: string;
+  convertedBytes?: Buffer;
+  fetchedUrl?: string;
+  fetchedContentType?: string;
+  fetchedBody?: Uint8Array;
+  expectedImage: Awaited<ReturnType<typeof extractImageContentFromSource>>;
+}) {
+  const release = mockUrlFetchResponse(params);
+  detectMimeMock.mockResolvedValueOnce(params.detectedMime);
+  if (params.convertedBytes) {
+    convertHeicToJpegMock.mockResolvedValueOnce(params.convertedBytes);
+  }
+
+  const image = await extractImageContentFromSource(params.source, params.limits);
+
+  expect(image).toEqual(params.expectedImage);
+  expect(detectMimeMock).toHaveBeenCalledTimes(1);
+  expect(convertHeicToJpegMock).toHaveBeenCalledTimes(params.convertedBytes ? 1 : 0);
+  if (release) {
+    expect(release).toHaveBeenCalledTimes(1);
+  }
+}
+
+async function expectBase64ImageValidationCase(params: {
+  source: Parameters<typeof extractImageContentFromSource>[0];
+  limits: Parameters<typeof extractImageContentFromSource>[1];
+  expectedData?: string;
+  expectedError?: string;
+}) {
+  if (params.expectedError) {
+    await expect(extractImageContentFromSource(params.source, params.limits)).rejects.toThrow(
+      params.expectedError,
+    );
+    return;
+  }
+
+  const image = await extractImageContentFromSource(params.source, params.limits);
+  expect(image.data).toBe(params.expectedData);
+}
+
+describe("HEIC input image normalization", () => {
+  it.each([
+    {
+      name: "converts base64 HEIC images to JPEG before returning them",
+      source: {
         type: "base64",
         data: Buffer.from("heic-source").toString("base64"),
         mediaType: "image/heic",
+      } as const,
+      limits: createImageSourceLimits(["image/heic", "image/jpeg"]),
+      detectedMime: "image/heic",
+      convertedBytes: Buffer.from("jpeg-normalized"),
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-normalized").toString("base64"),
+        mimeType: "image/jpeg",
       },
-      {
-        allowUrl: false,
-        allowedMimes: new Set(["image/heic", "image/jpeg"]),
-        maxBytes: 1024 * 1024,
-        maxRedirects: 0,
-        timeoutMs: 1,
-      },
-    );
-
-    expect(convertHeicToJpegMock).toHaveBeenCalledTimes(1);
-    expect(image).toEqual({
-      type: "image",
-      data: normalized.toString("base64"),
-      mimeType: "image/jpeg",
-    });
-  });
-
-  it("converts URL HEIC images to JPEG before returning them", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(Buffer.from("heic-url-source"), {
-        status: 200,
-        headers: { "content-type": "image/heic" },
-      }),
-      release,
-      finalUrl: "https://example.com/photo.heic",
-    });
-    const normalized = Buffer.from("jpeg-url-normalized");
-    detectMimeMock.mockResolvedValueOnce("image/heic");
-    convertHeicToJpegMock.mockResolvedValueOnce(normalized);
-
-    const image = await extractImageContentFromSource(
-      {
+    },
+    {
+      name: "converts URL HEIC images to JPEG before returning them",
+      source: {
         type: "url",
         url: "https://example.com/photo.heic",
+      } as const,
+      limits: createImageSourceLimits(["image/heic", "image/jpeg"], true),
+      detectedMime: "image/heic",
+      convertedBytes: Buffer.from("jpeg-url-normalized"),
+      fetchedUrl: "https://example.com/photo.heic",
+      fetchedContentType: "image/heic",
+      fetchedBody: Buffer.from("heic-url-source"),
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-url-normalized").toString("base64"),
+        mimeType: "image/jpeg",
       },
-      {
-        allowUrl: true,
-        allowedMimes: new Set(["image/heic", "image/jpeg"]),
-        maxBytes: 1024 * 1024,
-        maxRedirects: 0,
-        timeoutMs: 1000,
-      },
-    );
-
-    expect(convertHeicToJpegMock).toHaveBeenCalledTimes(1);
-    expect(image).toEqual({
-      type: "image",
-      data: normalized.toString("base64"),
-      mimeType: "image/jpeg",
-    });
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps declared MIME for non-HEIC images after validation", async () => {
-    detectMimeMock.mockResolvedValueOnce("image/png");
-
-    const image = await extractImageContentFromSource(
-      {
+    },
+    {
+      name: "keeps declared MIME for non-HEIC images after validation",
+      source: {
         type: "base64",
         data: Buffer.from("png-like").toString("base64"),
         mediaType: "image/png",
+      } as const,
+      limits: createImageSourceLimits(["image/png"]),
+      detectedMime: "image/png",
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("png-like").toString("base64"),
+        mimeType: "image/png",
       },
-      {
-        allowUrl: false,
-        allowedMimes: new Set(["image/png"]),
-        maxBytes: 1024 * 1024,
-        maxRedirects: 0,
-        timeoutMs: 1,
-      },
-    );
-
-    expect(detectMimeMock).toHaveBeenCalledTimes(1);
-    expect(convertHeicToJpegMock).not.toHaveBeenCalled();
-    expect(image).toEqual({
-      type: "image",
-      data: Buffer.from("png-like").toString("base64"),
-      mimeType: "image/png",
-    });
+    },
+  ] as const)("$name", async (testCase) => {
+    await expectResolvedImageContentCase(testCase);
   });
 
-  it("rejects spoofed base64 images when detected bytes are not an image", async () => {
+  it.each([
+    {
+      name: "rejects spoofed base64 images when detected bytes are not an image",
+      source: {
+        type: "base64" as const,
+        data: Buffer.from("%PDF-1.4\n").toString("base64"),
+        mediaType: "image/png",
+      },
+      limits: createImageSourceLimits(["image/png", "image/jpeg"]),
+      expectedError: "Unsupported image MIME type: application/pdf",
+    },
+    {
+      name: "rejects spoofed URL images when detected bytes are not an image",
+      source: {
+        type: "url" as const,
+        url: "https://example.com/photo.png",
+      },
+      limits: createImageSourceLimits(["image/png", "image/jpeg"], true),
+      expectedError: "Unsupported image MIME type: application/pdf",
+      fetchedUrl: "https://example.com/photo.png",
+      fetchedContentType: "image/png",
+      fetchedBody: Buffer.from("%PDF-1.4\n"),
+    },
+  ] as const)("$name", async (testCase) => {
     detectMimeMock.mockResolvedValueOnce("application/pdf");
-
-    await expect(
-      extractImageContentFromSource(
-        {
-          type: "base64",
-          data: Buffer.from("%PDF-1.4\n").toString("base64"),
-          mediaType: "image/png",
-        },
-        {
-          allowUrl: false,
-          allowedMimes: new Set(["image/png", "image/jpeg"]),
-          maxBytes: 1024 * 1024,
-          maxRedirects: 0,
-          timeoutMs: 1,
-        },
-      ),
-    ).rejects.toThrow("Unsupported image MIME type: application/pdf");
-    expect(convertHeicToJpegMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects spoofed URL images when detected bytes are not an image", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(Buffer.from("%PDF-1.4\n"), {
-        status: 200,
-        headers: { "content-type": "image/png" },
-      }),
-      release,
-      finalUrl: "https://example.com/photo.png",
-    });
-    detectMimeMock.mockResolvedValueOnce("application/pdf");
-
-    await expect(
-      extractImageContentFromSource(
-        {
-          type: "url",
-          url: "https://example.com/photo.png",
-        },
-        {
-          allowUrl: true,
-          allowedMimes: new Set(["image/png", "image/jpeg"]),
-          maxBytes: 1024 * 1024,
-          maxRedirects: 0,
-          timeoutMs: 1000,
-        },
-      ),
-    ).rejects.toThrow("Unsupported image MIME type: application/pdf");
-    expect(release).toHaveBeenCalledTimes(1);
+    await expectRejectedImageMimeCase(testCase);
     expect(convertHeicToJpegMock).not.toHaveBeenCalled();
   });
 });
@@ -276,40 +316,39 @@ describe("base64 size guards", () => {
 });
 
 describe("input image base64 validation", () => {
-  it("rejects malformed base64 payloads", async () => {
-    await expect(
-      extractImageContentFromSource(
-        {
-          type: "base64",
-          data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2N4j8AAAAASUVORK5CYII=" onerror="alert(1)',
-          mediaType: "image/png",
-        },
-        {
-          allowUrl: false,
-          allowedMimes: new Set(["image/png"]),
-          maxBytes: 1024 * 1024,
-          maxRedirects: 0,
-          timeoutMs: 1,
-        },
-      ),
-    ).rejects.toThrow("invalid 'data' field");
-  });
-
-  it("normalizes whitespace in valid base64 payloads", async () => {
-    const image = await extractImageContentFromSource(
-      {
+  it.each([
+    {
+      name: "rejects malformed base64 payloads",
+      source: {
         type: "base64",
-        data: " aGVs bG8= \n",
+        data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2N4j8AAAAASUVORK5CYII=" onerror="alert(1)',
         mediaType: "image/png",
-      },
-      {
+      } as const,
+      limits: {
         allowUrl: false,
         allowedMimes: new Set(["image/png"]),
         maxBytes: 1024 * 1024,
         maxRedirects: 0,
         timeoutMs: 1,
       },
-    );
-    expect(image.data).toBe("aGVsbG8=");
+      expectedError: "invalid 'data' field",
+    },
+    {
+      name: "normalizes whitespace in valid base64 payloads",
+      source: {
+        type: "base64",
+        data: " aGVs bG8= \n",
+        mediaType: "image/png",
+      } as const,
+      limits: createImageSourceLimits(["image/png"]),
+      expectedData: "aGVsbG8=",
+    },
+  ] as const)("$name", async ({ source, limits, expectedData, expectedError }) => {
+    await expectBase64ImageValidationCase({
+      source,
+      limits,
+      ...(expectedData ? { expectedData } : {}),
+      ...(expectedError ? { expectedError } : {}),
+    });
   });
 });

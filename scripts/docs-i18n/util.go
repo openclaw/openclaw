@@ -6,17 +6,30 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 )
 
 const (
-	workflowVersion = 15
-	providerName    = "pi"
-	modelVersion    = "claude-opus-4-6"
+	workflowVersion          = 16
+	docsI18nEngineName       = "codex"
+	envDocsI18nProvider      = "OPENCLAW_DOCS_I18N_PROVIDER"
+	envDocsI18nModel         = "OPENCLAW_DOCS_I18N_MODEL"
+	defaultOpenAIModel       = "gpt-5.5"
+	defaultFallbackProvider  = "openai"
+	defaultFallbackModelName = defaultOpenAIModel
 )
 
+var translationTranscriptArtifactRE = regexp.MustCompile(`(?i)(?:\b(?:analysis|commentary|final|assistant|user)\s+to\s*=\s*(?:functions\.[a-z0-9_-]+|[a-z_]+)|\bto\s*=\s*(?:functions\.[a-z0-9_-]+|analysis|commentary|final)\b|\bfunctions\.[a-z0-9_-]+\b|/home/runner/work/|\.agents/skills/|\bforce_parallel\s*:|\bcode\s+omitted\b|\bomitted\s+reasoning\b|全民彩票|娱乐平台开户|娱乐平台|皇平台|彩票平台|一本道|毛片|高清视频免费|不卡免费播放)`)
+
 func cacheNamespace() string {
-	return fmt.Sprintf("wf=%d|provider=%s|model=%s", workflowVersion, providerName, modelVersion)
+	return fmt.Sprintf(
+		"wf=%d|engine=%s|provider=%s|model=%s",
+		workflowVersion,
+		docsI18nEngineName,
+		docsI18nProvider(),
+		docsI18nModel(),
+	)
 }
 
 func cacheKey(namespace, srcLang, tgtLang, segmentID, textHash string) string {
@@ -38,6 +51,20 @@ func hashBytes(data []byte) string {
 
 func normalizeText(text string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+}
+
+func docsI18nProvider() string {
+	if value := strings.TrimSpace(os.Getenv(envDocsI18nProvider)); strings.EqualFold(value, "openai") {
+		return value
+	}
+	return defaultFallbackProvider
+}
+
+func docsI18nModel() string {
+	if value := strings.TrimSpace(os.Getenv(envDocsI18nModel)); value != "" {
+		return value
+	}
+	return defaultFallbackModelName
 }
 
 func segmentID(relPath, textHash string) string {
@@ -70,6 +97,26 @@ func isWhitespace(b byte) bool {
 	default:
 		return false
 	}
+}
+
+func validateNoTranslationTranscriptArtifacts(source, translated string) error {
+	sourceLower := strings.ToLower(source)
+	for _, token := range []string{"<openclaw_docs_i18n_input>", "</openclaw_docs_i18n_input>"} {
+		if strings.Contains(strings.ToLower(translated), token) && !strings.Contains(sourceLower, token) {
+			return fmt.Errorf("agent transcript artifact leaked into translation: %q", token)
+		}
+	}
+	for _, match := range translationTranscriptArtifactRE.FindAllString(translated, -1) {
+		match = strings.TrimSpace(match)
+		if match == "" {
+			continue
+		}
+		if strings.Contains(sourceLower, strings.ToLower(match)) {
+			continue
+		}
+		return fmt.Errorf("agent transcript artifact leaked into translation: %q", match)
+	}
+	return nil
 }
 
 func fatal(err error) {

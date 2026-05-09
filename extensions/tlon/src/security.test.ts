@@ -8,14 +8,45 @@
  * - Bot mention detection boundaries
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  extractCites,
   isDmAllowed,
   isGroupInviteAllowed,
   isBotMentioned,
   extractMessageText,
+  resolveAuthorizedMessageText,
 } from "./monitor/utils.js";
 import { normalizeShip } from "./targets.js";
+
+const allowlistShipMatchingCases = [
+  { label: "DM allowlist", isAllowed: isDmAllowed },
+  { label: "group invite allowlist", isAllowed: isGroupInviteAllowed },
+] satisfies Array<{
+  label: string;
+  isAllowed: (ship: string, allowlist: string[] | undefined) => boolean;
+}>;
+
+describe("Security: allowlist ship matching", () => {
+  it.each(allowlistShipMatchingCases)(
+    "$label normalizes ship names with and without ~ prefix",
+    ({ isAllowed }) => {
+      const allowlist = ["~zod"];
+      expect(isAllowed("zod", allowlist)).toBe(true);
+      expect(isAllowed("~zod", allowlist)).toBe(true);
+
+      const allowlistWithoutTilde = ["zod"];
+      expect(isAllowed("~zod", allowlistWithoutTilde)).toBe(true);
+      expect(isAllowed("zod", allowlistWithoutTilde)).toBe(true);
+    },
+  );
+
+  it.each(allowlistShipMatchingCases)("$label rejects partial ship matches", ({ isAllowed }) => {
+    const allowlist = ["~zod"];
+    expect(isAllowed("~zod-extra", allowlist)).toBe(false);
+    expect(isAllowed("~extra-zod", allowlist)).toBe(false);
+  });
+});
 
 describe("Security: DM Allowlist", () => {
   describe("isDmAllowed", () => {
@@ -39,16 +70,6 @@ describe("Security: DM Allowlist", () => {
       expect(isDmAllowed("~nec", allowlist)).toBe(false);
       expect(isDmAllowed("~sampel-palnet", allowlist)).toBe(false);
       expect(isDmAllowed("~random-ship", allowlist)).toBe(false);
-    });
-
-    it("normalizes ship names (with/without ~ prefix)", () => {
-      const allowlist = ["~zod"];
-      expect(isDmAllowed("zod", allowlist)).toBe(true);
-      expect(isDmAllowed("~zod", allowlist)).toBe(true);
-
-      const allowlistWithoutTilde = ["zod"];
-      expect(isDmAllowed("~zod", allowlistWithoutTilde)).toBe(true);
-      expect(isDmAllowed("zod", allowlistWithoutTilde)).toBe(true);
     });
 
     it("handles galaxy, star, planet, and moon names", () => {
@@ -78,12 +99,6 @@ describe("Security: DM Allowlist", () => {
       expect(isDmAllowed("~zod", allowlist)).toBe(true);
       // Different case would NOT match with current implementation
       expect(isDmAllowed("~Zod", ["~Zod"])).toBe(true); // exact match works
-    });
-
-    it("does not allow partial matches", () => {
-      const allowlist = ["~zod"];
-      expect(isDmAllowed("~zod-extra", allowlist)).toBe(false);
-      expect(isDmAllowed("~extra-zod", allowlist)).toBe(false);
     });
 
     it("handles whitespace in ship names (normalized)", () => {
@@ -121,21 +136,6 @@ describe("Security: Group Invite Allowlist", () => {
       expect(isGroupInviteAllowed("~random-attacker", allowlist)).toBe(false);
       expect(isGroupInviteAllowed("~malicious-ship", allowlist)).toBe(false);
       expect(isGroupInviteAllowed("~zod", allowlist)).toBe(false);
-    });
-
-    it("normalizes ship names (with/without ~ prefix)", () => {
-      const allowlist = ["~nocsyx-lassul"];
-      expect(isGroupInviteAllowed("nocsyx-lassul", allowlist)).toBe(true);
-      expect(isGroupInviteAllowed("~nocsyx-lassul", allowlist)).toBe(true);
-
-      const allowlistWithoutTilde = ["nocsyx-lassul"];
-      expect(isGroupInviteAllowed("~nocsyx-lassul", allowlistWithoutTilde)).toBe(true);
-    });
-
-    it("does not allow partial matches", () => {
-      const allowlist = ["~zod"];
-      expect(isGroupInviteAllowed("~zod-moon", allowlist)).toBe(false);
-      expect(isGroupInviteAllowed("~pinser-botter-zod", allowlist)).toBe(false);
     });
 
     it("handles whitespace in allowlist entries", () => {
@@ -340,6 +340,186 @@ describe("Security: Authorization Edge Cases", () => {
   });
 });
 
+describe("Security: Cite Resolution Authorization Ordering", () => {
+  async function resolveAllCitesForPoC(
+    content: unknown,
+    api: { scry: (path: string) => Promise<unknown> },
+  ): Promise<string> {
+    const cites = extractCites(content);
+    if (cites.length === 0) {
+      return "";
+    }
+
+    const resolved: string[] = [];
+    for (const cite of cites) {
+      if (cite.type !== "chan" || !cite.nest || !cite.postId) {
+        continue;
+      }
+      const data = (await api.scry(`/channels/v4/${cite.nest}/posts/post/${cite.postId}.json`)) as {
+        essay?: { content?: unknown };
+      };
+      const text = data?.essay?.content ? extractMessageText(data.essay.content) : "";
+      if (text) {
+        resolved.push(`> ${cite.author || "unknown"} wrote: ${text}`);
+      }
+    }
+
+    return resolved.length > 0 ? resolved.join("\n") + "\n\n" : "";
+  }
+
+  function buildCitedMessage(
+    secretNest = "chat/~private-ship/ops",
+    postId = "1701411845077995094",
+  ) {
+    return [
+      {
+        block: {
+          cite: {
+            chan: {
+              nest: secretNest,
+              where: `/msg/~victim-ship/${postId}`,
+            },
+          },
+        },
+      },
+      { inline: ["~bot-ship please summarize this"] },
+    ];
+  }
+
+  it("does not resolve channel cites for unauthorized senders", async () => {
+    const content = buildCitedMessage();
+    const rawText = extractMessageText(content);
+    const api = {
+      scry: vi.fn(async () => ({
+        essay: { content: [{ inline: ["TOP-SECRET"] }] },
+      })),
+    };
+
+    const messageText = await resolveAuthorizedMessageText({
+      rawText,
+      content,
+      authorizedForCites: false,
+      resolveAllCites: (nextContent) => resolveAllCitesForPoC(nextContent, api),
+    });
+
+    expect(messageText).toBe(rawText);
+    expect(api.scry).not.toHaveBeenCalled();
+  });
+
+  it("resolves channel cites after sender authorization passes", async () => {
+    const secretNest = "chat/~private-ship/ops";
+    const postId = "170141184507799509469114119040828178432";
+    const content = buildCitedMessage(secretNest, postId);
+    const rawText = extractMessageText(content);
+    const api = {
+      scry: vi.fn(async (path: string) => {
+        expect(path).toBe(`/channels/v4/${secretNest}/posts/post/${postId}.json`);
+        return {
+          essay: { content: [{ inline: ["TOP-SECRET: migration key is rotate-me"] }] },
+        };
+      }),
+    };
+
+    const messageText = await resolveAuthorizedMessageText({
+      rawText,
+      content,
+      authorizedForCites: true,
+      resolveAllCites: (nextContent) => resolveAllCitesForPoC(nextContent, api),
+    });
+
+    expect(api.scry).toHaveBeenCalledTimes(1);
+    expect(messageText).toContain("TOP-SECRET: migration key is rotate-me");
+    expect(messageText).toContain("> ~victim-ship wrote: TOP-SECRET: migration key is rotate-me");
+  });
+
+  it("does not resolve DM cites before a deny path", async () => {
+    const content = buildCitedMessage("chat/~secret-dm/ops", "1701411845077995095");
+    const rawText = extractMessageText(content);
+    const senderShip = "~attacker-ship";
+    const allowlist = ["~trusted-ship"];
+    const api = {
+      scry: vi.fn(async () => ({
+        essay: { content: [{ inline: ["DM-SECRET"] }] },
+      })),
+    };
+
+    const senderAllowed = allowlist
+      .map((ship) => normalizeShip(ship))
+      .includes(normalizeShip(senderShip));
+    expect(senderAllowed).toBe(false);
+
+    const messageText = await resolveAuthorizedMessageText({
+      rawText,
+      content,
+      authorizedForCites: senderAllowed,
+      resolveAllCites: (nextContent) => resolveAllCitesForPoC(nextContent, api),
+    });
+
+    expect(messageText).toBe(rawText);
+    expect(api.scry).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve DM cites before owner approval command handling", async () => {
+    const content = [
+      {
+        block: {
+          cite: {
+            chan: {
+              nest: "chat/~private-ship/admin",
+              where: "/msg/~victim-ship/1701411845077995096",
+            },
+          },
+        },
+      },
+      { inline: ["/approve 1"] },
+    ];
+    const rawText = extractMessageText(content);
+    const api = {
+      scry: vi.fn(async () => ({
+        essay: { content: [{ inline: ["ADMIN-SECRET"] }] },
+      })),
+    };
+
+    const messageText = await resolveAuthorizedMessageText({
+      rawText,
+      content,
+      authorizedForCites: false,
+      resolveAllCites: (nextContent) => resolveAllCitesForPoC(nextContent, api),
+    });
+
+    expect(rawText).toContain("/approve 1");
+    expect(messageText).toBe(rawText);
+    expect(messageText).not.toContain("ADMIN-SECRET");
+    expect(api.scry).not.toHaveBeenCalled();
+  });
+
+  it("resolves DM cites for allowed senders after authorization passes", async () => {
+    const secretNest = "chat/~private-ship/dm";
+    const postId = "1701411845077995097";
+    const content = buildCitedMessage(secretNest, postId);
+    const rawText = extractMessageText(content);
+    const api = {
+      scry: vi.fn(async (path: string) => {
+        expect(path).toBe(`/channels/v4/${secretNest}/posts/post/${postId}.json`);
+        return {
+          essay: { content: [{ inline: ["ALLOWED-DM-SECRET"] }] },
+        };
+      }),
+    };
+
+    const messageText = await resolveAuthorizedMessageText({
+      rawText,
+      content,
+      authorizedForCites: true,
+      resolveAllCites: (nextContent) => resolveAllCitesForPoC(nextContent, api),
+    });
+
+    expect(api.scry).toHaveBeenCalledTimes(1);
+    expect(messageText).toContain("ALLOWED-DM-SECRET");
+    expect(messageText).toContain("> ~victim-ship wrote: ALLOWED-DM-SECRET");
+  });
+});
+
 describe("Security: Sender Role Identification", () => {
   /**
    * Tests for sender role identification (owner vs user).
@@ -351,7 +531,9 @@ describe("Security: Sender Role Identification", () => {
 
   // Helper to compute sender role (mirrors logic in monitor/index.ts)
   function getSenderRole(senderShip: string, ownerShip: string | null): "owner" | "user" {
-    if (!ownerShip) return "user";
+    if (!ownerShip) {
+      return "user";
+    }
     return normalizeShip(senderShip) === normalizeShip(ownerShip) ? "owner" : "user";
   }
 

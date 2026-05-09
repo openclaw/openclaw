@@ -5,11 +5,35 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeRuntimeTests {
+    actor CanvasRefreshProbe {
+        private(set) var calls = 0
+
+        func refresh() -> String? {
+            self.calls += 1
+            return "http://127.0.0.1:18789/refreshed"
+        }
+    }
+
     @Test func `handle invoke rejects unknown command`() async {
         let runtime = MacNodeRuntime()
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(id: "req-1", command: "unknown.command"))
         #expect(response.ok == false)
+    }
+
+    @Test func `A2UI host capability refresh uses injected node session refresher`() async {
+        let probe = CanvasRefreshProbe()
+        let runtime = MacNodeRuntime(
+            canvasSurfaceUrl: { "http://127.0.0.1:18789/current" },
+            refreshCanvasSurfaceUrl: { await probe.refresh() })
+
+        let current = await runtime.resolveA2UIHostUrlWithCapabilityRefresh()
+        #expect(current == "http://127.0.0.1:18789/current/__openclaw__/a2ui/?platform=macos")
+        #expect(await probe.calls == 0)
+
+        let refreshed = await runtime.resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: true)
+        #expect(refreshed == "http://127.0.0.1:18789/refreshed/__openclaw__/a2ui/?platform=macos")
+        #expect(await probe.calls == 1)
     }
 
     @Test func `handle invoke rejects empty system run`() async throws {
@@ -19,6 +43,32 @@ struct MacNodeRuntimeTests {
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(id: "req-2", command: OpenClawSystemCommand.run.rawValue, paramsJSON: json))
         #expect(response.ok == false)
+    }
+
+    @Test func `handle invoke rejects blocked system run env override before execution`() async throws {
+        let runtime = MacNodeRuntime()
+        let params = OpenClawSystemRunParams(
+            command: ["/bin/sh", "-lc", "echo ok"],
+            env: ["CLASSPATH": "/tmp/evil-classpath"])
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(id: "req-2c", command: OpenClawSystemCommand.run.rawValue, paramsJSON: json))
+        #expect(response.ok == false)
+        #expect(response.error?.message.contains("SYSTEM_RUN_DENIED: environment override rejected") == true)
+        #expect(response.error?.message.contains("CLASSPATH") == true)
+    }
+
+    @Test func `handle invoke rejects invalid system run env override key before execution`() async throws {
+        let runtime = MacNodeRuntime()
+        let params = OpenClawSystemRunParams(
+            command: ["/bin/sh", "-lc", "echo ok"],
+            env: ["BAD-KEY": "x"])
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(id: "req-2d", command: OpenClawSystemCommand.run.rawValue, paramsJSON: json))
+        #expect(response.ok == false)
+        #expect(response.error?.message.contains("SYSTEM_RUN_DENIED: environment override rejected") == true)
+        #expect(response.error?.message.contains("BAD-KEY") == true)
     }
 
     @Test func `handle invoke rejects empty system which`() async throws {
@@ -52,6 +102,19 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke screen record uses injected services`() async throws {
         @MainActor
         final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            func snapshotScreen(
+                screenIndex: Int?,
+                maxWidth: Int?,
+                quality: Double?,
+                format: OpenClawScreenSnapshotFormat?) async throws
+                -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+            {
+                _ = screenIndex
+                _ = maxWidth
+                _ = quality
+                return (Data("snapshot".utf8), format ?? .jpeg, 640, 360)
+            }
+
             func recordScreen(
                 screenIndex: Int?,
                 durationMs: Int?,
@@ -99,6 +162,94 @@ struct MacNodeRuntimeTests {
         let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
         #expect(payload.format == "mp4")
         #expect(!payload.base64.isEmpty)
+    }
+
+    @Test func `handle invoke screen snapshot uses injected services`() async throws {
+        @MainActor
+        final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            var snapshotCalledAtMs: Int64?
+
+            func snapshotScreen(
+                screenIndex: Int?,
+                maxWidth: Int?,
+                quality: Double?,
+                format: OpenClawScreenSnapshotFormat?) async throws
+                -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+            {
+                self.snapshotCalledAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+                #expect(screenIndex == 0)
+                #expect(maxWidth == 800)
+                #expect(quality == 0.5)
+                return (Data("ok".utf8), format ?? .jpeg, 800, 450)
+            }
+
+            func recordScreen(
+                screenIndex: Int?,
+                durationMs: Int?,
+                fps: Double?,
+                includeAudio: Bool?,
+                outPath: String?) async throws -> (path: String, hasAudio: Bool)
+            {
+                let url = FileManager().temporaryDirectory
+                    .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
+                try Data("ok".utf8).write(to: url)
+                return (path: url.path, hasAudio: false)
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus {
+                .authorizedAlways
+            }
+
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
+                .fullAccuracy
+            }
+
+            func currentLocation(
+                desiredAccuracy: OpenClawLocationAccuracy,
+                maxAgeMs: Int?,
+                timeoutMs: Int?) async throws -> CLLocation
+            {
+                _ = desiredAccuracy
+                _ = maxAgeMs
+                _ = timeoutMs
+                return CLLocation(latitude: 0, longitude: 0)
+            }
+        }
+
+        let services = await MainActor.run { FakeMainActorServices() }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+
+        let params = MacNodeScreenSnapshotParams(
+            screenIndex: 0,
+            maxWidth: 800,
+            quality: 0.5,
+            format: .jpeg)
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot",
+                command: MacNodeScreenCommand.snapshot.rawValue,
+                paramsJSON: json))
+        #expect(response.ok == true)
+        let payloadJSON = try #require(response.payloadJSON)
+
+        struct Payload: Decodable {
+            var format: String
+            var base64: String
+            var width: Int
+            var height: Int
+            var capturedAtMs: Int64
+        }
+
+        let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
+        #expect(payload.format == "jpeg")
+        #expect(payload.base64 == Data("ok".utf8).base64EncodedString())
+        #expect(payload.width == 800)
+        #expect(payload.height == 450)
+        #expect(payload.capturedAtMs > 0)
+        let snapshotCalledAtMs = await MainActor.run { services.snapshotCalledAtMs }
+        #expect(snapshotCalledAtMs != nil)
+        #expect(payload.capturedAtMs <= snapshotCalledAtMs!)
     }
 
     @Test func `handle invoke browser proxy uses injected request`() async {

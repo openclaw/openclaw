@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import os from "node:os";
 import { promisify } from "node:util";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -12,7 +13,7 @@ async function tryScutil(key: "ComputerName" | "LocalHostName") {
       timeout: 1000,
       windowsHide: true,
     });
-    const value = String(stdout ?? "").trim();
+    const value = normalizeOptionalString(stdout ?? "") ?? "";
     return value.length > 0 ? value : null;
   } catch {
     return null;
@@ -20,12 +21,8 @@ async function tryScutil(key: "ComputerName" | "LocalHostName") {
 }
 
 function fallbackHostName() {
-  return (
-    os
-      .hostname()
-      .replace(/\.local$/i, "")
-      .trim() || "openclaw"
-  );
+  const trimmed = normalizeOptionalString(os.hostname()) ?? "";
+  return trimmed.replace(/\.local$/i, "") || "openclaw";
 }
 
 export async function getMachineDisplayName(): Promise<string> {

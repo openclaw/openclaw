@@ -3,14 +3,15 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { identityHasValues, parseIdentityMarkdown } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
-import { writeConfigFile } from "../config/config.js";
+import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { IdentityConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
-import { requireValidConfig } from "./agents.command-shared.js";
+import { requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import {
   type AgentIdentity,
   findAgentEntryIndex,
@@ -31,11 +32,6 @@ type AgentsSetIdentityOptions = {
 };
 
 const normalizeWorkspacePath = (input: string) => path.resolve(resolveUserPath(input));
-
-const coerceTrimmed = (value?: string) => {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-};
 
 async function loadIdentityFromFile(filePath: string): Promise<AgentIdentity | null> {
   try {
@@ -69,20 +65,22 @@ export async function agentsSetIdentityCommand(
   opts: AgentsSetIdentityOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) {
+  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
+  if (!configSnapshot) {
     return;
   }
+  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
+  const baseHash = configSnapshot.hash;
 
-  const agentRaw = coerceTrimmed(opts.agent);
-  const nameRaw = coerceTrimmed(opts.name);
-  const emojiRaw = coerceTrimmed(opts.emoji);
-  const themeRaw = coerceTrimmed(opts.theme);
-  const avatarRaw = coerceTrimmed(opts.avatar);
+  const agentRaw = normalizeOptionalString(opts.agent);
+  const nameRaw = normalizeOptionalString(opts.name);
+  const emojiRaw = normalizeOptionalString(opts.emoji);
+  const themeRaw = normalizeOptionalString(opts.theme);
+  const avatarRaw = normalizeOptionalString(opts.avatar);
   const hasExplicitIdentity = Boolean(nameRaw || emojiRaw || themeRaw || avatarRaw);
 
-  const identityFileRaw = coerceTrimmed(opts.identityFile);
-  const workspaceRaw = coerceTrimmed(opts.workspace);
+  const identityFileRaw = normalizeOptionalString(opts.identityFile);
+  const workspaceRaw = normalizeOptionalString(opts.workspace);
   const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
 
   let identityFilePath: string | undefined;
@@ -195,21 +193,18 @@ export async function agentsSetIdentityCommand(
     },
   };
 
-  await writeConfigFile(nextConfig);
+  await replaceConfigFile({
+    nextConfig,
+    ...(baseHash !== undefined ? { baseHash } : {}),
+  });
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          agentId,
-          identity: nextIdentity,
-          workspace: workspaceDir ?? null,
-          identityFile: identityFilePath ?? null,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      agentId,
+      identity: nextIdentity,
+      workspace: workspaceDir ?? null,
+      identityFile: identityFilePath ?? null,
+    });
     return;
   }
 

@@ -1,29 +1,18 @@
 import JSON5 from "json5";
 import { LEGACY_MANIFEST_KEYS, MANIFEST_KEY } from "../compat/legacy-names.js";
 import { parseBooleanValue } from "../utils/boolean.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "./string-coerce.js";
+import { normalizeCsvOrLooseStringList } from "./string-normalization.js";
 
 export function normalizeStringList(input: unknown): string[] {
-  if (!input) {
-    return [];
-  }
-  if (Array.isArray(input)) {
-    return input.map((value) => String(value).trim()).filter(Boolean);
-  }
-  if (typeof input === "string") {
-    return input
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-  }
-  return [];
+  return normalizeCsvOrLooseStringList(input);
 }
 
 export function getFrontmatterString(
   frontmatter: Record<string, unknown>,
   key: string,
 ): string | undefined {
-  const raw = frontmatter[key];
-  return typeof raw === "string" ? raw : undefined;
+  return readStringValue(frontmatter[key]);
 }
 
 export function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
@@ -116,7 +105,7 @@ export function parseOpenClawManifestInstallBase(
   const raw = input as Record<string, unknown>;
   const kindRaw =
     typeof raw.kind === "string" ? raw.kind : typeof raw.type === "string" ? raw.type : "";
-  const kind = kindRaw.trim().toLowerCase();
+  const kind = normalizeOptionalLowercaseString(kindRaw) ?? "";
   if (!allowedKinds.includes(kind)) {
     return undefined;
   }

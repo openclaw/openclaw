@@ -1,5 +1,7 @@
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
-import { resolveSystemRunCommand } from "../infra/system-run-command.js";
+import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import { asNullableRecord } from "../shared/record-coerce.js";
+import { normalizeNullableString } from "../shared/string-coerce.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import {
   systemRunApprovalGuardError,
@@ -9,6 +11,7 @@ import {
   evaluateSystemRunApprovalMatch,
   toSystemRunApprovalMismatchError,
 } from "./node-invoke-system-run-approval-match.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 type SystemRunParamsLike = {
   command?: unknown;
@@ -23,6 +26,7 @@ type SystemRunParamsLike = {
   approved?: unknown;
   approvalDecision?: unknown;
   runId?: unknown;
+  suppressNotifyOnExit?: unknown;
 };
 
 type ApprovalLookup = {
@@ -32,35 +36,52 @@ type ApprovalLookup = {
 
 type ApprovalClient = {
   connId?: string | null;
+  isDeviceTokenAuth?: boolean;
   connect?: {
     scopes?: unknown;
+    client?: { id?: string | null; mode?: string | null } | null;
     device?: { id?: string | null } | null;
   } | null;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function normalizeString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
+const BACKEND_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS = new Set<string>([
+  GATEWAY_CLIENT_NAMES.CONTROL_UI,
+  GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+  GATEWAY_CLIENT_NAMES.WEBCHAT,
+  GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+]);
 
 function normalizeApprovalDecision(value: unknown): "allow-once" | "allow-always" | null {
-  const s = normalizeString(value);
+  const s = normalizeNullableString(value);
   return s === "allow-once" || s === "allow-always" ? s : null;
 }
 
 function clientHasApprovals(client: ApprovalClient | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client?.connect?.scopes : [];
   return scopes.includes("operator.admin") || scopes.includes("operator.approvals");
+}
+
+function isTrustedBackendApprovalClient(client: ApprovalClient | null): boolean {
+  return (
+    clientHasApprovals(client) &&
+    client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    client.isDeviceTokenAuth !== true
+  );
+}
+
+function canBridgeNoDeviceApprovalFromBackend(params: {
+  snapshot: ExecApprovalRecord;
+  client: ApprovalClient | null;
+}): boolean {
+  const requestedByClientId = normalizeNullableString(params.snapshot.requestedByClientId);
+  return (
+    params.snapshot.requestedByDeviceId == null &&
+    params.snapshot.requestedByDeviceTokenAuth !== true &&
+    requestedByClientId !== null &&
+    BACKEND_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS.has(requestedByClientId) &&
+    isTrustedBackendApprovalClient(params.client)
+  );
 }
 
 function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unknown> {
@@ -78,6 +99,7 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
     "agentId",
     "sessionKey",
     "runId",
+    "suppressNotifyOnExit",
   ]) {
     if (key in raw) {
       next[key] = raw[key];
@@ -100,7 +122,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
 }):
   | { ok: true; params: unknown }
   | { ok: false; message: string; details?: Record<string, unknown> } {
-  const obj = asRecord(opts.rawParams);
+  const obj = asNullableRecord(opts.rawParams);
   if (!obj) {
     return { ok: true, params: opts.rawParams };
   }
@@ -115,7 +137,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   const next: Record<string, unknown> = pickSystemRunParams(obj);
 
   if (!wantsApprovalOverride) {
-    const cmdTextResolution = resolveSystemRunCommand({
+    const cmdTextResolution = resolveSystemRunCommandRequest({
       command: p.command,
       rawCommand: p.rawCommand,
     });
@@ -129,7 +151,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     return { ok: true, params: next };
   }
 
-  const runId = normalizeString(p.runId);
+  const runId = normalizeNullableString(p.runId);
   if (!runId) {
     return systemRunApprovalGuardError({
       code: "MISSING_RUN_ID",
@@ -163,7 +185,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     });
   }
 
-  const targetNodeId = normalizeString(opts.nodeId);
+  const targetNodeId = normalizeNullableString(opts.nodeId);
   if (!targetNodeId) {
     return systemRunApprovalGuardError({
       code: "MISSING_NODE_ID",
@@ -171,7 +193,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
       details: { runId },
     });
   }
-  const approvalNodeId = normalizeString(snapshot.request.nodeId);
+  const approvalNodeId = normalizeNullableString(snapshot.request.nodeId);
   if (!approvalNodeId) {
     return systemRunApprovalGuardError({
       code: "APPROVAL_NODE_BINDING_MISSING",
@@ -201,7 +223,8 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     }
   } else if (
     snapshot.requestedByConnId &&
-    snapshot.requestedByConnId !== (opts.client?.connId ?? null)
+    snapshot.requestedByConnId !== (opts.client?.connId ?? null) &&
+    !canBridgeNoDeviceApprovalFromBackend({ snapshot, client: opts.client })
   ) {
     return systemRunApprovalGuardError({
       code: "APPROVAL_CLIENT_MISMATCH",
@@ -228,8 +251,8 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   if (runtimeContext.plan) {
     next.command = [...runtimeContext.plan.argv];
     next.systemRunPlan = runtimeContext.plan;
-    if (runtimeContext.rawCommand) {
-      next.rawCommand = runtimeContext.rawCommand;
+    if (runtimeContext.commandText) {
+      next.rawCommand = runtimeContext.commandText;
     } else {
       delete next.rawCommand;
     }

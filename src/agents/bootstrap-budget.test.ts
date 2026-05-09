@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
+  buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
   buildBootstrapTruncationSignature,
   formatBootstrapTruncationWarningLines,
   resolveBootstrapWarningSignaturesSeen,
 } from "./bootstrap-budget.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 describe("buildBootstrapInjectionStats", () => {
@@ -35,18 +38,14 @@ describe("buildBootstrapInjectionStats", () => {
       injectedFiles,
     });
     expect(stats).toHaveLength(2);
-    expect(stats[0]).toMatchObject({
-      name: "AGENTS.md",
-      rawChars: 100,
-      injectedChars: 100,
-      truncated: false,
-    });
-    expect(stats[1]).toMatchObject({
-      name: "SOUL.md",
-      rawChars: 50,
-      injectedChars: 20,
-      truncated: true,
-    });
+    expect(stats[0]?.name).toBe("AGENTS.md");
+    expect(stats[0]?.rawChars).toBe(100);
+    expect(stats[0]?.injectedChars).toBe(100);
+    expect(stats[0]?.truncated).toBe(false);
+    expect(stats[1]?.name).toBe("SOUL.md");
+    expect(stats[1]?.rawChars).toBe(50);
+    expect(stats[1]?.injectedChars).toBe(20);
+    expect(stats[1]?.truncated).toBe(true);
   });
 });
 
@@ -99,11 +98,53 @@ describe("analyzeBootstrapBudget", () => {
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
     });
-    expect(analysis.truncatedFiles[0]?.causes).toEqual([]);
+    expect(analysis.truncatedFiles[0]?.causes).toStrictEqual([]);
   });
 });
 
 describe("bootstrap prompt warnings", () => {
+  it("appends warning details to the turn prompt instead of mutating the system prompt", () => {
+    const prompt = appendBootstrapPromptWarning("Please continue.", [
+      "AGENTS.md: 200 raw -> 0 injected",
+    ]);
+    expect(prompt.startsWith("Please continue.")).toBe(true);
+    expect(prompt).toContain("[Bootstrap truncation warning]");
+    expect(prompt).toContain("Treat Project Context as partial");
+    expect(prompt).toContain("- AGENTS.md: 200 raw -> 0 injected");
+    expect(prompt.endsWith("- AGENTS.md: 200 raw -> 0 injected")).toBe(true);
+  });
+
+  it("preserves raw prompt whitespace when appending warning details", () => {
+    const prompt = appendBootstrapPromptWarning("  indented\nkeep tail  ", [
+      "AGENTS.md: 200 raw -> 0 injected",
+    ]);
+
+    expect(prompt).toContain("  indented\nkeep tail  ");
+    expect(prompt.indexOf("  indented\nkeep tail  ")).toBe(0);
+  });
+
+  it("preserves exact heartbeat prompts without warning suffixes", () => {
+    const heartbeatPrompt = "Read HEARTBEAT.md. Reply HEARTBEAT_OK.";
+
+    expect(
+      appendBootstrapPromptWarning(heartbeatPrompt, ["AGENTS.md: 200 raw -> 0 injected"], {
+        preserveExactPrompt: heartbeatPrompt,
+      }),
+    ).toBe(heartbeatPrompt);
+  });
+
+  it("builds a concise agent notice without raw truncation diagnostics", () => {
+    const notice = buildBootstrapPromptWarningNotice([
+      "AGENTS.md: 200 raw -> 0 injected",
+      "If unintentional, raise agents.defaults.bootstrapMaxChars.",
+    ]);
+
+    expect(notice).toContain("[Bootstrap truncation warning]");
+    expect(notice).toContain("Treat Project Context as partial");
+    expect(notice).not.toContain("raw ->");
+    expect(notice).not.toContain("bootstrapMaxChars");
+  });
+
   it("resolves seen signatures from report history or legacy single signature", () => {
     expect(
       resolveBootstrapWarningSignaturesSeen({
@@ -122,7 +163,7 @@ describe("bootstrap prompt warnings", () => {
       }),
     ).toEqual(["legacy-only"]);
 
-    expect(resolveBootstrapWarningSignaturesSeen(undefined)).toEqual([]);
+    expect(resolveBootstrapWarningSignaturesSeen(undefined)).toStrictEqual([]);
   });
 
   it("ignores single-signature fallback when warning mode is off", () => {
@@ -133,7 +174,7 @@ describe("bootstrap prompt warnings", () => {
           promptWarningSignature: "off-mode-signature",
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       resolveBootstrapWarningSignaturesSeen({
@@ -166,7 +207,25 @@ describe("bootstrap prompt warnings", () => {
       mode: "once",
     });
     expect(first.warningShown).toBe(true);
-    expect(first.signature).toBeTruthy();
+    expect(first.signature).toBeTypeOf("string");
+    expect(first.signature).not.toBe("");
+    const signature = JSON.parse(first.signature ?? "{}") as {
+      bootstrapMaxChars?: unknown;
+      bootstrapTotalMaxChars?: unknown;
+      files?: Array<{
+        path?: unknown;
+        rawChars?: unknown;
+        injectedChars?: unknown;
+        causes?: unknown;
+      }>;
+    };
+    expect(signature.bootstrapMaxChars).toBe(120);
+    expect(signature.bootstrapTotalMaxChars).toBe(200);
+    expect(signature.files).toHaveLength(1);
+    expect(signature.files?.[0]?.path).toBe("/tmp/AGENTS.md");
+    expect(signature.files?.[0]?.rawChars).toBe(150);
+    expect(signature.files?.[0]?.injectedChars).toBe(100);
+    expect(signature.files?.[0]?.causes).toStrictEqual(["per-file-limit"]);
     expect(first.lines.join("\n")).toContain("AGENTS.md");
 
     const second = buildBootstrapPromptWarning({
@@ -175,7 +234,7 @@ describe("bootstrap prompt warnings", () => {
       seenSignatures: first.warningSignaturesSeen,
     });
     expect(second.warningShown).toBe(false);
-    expect(second.lines).toEqual([]);
+    expect(second.lines).toStrictEqual([]);
   });
 
   it("dedupes once mode across non-consecutive repeated signatures", () => {
@@ -317,7 +376,7 @@ describe("bootstrap prompt warnings", () => {
       previousSignature: signature,
     });
     expect(off.warningShown).toBe(false);
-    expect(off.lines).toEqual([]);
+    expect(off.lines).toStrictEqual([]);
 
     const always = buildBootstrapPromptWarning({
       analysis,
@@ -391,7 +450,43 @@ describe("bootstrap prompt warnings", () => {
     expect(meta.warningShown).toBe(true);
     expect(meta.truncatedFiles).toBe(1);
     expect(meta.nearLimitFiles).toBeGreaterThanOrEqual(1);
-    expect(meta.promptWarningSignature).toBeTruthy();
-    expect(meta.warningSignaturesSeen?.length).toBeGreaterThan(0);
+    expect(meta.promptWarningSignature).toBe(warning.signature);
+    expect(meta.warningSignaturesSeen).toEqual([warning.signature]);
+  });
+
+  it("improves cache-relevant system prompt stability versus legacy warning injection", () => {
+    const contextFiles = [{ path: "AGENTS.md", content: "Follow AGENTS guidance." }];
+    const warningLines = ["AGENTS.md: 200 raw -> 0 injected"];
+    const stableSystemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles,
+    });
+    const optimizedTurns = [stableSystemPrompt, stableSystemPrompt, stableSystemPrompt];
+    const injectLegacyWarning = (prompt: string, lines: string[]) => {
+      const warningBlock = [
+        "⚠ Bootstrap truncation warning:",
+        ...lines.map((line) => `- ${line}`),
+        "",
+      ].join("\n");
+      return prompt.replace("## AGENTS.md", `${warningBlock}## AGENTS.md`);
+    };
+    const legacyTurns = [
+      injectLegacyWarning(optimizedTurns[0] ?? "", warningLines),
+      optimizedTurns[1] ?? "",
+      injectLegacyWarning(optimizedTurns[2] ?? "", warningLines),
+    ];
+    const cacheHitRate = (turns: string[]) => {
+      let hits = 0;
+      for (let index = 1; index < turns.length; index++) {
+        if (turns[index] === turns[index - 1]) {
+          hits++;
+        }
+      }
+      return hits / Math.max(1, turns.length - 1);
+    };
+
+    expect(cacheHitRate(legacyTurns)).toBe(0);
+    expect(cacheHitRate(optimizedTurns)).toBe(1);
+    expect(optimizedTurns[0]).not.toContain("⚠ Bootstrap truncation warning:");
   });
 });

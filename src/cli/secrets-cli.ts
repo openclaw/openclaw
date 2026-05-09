@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { confirm } from "@clack/prompts";
 import type { Command } from "commander";
 import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecretsApply } from "../secrets/apply.js";
 import { resolveSecretsAuditExitCode, runSecretsAudit } from "../secrets/audit.js";
@@ -9,12 +10,14 @@ import { runSecretsConfigureInteractive } from "../secrets/configure.js";
 import { isSecretsApplyPlan, type SecretsApplyPlan } from "../secrets/plan.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 
 type SecretsReloadOptions = GatewayRpcOpts & { json?: boolean };
 type SecretsAuditOptions = {
   check?: boolean;
   json?: boolean;
+  allowExec?: boolean;
 };
 type SecretsConfigureOptions = {
   apply?: boolean;
@@ -23,11 +26,13 @@ type SecretsConfigureOptions = {
   providersOnly?: boolean;
   skipProviderSetup?: boolean;
   agent?: string;
+  allowExec?: boolean;
   json?: boolean;
 };
 type SecretsApplyOptions = {
   from: string;
   dryRun?: boolean;
+  allowExec?: boolean;
   json?: boolean;
 };
 
@@ -35,7 +40,9 @@ function readPlanFile(pathname: string): SecretsApplyPlan {
   const raw = fs.readFileSync(pathname, "utf8");
   const parsed = JSON.parse(raw) as unknown;
   if (!isSecretsApplyPlan(parsed)) {
-    throw new Error(`Invalid secrets plan file: ${pathname}`);
+    throw new Error(
+      `Invalid secrets plan file: ${pathname}. Generate a fresh plan with ${formatCliCommand("openclaw secrets configure --plan-out <path>")}.`,
+    );
   }
   return parsed;
 }
@@ -61,7 +68,7 @@ export function registerSecretsCli(program: Command) {
         expectFinal: false,
       });
       if (opts.json) {
-        defaultRuntime.log(JSON.stringify(result, null, 2));
+        defaultRuntime.writeJson(result);
         return;
       }
       const warningCount = Number(
@@ -73,7 +80,11 @@ export function registerSecretsCli(program: Command) {
       }
       defaultRuntime.log("Secrets reloaded.");
     } catch (err) {
-      defaultRuntime.error(danger(String(err)));
+      defaultRuntime.error(
+        danger(
+          `Secrets reload failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} to inspect the active gateway.`,
+        ),
+      );
       defaultRuntime.exit(1);
     }
   });
@@ -82,12 +93,19 @@ export function registerSecretsCli(program: Command) {
     .command("audit")
     .description("Audit plaintext secrets, unresolved refs, and precedence drift")
     .option("--check", "Exit non-zero when findings are present", false)
+    .option(
+      "--allow-exec",
+      "Allow exec SecretRef resolution during audit (may execute provider commands)",
+      false,
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsAuditOptions) => {
       try {
-        const report = await runSecretsAudit();
+        const report = await runSecretsAudit({
+          allowExec: Boolean(opts.allowExec),
+        });
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(report, null, 2));
+          defaultRuntime.writeJson(report);
         } else {
           defaultRuntime.log(
             `Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, legacy=${report.summary.legacyResidueCount}.`,
@@ -102,13 +120,22 @@ export function registerSecretsCli(program: Command) {
               defaultRuntime.log(`... ${report.findings.length - 20} more finding(s).`);
             }
           }
+          if (report.resolution.skippedExecRefs > 0) {
+            defaultRuntime.log(
+              `Audit note: skipped ${report.resolution.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during audit.`,
+            );
+          }
         }
         const exitCode = resolveSecretsAuditExitCode(report, Boolean(opts.check));
         if (exitCode !== 0) {
           defaultRuntime.exit(exitCode);
         }
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(
+          danger(
+            `Secrets audit failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw doctor")} to inspect config and credential state.`,
+          ),
+        );
         defaultRuntime.exit(2);
       }
     });
@@ -128,6 +155,11 @@ export function registerSecretsCli(program: Command) {
       "--agent <id>",
       "Agent id for auth-profiles targets (default: configured default agent)",
     )
+    .option(
+      "--allow-exec",
+      "Allow exec SecretRef preflight checks (may execute provider commands)",
+      false,
+    )
     .option("--plan-out <path>", "Write generated plan JSON to a file")
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsConfigureOptions) => {
@@ -136,21 +168,16 @@ export function registerSecretsCli(program: Command) {
           providersOnly: Boolean(opts.providersOnly),
           skipProviderSetup: Boolean(opts.skipProviderSetup),
           agentId: typeof opts.agent === "string" ? opts.agent : undefined,
+          allowExecInPreflight: Boolean(opts.allowExec),
         });
         if (opts.planOut) {
           fs.writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
         }
         if (opts.json) {
-          defaultRuntime.log(
-            JSON.stringify(
-              {
-                plan: configured.plan,
-                preflight: configured.preflight,
-              },
-              null,
-              2,
-            ),
-          );
+          defaultRuntime.writeJson({
+            plan: configured.plan,
+            preflight: configured.preflight,
+          });
         } else {
           defaultRuntime.log(
             `Preflight: changed=${configured.preflight.changed}, files=${configured.preflight.changedFiles.length}, warnings=${configured.preflight.warningCount}.`,
@@ -159,6 +186,14 @@ export function registerSecretsCli(program: Command) {
             for (const warning of configured.preflight.warnings) {
               defaultRuntime.log(`- warning: ${warning}`);
             }
+          }
+          if (
+            !configured.preflight.checks.resolvabilityComplete &&
+            configured.preflight.skippedExecRefs > 0
+          ) {
+            defaultRuntime.log(
+              `Preflight note: skipped ${configured.preflight.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during preflight.`,
+            );
           }
           const providerUpserts = Object.keys(configured.plan.providerUpserts ?? {}).length;
           const providerDeletes = configured.plan.providerDeletes?.length ?? 0;
@@ -196,9 +231,10 @@ export function registerSecretsCli(program: Command) {
           const result = await runSecretsApply({
             plan: configured.plan,
             write: true,
+            allowExec: Boolean(opts.allowExec),
           });
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+            defaultRuntime.writeJson(result);
             return;
           }
           defaultRuntime.log(
@@ -208,7 +244,11 @@ export function registerSecretsCli(program: Command) {
           );
         }
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(
+          danger(
+            `Secrets configure failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets audit")} before applying changes.`,
+          ),
+        );
         defaultRuntime.exit(1);
       }
     });
@@ -218,6 +258,7 @@ export function registerSecretsCli(program: Command) {
     .description("Apply a previously generated secrets plan")
     .requiredOption("--from <path>", "Path to plan JSON")
     .option("--dry-run", "Validate/preflight only", false)
+    .option("--allow-exec", "Allow exec SecretRef checks (may execute provider commands)", false)
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsApplyOptions) => {
       try {
@@ -225,9 +266,10 @@ export function registerSecretsCli(program: Command) {
         const result = await runSecretsApply({
           plan,
           write: !opts.dryRun,
+          allowExec: Boolean(opts.allowExec),
         });
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
           return;
         }
         if (opts.dryRun) {
@@ -236,6 +278,11 @@ export function registerSecretsCli(program: Command) {
               ? `Secrets apply dry run: ${result.changedFiles.length} file(s) would change.`
               : "Secrets apply dry run: no changes.",
           );
+          if (!result.checks.resolvabilityComplete && result.skippedExecRefs > 0) {
+            defaultRuntime.log(
+              `Secrets apply dry-run note: skipped ${result.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
+            );
+          }
           return;
         }
         defaultRuntime.log(
@@ -244,7 +291,11 @@ export function registerSecretsCli(program: Command) {
             : "Secrets apply: no changes.",
         );
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(
+          danger(
+            `Secrets apply failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
+          ),
+        );
         defaultRuntime.exit(1);
       }
     });

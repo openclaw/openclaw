@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { parseWindowsCodePage } from "../infra/windows-encoding.js";
 import { withEnv } from "../test-utils/env.js";
-import { decodeCapturedOutputBuffer, parseWindowsCodePage, sanitizeEnv } from "./invoke.js";
+import { decodeCapturedOutputBuffer, sanitizeEnv } from "./invoke.js";
 import { buildNodeInvokeResultParams } from "./runner.js";
 
 describe("node-host sanitizeEnv", () => {
@@ -49,6 +50,13 @@ describe("node-host sanitizeEnv", () => {
       const env = sanitizeEnv(undefined);
       expect(env.PATH).toBe("/usr/bin:/bin");
       expect(env.BASH_ENV).toBeUndefined();
+    });
+  });
+
+  it("preserves inherited non-portable Windows-style env keys", () => {
+    withEnv({ "ProgramFiles(x86)": "C:\\Program Files (x86)" }, () => {
+      const env = sanitizeEnv(undefined);
+      expect(env["ProgramFiles(x86)"]).toBe("C:\\Program Files (x86)");
     });
   });
 });

@@ -1,3 +1,5 @@
+import type { SecretInput } from "./types.secrets.js";
+
 export type SandboxDockerSettings = {
   /** Docker image to use for sandbox containers. */
   image?: string;
@@ -27,6 +29,8 @@ export type SandboxDockerSettings = {
   memorySwap?: string | number;
   /** Limit container CPU shares (e.g. 0.5, 1, 2). */
   cpus?: number;
+  /** GPU devices to expose via Docker --gpus (e.g. "all", "device=GPU-uuid"). */
+  gpus?: string;
   /**
    * Set ulimit values by name (e.g. nofile, nproc).
    * Use "soft:hard" string, a number, or { soft, hard }.
@@ -93,4 +97,29 @@ export type SandboxPruneSettings = {
   idleHours?: number;
   /** Prune if older than N days (0 disables). */
   maxAgeDays?: number;
+};
+
+export type SandboxSshSettings = {
+  /** SSH target in user@host[:port] form. */
+  target?: string;
+  /** SSH client command. Default: "ssh". */
+  command?: string;
+  /** Absolute remote root used for per-scope workspaces. */
+  workspaceRoot?: string;
+  /** Enforce host-key verification. Default: true. */
+  strictHostKeyChecking?: boolean;
+  /** Allow OpenSSH host-key updates. Default: true. */
+  updateHostKeys?: boolean;
+  /** Existing private key path on the host. */
+  identityFile?: string;
+  /** Existing SSH certificate path on the host. */
+  certificateFile?: string;
+  /** Existing known_hosts file path on the host. */
+  knownHostsFile?: string;
+  /** Inline or SecretRef-backed private key contents. */
+  identityData?: SecretInput;
+  /** Inline or SecretRef-backed SSH certificate contents. */
+  certificateData?: SecretInput;
+  /** Inline or SecretRef-backed known_hosts contents. */
+  knownHostsData?: SecretInput;
 };

@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 
 const note = vi.hoisted(() => vi.fn());
 
@@ -12,24 +14,27 @@ vi.mock("../terminal/note.js", () => ({
 
 import { noteSessionLockHealth } from "./doctor-session-locks.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("noteSessionLockHealth", () => {
-  let root: string;
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let state: OpenClawTestState;
 
   beforeEach(async () => {
     note.mockClear();
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-locks-"));
-    process.env.OPENCLAW_STATE_DIR = root;
+    state = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-doctor-locks-",
+    });
   });
 
   afterEach(async () => {
-    envSnapshot.restore();
-    await fs.rm(root, { recursive: true, force: true });
+    await state.cleanup();
   });
 
   it("reports existing lock files with pid status and age", async () => {
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });
     const lockPath = path.join(sessionsDir, "active.jsonl.lock");
     await fs.writeFile(
@@ -50,7 +55,7 @@ describe("noteSessionLockHealth", () => {
   });
 
   it("removes stale locks in repair mode", async () => {
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });
 
     const staleLock = path.join(sessionsDir, "stale.jsonl.lock");
@@ -74,7 +79,7 @@ describe("noteSessionLockHealth", () => {
     expect(message).toContain("[removed]");
     expect(message).toContain("Removed 1 stale session lock file");
 
-    await expect(fs.access(staleLock)).rejects.toThrow();
+    await expectPathMissing(staleLock);
     await expect(fs.access(freshLock)).resolves.toBeUndefined();
   });
 });

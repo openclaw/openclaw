@@ -1,3 +1,8 @@
+import {
+  normalizeHeadersInitForFetch,
+  normalizeRequestInitHeadersForFetch,
+} from "../infra/fetch-headers.js";
+
 export type ScopeTokenProvider = {
   getAccessToken: (scope: string) => Promise<string>;
 };
@@ -6,6 +11,7 @@ function isAuthFailureStatus(status: number): boolean {
   return status === 401 || status === 403;
 }
 
+/** Retry a fetch with bearer tokens from the provided scopes when the unauthenticated attempt fails. */
 export async function fetchWithBearerAuthScopeFallback(params: {
   url: string;
   scopes: readonly string[];
@@ -27,9 +33,10 @@ export async function fetchWithBearerAuthScopeFallback(params: {
     throw new Error(`URL must use HTTPS: ${params.url}`);
   }
 
+  const requestInit = normalizeRequestInitHeadersForFetch(params.requestInit);
   const fetchOnce = (headers?: Headers): Promise<Response> =>
     fetchFn(params.url, {
-      ...params.requestInit,
+      ...requestInit,
       ...(headers ? { headers } : {}),
     });
 
@@ -53,7 +60,7 @@ export async function fetchWithBearerAuthScopeFallback(params: {
   for (const scope of params.scopes) {
     try {
       const token = await params.tokenProvider.getAccessToken(scope);
-      const authHeaders = new Headers(params.requestInit?.headers);
+      const authHeaders = new Headers(normalizeHeadersInitForFetch(requestInit?.headers));
       authHeaders.set("Authorization", `Bearer ${token}`);
       const authAttempt = await fetchOnce(authHeaders);
       if (authAttempt.ok) {

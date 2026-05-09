@@ -1,22 +1,27 @@
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolveEffectiveAllowFromLists,
+} from "openclaw/plugin-sdk/channel-policy";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import {
+  deliverFormattedTextWithAttachments,
+  type OutboundReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  createScopedPairingAccess,
-  dispatchInboundReplyWithBase,
-  formatTextWithAttachmentLinks,
-  issuePairingChallenge,
-  logInboundDrop,
-  isDangerousNameMatchingEnabled,
-  readStoreAllowFromForDmPolicy,
-  resolveControlCommandGate,
-  resolveOutboundMediaUrls,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-  resolveEffectiveAllowFromLists,
   warnMissingProviderGroupPolicyFallbackOnce,
-  type OutboundReplyPayload,
-  type OpenClawConfig,
-  type RuntimeEnv,
-} from "openclaw/plugin-sdk/irc";
+} from "openclaw/plugin-sdk/runtime-group-policy";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import {
@@ -56,28 +61,30 @@ function resolveIrcEffectiveAllowlists(params: {
 
 async function deliverIrcReply(params: {
   payload: OutboundReplyPayload;
+  cfg: CoreConfig;
   target: string;
   accountId: string;
   sendReply?: (target: string, text: string, replyToId?: string) => Promise<void>;
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }) {
-  const combined = formatTextWithAttachmentLinks(
-    params.payload.text,
-    resolveOutboundMediaUrls(params.payload),
-  );
-  if (!combined) {
+  const delivered = await deliverFormattedTextWithAttachments({
+    payload: params.payload,
+    send: async ({ text, replyToId }) => {
+      if (params.sendReply) {
+        await params.sendReply(params.target, text, replyToId);
+      } else {
+        await sendMessageIrc(params.target, text, {
+          cfg: params.cfg,
+          accountId: params.accountId,
+          replyTo: replyToId,
+        });
+      }
+      params.statusSink?.({ lastOutboundAt: Date.now() });
+    },
+  });
+  if (!delivered) {
     return;
   }
-
-  if (params.sendReply) {
-    await params.sendReply(params.target, combined, params.payload.replyToId);
-  } else {
-    await sendMessageIrc(params.target, combined, {
-      accountId: params.accountId,
-      replyTo: params.payload.replyToId,
-    });
-  }
-  params.statusSink?.({ lastOutboundAt: Date.now() });
 }
 
 export async function handleIrcInbound(params: {
@@ -91,7 +98,7 @@ export async function handleIrcInbound(params: {
 }): Promise<void> {
   const { message, account, config, runtime, connectedNick, statusSink } = params;
   const core = getIrcRuntime();
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -201,41 +208,39 @@ export async function handleIrcInbound(params: {
       runtime.log?.(`irc: drop DM sender=${senderDisplay} (dmPolicy=disabled)`);
       return;
     }
-    if (dmPolicy !== "open") {
-      const dmAllowed = resolveIrcAllowlistMatch({
-        allowFrom: effectiveAllowFrom,
-        message,
-        allowNameMatching,
-      }).allowed;
-      if (!dmAllowed) {
-        if (dmPolicy === "pairing") {
-          await issuePairingChallenge({
-            channel: CHANNEL_ID,
-            senderId: senderDisplay.toLowerCase(),
-            senderIdLine: `Your IRC id: ${senderDisplay}`,
-            meta: { name: message.senderNick || undefined },
-            upsertPairingRequest: pairing.upsertPairingRequest,
-            sendPairingReply: async (text) => {
-              await deliverIrcReply({
-                payload: { text },
-                target: message.senderNick,
-                accountId: account.accountId,
-                sendReply: params.sendReply,
-                statusSink,
-              });
-            },
-            onReplyError: (err) => {
-              runtime.error?.(`irc: pairing reply failed for ${senderDisplay}: ${String(err)}`);
-            },
-          });
-        }
-        runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
-        return;
+    const dmAllowed = resolveIrcAllowlistMatch({
+      allowFrom: effectiveAllowFrom,
+      message,
+      allowNameMatching,
+    }).allowed;
+    if (!dmAllowed) {
+      if (dmPolicy === "pairing") {
+        await pairing.issueChallenge({
+          senderId: normalizeLowercaseStringOrEmpty(senderDisplay),
+          senderIdLine: `Your IRC id: ${senderDisplay}`,
+          meta: { name: message.senderNick || undefined },
+          sendPairingReply: async (text) => {
+            await deliverIrcReply({
+              payload: { text },
+              cfg: config,
+              target: message.senderNick,
+              accountId: account.accountId,
+              sendReply: params.sendReply,
+              statusSink,
+            });
+          },
+          onReplyError: (err) => {
+            runtime.error?.(`irc: pairing reply failed for ${senderDisplay}: ${String(err)}`);
+          },
+        });
       }
+      runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
+      return;
     }
   }
 
   if (message.isGroup && commandGate.shouldBlock) {
+    const { logInboundDrop } = await import("openclaw/plugin-sdk/channel-inbound");
     logInboundDrop({
       log: (line) => runtime.log?.(line),
       channel: CHANNEL_ID,
@@ -303,7 +308,7 @@ export async function handleIrcInbound(params: {
     body: rawBody,
   });
 
-  const groupSystemPrompt = groupMatch.groupConfig?.systemPrompt?.trim() || undefined;
+  const groupSystemPrompt = normalizeOptionalString(groupMatch.groupConfig?.systemPrompt);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -329,35 +334,53 @@ export async function handleIrcInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  await dispatchInboundReplyWithBase({
+  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: config as OpenClawConfig,
+    agentId: route.agentId,
     channel: CHANNEL_ID,
     accountId: account.accountId,
-    route,
+  });
+
+  await core.channel.turn.runPrepared({
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    routeSessionKey: route.sessionKey,
     storePath,
     ctxPayload,
-    core,
-    deliver: async (payload) => {
-      await deliverIrcReply({
-        payload,
-        target: peerId,
-        accountId: account.accountId,
-        sendReply: params.sendReply,
-        statusSink,
-      });
-    },
-    onRecordError: (err) => {
-      runtime.error?.(`irc: failed updating session meta: ${String(err)}`);
-    },
-    onDispatchError: (err, info) => {
-      runtime.error?.(`irc ${info.kind} reply failed: ${String(err)}`);
-    },
-    replyOptions: {
-      skillFilter: groupMatch.groupConfig?.skills,
-      disableBlockStreaming:
-        typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
+    recordInboundSession: core.channel.session.recordInboundSession,
+    runDispatch: async () =>
+      await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: ctxPayload,
+        cfg: config as OpenClawConfig,
+        dispatcherOptions: {
+          ...replyPipeline,
+          deliver: async (payload) => {
+            await deliverIrcReply({
+              payload,
+              cfg: config,
+              target: peerId,
+              accountId: account.accountId,
+              sendReply: params.sendReply,
+              statusSink,
+            });
+          },
+          onError: (err, info) => {
+            runtime.error?.(`irc ${info.kind} reply failed: ${String(err)}`);
+          },
+        },
+        replyOptions: {
+          onModelSelected,
+          skillFilter: groupMatch.groupConfig?.skills,
+          disableBlockStreaming:
+            typeof account.config.blockStreaming === "boolean"
+              ? !account.config.blockStreaming
+              : undefined,
+        },
+      }),
+    record: {
+      onRecordError: (err) => {
+        runtime.error?.(`irc: failed updating session meta: ${String(err)}`);
+      },
     },
   });
 }

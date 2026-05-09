@@ -26,7 +26,12 @@ enum LaunchAgentManager {
     }
 
     private static func writePlist(bundlePath: String) {
-        let plist = """
+        let plist = self.plistContents(bundlePath: bundlePath)
+        try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
+    }
+
+    static func plistContents(bundlePath: String) -> String {
+        """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
@@ -41,8 +46,6 @@ enum LaunchAgentManager {
           <string>\(FileManager().homeDirectoryForCurrentUser.path)</string>
           <key>RunAtLoad</key>
           <true/>
-          <key>KeepAlive</key>
-          <true/>
           <key>EnvironmentVariables</key>
           <dict>
             <key>PATH</key>
@@ -55,7 +58,6 @@ enum LaunchAgentManager {
         </dict>
         </plist>
         """
-        try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
     }
 
     @discardableResult

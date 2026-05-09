@@ -77,6 +77,25 @@ describe("fetchClaudeUsage", () => {
     ]);
   });
 
+  it("clamps oauth usage windows and prefers sonnet over opus when both exist", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        five_hour: { utilization: -5 },
+        seven_day: { utilization: 140 },
+        seven_day_sonnet: { utilization: 40 },
+        seven_day_opus: { utilization: 90 },
+      }),
+    );
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.windows).toEqual([
+      { label: "5h", usedPercent: 0, resetAt: undefined },
+      { label: "Week", usedPercent: 100, resetAt: undefined },
+      { label: "Sonnet", usedPercent: 40 },
+    ]);
+  });
+
   it("returns HTTP errors with provider message suffix", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(403, {
@@ -86,6 +105,26 @@ describe("fetchClaudeUsage", () => {
 
     const result = await fetchClaudeUsage("token", 5000, mockFetch);
     expect(result.error).toBe("HTTP 403: scope not granted");
+    expect(result.windows).toHaveLength(0);
+  });
+
+  it("omits blank error message suffixes on oauth failures", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(403, {
+        error: { message: "   " },
+      }),
+    );
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+    expect(result.error).toBe("HTTP 403");
+    expect(result.windows).toHaveLength(0);
+  });
+
+  it("keeps HTTP status errors when oauth error bodies are not JSON", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(502, "bad gateway"));
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+    expect(result.error).toBe("HTTP 502");
     expect(result.windows).toHaveLength(0);
   });
 
@@ -117,6 +156,25 @@ describe("fetchClaudeUsage", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.windows).toEqual([{ label: "5h", usedPercent: 12, resetAt: undefined }]);
+  });
+
+  it("parses sessionKey from Cookie-prefixed CLAUDE_WEB_COOKIE headers", async () => {
+    vi.stubEnv("CLAUDE_WEB_COOKIE", "Cookie: foo=bar; sessionKey=sk-ant-cookie-header");
+
+    const mockFetch = createScopeFallbackFetch(async (url) => {
+      if (url.endsWith("/api/organizations")) {
+        return makeResponse(200, [{ uuid: "org-header" }]);
+      }
+      if (url.endsWith("/api/organizations/org-header/usage")) {
+        return makeResponse(200, { five_hour: { utilization: 9 } });
+      }
+      return makeResponse(404, "not found");
+    });
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+    expect(result.error).toBeUndefined();
+    expect(result.windows).toEqual([{ label: "5h", usedPercent: 9, resetAt: undefined }]);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
   it("parses sessionKey from CLAUDE_WEB_COOKIE for web fallback", async () => {

@@ -7,14 +7,14 @@ function applyOpenAiSelection(entry: SessionEntry) {
     entry,
     selection: {
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
     },
   });
 }
 
 function expectRuntimeModelFieldsCleared(entry: SessionEntry, before: number) {
   expect(entry.providerOverride).toBe("openai");
-  expect(entry.modelOverride).toBe("gpt-5.2");
+  expect(entry.modelOverride).toBe("gpt-5.4");
   expect(entry.modelProvider).toBeUndefined();
   expect(entry.model).toBeUndefined();
   expect((entry.updatedAt ?? 0) > before).toBe(true);
@@ -44,6 +44,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.fallbackNoticeSelectedModel).toBeUndefined();
     expect(entry.fallbackNoticeActiveModel).toBeUndefined();
     expect(entry.fallbackNoticeReason).toBeUndefined();
+    expect(entry.modelOverrideSource).toBe("user");
   });
 
   it("clears stale runtime model fields even when override selection is unchanged", () => {
@@ -54,7 +55,7 @@ describe("applyModelOverrideToSessionEntry", () => {
       modelProvider: "anthropic",
       model: "claude-sonnet-4-6",
       providerOverride: "openai",
-      modelOverride: "gpt-5.2",
+      modelOverride: "gpt-5.4",
       contextTokens: 160_000,
     };
 
@@ -71,9 +72,9 @@ describe("applyModelOverrideToSessionEntry", () => {
       sessionId: "sess-3",
       updatedAt: before,
       modelProvider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       providerOverride: "openai",
-      modelOverride: "gpt-5.2",
+      modelOverride: "gpt-5.4",
       contextTokens: 200_000,
     };
 
@@ -81,15 +82,16 @@ describe("applyModelOverrideToSessionEntry", () => {
       entry,
       selection: {
         provider: "openai",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
       },
     });
 
-    expect(result.updated).toBe(false);
+    expect(result.updated).toBe(true);
     expect(entry.modelProvider).toBe("openai");
-    expect(entry.model).toBe("gpt-5.2");
+    expect(entry.model).toBe("gpt-5.4");
+    expect(entry.modelOverrideSource).toBe("user");
     expect(entry.contextTokens).toBe(200_000);
-    expect(entry.updatedAt).toBe(before);
+    expect((entry.updatedAt ?? 0) >= before).toBe(true);
   });
 
   it("clears stale contextTokens when switching back to the default model", () => {
@@ -114,7 +116,60 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(result.updated).toBe(true);
     expect(entry.providerOverride).toBeUndefined();
     expect(entry.modelOverride).toBeUndefined();
+    expect(entry.modelOverrideSource).toBeUndefined();
     expect(entry.contextTokens).toBeUndefined();
     expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
+  it("marks non-default overrides with the provided source", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-5a",
+      updatedAt: Date.now() - 5_000,
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+      selectionSource: "auto",
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.modelOverrideSource).toBe("auto");
+  });
+
+  it("sets liveModelSwitchPending only when explicitly requested", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-5",
+      updatedAt: Date.now() - 5_000,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+    };
+
+    const withoutFlag = applyModelOverrideToSessionEntry({
+      entry: { ...entry },
+      selection: {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+    });
+    expect(withoutFlag.updated).toBe(true);
+    expect(entry.liveModelSwitchPending).toBeUndefined();
+
+    const withFlagEntry: SessionEntry = { ...entry };
+    const withFlag = applyModelOverrideToSessionEntry({
+      entry: withFlagEntry,
+      selection: {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      markLiveSwitchPending: true,
+    });
+    expect(withFlag.updated).toBe(true);
+    expect(withFlagEntry.liveModelSwitchPending).toBe(true);
   });
 });

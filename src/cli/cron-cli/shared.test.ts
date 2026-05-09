@@ -1,7 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { printCronList } from "./shared.js";
+import {
+  coerceCronDeliveryPreviews,
+  getCronChannelOptions,
+  parseCronToolsAllow,
+  printCronList,
+} from "./shared.js";
+
+const hoisted = vi.hoisted(() => ({
+  listChannelPluginsMock: vi.fn(),
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  listChannelPlugins: hoisted.listChannelPluginsMock,
+}));
 
 function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   const logs: string[] = [];
@@ -11,6 +24,11 @@ function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
     exit: () => {},
   } as RuntimeEnv;
   return { logs, runtime };
+}
+
+function expectLogsToInclude(logs: readonly string[], text: string): void {
+  const matches = logs.filter((line) => line.includes(text));
+  expect(matches.length).toBeGreaterThan(0);
 }
 
 function createBaseJob(overrides: Partial<CronJob>): CronJob {
@@ -31,6 +49,11 @@ function createBaseJob(overrides: Partial<CronJob>): CronJob {
 }
 
 describe("printCronList", () => {
+  beforeEach(() => {
+    hoisted.listChannelPluginsMock.mockReset();
+    hoisted.listChannelPluginsMock.mockReturnValue([]);
+  });
+
   it("handles job with undefined sessionTarget (#9649)", () => {
     const { logs, runtime } = createRuntimeLogCapture();
 
@@ -40,12 +63,11 @@ describe("printCronList", () => {
       // sessionTarget is intentionally omitted to simulate the bug
     });
 
-    // This should not throw "Cannot read properties of undefined (reading 'trim')"
-    expect(() => printCronList([jobWithUndefinedTarget], runtime)).not.toThrow();
+    printCronList([jobWithUndefinedTarget], runtime);
 
     // Verify output contains the job
     expect(logs.length).toBeGreaterThan(1);
-    expect(logs.some((line) => line.includes("test-job-id"))).toBe(true);
+    expectLogsToInclude(logs, "test-job-id");
   });
 
   it("handles job with defined sessionTarget", () => {
@@ -56,8 +78,24 @@ describe("printCronList", () => {
       sessionTarget: "isolated",
     });
 
-    expect(() => printCronList([jobWithTarget], runtime)).not.toThrow();
-    expect(logs.some((line) => line.includes("isolated"))).toBe(true);
+    printCronList([jobWithTarget], runtime);
+    expectLogsToInclude(logs, "isolated");
+  });
+
+  it("tolerates malformed rows in human-readable output", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const malformedJob = {
+      id: "malformed-job",
+      name: undefined,
+      enabled: true,
+      sessionTarget: undefined,
+      payload: undefined,
+      schedule: undefined,
+      state: undefined,
+    } as unknown as CronJob;
+
+    printCronList([malformedJob], runtime);
+    expectLogsToInclude(logs, "malformed-job");
   });
 
   it("shows stagger label for cron schedules", () => {
@@ -72,7 +110,7 @@ describe("printCronList", () => {
     });
 
     printCronList([job], runtime);
-    expect(logs.some((line) => line.includes("(stagger 5m)"))).toBe(true);
+    expectLogsToInclude(logs, "(stagger 5m)");
   });
 
   it("shows dash for unset agentId instead of default", () => {
@@ -107,6 +145,32 @@ describe("printCronList", () => {
     expect(logs[0]).toContain("Model");
     const dataLine = logs[1] ?? "";
     expect(dataLine).toContain("sonnet");
+  });
+
+  it("shows delivery preview when provided", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "delivery-job",
+      name: "Delivery",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+
+    printCronList([job], runtime, {
+      deliveryPreviews: new Map([
+        [
+          "delivery-job",
+          {
+            label: "announce -> telegram:-100",
+            detail: "resolved from last, main session",
+          },
+        ],
+      ]),
+    });
+
+    expect(logs[0]).toContain("Delivery");
+    expect(logs[1]).toContain("announce -> telegram:-100");
+    expect(logs[1]).toContain("resolved from last");
   });
 
   it("shows dash in Model column for systemEvent jobs", () => {
@@ -164,6 +228,56 @@ describe("printCronList", () => {
     });
 
     printCronList([job], runtime);
-    expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
+    expectLogsToInclude(logs, "(exact)");
+  });
+});
+
+describe("getCronChannelOptions", () => {
+  it("falls back to a generic channel placeholder when no plugins are loaded", () => {
+    hoisted.listChannelPluginsMock.mockReturnValue([]);
+    expect(getCronChannelOptions()).toBe("last|<channel-id>");
+  });
+
+  it("lists discovered channel plugin ids when plugins are available", () => {
+    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "quietchat" }, { id: "forum" }]);
+    expect(getCronChannelOptions()).toBe("last|quietchat|forum");
+  });
+});
+
+describe("parseCronToolsAllow", () => {
+  it.each([
+    { input: "exec,read,write", expected: ["exec", "read", "write"] },
+    { input: "exec, read, write", expected: ["exec", "read", "write"] },
+    { input: "exec read write", expected: ["exec", "read", "write"] },
+    { input: " exec  read,write ", expected: ["exec", "read", "write"] },
+    { input: ["exec", "read", "write"], expected: ["exec", "read", "write"] },
+  ])("parses $input", ({ input, expected }) => {
+    expect(parseCronToolsAllow(input)).toEqual(expected);
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(parseCronToolsAllow(" ,  ")).toBeUndefined();
+  });
+});
+
+describe("coerceCronDeliveryPreviews", () => {
+  it("keeps gateway-provided preview entries", () => {
+    expect(
+      coerceCronDeliveryPreviews({
+        deliveryPreviews: {
+          job1: { label: "announce -> telegram:123", detail: "explicit" },
+        },
+      }).get("job1"),
+    ).toEqual({ label: "announce -> telegram:123", detail: "explicit" });
+  });
+
+  it("drops malformed preview entries", () => {
+    expect(
+      coerceCronDeliveryPreviews({
+        deliveryPreviews: {
+          job1: { label: "announce -> telegram:123" },
+        },
+      }).size,
+    ).toBe(0);
   });
 });

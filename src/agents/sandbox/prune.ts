@@ -1,7 +1,9 @@
-import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getSandboxBackendManager } from "./backend.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
-import { dockerContainerState, execDocker } from "./docker.js";
+import { dockerSandboxBackendManager } from "./docker-backend.js";
 import {
   readBrowserRegistry,
   readRegistry,
@@ -16,7 +18,7 @@ let lastPruneAtMs = 0;
 
 type PruneableRegistryEntry = Pick<
   SandboxRegistryEntry,
-  "containerName" | "createdAtMs" | "lastUsedAtMs"
+  "containerName" | "backendId" | "createdAtMs" | "lastUsedAtMs"
 >;
 
 function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: PruneableRegistryEntry) {
@@ -33,10 +35,11 @@ function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: Pruneab
   );
 }
 
-async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry>(params: {
+async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(params: {
   cfg: SandboxConfig;
   read: () => Promise<{ entries: TEntry[] }>;
   remove: (containerName: string) => Promise<void>;
+  removeRuntime: (entry: TEntry) => Promise<void>;
   onRemoved?: (entry: TEntry) => Promise<void>;
 }) {
   const now = Date.now();
@@ -49,31 +52,62 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
       continue;
     }
     try {
-      await execDocker(["rm", "-f", entry.containerName], {
-        allowFailure: true,
-      });
-    } catch {
-      // ignore prune failures
-    } finally {
+      await params.removeRuntime(entry);
       await params.remove(entry.containerName);
       await params.onRemoved?.(entry);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : JSON.stringify(error);
+      defaultRuntime.error?.(
+        `Sandbox prune failed to remove ${entry.containerName}: ${message ?? "unknown error"}`,
+      );
     }
   }
 }
 
 async function pruneSandboxContainers(cfg: SandboxConfig) {
+  const config = getRuntimeConfig();
   await pruneSandboxRegistryEntries<SandboxRegistryEntry>({
     cfg,
     read: readRegistry,
     remove: removeRegistryEntry,
+    removeRuntime: async (entry) => {
+      const manager = getSandboxBackendManager(entry.backendId ?? "docker");
+      await manager?.removeRuntime({
+        entry,
+        config,
+      });
+    },
   });
 }
 
 async function pruneSandboxBrowsers(cfg: SandboxConfig) {
-  await pruneSandboxRegistryEntries<SandboxBrowserRegistryEntry>({
+  const config = getRuntimeConfig();
+  await pruneSandboxRegistryEntries<
+    SandboxBrowserRegistryEntry & {
+      backendId?: string;
+      runtimeLabel?: string;
+      configLabelKind?: string;
+    }
+  >({
     cfg,
     read: readBrowserRegistry,
     remove: removeBrowserRegistryEntry,
+    removeRuntime: async (entry) => {
+      await dockerSandboxBackendManager.removeRuntime({
+        entry: {
+          ...entry,
+          backendId: "docker",
+          runtimeLabel: entry.containerName,
+          configLabelKind: "Image",
+        },
+        config,
+      });
+    },
     onRemoved: async (entry) => {
       const bridge = BROWSER_BRIDGES.get(entry.sessionKey);
       if (bridge?.containerName === entry.containerName) {
@@ -101,12 +135,5 @@ export async function maybePruneSandboxes(cfg: SandboxConfig) {
           ? error
           : JSON.stringify(error);
     defaultRuntime.error?.(`Sandbox prune failed: ${message ?? "unknown error"}`);
-  }
-}
-
-export async function ensureDockerContainerIsRunning(containerName: string) {
-  const state = await dockerContainerState(containerName);
-  if (state.exists && !state.running) {
-    await execDocker(["start", containerName]);
   }
 }

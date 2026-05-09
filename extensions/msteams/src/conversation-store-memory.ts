@@ -1,3 +1,9 @@
+import {
+  findPreferredDmConversationByUserId,
+  mergeStoredConversationReference,
+  normalizeStoredConversationId,
+  toConversationStoreEntries,
+} from "./conversation-store-helpers.js";
 import type {
   MSTeamsConversationStore,
   MSTeamsConversationStoreEntry,
@@ -9,39 +15,37 @@ export function createMSTeamsConversationStoreMemory(
 ): MSTeamsConversationStore {
   const map = new Map<string, StoredConversationReference>();
   for (const { conversationId, reference } of initial) {
-    map.set(conversationId, reference);
+    map.set(normalizeStoredConversationId(conversationId), reference);
   }
+
+  const findPreferredDmByUserId = async (
+    id: string,
+  ): Promise<MSTeamsConversationStoreEntry | null> => {
+    return findPreferredDmConversationByUserId(toConversationStoreEntries(map.entries()), id);
+  };
 
   return {
     upsert: async (conversationId, reference) => {
-      map.set(conversationId, reference);
+      const normalizedId = normalizeStoredConversationId(conversationId);
+      map.set(
+        normalizedId,
+        mergeStoredConversationReference(
+          map.get(normalizedId),
+          reference,
+          new Date().toISOString(),
+        ),
+      );
     },
     get: async (conversationId) => {
-      return map.get(conversationId) ?? null;
+      return map.get(normalizeStoredConversationId(conversationId)) ?? null;
     },
     list: async () => {
-      return Array.from(map.entries()).map(([conversationId, reference]) => ({
-        conversationId,
-        reference,
-      }));
+      return toConversationStoreEntries(map.entries());
     },
     remove: async (conversationId) => {
-      return map.delete(conversationId);
+      return map.delete(normalizeStoredConversationId(conversationId));
     },
-    findByUserId: async (id) => {
-      const target = id.trim();
-      if (!target) {
-        return null;
-      }
-      for (const [conversationId, reference] of map.entries()) {
-        if (reference.user?.aadObjectId === target) {
-          return { conversationId, reference };
-        }
-        if (reference.user?.id === target) {
-          return { conversationId, reference };
-        }
-      }
-      return null;
-    },
+    findPreferredDmByUserId,
+    findByUserId: findPreferredDmByUserId,
   };
 }

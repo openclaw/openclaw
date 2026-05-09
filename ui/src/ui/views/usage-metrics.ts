@@ -4,6 +4,8 @@ import {
   mergeUsageDailyLatency,
   mergeUsageLatency,
 } from "../../../../src/shared/usage-aggregates.js";
+import { t } from "../../i18n/index.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -28,6 +30,50 @@ function formatHourLabel(hour: number): string {
   return date.toLocaleTimeString(undefined, { hour: "numeric" });
 }
 
+function forEachSessionHourSlice(
+  session: UsageSessionEntry,
+  timeZone: "local" | "utc",
+  visitor: (params: {
+    usage: NonNullable<UsageSessionEntry["usage"]>;
+    hour: number;
+    weekday: number;
+    share: number;
+  }) => void,
+) {
+  const usage = session.usage;
+  if (!usage) {
+    return false;
+  }
+
+  const start = usage.firstActivity ?? session.updatedAt;
+  const end = usage.lastActivity ?? session.updatedAt;
+  if (!start || !end) {
+    return false;
+  }
+
+  const startMs = Math.min(start, end);
+  const endMs = Math.max(start, end);
+  const durationMs = Math.max(endMs - startMs, 1);
+  const totalMinutes = durationMs / 60000;
+
+  let cursor = startMs;
+  while (cursor < endMs) {
+    const date = new Date(cursor);
+    const nextHour = setToHourEnd(date, timeZone);
+    const nextMs = Math.min(nextHour.getTime(), endMs);
+    const minutes = Math.max((nextMs - cursor) / 60000, 0);
+    visitor({
+      usage,
+      hour: getZonedHour(date, timeZone),
+      weekday: getZonedWeekday(date, timeZone),
+      share: minutes / totalMinutes,
+    });
+    cursor = nextMs + 1;
+  }
+
+  return true;
+}
+
 function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | "utc") {
   const hourErrors = Array.from({ length: 24 }, () => 0);
   const hourMsgs = Array.from({ length: 24 }, () => 0);
@@ -37,28 +83,32 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     if (!usage?.messageCounts || usage.messageCounts.total === 0) {
       continue;
     }
-    const start = usage.firstActivity ?? session.updatedAt;
-    const end = usage.lastActivity ?? session.updatedAt;
-    if (!start || !end) {
+
+    // Prefer precise quarter-hour message counts when available.
+    // Data is stored as UTC quarter-hour buckets (quarterIndex 0-95) with UTC date keys.
+    // For local view, construct a Date from the UTC components and use getHours()
+    // so the browser's DST-aware timezone logic handles offset automatically.
+    if (usage.utcQuarterHourMessageCounts && usage.utcQuarterHourMessageCounts.length > 0) {
+      for (const quarterHour of usage.utcQuarterHourMessageCounts) {
+        const mapped = getHourAndWeekdayForUtcQuarterBucket(
+          quarterHour.date,
+          quarterHour.quarterIndex,
+          timeZone,
+        );
+        if (!mapped) {
+          continue;
+        }
+        hourErrors[mapped.hour] += quarterHour.errors;
+        hourMsgs[mapped.hour] += quarterHour.total;
+      }
       continue;
     }
-    const startMs = Math.min(start, end);
-    const endMs = Math.max(start, end);
-    const durationMs = Math.max(endMs - startMs, 1);
-    const totalMinutes = durationMs / 60000;
 
-    let cursor = startMs;
-    while (cursor < endMs) {
-      const date = new Date(cursor);
-      const hour = getZonedHour(date, timeZone);
-      const nextHour = setToHourEnd(date, timeZone);
-      const nextMs = Math.min(nextHour.getTime(), endMs);
-      const minutes = Math.max((nextMs - cursor) / 60000, 0);
-      const share = minutes / totalMinutes;
-      hourErrors[hour] += usage.messageCounts.errors * share;
-      hourMsgs[hour] += usage.messageCounts.total * share;
-      cursor = nextMs + 1;
-    }
+    // Fallback: time-based proportional allocation (legacy algorithm)
+    forEachSessionHourSlice(session, timeZone, ({ hour, share }) => {
+      hourErrors[hour] += usage.messageCounts!.errors * share;
+      hourMsgs[hour] += usage.messageCounts!.total * share;
+    });
   }
 
   return hourMsgs
@@ -78,7 +128,7 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     .map((entry) => ({
       label: formatHourLabel(entry.hour),
       value: `${(entry.rate * 100).toFixed(2)}%`,
-      sub: `${Math.round(entry.errors)} errors · ${Math.round(entry.msgs)} msgs`,
+      sub: `${Math.round(entry.errors)} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${Math.round(entry.msgs)} ${t("usage.overview.messagesAbbrev")}`,
     }));
 }
 
@@ -89,14 +139,48 @@ type UsageMosaicStats = {
   weekdayTotals: Array<{ label: string; tokens: number }>;
 };
 
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
 function getZonedHour(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCHours() : date.getHours();
 }
 
 function getZonedWeekday(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCDay() : date.getDay();
+}
+
+function getUtcQuarterHourBucketDate(dateStr: string, quarterIndex: number): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!match || !Number.isInteger(quarterIndex) || quarterIndex < 0 || quarterIndex > 95) {
+    return null;
+  }
+  const [, yStr, mStr, dStr] = match;
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const d = Number(dStr);
+  const date = new Date(Date.UTC(y, m - 1, d, 0, quarterIndex * 15));
+  if (
+    Number.isNaN(date.valueOf()) ||
+    date.getUTCFullYear() !== y ||
+    date.getUTCMonth() !== m - 1 ||
+    date.getUTCDate() !== d
+  ) {
+    return null;
+  }
+  return date;
+}
+
+function getHourAndWeekdayForUtcQuarterBucket(
+  dateStr: string,
+  quarterIndex: number,
+  timeZone: "local" | "utc",
+): { hour: number; weekday: number } | null {
+  const date = getUtcQuarterHourBucketDate(dateStr, quarterIndex);
+  if (!date) {
+    return null;
+  }
+  return {
+    hour: getZonedHour(date, timeZone),
+    weekday: getZonedWeekday(date, timeZone),
+  };
 }
 
 function setToHourEnd(date: Date, zone: "local" | "utc"): Date {
@@ -107,6 +191,77 @@ function setToHourEnd(date: Date, zone: "local" | "utc"): Date {
     next.setMinutes(59, 59, 999);
   }
   return next;
+}
+
+function forEachSessionTokenUsageBucket(
+  session: UsageSessionEntry,
+  timeZone: "local" | "utc",
+  visitor: (params: { hour: number; weekday: number; tokens: number }) => void,
+): boolean {
+  const buckets = session.usage?.utcQuarterHourTokenUsage;
+  if (!buckets || buckets.length === 0) {
+    return false;
+  }
+  let visited = false;
+  for (const bucket of buckets) {
+    if (bucket.totalTokens <= 0) {
+      continue;
+    }
+    const mapped = getHourAndWeekdayForUtcQuarterBucket(bucket.date, bucket.quarterIndex, timeZone);
+    if (!mapped) {
+      continue;
+    }
+    visited = true;
+    visitor({ hour: mapped.hour, weekday: mapped.weekday, tokens: bucket.totalTokens });
+  }
+  return visited;
+}
+
+function sessionSpanTouchesSelectedHours(
+  session: UsageSessionEntry,
+  hours: number[],
+  timeZone: "local" | "utc",
+): boolean {
+  const usage = session.usage;
+  const start = usage?.firstActivity ?? session.updatedAt;
+  const end = usage?.lastActivity ?? session.updatedAt;
+  if (!start || !end) {
+    return false;
+  }
+  const startMs = Math.min(start, end);
+  const endMs = Math.max(start, end);
+  let cursor = startMs;
+  while (cursor <= endMs) {
+    const date = new Date(cursor);
+    const hour = getZonedHour(date, timeZone);
+    if (hours.includes(hour)) {
+      return true;
+    }
+    const nextHour = setToHourEnd(date, timeZone);
+    const nextMs = Math.min(nextHour.getTime(), endMs);
+    cursor = nextMs + 1;
+  }
+  return false;
+}
+
+function sessionTouchesSelectedHours(
+  session: UsageSessionEntry,
+  hours: number[],
+  timeZone: "local" | "utc",
+): boolean {
+  if (hours.length === 0) {
+    return true;
+  }
+  let touches = false;
+  const hasPreciseTokenBuckets = forEachSessionTokenUsageBucket(session, timeZone, ({ hour }) => {
+    if (hours.includes(hour)) {
+      touches = true;
+    }
+  });
+  if (hasPreciseTokenBuckets) {
+    return touches;
+  }
+  return sessionSpanTouchesSelectedHours(session, hours, timeZone);
 }
 
 function buildUsageMosaicStats(
@@ -125,34 +280,36 @@ function buildUsageMosaicStats(
     }
     totalTokens += usage.totalTokens;
 
-    const start = usage.firstActivity ?? session.updatedAt;
-    const end = usage.lastActivity ?? session.updatedAt;
-    if (!start || !end) {
+    if (
+      forEachSessionTokenUsageBucket(session, timeZone, ({ hour, weekday, tokens }) => {
+        hourTotals[hour] += tokens;
+        weekdayTotals[weekday] += tokens;
+      })
+    ) {
+      hasData = true;
+      continue;
+    }
+
+    if (
+      !forEachSessionHourSlice(session, timeZone, ({ usage, hour, weekday, share }) => {
+        hourTotals[hour] += usage.totalTokens * share;
+        weekdayTotals[weekday] += usage.totalTokens * share;
+      })
+    ) {
       continue;
     }
     hasData = true;
-
-    const startMs = Math.min(start, end);
-    const endMs = Math.max(start, end);
-    const durationMs = Math.max(endMs - startMs, 1);
-    const totalMinutes = durationMs / 60000;
-
-    let cursor = startMs;
-    while (cursor < endMs) {
-      const date = new Date(cursor);
-      const hour = getZonedHour(date, timeZone);
-      const weekday = getZonedWeekday(date, timeZone);
-      const nextHour = setToHourEnd(date, timeZone);
-      const nextMs = Math.min(nextHour.getTime(), endMs);
-      const minutes = Math.max((nextMs - cursor) / 60000, 0);
-      const share = minutes / totalMinutes;
-      hourTotals[hour] += usage.totalTokens * share;
-      weekdayTotals[weekday] += usage.totalTokens * share;
-      cursor = nextMs + 1;
-    }
   }
 
-  const weekdayLabels = WEEKDAYS.map((label, index) => ({
+  const weekdayLabels = [
+    t("usage.mosaic.sun"),
+    t("usage.mosaic.mon"),
+    t("usage.mosaic.tue"),
+    t("usage.mosaic.wed"),
+    t("usage.mosaic.thu"),
+    t("usage.mosaic.fri"),
+    t("usage.mosaic.sat"),
+  ].map((label, index) => ({
     label,
     tokens: weekdayTotals[index],
   }));
@@ -177,12 +334,16 @@ function renderUsageMosaic(
       <div class="card usage-mosaic">
         <div class="usage-mosaic-header">
           <div>
-            <div class="usage-mosaic-title">Activity by Time</div>
-            <div class="usage-mosaic-sub">Estimates require session timestamps.</div>
+            <div class="usage-mosaic-title">${t("usage.mosaic.title")}</div>
+            <div class="usage-mosaic-sub">${t("usage.mosaic.subtitleEmpty")}</div>
           </div>
-          <div class="usage-mosaic-total">${formatTokens(0)} tokens</div>
+          <div class="usage-mosaic-total">
+            ${formatTokens(0)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
+          </div>
         </div>
-        <div class="muted" style="padding: 12px; text-align: center;">No timeline data yet.</div>
+        <div class="usage-empty-block usage-empty-block--compact">
+          ${t("usage.mosaic.noTimelineData")}
+        </div>
       </div>
     `;
   }
@@ -194,21 +355,31 @@ function renderUsageMosaic(
     <div class="card usage-mosaic">
       <div class="usage-mosaic-header">
         <div>
-          <div class="usage-mosaic-title">Activity by Time</div>
+          <div class="usage-mosaic-title">${t("usage.mosaic.title")}</div>
           <div class="usage-mosaic-sub">
-            Estimated from session spans (first/last activity). Time zone: ${timeZone === "utc" ? "UTC" : "Local"}.
+            ${t("usage.mosaic.subtitle", {
+              zone:
+                timeZone === "utc"
+                  ? t("usage.filters.timeZoneUtc")
+                  : t("usage.filters.timeZoneLocal"),
+            })}
           </div>
         </div>
-        <div class="usage-mosaic-total">${formatTokens(stats.totalTokens)} tokens</div>
+        <div class="usage-mosaic-total">
+          ${formatTokens(stats.totalTokens)}
+          ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
+        </div>
       </div>
       <div class="usage-mosaic-grid">
         <div class="usage-mosaic-section">
-          <div class="usage-mosaic-section-title">Day of Week</div>
+          <div class="usage-mosaic-section-title">${t("usage.mosaic.dayOfWeek")}</div>
           <div class="usage-daypart-grid">
             ${stats.weekdayTotals.map((part) => {
               const intensity = Math.min(part.tokens / maxWeekday, 1);
               const bg =
-                part.tokens > 0 ? `rgba(255, 77, 77, ${0.12 + intensity * 0.6})` : "transparent";
+                part.tokens > 0
+                  ? `color-mix(in srgb, var(--accent) ${(12 + intensity * 60).toFixed(1)}%, transparent)`
+                  : "transparent";
               return html`
                 <div class="usage-daypart-cell" style="background: ${bg};">
                   <div class="usage-daypart-label">${part.label}</div>
@@ -220,15 +391,23 @@ function renderUsageMosaic(
         </div>
         <div class="usage-mosaic-section">
           <div class="usage-mosaic-section-title">
-            <span>Hours</span>
+            <span>${t("usage.filters.hours")}</span>
             <span class="usage-mosaic-sub">0 → 23</span>
           </div>
           <div class="usage-hour-grid">
             ${stats.hourTotals.map((value, hour) => {
               const intensity = Math.min(value / maxHour, 1);
-              const bg = value > 0 ? `rgba(255, 77, 77, ${0.08 + intensity * 0.7})` : "transparent";
-              const title = `${hour}:00 · ${formatTokens(value)} tokens`;
-              const border = intensity > 0.7 ? "rgba(255, 77, 77, 0.6)" : "rgba(255, 77, 77, 0.2)";
+              const bg =
+                value > 0
+                  ? `color-mix(in srgb, var(--accent) ${(8 + intensity * 70).toFixed(1)}%, transparent)`
+                  : "transparent";
+              const title = `${hour}:00 · ${formatTokens(value)} ${normalizeLowercaseStringOrEmpty(
+                t("usage.metrics.tokens"),
+              )}`;
+              const border =
+                intensity > 0.7
+                  ? "color-mix(in srgb, var(--accent) 60%, transparent)"
+                  : "color-mix(in srgb, var(--accent) 24%, transparent)";
               const selected = selectedHours.includes(hour);
               return html`
                 <div
@@ -241,16 +420,16 @@ function renderUsageMosaic(
             })}
           </div>
           <div class="usage-hour-labels">
-            <span>Midnight</span>
-            <span>4am</span>
-            <span>8am</span>
-            <span>Noon</span>
-            <span>4pm</span>
-            <span>8pm</span>
+            <span>${t("usage.mosaic.midnight")}</span>
+            <span>${t("usage.mosaic.fourAm")}</span>
+            <span>${t("usage.mosaic.eightAm")}</span>
+            <span>${t("usage.mosaic.noon")}</span>
+            <span>${t("usage.mosaic.fourPm")}</span>
+            <span>${t("usage.mosaic.eightPm")}</span>
           </div>
           <div class="usage-hour-legend">
             <span></span>
-            Low → High token density
+            ${t("usage.mosaic.legend")}
           </div>
         </div>
       </div>
@@ -539,15 +718,25 @@ const buildUsageInsightStats = (
   const errorRate = aggregates.messages.total
     ? aggregates.messages.errors / aggregates.messages.total
     : 0;
-  const peakErrorDay = aggregates.daily
-    .filter((day) => day.messages > 0 && day.errors > 0)
-    .map((day) => ({
+  let peakErrorDay: UsageInsightStats["peakErrorDay"];
+  for (const day of aggregates.daily) {
+    if (day.messages <= 0 || day.errors <= 0) {
+      continue;
+    }
+    const candidate = {
       date: day.date,
       errors: day.errors,
       messages: day.messages,
       rate: day.errors / day.messages,
-    }))
-    .toSorted((a, b) => b.rate - a.rate || b.errors - a.errors)[0];
+    };
+    if (
+      !peakErrorDay ||
+      candidate.rate > peakErrorDay.rate ||
+      (candidate.rate === peakErrorDay.rate && candidate.errors > peakErrorDay.errors)
+    ) {
+      peakErrorDay = candidate;
+    }
+  }
 
   return {
     durationSumMs,
@@ -569,10 +758,13 @@ export {
   formatCost,
   formatDayLabel,
   formatFullDate,
+  buildUsageMosaicStats,
   formatHourLabel,
   formatIsoDate,
   formatTokens,
+  getHourAndWeekdayForUtcQuarterBucket,
   getZonedHour,
   renderUsageMosaic,
+  sessionTouchesSelectedHours,
   setToHourEnd,
 };
