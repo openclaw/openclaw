@@ -203,6 +203,29 @@ describe("matrixOutbound cfg threading", () => {
     });
   });
 
+  it("renders divider-only MessagePresentation with a non-empty Matrix fallback body", async () => {
+    const presentation = {
+      blocks: [{ type: "divider" as const }],
+    };
+
+    const rendered = await matrixOutbound.renderPresentation!({
+      payload: { text: "", presentation },
+      presentation,
+      ctx: {} as never,
+    });
+
+    expect(rendered?.text).toBe("---");
+    expect(
+      (rendered?.channelData?.matrix as { extraContent?: Record<string, unknown> }).extraContent?.[
+        "com.openclaw.presentation"
+      ],
+    ).toEqual({
+      ...presentation,
+      version: 1,
+      type: "message.presentation",
+    });
+  });
+
   it("passes Matrix presentation metadata through sendPayload extraContent", async () => {
     const cfg = {
       channels: {
@@ -252,6 +275,49 @@ describe("matrixOutbound cfg threading", () => {
         accountId: "default",
         threadId: "$thread",
         replyToId: "$reply",
+        extraContent: {
+          "com.openclaw.presentation": presentationContent,
+        },
+      }),
+    );
+  });
+
+  it("sends empty Matrix presentation payloads with a minimal fallback body", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "resolved-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    const presentationContent = {
+      version: 1,
+      type: "message.presentation",
+      blocks: [{ type: "divider" }],
+    };
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:example",
+      text: "",
+      payload: {
+        text: "",
+        channelData: {
+          matrix: {
+            extraContent: {
+              "com.openclaw.presentation": presentationContent,
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
+      "room:!room:example",
+      "---",
+      expect.objectContaining({
         extraContent: {
           "com.openclaw.presentation": presentationContent,
         },
