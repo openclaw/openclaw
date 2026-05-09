@@ -800,6 +800,8 @@ Move these into agent databases:
   readable only as export/migration compatibility input. Runtime trajectory
   capture exposes a SQLite runtime locator; JSONL path helpers are isolated to
   legacy export/debug support and are not re-exported from the runtime module.
+  Embedded-runner trajectory metadata records `{agentId, sessionId, sessionKey}`
+  identity instead of persisting a transcript locator.
 
 Keep these file-backed for now:
 

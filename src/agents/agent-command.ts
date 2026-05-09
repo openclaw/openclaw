@@ -909,7 +909,7 @@ async function agentCommandInternal(
       workspaceDir,
     });
     const { resolveSessionTranscriptTarget } = await loadTranscriptResolveRuntime();
-    let sessionFile: string | undefined;
+    let transcriptLocator: string | undefined;
     if (sessionStore && sessionKey) {
       const resolvedTranscriptTarget = await resolveSessionTranscriptTarget({
         sessionId,
@@ -919,10 +919,10 @@ async function agentCommandInternal(
         agentId: sessionAgentId,
         threadId: opts.threadId,
       });
-      sessionFile = resolvedTranscriptTarget.sessionFile;
+      transcriptLocator = resolvedTranscriptTarget.transcriptLocator;
       sessionEntry = resolvedTranscriptTarget.sessionEntry;
     }
-    if (!sessionFile) {
+    if (!transcriptLocator) {
       const resolvedTranscriptTarget = await resolveSessionTranscriptTarget({
         sessionId,
         sessionKey: sessionKey ?? sessionId,
@@ -930,7 +930,7 @@ async function agentCommandInternal(
         agentId: sessionAgentId,
         threadId: opts.threadId,
       });
-      sessionFile = resolvedTranscriptTarget.sessionFile;
+      transcriptLocator = resolvedTranscriptTarget.transcriptLocator;
       sessionEntry = resolvedTranscriptTarget.sessionEntry;
     }
 
@@ -953,7 +953,6 @@ async function agentCommandInternal(
       runId,
       sessionId,
       sessionKey,
-      sessionFile,
       provider,
       modelId: model,
       workspaceDir,
@@ -1000,7 +999,7 @@ async function agentCommandInternal(
               sessionId,
               sessionKey,
               sessionAgentId,
-              sessionFile,
+              transcriptLocator,
               workspaceDir,
               body,
               isFallbackRetry,
@@ -1026,10 +1025,8 @@ async function agentCommandInternal(
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory:
                 !isNewSession ||
-                (await attemptExecutionRuntime.sessionTranscriptHasContent(sessionFile)),
-              suppressPromptPersistenceOnRetry:
-                opts.suppressPromptPersistence === true ||
-                (isFallbackRetry && currentTurnUserMessagePersisted),
+                (await attemptExecutionRuntime.sessionTranscriptHasContent(transcriptLocator)),
+              suppressPromptPersistenceOnRetry: isFallbackRetry && currentTurnUserMessagePersisted,
               onUserMessagePersisted: () => {
                 currentTurnUserMessagePersisted = true;
               },
