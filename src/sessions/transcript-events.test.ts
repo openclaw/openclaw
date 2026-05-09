@@ -33,7 +33,6 @@ describe("transcript events", () => {
     emitSessionTranscriptUpdate({
       agentId: "  main  ",
       sessionId: "  sess-1  ",
-      transcriptLocator: "  sqlite-transcript://main/session  ",
       sessionKey: "  agent:main:main  ",
       message: { role: "assistant", content: "hi" },
       messageId: "  msg-1  ",
@@ -42,7 +41,6 @@ describe("transcript events", () => {
     expect(listener).toHaveBeenCalledWith({
       agentId: "main",
       sessionId: "sess-1",
-      transcriptLocator: "sqlite-transcript://main/session",
       sessionKey: "agent:main:main",
       message: { role: "assistant", content: "hi" },
       messageId: "msg-1",

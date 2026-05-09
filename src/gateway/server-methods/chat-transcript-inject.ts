@@ -116,11 +116,10 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       useRawWhenLinear: true,
       config: params.config,
     });
-    if (params.transcriptLocator) {
+    if (sessionId) {
       emitSessionTranscriptUpdate({
         agentId,
         sessionId,
-        transcriptLocator: params.transcriptLocator,
         message: appendedMessage,
         messageId,
       });

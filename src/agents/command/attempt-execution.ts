@@ -195,7 +195,7 @@ async function persistTextTurnTranscript(
     return params.sessionEntry;
   }
 
-  const { transcriptLocator, sessionEntry } = await resolveSessionTranscriptTarget({
+  const { sessionEntry } = await resolveSessionTranscriptTarget({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry: params.sessionEntry,
@@ -253,7 +253,6 @@ async function persistTextTurnTranscript(
   emitSessionTranscriptUpdate({
     agentId: params.sessionAgentId,
     sessionId: params.sessionId,
-    transcriptLocator,
     sessionKey: params.sessionKey,
   });
   return sessionEntry;

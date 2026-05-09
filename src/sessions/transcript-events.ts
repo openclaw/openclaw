@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 export type SessionTranscriptUpdate = {
   agentId?: string;
   sessionId?: string;
-  transcriptLocator?: string;
   sessionKey?: string;
   message?: unknown;
   messageId?: string;
@@ -24,22 +23,19 @@ export function emitSessionTranscriptUpdate(update: SessionTranscriptUpdate): vo
   const normalized = {
     agentId: update.agentId,
     sessionId: update.sessionId,
-    transcriptLocator: update.transcriptLocator,
     sessionKey: update.sessionKey,
     message: update.message,
     messageId: update.messageId,
   };
-  const trimmed = normalizeOptionalString(normalized.transcriptLocator);
   const agentId = normalizeOptionalString(normalized.agentId);
   const sessionId = normalizeOptionalString(normalized.sessionId);
   const sessionKey = normalizeOptionalString(normalized.sessionKey);
-  if (!trimmed && !sessionId && !sessionKey) {
+  if (!sessionId && !sessionKey) {
     return;
   }
   const nextUpdate: SessionTranscriptUpdate = {
     ...(agentId ? { agentId } : {}),
     ...(sessionId ? { sessionId } : {}),
-    ...(trimmed ? { transcriptLocator: trimmed } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(normalized.message !== undefined ? { message: normalized.message } : {}),
     ...(normalizeOptionalString(normalized.messageId)
