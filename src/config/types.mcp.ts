@@ -80,7 +80,7 @@ export type McpConfig = {
   /** Named MCP server definitions managed by OpenClaw. */
   servers?: Record<string, McpServerConfig>;
   /**
-   * Idle TTL for session-scoped bundled MCP runtimes, in milliseconds.
+   * Idle TTL for bundled MCP runtimes, in milliseconds.
    *
    * Defaults to 10 minutes. Set to 0 to disable idle eviction.
    */
