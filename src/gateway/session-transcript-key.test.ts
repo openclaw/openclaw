@@ -44,7 +44,6 @@ describe("resolveSessionKeyForTranscriptLocator", () => {
       agentId: "main",
       databasePath: "/tmp/openclaw-agent.sqlite",
       canonicalKey: key,
-      storeKeys: [key],
     }));
   });
 

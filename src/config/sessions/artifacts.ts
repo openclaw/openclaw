@@ -27,33 +27,6 @@ export function isTrajectorySessionArtifactName(fileName: string): boolean {
   return isTrajectoryRuntimeArtifactName(fileName) || isTrajectoryPointerArtifactName(fileName);
 }
 
-export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
-  if (fileName === "sessions.json") {
-    return false;
-  }
-  if (!fileName.endsWith(".jsonl")) {
-    return false;
-  }
-  if (isTrajectoryRuntimeArtifactName(fileName)) {
-    return false;
-  }
-  if (isCompactionCheckpointTranscriptFileName(fileName)) {
-    return false;
-  }
-  return true;
-}
-
-export function isUsageCountedSessionTranscriptFileName(fileName: string): boolean {
-  return isPrimarySessionTranscriptFileName(fileName);
-}
-
-export function parseUsageCountedSessionIdFromFileName(fileName: string): string | null {
-  if (isPrimarySessionTranscriptFileName(fileName)) {
-    return fileName.slice(0, -".jsonl".length);
-  }
-  return null;
-}
-
 export function formatFilesystemTimestamp(nowMs = Date.now()): string {
   return new Date(nowMs).toISOString().replaceAll(":", "-");
 }

@@ -1,13 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { listSessionEntries, patchSessionEntry, type SessionEntry } from "../config/sessions.js";
-import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import { getSessionEntry, patchSessionEntry, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionRowAgentId, resolveSessionRowKey } from "../gateway/session-row-key.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 export { clearPluginOwnedSessionState } from "./host-hook-cleanup.js";
 import {
   buildPluginAgentTurnPrepareContext,
@@ -70,67 +66,6 @@ function isExpired(entry: unknown, now: number) {
   return typeof entry.ttlMs === "number" && entry.ttlMs >= 0 && now - entry.createdAt > entry.ttlMs;
 }
 
-function findStoreKeysIgnoreCase(store: Record<string, unknown>, targetKey: string): string[] {
-  const lowered = normalizeLowercaseStringOrEmpty(targetKey);
-  const matches: string[] = [];
-  for (const key of Object.keys(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === lowered) {
-      matches.push(key);
-    }
-  }
-  return matches;
-}
-
-function findFreshestStoreMatch(
-  store: Record<string, SessionEntry>,
-  ...candidates: string[]
-): { entry: SessionEntry; key: string } | undefined {
-  let freshest: { entry: SessionEntry; key: string } | undefined;
-  for (const candidate of candidates) {
-    const trimmed = normalizeOptionalString(candidate) ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    const exact = store[trimmed];
-    if (exact && (!freshest || (exact.updatedAt ?? 0) >= (freshest.entry.updatedAt ?? 0))) {
-      freshest = { entry: exact, key: trimmed };
-    }
-    for (const legacyKey of findStoreKeysIgnoreCase(store, trimmed)) {
-      const entry = store[legacyKey];
-      if (entry && (!freshest || (entry.updatedAt ?? 0) >= (freshest.entry.updatedAt ?? 0))) {
-        freshest = { entry, key: legacyKey };
-      }
-    }
-  }
-  return freshest;
-}
-
-function buildSessionRowScanTargets(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  canonicalKey: string;
-  agentId: string;
-}): string[] {
-  const targets = new Set<string>();
-  if (params.canonicalKey) {
-    targets.add(params.canonicalKey);
-  }
-  if (params.key && params.key !== params.canonicalKey) {
-    targets.add(params.key);
-  }
-  if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
-    return [...targets];
-  }
-  const agentMainKey = resolveAgentMainSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  if (params.canonicalKey === agentMainKey) {
-    targets.add(`agent:${params.agentId}:main`);
-  }
-  return [...targets];
-}
-
 function loadPluginHostHookSessionEntry(params: { cfg: OpenClawConfig; sessionKey: string }): {
   agentId: string;
   entry?: SessionEntry;
@@ -141,16 +76,11 @@ function loadPluginHostHookSessionEntry(params: { cfg: OpenClawConfig; sessionKe
   const cfg = params.cfg;
   const canonicalKey = resolveSessionRowKey({ cfg, sessionKey: key });
   const agentId = resolveSessionRowAgentId(cfg, canonicalKey);
-  const scanTargets = buildSessionRowScanTargets({ cfg, key, canonicalKey, agentId });
-  const store = Object.fromEntries(
-    listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
-  const selectedMatch = findFreshestStoreMatch(store, ...scanTargets);
   return {
     agentId,
-    entry: selectedMatch?.entry,
+    entry: getSessionEntry({ agentId, sessionKey: canonicalKey }),
     canonicalKey,
-    storeKey: selectedMatch?.key ?? canonicalKey,
+    storeKey: canonicalKey,
   };
 }
 

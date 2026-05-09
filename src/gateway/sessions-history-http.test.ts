@@ -286,7 +286,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("prefers the freshest duplicate row for direct history reads", async () => {
+  test("uses the canonical row for direct history reads", async () => {
     await configureSessionRowTarget();
     replaceSqliteSessionTranscriptEvents({
       agentId: AGENT_ID,
@@ -339,7 +339,7 @@ describe("session history HTTP endpoints", () => {
 
     await expectSessionHistoryText({
       sessionKey: "agent:main:main",
-      expectedText: "fresh history",
+      expectedText: "stale history",
     });
   });
 

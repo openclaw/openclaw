@@ -276,7 +276,7 @@ async function persistInitialChildSessionRuntimeModel(params: {
     await subagentSpawnDeps.upsertSessionEntry({
       agentId: target.agentId,
       sessionKey: target.canonicalKey,
-      entry: mergeSessionEntry(resolveStoreEntryByKeys(store, target.storeKeys), {
+      entry: mergeSessionEntry(store[target.canonicalKey], {
         model,
         ...(provider ? { modelProvider: provider } : {}),
       }),
@@ -285,19 +285,6 @@ async function persistInitialChildSessionRuntimeModel(params: {
   } catch (err) {
     return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
   }
-}
-
-function resolveStoreEntryByKeys(
-  store: Record<string, SessionEntry>,
-  keys: readonly string[],
-): SessionEntry | undefined {
-  for (const key of keys) {
-    const entry = store[key];
-    if (entry) {
-      return entry;
-    }
-  }
-  return undefined;
 }
 
 type PreparedSpawnContext =
@@ -349,8 +336,8 @@ async function prepareSubagentSessionContext(params: {
       );
     }
     const store = loadSubagentSessionRows(childTarget.agentId);
-    parentEntry = resolveStoreEntryByKeys(store, parentTarget.storeKeys);
-    childEntry = resolveStoreEntryByKeys(store, childTarget.storeKeys);
+    parentEntry = store[parentTarget.canonicalKey];
+    childEntry = store[childTarget.canonicalKey];
     if (!parentEntry?.sessionId) {
       throw new Error(
         'context="fork" requested but the requester session transcript is not available.',
@@ -863,10 +850,7 @@ export async function spawnSubagentDirect(
       await subagentSpawnDeps.upsertSessionEntry({
         agentId: target.agentId,
         sessionKey: target.canonicalKey,
-        entry: mergeSessionEntry(
-          resolveStoreEntryByKeys(store, target.storeKeys),
-          buildDirectChildSessionPatch(patch),
-        ),
+        entry: mergeSessionEntry(store[target.canonicalKey], buildDirectChildSessionPatch(patch)),
       });
       return undefined;
     } catch (err) {

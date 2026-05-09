@@ -34,8 +34,6 @@ function sessionKeyMatchesTranscriptLocator(params: {
   const target = resolveGatewaySessionDatabaseTarget({
     cfg: params.cfg,
     key: params.key,
-    scanLegacyKeys: false,
-    store: params.store,
   });
   const sessionAgentId = normalizeAgentId(target.agentId);
   return resolveSessionTranscriptCandidates(

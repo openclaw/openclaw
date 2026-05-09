@@ -9,12 +9,8 @@ import {
 } from "../agents/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
-import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
-import {
-  resolveLegacySessionTranscriptsDirForAgent,
-  resolveSessionTranscriptLocator,
-} from "../config/sessions/paths.js";
+import { resolveSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
 import {
   hasSqliteSessionTranscriptEvents,
@@ -33,6 +29,10 @@ import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
+import {
+  isPrimaryLegacySessionTranscriptFileName,
+  resolveLegacySessionTranscriptsDirForAgent,
+} from "./doctor/legacy/session-file-artifacts.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -1014,7 +1014,7 @@ export async function noteStateIntegrity(
     }
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
-      .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
+      .filter((entry) => entry.isFile() && isPrimaryLegacySessionTranscriptFileName(entry.name))
       .map((entry) => path.join(sessionsDir, entry.name))
       .filter(
         (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),

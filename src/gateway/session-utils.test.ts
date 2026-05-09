@@ -488,7 +488,7 @@ describe("gateway session utils", () => {
     expect(classifySessionKey("main", entry)).toBe("group");
   });
 
-  test("resolveSessionRowKey maps main aliases to default agent main", () => {
+  test("resolveSessionRowKey maps only current-agent main aliases to default agent main", () => {
     const cfg = {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
@@ -497,8 +497,8 @@ describe("gateway session utils", () => {
     expect(resolveSessionRowKey({ cfg, sessionKey: "work" })).toBe("agent:ops:work");
     expect(resolveSessionRowKey({ cfg, sessionKey: "agent:ops:main" })).toBe("agent:ops:work");
     expect(resolveSessionRowKey({ cfg, sessionKey: "agent:ops:MAIN" })).toBe("agent:ops:work");
-    expect(resolveSessionRowKey({ cfg, sessionKey: "agent:main:main" })).toBe("agent:ops:work");
-    expect(resolveSessionRowKey({ cfg, sessionKey: "agent:main:work" })).toBe("agent:ops:work");
+    expect(resolveSessionRowKey({ cfg, sessionKey: "agent:main:main" })).toBe("agent:main:work");
+    expect(resolveSessionRowKey({ cfg, sessionKey: "agent:main:work" })).toBe("agent:main:work");
     expect(resolveSessionRowKey({ cfg, sessionKey: "MAIN" })).toBe("agent:ops:work");
   });
 
@@ -512,18 +512,15 @@ describe("gateway session utils", () => {
     );
   });
 
-  test("resolveDeletedAgentIdFromSessionKey rejects non-alias main keys when main is absent", () => {
+  test("resolveDeletedAgentIdFromSessionKey rejects main-agent keys when main is absent", () => {
     const cfg = {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
     } as OpenClawConfig;
-    const legacyMainAlias = resolveSessionRowKey({ cfg, sessionKey: "agent:main:main" });
-
-    expect(legacyMainAlias).toBe("agent:ops:work");
-    expect(resolveDeletedAgentIdFromSessionKey(cfg, legacyMainAlias)).toBeNull();
     expect(resolveDeletedAgentIdFromSessionKey(cfg, "global")).toBeNull();
     expect(resolveDeletedAgentIdFromSessionKey(cfg, "unknown")).toBeNull();
     expect(resolveDeletedAgentIdFromSessionKey(cfg, "main")).toBeNull();
+    expect(resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:main")).toBe("main");
     expect(resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:discord:direct:u1")).toBe("main");
   });
 
@@ -590,7 +587,6 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     const target = resolveGatewaySessionDatabaseTarget({ cfg, key: "main" });
     expect(target.canonicalKey).toBe("agent:ops:main");
-    expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:main", "main"]));
   });
 
   test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {

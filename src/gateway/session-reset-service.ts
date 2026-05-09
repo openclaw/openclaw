@@ -170,7 +170,6 @@ async function ensureSessionRuntimeCleanup(params: {
     const closeKeys = new Set<string>([
       params.key,
       params.target.canonicalKey,
-      ...params.target.storeKeys,
       params.sessionId ?? "",
     ]);
     return await closeTrackedBrowserTabsForSessions({
@@ -179,8 +178,7 @@ async function ensureSessionRuntimeCleanup(params: {
     });
   };
 
-  const queueKeys = new Set<string>(params.target.storeKeys);
-  queueKeys.add(params.target.canonicalKey);
+  const queueKeys = new Set<string>([params.target.canonicalKey]);
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
@@ -368,8 +366,6 @@ export async function cleanupSessionBeforeMutation(params: {
   key: string;
   target: ReturnType<typeof resolveGatewaySessionDatabaseTarget>;
   entry: SessionEntry | undefined;
-  legacyKey?: string;
-  canonicalKey?: string;
   reason: "session-reset" | "session-delete";
 }) {
   const cleanupError = await ensureSessionRuntimeCleanup({
@@ -394,7 +390,7 @@ export async function cleanupSessionBeforeMutation(params: {
   }
   return await closeAcpRuntimeForSession({
     cfg: params.cfg,
-    sessionKey: params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key,
+    sessionKey: params.target.canonicalKey ?? params.key,
     entry: params.entry,
     reason: params.reason,
   });
@@ -496,7 +492,7 @@ export async function performGatewaySessionReset(params: {
     const target = resolveGatewaySessionDatabaseTarget({ cfg, key: params.key });
     return { cfg, target };
   })();
-  const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key);
+  const { entry } = loadSessionEntry(params.key);
   const hadExistingEntry = Boolean(entry);
   const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -518,8 +514,6 @@ export async function performGatewaySessionReset(params: {
     key: params.key,
     target,
     entry,
-    legacyKey,
-    canonicalKey,
     reason: "session-reset",
   });
   if (mutationCleanupError) {
@@ -530,17 +524,10 @@ export async function performGatewaySessionReset(params: {
   let oldSessionFile: string | undefined;
   let resetSourceEntry: SessionEntry | undefined;
   let deleteOldTranscript = false;
-  const matches = target.storeKeys
-    .map((storeKey) => {
-      const matchedEntry = getSessionEntry({
-        agentId: target.agentId,
-        sessionKey: storeKey,
-      });
-      return matchedEntry ? { storeKey, entry: matchedEntry } : undefined;
-    })
-    .filter((match): match is { storeKey: string; entry: SessionEntry } => Boolean(match))
-    .toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0));
-  const currentEntry = matches[0]?.entry;
+  const currentEntry = getSessionEntry({
+    agentId: target.agentId,
+    sessionKey: target.canonicalKey,
+  });
   resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
   const next = (() => {
     const primaryKey = target.canonicalKey;

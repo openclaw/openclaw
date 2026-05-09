@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveLegacySessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import {
   deleteSessionEntry,
   listSessionEntries,
@@ -23,6 +22,7 @@ import {
   resolveHeartbeatMainSessionRepairCandidate,
 } from "./doctor-heartbeat-main-session-repair.js";
 import { noteStateIntegrity } from "./doctor-state-integrity.js";
+import { resolveLegacySessionTranscriptsDirForAgent } from "./doctor/legacy/session-file-artifacts.js";
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],

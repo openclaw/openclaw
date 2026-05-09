@@ -87,13 +87,8 @@ vi.mock("./http-utils.js", () => ({
 vi.mock("./session-utils.js", () => ({
   resolveGatewaySessionDatabaseTarget: () => ({
     databasePath: "/tmp/openclaw-agent.sqlite",
-    storeKeys: ["agent:main"],
     canonicalKey: "agent:main",
     agentId: "main",
-  }),
-  resolveFreshestSessionEntryFromStoreKeys: () => ({
-    sessionId: "session-1",
-    sessionFile: "/tmp/session-1.jsonl",
   }),
   readSessionMessagesAsync: async () => [],
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
