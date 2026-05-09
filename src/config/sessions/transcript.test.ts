@@ -185,9 +185,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     if (secondResult.ok) {
       expect(secondResult.messageId).toBe(firstResult.messageId);
     }
-    expect(readSpy.mock.calls.some(([file]) => String(file) === firstResult.sessionFile)).toBe(
-      false,
-    );
+    expect(
+      readSpy.mock.calls.some(
+        ([file]) => typeof file === "string" && file === firstResult.sessionFile,
+      ),
+    ).toBe(false);
     readSpy.mockRestore();
 
     const lines = fs.readFileSync(firstResult.sessionFile, "utf-8").trim().split("\n");

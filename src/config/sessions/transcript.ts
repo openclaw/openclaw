@@ -487,6 +487,7 @@ async function findTranscriptIdempotencyKey(
     case "unavailable":
       return await scanTranscriptIdempotencyKey(transcriptPath, idempotencyKey);
   }
+  return undefined;
 }
 
 async function scanTranscriptIdempotencyKey(

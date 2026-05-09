@@ -126,7 +126,7 @@ describe("createDiscordMessageRunQueue", () => {
       });
 
       queue.enqueue(createJob({ messageId: "m-1" }));
-      await vi.runAllTicks();
+      vi.runAllTicks();
       await flushQueueWork();
       queue.enqueue(createJob({ messageId: "m-2" }));
 

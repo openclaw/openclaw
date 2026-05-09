@@ -694,7 +694,7 @@ describe("resolveMediaList", () => {
       filename: `${index + 1}.png`,
       content_type: "image/png",
     }));
-    const downloads = attachments.map((attachment) =>
+    const downloads = attachments.map(() =>
       createDeferred<{ buffer: Buffer; contentType: string }>(),
     );
     const activeUrls = new Set<string>();

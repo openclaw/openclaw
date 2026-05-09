@@ -330,14 +330,15 @@ async function mapWithConcurrency<T, R>(
   mapper: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
   const limit = Math.max(1, Math.floor(concurrency));
-  const results = new Array<R>(items.length);
+  const results: R[] = [];
+  results.length = items.length;
   let nextIndex = 0;
 
   const worker = async () => {
     while (nextIndex < items.length) {
       const index = nextIndex;
       nextIndex += 1;
-      results[index] = await mapper(items[index]!, index);
+      results[index] = await mapper(items[index], index);
     }
   };
 
