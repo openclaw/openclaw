@@ -1706,7 +1706,7 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 
-  it("lists ACP sessions from the session store", async () => {
+  it("lists ACP sessions from SQLite session rows", async () => {
     hoisted.sessionBindingListBySessionMock.mockImplementation((key: string) =>
       key === defaultAcpSessionKey ? [createBoundThreadSession(key) as SessionBindingRecord] : [],
     );

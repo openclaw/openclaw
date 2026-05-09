@@ -2,7 +2,7 @@
  * Group activation mode — how the bot decides whether to respond in a group.
  *
  * Resolution chain:
- *   1. session store override (`/activation` command writes per-session
+ *   1. session row override (`/activation` command writes per-session
  *      `groupActivation` value) — highest priority
  *   2. per-group `requireMention` config
  *   3. `"mention"` default (require @-bot to respond)

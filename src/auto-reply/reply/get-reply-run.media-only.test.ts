@@ -285,7 +285,7 @@ describe("runPreparedReply media-only handling", () => {
     replyRunTesting.resetReplyRunRegistry();
   });
 
-  it("does not load session store runtime on module import", async () => {
+  it("does not load session row runtime on module import", async () => {
     await loadFreshGetReplyRunModuleForTest();
 
     expect(storeRuntimeLoads).not.toHaveBeenCalled();

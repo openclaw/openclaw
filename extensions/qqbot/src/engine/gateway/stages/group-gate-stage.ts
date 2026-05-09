@@ -59,6 +59,7 @@ export function runGroupGateStage(input: GroupGateStageInput): GroupGateStageRes
     getRefEntry: (idx) => getRefIndex(idx) ?? null,
   });
 
+  // ---- 3. Activation mode (session row > cfg) ----
   const activation = resolveGroupActivation({
     cfg,
     agentId: agentId ?? "default",

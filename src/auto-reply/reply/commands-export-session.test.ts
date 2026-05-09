@@ -179,7 +179,7 @@ describe("buildExportSessionReply", () => {
     });
   });
 
-  it("reads the active command session row from the session store", async () => {
+  it("reads the active command session row from SQLite", async () => {
     hoisted.sessionRowsMock.mockReturnValue({
       "agent:target:session": {
         sessionId: "session-1",

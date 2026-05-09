@@ -1452,7 +1452,7 @@ describe("thread binding lifecycle", () => {
     expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
   });
 
-  it("keeps ACP bindings when session store reads fail during startup reconciliation", async () => {
+  it("keeps ACP bindings when SQLite session row reads fail during startup reconciliation", async () => {
     const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,

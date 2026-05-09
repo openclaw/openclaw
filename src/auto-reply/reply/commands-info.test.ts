@@ -230,7 +230,7 @@ describe("info command handlers", () => {
     expect(statusReplyParams.parentSessionKey).toBe("discord:group:parent-room");
   });
 
-  it("does not route the legacy session store path through /status", async () => {
+  it("does not route the legacy session path through /status", async () => {
     const params = buildInfoParams("/status", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },

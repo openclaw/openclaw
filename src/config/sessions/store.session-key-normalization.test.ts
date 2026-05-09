@@ -24,7 +24,7 @@ function createInboundContext(): MsgContext {
   };
 }
 
-describe("session store key normalization", () => {
+describe("SQLite session row key normalization", () => {
   const suiteRootTracker = createSuiteTempRootTracker({
     prefix: "openclaw-session-key-normalize-",
   });

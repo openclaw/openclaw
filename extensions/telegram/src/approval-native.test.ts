@@ -167,7 +167,7 @@ describe("telegram native approval adapter", () => {
     });
   });
 
-  it("parses numeric string thread ids from the session store for plugin approvals", async () => {
+  it("parses numeric string thread ids from SQLite session rows for plugin approvals", async () => {
     seedSessionEntry({
       sessionId: "sess",
       updatedAt: Date.now(),

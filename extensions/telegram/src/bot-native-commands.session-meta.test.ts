@@ -854,7 +854,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
-  it("does not load the session store when a native argument menu is skipped", async () => {
+  it("does not load session rows when a native argument menu is skipped", async () => {
     const { handler } = registerAndResolveCommandHandler({
       commandName: "think",
       cfg: {},

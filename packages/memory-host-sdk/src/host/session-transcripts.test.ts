@@ -181,7 +181,7 @@ describe("buildSessionTranscriptEntry", () => {
     expect(entry.lineMap).toEqual([]);
   });
 
-  it("keeps cron-run transcripts opaque when the live session store entry is gone", async () => {
+  it("keeps cron-run transcripts opaque when the live session row is gone", async () => {
     const transcriptRef = seedTranscript({
       sessionId: "cron-run-deleted",
       events: [

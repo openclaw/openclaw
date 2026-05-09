@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importLegacyVoiceWakeRoutingConfigFileToSqlite } from "../commands/doctor/legacy/voicewake-routing.js";
 import { importLegacyVoiceWakeConfigFileToSqlite } from "../commands/doctor/legacy/voicewake.js";
-import { readSessionStoreJson5 } from "../commands/doctor/state-migrations.fs.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   getChannelActivity,
@@ -53,35 +52,6 @@ const missingStoreDefaultCases = [
 ];
 
 describe("infra store", () => {
-  describe("state migrations fs", () => {
-    it("treats array session stores as invalid", async () => {
-      await withTempDir("openclaw-session-store-", async (dir) => {
-        const storePath = path.join(dir, "legacy-session-store.json5");
-        await fs.writeFile(storePath, "[]", "utf-8");
-
-        const result = readSessionStoreJson5(storePath);
-        expect(result.ok).toBe(false);
-        expect(result.store).toStrictEqual({});
-      });
-    });
-
-    it("parses JSON5 object session stores", async () => {
-      await withTempDir("openclaw-session-store-", async (dir) => {
-        const storePath = path.join(dir, "legacy-session-store.json5");
-        await fs.writeFile(
-          storePath,
-          "{\n  // comment allowed in JSON5\n  main: { sessionId: 's1', updatedAt: 123 },\n}\n",
-          "utf-8",
-        );
-
-        const result = readSessionStoreJson5(storePath);
-        expect(result.ok).toBe(true);
-        expect(result.store.main?.sessionId).toBe("s1");
-        expect(result.store.main?.updatedAt).toBe(123);
-      });
-    });
-  });
-
   describe("missing store defaults", () => {
     it.each(missingStoreDefaultCases)(
       "$name returns defaults when missing",

@@ -49,7 +49,7 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
 }
 
 /**
- * Map transcript stem to canonical session store keys (all agents in the combined store).
+ * Map transcript stem to canonical session row keys across all agents.
  * Session tools visibility and agent-to-agent policy are enforced by the caller (e.g.
  * `createSessionVisibilityGuard`), including cross-agent cases.
  */

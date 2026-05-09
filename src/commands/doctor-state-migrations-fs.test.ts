@@ -54,7 +54,11 @@ describe("state migration fs helpers", () => {
       const badPath = path.join(base, "bad.json");
       const listPath = path.join(base, "list.json");
 
-      fs.writeFileSync(okPath, "{session: {sessionId: 'abc', updatedAt: 1}}", "utf8");
+      fs.writeFileSync(
+        okPath,
+        "{\n  // comment allowed in JSON5\n  session: {sessionId: 'abc', updatedAt: 1},\n}\n",
+        "utf8",
+      );
       fs.writeFileSync(badPath, "{not valid", "utf8");
       fs.writeFileSync(listPath, "[]", "utf8");
 

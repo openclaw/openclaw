@@ -1230,6 +1230,9 @@ keeps only the version-1 schema plus doctor file-to-database import.
   Gateway session tests no longer expose a `createSessionStoreDir` helper or
   unused temp session-store path setup; fixture dirs are explicit, and direct
   row setup uses SQLite session-row naming.
+  Doctor-only JSON5 session-store parser coverage moved out of infra tests and
+  into doctor migration tests, so runtime test suites no longer own legacy
+  session-file parsing.
 - Keep tests that seed legacy files only for migration.
 - Replace JSON-file proof with SQL row proof.
 

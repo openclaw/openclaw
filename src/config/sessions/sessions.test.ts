@@ -213,7 +213,7 @@ describe("session lifecycle timestamps", () => {
   });
 });
 
-describe("SQLite session store patch retries", () => {
+describe("SQLite session row patch retries", () => {
   const patchFixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-patch-test-" });
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 

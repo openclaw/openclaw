@@ -264,7 +264,7 @@ describe("exec approval session target", () => {
     });
   });
 
-  it("preserves string thread ids from the session store", () => {
+  it("preserves string thread ids from SQLite session rows", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
       const cfg = seedSessionRowsForStateDir(tmpDir, {
         "agent:main:main": {
@@ -321,7 +321,7 @@ describe("exec approval session target", () => {
     ).toBeNull();
   });
 
-  it("prefers explicit turn-source account bindings when session store is missing", () => {
+  it("prefers explicit turn-source account bindings when the session row is missing", () => {
     const cfg = {} as OpenClawConfig;
     const request = buildRequest({
       turnSourceChannel: "slack",

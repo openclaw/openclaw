@@ -30,7 +30,7 @@ afterEach(() => {
   }
 });
 
-describe("SQLite session store backend", () => {
+describe("SQLite session row backend", () => {
   it("round-trips session entries by agent id", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

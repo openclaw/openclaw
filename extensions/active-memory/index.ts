@@ -600,7 +600,7 @@ function resolveRecallRunChannelContext(params: {
     // Channel IDs containing ":" or "/" are scoped conversation IDs, not
     // runnable channel names. The same guard that
     // applies to explicit channelId (#76704) must also apply to channels
-    // read from the session store (#77396).
+    // read from SQLite session rows (#77396).
     const strongEntryChannel =
       rawStrongEntryChannel && isRunnableChannelName(rawStrongEntryChannel)
         ? rawStrongEntryChannel
