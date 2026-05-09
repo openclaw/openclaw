@@ -3,7 +3,6 @@ import {
   getSessionEntry,
   mergeSessionEntry,
   resolveAgentIdFromSessionKey,
-  resolveSessionTranscriptPath,
   upsertSessionEntry,
 } from "../../config/sessions.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -44,7 +43,7 @@ export async function resetReplyRunSession(params: {
   messageThreadId?: string;
   followupRun: FollowupRun;
   onActiveSessionEntry: (entry: SessionEntry) => void;
-  onNewSession: (newSessionId: string, nextSessionFile: string) => void;
+  onNewSession: (newSessionId: string) => void;
 }): Promise<boolean> {
   if (!params.sessionKey) {
     return false;
@@ -86,12 +85,6 @@ export async function resetReplyRunSession(params: {
     fallbackNoticeActiveModel: undefined,
     fallbackNoticeReason: undefined,
   };
-  const nextSessionFile = resolveSessionTranscriptPath(
-    nextSessionId,
-    agentId,
-    params.messageThreadId,
-  );
-  nextEntry.sessionFile = nextSessionFile;
   if (params.activeSessionStore) {
     params.activeSessionStore[params.sessionKey] = nextEntry;
   }
@@ -113,21 +106,17 @@ export async function resetReplyRunSession(params: {
   await replayRecentUserAssistantMessages({
     sourceAgentId: agentId,
     sourceSessionId: prevEntry.sessionId,
-    sourceTranscript: prevEntry.sessionFile,
     targetAgentId: agentId,
-    targetTranscript: nextSessionFile,
     newSessionId: nextSessionId,
   });
   params.followupRun.run.sessionId = nextSessionId;
-  params.followupRun.run.sessionFile = nextSessionFile;
   deps.refreshQueuedFollowupSession({
     key: params.queueKey,
     previousSessionId: prevEntry.sessionId,
     nextSessionId,
-    nextSessionFile,
   });
   params.onActiveSessionEntry(nextEntry);
-  params.onNewSession(nextSessionId, nextSessionFile);
+  params.onNewSession(nextSessionId);
   deps.error(params.options.buildLogMessage(nextSessionId));
   return true;
 }
