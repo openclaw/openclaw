@@ -261,7 +261,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
           behavior?: string;
           description?: string;
           name?: string;
-          parametersJsonSchema?: unknown;
+          parameters?: unknown;
         }>;
       }>;
     };
@@ -283,7 +283,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const declarations = config.tools?.[0]?.functionDeclarations ?? [];
     expect(declarations[0]?.name).toBe("lookup");
     expect(declarations[0]?.description).toBe("Look something up");
-    expect(declarations[0]?.parametersJsonSchema).toEqual({
+    expect(declarations[0]?.parameters).toEqual({
       type: "object",
       properties: {
         query: { type: "string" },
@@ -292,7 +292,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
     expect(declarations[1]?.name).toBe("openclaw_agent_consult");
     expect(declarations[1]?.description).toBe("Ask OpenClaw");
-    expect(declarations[1]?.parametersJsonSchema).toEqual({
+    expect(declarations[1]?.parameters).toEqual({
       type: "object",
       properties: {
         question: { type: "string" },
