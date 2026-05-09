@@ -133,7 +133,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   const requestHeartbeat = vi.fn();
   const finished = createFinishedBarrier();
   const cron = new CronService({
-    storePath: params.storePath,
+    storeKey: params.storePath,
     cronEnabled: true,
     log: params.logger,
     enqueueSystemEvent,
@@ -162,7 +162,7 @@ export async function withCronServiceForTest(
   const requestHeartbeat = vi.fn();
   const cron = new CronService({
     cronEnabled: params.cronEnabled,
-    storePath: store.storePath,
+    storeKey: store.storePath,
     log: params.logger,
     enqueueSystemEvent,
     requestHeartbeat,
@@ -188,7 +188,7 @@ export function createRunningCronServiceState(params: {
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
-    storePath: params.storePath,
+    storeKey: params.storePath,
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),
@@ -245,7 +245,7 @@ export function createMockCronStateForJobs(params: {
     warnedDisabled: false,
     warnedMissingSessionTargetJobIds: new Set<string>(),
     deps: {
-      storePath: "/mock/path",
+      storeKey: "mock",
       cronEnabled: true,
       nowMs: () => nowMs,
       enqueueSystemEvent: () => {},

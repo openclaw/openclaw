@@ -90,7 +90,7 @@ export function createRunningCronServiceState(params: {
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
-    storePath: params.storePath,
+    storeKey: params.storePath,
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),

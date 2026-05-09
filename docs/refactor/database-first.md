@@ -296,8 +296,8 @@ The remaining cleanup is mostly consolidation and deletion:
   the same state-database transaction.
 - Cron runtime callers now use a stable SQLite cron store key. Legacy
   `cron.store` paths are doctor import inputs only; production gateway, task
-  maintenance, status, and Telegram target writeback paths use
-  `resolveCronStoreKey`.
+  maintenance, status, run-log, and Telegram target writeback paths use
+  `resolveCronStoreKey` and no longer path-normalize the key.
 - ACP spawn no longer resolves or persists transcript JSONL file paths. Spawn
   and thread-bind setup persist the SQLite session row directly and keep the
   session id as the retained transcript identity.
@@ -954,7 +954,8 @@ keeps only the version-1 schema plus doctor file-to-database import.
      `/status` and chat-driven trajectory export no longer propagate legacy
      store paths; transcript usage fallback reads SQLite by agent/session
      identity. Remaining `storePath` call surfaces are migration/path metadata,
-     transcript-path metadata, and gateway aggregate lookup.
+     transcript-path metadata, and older RPC response fields that still carry
+     SQLite keys for compatibility.
      Gateway combined-session loading no longer has a special runtime branch for
      non-templated `session.store` values; it aggregates per-agent SQLite rows.
      The legacy session-lock doctor lane and its `.jsonl.lock` cleanup helper

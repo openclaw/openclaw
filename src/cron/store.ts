@@ -145,14 +145,14 @@ function mergeCronJobRowRuntimeState(job: CronStoreFile["jobs"][number], row: Cr
   });
 }
 
-function hydrateCronStoreFromSqlite(storePath: string): CronStoreFile {
+function hydrateCronStoreFromSqlite(storeKey: string): CronStoreFile {
   const database = openOpenClawStateDatabase();
   const rows = executeSqliteQuerySync(
     database.db,
     getCronJobsKysely(database.db)
       .selectFrom("cron_jobs")
       .select(["job_id", "job_json", "runtime_updated_at_ms", "schedule_identity", "state_json"])
-      .where("store_key", "=", cronStoreKey(storePath))
+      .where("store_key", "=", cronStoreKey(storeKey))
       .orderBy("sort_order", "asc")
       .orderBy("updated_at", "asc")
       .orderBy("job_id", "asc"),
@@ -179,18 +179,18 @@ function hydrateCronStoreFromSqlite(storePath: string): CronStoreFile {
   return { version: 1, jobs };
 }
 
-export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
-  return hydrateCronStoreFromSqlite(storePath);
+export async function loadCronStore(storeKey: string): Promise<CronStoreFile> {
+  return hydrateCronStoreFromSqlite(storeKey);
 }
 
-export function loadCronStoreSync(storePath: string): CronStoreFile {
-  return hydrateCronStoreFromSqlite(storePath);
+export function loadCronStoreSync(storeKey: string): CronStoreFile {
+  return hydrateCronStoreFromSqlite(storeKey);
 }
 
-function cronJobRow(storePath: string, job: CronJob, sortOrder: number): Insertable<CronJobsTable> {
+function cronJobRow(storeKey: string, job: CronJob, sortOrder: number): Insertable<CronJobsTable> {
   const scheduleIdentity = tryCronScheduleIdentity(job as unknown as Record<string, unknown>);
   return {
-    store_key: cronStoreKey(storePath),
+    store_key: cronStoreKey(storeKey),
     job_id: job.id,
     job_json: JSON.stringify(stripRuntimeOnlyCronJobFields(job)),
     state_json: JSON.stringify(job.state ?? {}),
@@ -217,13 +217,13 @@ function cronStateUpdateValues(
   };
 }
 
-function writeCronJobsToSqlite(storePath: string, store: CronStoreFile): void {
-  const storeKey = cronStoreKey(storePath);
+function writeCronJobsToSqlite(storeKey: string, store: CronStoreFile): void {
+  const normalizedStoreKey = cronStoreKey(storeKey);
   runOpenClawStateWriteTransaction((database) => {
     const db = getCronJobsKysely(database.db);
     const existingRows = executeSqliteQuerySync(
       database.db,
-      db.selectFrom("cron_jobs").select("job_id").where("store_key", "=", storeKey),
+      db.selectFrom("cron_jobs").select("job_id").where("store_key", "=", normalizedStoreKey),
     ).rows;
     const nextJobIds = new Set(store.jobs.map((job) => job.id));
     for (const [index, job] of store.jobs.entries()) {
@@ -231,7 +231,7 @@ function writeCronJobsToSqlite(storePath: string, store: CronStoreFile): void {
         database.db,
         db
           .insertInto("cron_jobs")
-          .values(cronJobRow(storePath, job, index))
+          .values(cronJobRow(storeKey, job, index))
           .onConflict((conflict) =>
             conflict.columns(["store_key", "job_id"]).doUpdateSet({
               job_json: JSON.stringify(stripRuntimeOnlyCronJobFields(job)),
@@ -250,19 +250,19 @@ function writeCronJobsToSqlite(storePath: string, store: CronStoreFile): void {
         database.db,
         db
           .deleteFrom("cron_jobs")
-          .where("store_key", "=", storeKey)
+          .where("store_key", "=", normalizedStoreKey)
           .where("job_id", "=", row.job_id),
       );
     }
   });
 }
 
-export function writeCronJobsForMigration(storePath: string, store: CronStoreFile): void {
-  writeCronJobsToSqlite(storePath, store);
+export function writeCronJobsForMigration(storeKey: string, store: CronStoreFile): void {
+  writeCronJobsToSqlite(storeKey, store);
 }
 
-function writeCronJobRuntimeStateToSqlite(storePath: string, stateFile: CronStateFile): number {
-  const storeKey = cronStoreKey(storePath);
+function writeCronJobRuntimeStateToSqlite(storeKey: string, stateFile: CronStateFile): number {
+  const normalizedStoreKey = cronStoreKey(storeKey);
   const updatedAt = Date.now();
   let importedJobs = 0;
   runOpenClawStateWriteTransaction((database) => {
@@ -282,7 +282,7 @@ function writeCronJobRuntimeStateToSqlite(storePath: string, stateFile: CronStat
               typeof entry.scheduleIdentity === "string" ? entry.scheduleIdentity : null,
             updated_at: updatedAt,
           })
-          .where("store_key", "=", storeKey)
+          .where("store_key", "=", normalizedStoreKey)
           .where("job_id", "=", jobId),
       );
       if ((result.numAffectedRows ?? 0n) > 0n) {
@@ -294,30 +294,30 @@ function writeCronJobRuntimeStateToSqlite(storePath: string, stateFile: CronStat
 }
 
 export function writeCronJobRuntimeStateForMigration(
-  storePath: string,
+  storeKey: string,
   stateFile: CronStateFile,
 ): number {
-  return writeCronJobRuntimeStateToSqlite(storePath, stateFile);
+  return writeCronJobRuntimeStateToSqlite(storeKey, stateFile);
 }
 
 export async function saveCronStore(
-  storePath: string,
+  storeKey: string,
   store: CronStoreFile,
   opts?: { skipBackup?: boolean; stateOnly?: boolean },
 ) {
   void opts?.skipBackup;
   if (opts?.stateOnly === true) {
-    writeCronJobRuntimeStateToSqlite(storePath, extractStateFile(store));
+    writeCronJobRuntimeStateToSqlite(storeKey, extractStateFile(store));
     return;
   }
-  writeCronJobsToSqlite(storePath, store);
+  writeCronJobsToSqlite(storeKey, store);
 }
 
 export async function updateCronStoreJobs(
-  storePath: string,
+  storeKey: string,
   updateJob: (job: CronJob) => CronJob | undefined,
 ): Promise<{ updatedJobs: number }> {
-  const store = await loadCronStore(storePath);
+  const store = await loadCronStore(storeKey);
   const updates: Array<{ previousJobId: string; job: CronJob; sortOrder: number }> = [];
 
   for (const [index, job] of store.jobs.entries()) {
@@ -333,7 +333,7 @@ export async function updateCronStoreJobs(
     return { updatedJobs: 0 };
   }
 
-  const storeKey = cronStoreKey(storePath);
+  const normalizedStoreKey = cronStoreKey(storeKey);
   const updatedAt = Date.now();
   runOpenClawStateWriteTransaction((database) => {
     const db = getNodeSqliteKysely<CronStoreUpdateDatabase>(database.db);
@@ -343,7 +343,7 @@ export async function updateCronStoreJobs(
           database.db,
           db
             .deleteFrom("cron_jobs")
-            .where("store_key", "=", storeKey)
+            .where("store_key", "=", normalizedStoreKey)
             .where("job_id", "=", update.previousJobId),
         );
       }
@@ -351,7 +351,7 @@ export async function updateCronStoreJobs(
         database.db,
         db
           .insertInto("cron_jobs")
-          .values(cronJobRow(storePath, update.job, update.sortOrder))
+          .values(cronJobRow(storeKey, update.job, update.sortOrder))
           .onConflict((conflict) =>
             conflict.columns(["store_key", "job_id"]).doUpdateSet({
               job_json: JSON.stringify(stripRuntimeOnlyCronJobFields(update.job)),

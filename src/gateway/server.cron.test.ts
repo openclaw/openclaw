@@ -257,7 +257,7 @@ async function directCronReq(
       respond,
       context: {
         cron: cronState.cron,
-        cronStorePath: cronState.storePath,
+        cronStoreKey: cronState.storeKey,
         logGateway: {
           info: vi.fn(),
           warn: vi.fn(),

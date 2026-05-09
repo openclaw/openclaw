@@ -72,8 +72,8 @@ export function createGatewayRequestContext(
     get cron() {
       return params.runtimeState.cronState.cron;
     },
-    get cronStorePath() {
-      return params.runtimeState.cronState.storePath;
+    get cronStoreKey() {
+      return params.runtimeState.cronState.storeKey;
     },
     getRuntimeConfig: params.getRuntimeConfig,
     execApprovalManager: params.execApprovalManager,

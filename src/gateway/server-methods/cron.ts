@@ -510,7 +510,7 @@ export const cronHandlers: GatewayRequestHandlers = {
           .map((job) => [job.id, job.name]),
       );
       const page = await readCronRunLogEntriesPageAllFromSqlite({
-        storePath: context.cronStorePath,
+        storeKey: context.cronStoreKey,
         limit: p.limit,
         offset: p.offset,
         statuses: p.statuses,
@@ -525,7 +525,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const page = await readCronRunLogEntriesPageFromSqlite(context.cronStorePath, {
+      const page = await readCronRunLogEntriesPageFromSqlite(context.cronStoreKey, {
         limit: p.limit,
         offset: p.offset,
         jobId: jobId as string,
