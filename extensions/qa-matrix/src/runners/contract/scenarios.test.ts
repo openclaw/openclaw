@@ -4875,7 +4875,7 @@ describe("matrix live qa scenarios", () => {
             plugins?: { allow?: string[]; entries?: { matrix?: unknown } };
           };
           expect(initialConfig.channels?.matrix?.enabled).toBe(true);
-          expect(initialConfig.channels?.matrix?.accounts).toEqual({});
+          expect(initialConfig.channels?.matrix?.accounts).toStrictEqual({});
           expect(initialConfig.plugins?.allow).toContain("matrix");
           expect(initialConfig.plugins?.entries?.matrix).toEqual({ enabled: true });
         }

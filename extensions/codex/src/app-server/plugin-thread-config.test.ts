@@ -159,7 +159,7 @@ describe("Codex plugin thread config", () => {
       },
     });
     expect(config.diagnostics).toEqual([]);
-    expect(config.policyContext.apps).toEqual({});
+    expect(config.policyContext.apps).toStrictEqual({});
   });
 
   it("does not let per-plugin enablement override disabled native plugin support", async () => {
@@ -207,7 +207,7 @@ describe("Codex plugin thread config", () => {
         },
       },
     });
-    expect(config.policyContext.apps).toEqual({});
+    expect(config.policyContext.apps).toStrictEqual({});
     expect(config.diagnostics).toEqual([]);
   });
 
@@ -312,7 +312,7 @@ describe("Codex plugin thread config", () => {
         },
       },
     });
-    expect(config.policyContext.apps).toEqual({});
+    expect(config.policyContext.apps).toStrictEqual({});
     expect(config.diagnostics).toContainEqual(
       expect.objectContaining({
         code: "app_not_ready",
@@ -451,7 +451,7 @@ describe("Codex plugin thread config", () => {
         },
       },
     });
-    expect(config.policyContext.apps).toEqual({});
+    expect(config.policyContext.apps).toStrictEqual({});
     expect(config.diagnostics).toContainEqual(
       expect.objectContaining({
         code: "plugin_activation_failed",
@@ -499,7 +499,7 @@ describe("Codex plugin thread config", () => {
         },
       },
     });
-    expect(config.policyContext.apps).toEqual({});
+    expect(config.policyContext.apps).toStrictEqual({});
     expect(config.diagnostics).toContainEqual(
       expect.objectContaining({ code: "app_inventory_missing" }),
     );
