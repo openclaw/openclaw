@@ -24,8 +24,11 @@ vi.mock("./session-utils.js", async () => {
   };
 });
 
-const { resolveSessionKeyForRun, resetResolvedSessionKeyForRunCacheForTest } =
-  await import("./server-session-key.js");
+const {
+  resolveSessionKeyForRun,
+  resolveSessionKeySelectionForRun,
+  resetResolvedSessionKeyForRunCacheForTest,
+} = await import("./server-session-key.js");
 
 describe("resolveSessionKeyForRun", () => {
   beforeEach(() => {
@@ -52,6 +55,11 @@ describe("resolveSessionKeyForRun", () => {
       },
     });
 
+    expect(resolveSessionKeySelectionForRun("run-1")).toEqual({
+      kind: "selected",
+      storeSessionKey: "agent:retired:acp:run-1",
+      requestSessionKey: "acp:run-1",
+    });
     expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
     expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
     expect(hoisted.loadCombinedSessionEntriesForGatewayMock).toHaveBeenCalledTimes(1);
@@ -89,6 +97,24 @@ describe("resolveSessionKeyForRun", () => {
     });
 
     expect(resolveSessionKeyForRun("run-dup")).toBe("acp:run-dup");
+  });
+
+  it("preserves ambiguity details in the richer run selection helper", () => {
+    hoisted.loadConfigMock.mockReturnValue({});
+    hoisted.loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
+      databasePath: "(multiple)",
+      entries: {
+        "agent:retired:acp:first": { sessionId: "run-ambiguous", updatedAt: 100 },
+        "agent:retired:ops:second": { sessionId: "run-ambiguous", updatedAt: 100 },
+      },
+    });
+
+    expect(resolveSessionKeySelectionForRun("run-ambiguous")).toEqual({
+      kind: "ambiguous",
+      storeSessionKeys: ["agent:retired:acp:first", "agent:retired:ops:second"],
+      requestSessionKeys: ["acp:first", "ops:second"],
+    });
+    expect(resolveSessionKeyForRun("run-ambiguous")).toBeUndefined();
   });
 
   it("refuses ambiguous duplicate session ids without a clear best match", () => {

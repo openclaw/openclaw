@@ -25,6 +25,11 @@ export {
   replaceSqliteSessionTranscriptEvents,
 } from "../config/sessions/transcript-store.sqlite.js";
 export {
+  resolvePreferredSessionKeyForSessionIdMatches,
+  resolveSessionIdMatchSelection,
+} from "../sessions/session-id-resolution.js";
+export type { SessionIdMatchSelection } from "../sessions/session-id-resolution.js";
+export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,
   resolveSessionResetPolicy,
