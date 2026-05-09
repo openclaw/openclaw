@@ -1235,6 +1235,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - Memory Wiki `.openclaw-wiki/cache/claims.jsonl`
 - ClawHub `.clawhub/lock.json`
 - ClawHub `.clawhub/origin.json`
+- Browser profile decoration `.openclaw-profile-decorated`
 
 The ban should allow tests to create legacy fixtures and allow migration code to
 read/import/remove legacy file sources. Unshipped SQLite sidecars stay banned

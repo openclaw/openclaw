@@ -119,6 +119,7 @@ const legacyStoreMarkers = [
   },
   { label: "ClawHub skill lock JSON", pattern: /\b\.clawhub[/\\]lock\.json\b/u },
   { label: "ClawHub skill origin JSON", pattern: /\b\.clawhub[/\\]origin\.json\b/u },
+  { label: "Browser profile decoration marker", pattern: /\b\.openclaw-profile-decorated\b/u },
   { label: "installed plugin index JSON", pattern: /\bplugins[/\\]installs\.json\b/u },
   { label: "QQBot known users JSON", pattern: /\bknown-users\.json\b/u },
   { label: "QQBot ref-index JSONL", pattern: /\bref-index\.jsonl\b/u },

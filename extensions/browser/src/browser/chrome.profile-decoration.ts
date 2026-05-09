@@ -1,14 +1,9 @@
-import fs from "node:fs";
 import path from "node:path";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-
-function decoratedMarkerPath(userDataDir: string) {
-  return path.join(userDataDir, ".openclaw-profile-decorated");
-}
 
 function safeReadJson(filePath: string): Record<string, unknown> | null {
   const parsed = loadJsonFile(filePath);
@@ -166,12 +161,6 @@ export function decorateOpenClawProfile(
     setDeep(prefs, ["savefile", "default_directory"], opts.downloadDir);
   }
   safeWriteJson(preferencesPath, prefs);
-
-  try {
-    fs.writeFileSync(decoratedMarkerPath(userDataDir), `${Date.now()}\n`, "utf-8");
-  } catch {
-    // ignore
-  }
 }
 
 export function ensureProfileCleanExit(userDataDir: string) {
