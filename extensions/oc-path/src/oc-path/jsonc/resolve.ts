@@ -47,9 +47,6 @@ export function resolveJsoncOcPath(ast: JsoncAst, path: OcPath): JsoncOcPathMatc
 
   for (let seg of segments) {
     if (seg.length === 0) {return null;}
-    // `-N` on an indexable container is positional; on a keyed
-    // container it falls through to literal-key lookup (e.g. Telegram
-    // supergroup IDs — openclaw#59934).
     if (isPositionalSeg(seg)) {
       const concrete = positionalForJsonc(current, seg);
       if (concrete !== null) {seg = concrete;}
