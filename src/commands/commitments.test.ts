@@ -7,7 +7,7 @@ import { commitmentsDismissCommand, commitmentsListCommand } from "./commitments
 const mocks = vi.hoisted(() => ({
   listCommitments: vi.fn(),
   markCommitmentsStatus: vi.fn(),
-  resolveCommitmentStorePath: vi.fn(() => "/tmp/openclaw-commitments.json"),
+  resolveCommitmentDatabasePath: vi.fn(() => "/tmp/openclaw-state.sqlite"),
   getRuntimeConfig: vi.fn(() => ({
     commitments: {
       enabled: true,
@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../commitments/store.js", () => ({
   listCommitments: mocks.listCommitments,
   markCommitmentsStatus: mocks.markCommitmentsStatus,
-  resolveCommitmentStorePath: mocks.resolveCommitmentStorePath,
+  resolveCommitmentDatabasePath: mocks.resolveCommitmentDatabasePath,
 }));
 
 vi.mock("../config/config.js", () => ({

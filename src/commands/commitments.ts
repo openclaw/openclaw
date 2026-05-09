@@ -2,7 +2,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import {
   listCommitments,
   markCommitmentsStatus,
-  resolveCommitmentStorePath,
+  resolveCommitmentDatabasePath,
 } from "../commitments/store.js";
 import type { CommitmentRecord, CommitmentStatus } from "../commitments/types.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -104,18 +104,24 @@ export async function commitmentsListCommand(
   ).filter((commitment) => opts.all || status || isActiveCommitment(commitment));
 
   if (opts.json) {
-    writeRuntimeJson(runtime, {
-      count: commitments.length,
-      status: status ?? (opts.all ? null : "pending"),
-      agentId: normalizeOptionalString(opts.agent) ?? null,
-      store: resolveCommitmentStorePath(),
-      commitments,
-    });
+    runtime.log(
+      JSON.stringify(
+        {
+          count: commitments.length,
+          status: status ?? (opts.all ? null : "pending"),
+          agentId: normalizeOptionalString(opts.agent) ?? null,
+          databasePath: resolveCommitmentDatabasePath(),
+          commitments,
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
 
   runtime.log(info(`Commitments: ${commitments.length}`));
-  runtime.log(info(`Store: ${resolveCommitmentStorePath()}`));
+  runtime.log(info(`Database: ${resolveCommitmentDatabasePath()}`));
   if (status) {
     runtime.log(info(`Status filter: ${status}`));
   }

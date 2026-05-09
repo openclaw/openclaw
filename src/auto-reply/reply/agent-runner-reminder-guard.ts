@@ -28,8 +28,8 @@ export function hasUnbackedReminderCommitment(text: string): boolean {
  */
 export async function hasSessionRelatedCronJobs(params: { sessionKey?: string }): Promise<boolean> {
   try {
-    const cronStorePath = resolveCronStoreKey();
-    const store = await loadCronStore(cronStorePath);
+    const cronStoreKey = resolveCronStoreKey();
+    const store = await loadCronStore(cronStoreKey);
     if (store.jobs.length === 0) {
       return false;
     }

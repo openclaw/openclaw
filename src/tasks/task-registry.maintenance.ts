@@ -1063,10 +1063,10 @@ export function resetTaskRegistryMaintenanceRuntimeForTests(): void {
 }
 
 export function configureTaskRegistryMaintenance(options: {
-  cronStorePath?: string;
+  cronStoreKey?: string;
   cronRuntimeAuthoritative?: boolean;
 }): void {
-  configuredCronStoreKey = options.cronStorePath?.trim() || undefined;
+  configuredCronStoreKey = options.cronStoreKey?.trim() || undefined;
   if (options.cronRuntimeAuthoritative !== undefined) {
     configuredCronRuntimeAuthoritative = options.cronRuntimeAuthoritative;
   }
