@@ -220,15 +220,14 @@ describe("SQLite session store patch retries", () => {
   async function makeTmpStore(
     initial: Record<string, unknown> = {},
     options: { agentId?: string } = {},
-  ): Promise<{ dir: string; agentId: string; sessionsDir: string }> {
+  ): Promise<{ dir: string; agentId: string }> {
     const dir = await patchFixtureRootTracker.make("case");
     process.env.OPENCLAW_STATE_DIR = dir;
     const agentId = options.agentId ?? "main";
-    const sessionsDir = path.join(dir, "agents", agentId, "sessions");
     for (const [sessionKey, entry] of Object.entries(initial)) {
       upsertSessionEntry({ agentId, sessionKey, entry: entry as SessionEntry });
     }
-    return { dir, agentId, sessionsDir };
+    return { dir, agentId };
   }
 
   function readSessionEntries(agentId = "main"): Record<string, SessionEntry> {

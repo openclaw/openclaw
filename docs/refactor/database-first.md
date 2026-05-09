@@ -403,9 +403,9 @@ sessionId}` and session key context.
 - `llm-task` helper runs and hidden commitment extraction also use SQLite
   transcript rows, so these model-only helper sessions no longer create
   temporary JSON/JSONL transcript files.
-- `TranscriptSessionManager` default create, list, fork, and branch paths use
-  SQLite transcript rows unless a caller explicitly supplies a legacy transcript
-  directory for doctor/import/debug handling.
+- `TranscriptSessionManager` create, list, fork, branch, and continue paths use
+  SQLite transcript rows only. Doctor/import/debug code handles explicit legacy
+  source files outside the runtime session manager.
 - Parent transcript fork decisions and fork creation no longer accept
   `storePath` or `sessionsDir`; they use `{agentId, sessionId}` SQLite
   transcript scope instead of retained filesystem path metadata.
