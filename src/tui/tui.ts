@@ -877,15 +877,24 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       if (!statusStartedAt || lastActivityStatus !== activityStatus) {
         statusStartedAt = Date.now();
       }
-      ensureStatusLoader();
-      if (activityStatus === "waiting") {
+      if (opts.quietStatus) {
         stopStatusTimer();
-        startWaitingTimer();
-      } else {
         stopWaitingTimer();
-        startStatusTimer();
+        statusLoader?.stop();
+        statusLoader = null;
+        ensureStatusText();
+        statusText?.setText(theme.dim(`${activityStatus} | ${connectionStatus}`));
+      } else {
+        ensureStatusLoader();
+        if (activityStatus === "waiting") {
+          stopStatusTimer();
+          startWaitingTimer();
+        } else {
+          stopWaitingTimer();
+          startStatusTimer();
+        }
+        updateBusyStatusMessage();
       }
-      updateBusyStatusMessage();
     } else {
       statusStartedAt = null;
       stopStatusTimer();
