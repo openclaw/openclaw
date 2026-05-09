@@ -1,7 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { importLegacyCronStoreToSqlite } from "../../commands/doctor/legacy/cron-store.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
@@ -211,56 +208,28 @@ describe("cron service ops seam coverage", () => {
   });
 
   it("start persists load-time updatedAtMs repairs to SQLite state only", async () => {
-    const { storeKey, stateDir } = await makeStoreKey();
+    const { storeKey } = await makeStoreKey();
     const now = Date.parse("2026-04-09T08:00:00.000Z");
     const createdAtMs = now - 86_400_000;
     const nextRunAtMs = Date.parse("2026-04-10T09:00:00.000Z");
     const jobId = "future-sidecar-repair";
-    const storePath = path.join(stateDir, "legacy-cron", "jobs.json");
-    const statePath = storePath.replace(/\.json$/, "-state.json");
-
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
+    await writeCronStoreSnapshot({
+      storeKey,
+      jobs: [
         {
-          version: 1,
-          jobs: [
-            {
-              id: jobId,
-              name: "future sidecar repair",
-              enabled: true,
-              createdAtMs,
-              schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-              sessionTarget: "main",
-              wakeMode: "next-heartbeat",
-              payload: { kind: "systemEvent", text: "daily" },
-              state: {},
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    await fs.writeFile(
-      statePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: {
-            [jobId]: {
-              state: { nextRunAtMs },
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    await importLegacyCronStoreToSqlite({ legacyStorePath: storePath, storeKey });
+          id: jobId,
+          name: "future state repair",
+          enabled: true,
+          createdAtMs,
+          updatedAtMs: undefined,
+          schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "daily" },
+          state: { nextRunAtMs },
+        } as unknown as CronJob,
+      ],
+    });
 
     const state = createCronServiceState({
       storeKey,
@@ -279,7 +248,6 @@ describe("cron service ops seam coverage", () => {
 
       expect(persisted.jobs[0]?.updatedAtMs).toBe(createdAtMs);
       expect(persisted.jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
-      await expect(fs.stat(storePath)).rejects.toThrow();
     } finally {
       stop(state);
     }
