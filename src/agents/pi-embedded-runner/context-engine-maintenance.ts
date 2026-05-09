@@ -49,7 +49,7 @@ type DeferredTurnMaintenanceScheduleParams = {
   sessionId: string;
   sessionKey: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator: string;
+  transcriptLocator?: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
@@ -281,7 +281,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionId: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator: string;
+  transcriptLocator?: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
@@ -344,7 +344,7 @@ async function executeContextEngineMaintenance(params: {
   sessionId: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator: string;
+  transcriptLocator?: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -392,7 +392,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
   sessionId: string;
   sessionKey: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator: string;
+  transcriptLocator?: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
@@ -659,7 +659,7 @@ export async function runContextEngineMaintenance(params: {
   sessionId: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator: string;
+  transcriptLocator?: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;

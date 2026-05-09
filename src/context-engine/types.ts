@@ -205,7 +205,7 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     transcriptScope?: ContextEngineTranscriptScope;
-    transcriptLocator: string;
+    transcriptLocator?: string;
   }): Promise<BootstrapResult>;
 
   /**
@@ -218,7 +218,7 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     transcriptScope?: ContextEngineTranscriptScope;
-    transcriptLocator: string;
+    transcriptLocator?: string;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<ContextEngineMaintenanceResult>;
 
@@ -253,7 +253,7 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     transcriptScope?: ContextEngineTranscriptScope;
-    transcriptLocator: string;
+    transcriptLocator?: string;
     messages: AgentMessage[];
     /** Number of messages that existed before the prompt was sent. */
     prePromptMessageCount: number;
@@ -295,7 +295,7 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     transcriptScope?: ContextEngineTranscriptScope;
-    transcriptLocator: string;
+    transcriptLocator?: string;
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */
     force?: boolean;

@@ -81,7 +81,7 @@ async function runBootstrap(
   overrides: Partial<Parameters<typeof runAttemptContextEngineBootstrap>[0]> = {},
 ) {
   await runAttemptContextEngineBootstrap({
-    hadTranscriptLocator: true,
+    hadTranscript: true,
     contextEngine,
     sessionId: embeddedSessionId,
     sessionKey,

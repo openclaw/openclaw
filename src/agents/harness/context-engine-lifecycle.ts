@@ -19,12 +19,12 @@ export type HarnessContextEngine = ContextEngine;
  * Run optional bootstrap + bootstrap maintenance for a harness-owned context engine.
  */
 export async function bootstrapHarnessContextEngine(params: {
-  hadTranscriptLocator: boolean;
+  hadTranscript: boolean;
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator: string;
+  transcriptLocator?: string;
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
@@ -32,7 +32,7 @@ export async function bootstrapHarnessContextEngine(params: {
   warn: (message: string) => void;
 }): Promise<void> {
   if (
-    !params.hadTranscriptLocator ||
+    !params.hadTranscript ||
     !(params.contextEngine?.bootstrap || params.contextEngine?.maintain)
   ) {
     return;
@@ -103,7 +103,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
   sessionIdUsed: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator: string;
+  transcriptLocator?: string;
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
   tokenBudget?: number;
@@ -236,7 +236,7 @@ export async function runHarnessContextEngineMaintenance(params: {
   sessionId: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  transcriptLocator: string;
+  transcriptLocator?: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
