@@ -169,9 +169,9 @@ function createTaskRegistryMaintenanceHarness(params: {
       return next;
     },
     isCronRuntimeAuthoritative: () => params.cronRuntimeAuthoritative ?? true,
-    resolveCronStoreKey: () => "/tmp/openclaw-test-cron/jobs.json",
+    resolveCronStoreKey: () => "test-cron-store",
     loadCronStoreSync: () => params.cronStore ?? { version: 1, jobs: [] },
-    readCronRunLogEntriesSync: (_storePath, opts) => cronRunLogEntries[opts?.jobId ?? ""] ?? [],
+    readCronRunLogEntriesSync: (_storeKey, opts) => cronRunLogEntries[opts?.jobId ?? ""] ?? [],
   };
 
   setTaskRegistryMaintenanceRuntimeForTests(runtime);
