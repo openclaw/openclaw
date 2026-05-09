@@ -44,6 +44,15 @@ describe("kysely sync helper types", () => {
           }
         | undefined
       >();
+
+      // @ts-expect-error Kysely checks selected column string literals.
+      db.selectFrom("type_test_items").select("missing_column");
+
+      // @ts-expect-error Kysely checks where-reference string literals.
+      db.selectFrom("type_test_items").select("id").where("missing_column", "=", 1);
+
+      // @ts-expect-error Kysely checks grouped column string literals.
+      query.groupBy("missing_column");
     }
 
     expect(query.compile().sql).toContain("select");

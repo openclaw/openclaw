@@ -55,6 +55,9 @@ patching:
    - `selectFrom`, `insertInto`, `updateTable`, `deleteFrom`
    - `executeTakeFirst`, `executeTakeFirstOrThrow`, `execute`
    - `eb.fn.countAll`, `eb.fn.count`, `eb.fn.coalesce` for common functions
+   - Keep compile-time Kysely reference literals such as `"host"` and
+     `"flow_id as flowId"` when they are clearer than constants; they are
+     type-checked by Kysely.
    - Let Kysely infer selected row shapes. Do not pass broad row generics to
      sync helpers for normal builder queries.
    - For finite public query presets, use a preset-to-row type map plus a union
@@ -65,6 +68,9 @@ patching:
    - Bad: raw `COUNT(*)` or dynamic SQL where Kysely has a typed builder shape.
    - Use `${value}` parameters; use `sql.ref` / `sql.table` only for validated,
      closed-set identifiers.
+   - Do not feed unconstrained runtime `string` values into table/column/group/
+     order/identifier positions. Narrow them to local unions or generated table
+     keys first.
 5. Align TypeScript with real driver values:
    - Kysely does not coerce runtime values.
    - Native `node:sqlite` returns BLOB columns as `Uint8Array`; convert with
@@ -126,6 +132,8 @@ Add or update focused tests for:
 - BLOB and JSON boundary conversions
 - schema/codegen drift
 - type inference contracts for sync helpers and public query result maps
+- negative type contracts with `@ts-expect-error` for important column/preset
+  mistakes
 - public store behavior, not just private SQL shape
 
 ## Avoid
@@ -136,5 +144,7 @@ Add or update focused tests for:
 - Do not hand-edit generated DB types.
 - Do not hide finite query result shapes behind `Record<string, ...>` just to
   make JSON output convenient; use exact row unions or map at the boundary.
+- Do not replace every Kysely string literal with constants for aesthetics; fix
+  dynamic identifiers, raw SQL assertions, and public result boundaries instead.
 - Do not add broad cache layers to hide repeated query/discovery work; carry the
   known runtime fact earlier when possible.

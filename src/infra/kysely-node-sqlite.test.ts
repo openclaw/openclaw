@@ -20,6 +20,10 @@ type TestDatabase = {
   };
 };
 
+function readSqliteUserVersion<Database>(db: Kysely<Database>) {
+  return sql<{ user_version: number }>`pragma user_version`.execute(db);
+}
+
 describe("NodeSqliteKyselyDialect", () => {
   let db: Kysely<TestDatabase> | undefined;
 
@@ -77,9 +81,7 @@ describe("NodeSqliteKyselyDialect", () => {
       }),
     });
 
-    await expect(
-      sql<{ user_version: number }>`pragma user_version`.execute(db),
-    ).resolves.toMatchObject({
+    await expect(readSqliteUserVersion(db)).resolves.toMatchObject({
       rows: [{ user_version: 7 }],
     });
     expect(createDatabase).toHaveBeenCalledTimes(1);
