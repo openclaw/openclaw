@@ -37,6 +37,7 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  fireAt: number;
   releaseReady: () => void;
   readyReleased: boolean;
   task: Promise<void>;
@@ -44,17 +45,34 @@ type DebounceBuffer<T> = {
 
 const DEFAULT_MAX_TRACKED_KEYS = 2048;
 
-export type InboundDebounceCreateParams<T> = {
+export type InboundDebounceActivityControls = {
+  extend: (ms: number) => void;
+  cancel: () => void;
+};
+
+export type InboundDebounceActivityResult = {
+  readonly [key: string]: never;
+} | void;
+
+export type InboundDebounceCreateParams<T, TActivity = never> = {
   debounceMs: number;
   maxTrackedKeys?: number;
   buildKey: (item: T) => string | null | undefined;
+  buildActivity?: (item: T, key: string) => TActivity | null | undefined;
+  onActivity?: (
+    activity: TActivity,
+    controls: InboundDebounceActivityControls,
+  ) => Promise<InboundDebounceActivityResult> | InboundDebounceActivityResult;
   shouldDebounce?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
   onFlush: (items: T[]) => Promise<void>;
+  onCancel?: (items: T[], key: string) => void;
   onError?: (err: unknown, items: T[]) => void;
 };
 
-export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
+export function createInboundDebouncer<T, TActivity = never>(
+  params: InboundDebounceCreateParams<T, TActivity>,
+) {
   const buffers = new Map<string, DebounceBuffer<T>>();
   const keyChains = new Map<string, Promise<void>>();
   const defaultDebounceMs = Math.max(0, Math.trunc(params.debounceMs));
@@ -150,10 +168,53 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
     }
+    const delayMs = Math.max(0, buffer.fireAt - Date.now());
     buffer.timeout = setTimeout(async () => {
       await flushBuffer(key, buffer);
-    }, buffer.debounceMs);
+    }, delayMs);
     buffer.timeout.unref?.();
+  };
+
+  const extendKey = (key: string, ms: number) => {
+    const buffer = buffers.get(key);
+    const extensionMs = resolveMs(ms);
+    if (!buffer || extensionMs === undefined) {
+      return;
+    }
+    const nextFireAt = Date.now() + extensionMs;
+    buffer.fireAt = Math.max(buffer.fireAt, nextFireAt);
+    scheduleFlush(key, buffer);
+  };
+
+  const cancelKey = (key: string) => {
+    const buffer = buffers.get(key);
+    if (!buffer) {
+      return;
+    }
+    buffers.delete(key);
+    const items = buffer.items;
+    buffer.items = [];
+    if (buffer.timeout) {
+      clearTimeout(buffer.timeout);
+      buffer.timeout = null;
+    }
+    try {
+      params.onCancel?.(items, key);
+    } catch {
+      // Cancellation is best-effort cleanup; do not let observer cleanup throw
+      // back through plugin hook activity handling.
+    }
+    releaseBuffer(buffer);
+  };
+
+  const emitActivity = async (activity: TActivity, key: string) => {
+    if (!params.onActivity) {
+      return;
+    }
+    await params.onActivity(activity, {
+      extend: (ms) => extendKey(key, ms),
+      cancel: () => cancelKey(key),
+    });
   };
 
   const canTrackKey = (key: string) => {
@@ -167,6 +228,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const key = params.buildKey(item);
     const debounceMs = resolveDebounceMs(item);
     const canDebounce = debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
+
+    if (key && params.buildActivity) {
+      const activity = params.buildActivity(item, key);
+      if (activity !== null && activity !== undefined) {
+        await emitActivity(activity, key);
+      }
+    }
 
     if (!canDebounce || !key) {
       if (key) {
@@ -201,6 +269,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (existing) {
       existing.items.push(item);
       existing.debounceMs = debounceMs;
+      existing.fireAt = Math.max(existing.fireAt, Date.now() + debounceMs);
       scheduleFlush(key, existing);
       return;
     }
@@ -224,6 +293,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       items: [item],
       timeout: null,
       debounceMs,
+      fireAt: Date.now() + debounceMs,
       releaseReady: reservedTask.release,
       readyReleased: false,
       task: reservedTask.task,
@@ -232,5 +302,5 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  return { enqueue, flushKey, extendKey, cancelKey, emitActivity };
 }
