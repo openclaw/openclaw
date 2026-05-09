@@ -342,7 +342,16 @@ describe("bundled plugin postinstall", () => {
       log,
     });
 
-    expect(result).toMatchObject({ status: "migrated" });
+    expect(result).toEqual({
+      current: {
+        plugins: [{ pluginId: "demo" }],
+      },
+      migrated: true,
+      preflight: {
+        deprecationWarnings: [],
+      },
+      status: "migrated",
+    });
     expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
       env: { OPENCLAW_HOME: "/tmp/home" },
       packageRoot,
@@ -403,7 +412,7 @@ describe("bundled plugin postinstall", () => {
         importModule,
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
       status: "disabled",
       migrated: false,
       reason: "disabled-env",
@@ -427,9 +436,10 @@ describe("bundled plugin postinstall", () => {
         importModule,
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
       status: "skip-existing",
       migrated: false,
+      preflight: {},
     });
     expect(importModule).toHaveBeenCalledOnce();
     expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
