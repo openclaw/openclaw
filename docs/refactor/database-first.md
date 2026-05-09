@@ -302,7 +302,8 @@ The remaining cleanup is mostly consolidation and deletion:
 - Cron runtime callers now use a stable SQLite cron store key. Legacy
   `cron.store` paths are doctor import inputs only; production gateway, task
   maintenance, status, run-log, and Telegram target writeback paths use
-  `resolveCronStoreKey` and no longer path-normalize the key.
+  `resolveCronStoreKey` and no longer path-normalize the key. Cron status now
+  reports `storeKey` rather than the old file-shaped `storePath` field.
 - ACP spawn no longer resolves or persists transcript JSONL file paths. Spawn
   and thread-bind setup persist the SQLite session row directly and keep the
   session id as the retained transcript identity.

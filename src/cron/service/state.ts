@@ -170,8 +170,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 
 export type CronStatusSummary = {
   enabled: boolean;
-  /** Kept as `storePath` for the older RPC/status response contract. */
-  storePath: string;
+  storeKey: string;
   jobs: number;
   nextWakeAtMs: number | null;
 };
