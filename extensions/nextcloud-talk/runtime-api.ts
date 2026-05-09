@@ -19,7 +19,10 @@ export {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+export {
+  createChannelMessageReplyPipeline,
+  dispatchChannelMessageReplyWithBase,
+} from "openclaw/plugin-sdk/channel-message";
 export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 export { deliverFormattedTextWithAttachments } from "openclaw/plugin-sdk/reply-payload";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";

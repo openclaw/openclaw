@@ -596,13 +596,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
+      session: createSessionRuntimeMock(sessionStore),
       runEmbeddedPiAgent,
     };
     mocks.managerGetCall.mockReturnValue({

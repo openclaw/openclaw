@@ -215,6 +215,7 @@ export async function consultRealtimeVoiceAgent(params: {
   provider?: RunEmbeddedPiAgentParams["provider"];
   model?: RunEmbeddedPiAgentParams["model"];
   thinkLevel?: RunEmbeddedPiAgentParams["thinkLevel"];
+  fastMode?: RunEmbeddedPiAgentParams["fastMode"];
   timeoutMs?: number;
   toolsAllow?: string[];
   extraSystemPrompt?: string;
@@ -272,6 +273,7 @@ export async function consultRealtimeVoiceAgent(params: {
     provider: params.provider,
     model: params.model,
     thinkLevel: params.thinkLevel ?? "high",
+    fastMode: params.fastMode,
     verboseLevel: "off",
     reasoningLevel: "off",
     toolResultFormat: "plain",
