@@ -28,12 +28,15 @@ import {
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import {
   DiscordMessageListener,
+  DiscordMessageDeleteListener,
+  DiscordTypingStartListener,
   DiscordInteractionListener,
   DiscordPresenceListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
   DiscordThreadUpdateListener,
   registerDiscordListener,
+  type DiscordInboundActivityEmitter,
 } from "./listeners.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
@@ -251,7 +254,9 @@ export function registerDiscordMonitorListeners(params: {
   groupPolicy: "open" | "allowlist" | "disabled";
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   logger: NonNullable<ConstructorParameters<typeof DiscordMessageListener>[1]>;
-  messageHandler: ConstructorParameters<typeof DiscordMessageListener>[0];
+  messageHandler: ConstructorParameters<typeof DiscordMessageListener>[0] & {
+    emitInboundActivity: DiscordInboundActivityEmitter;
+  };
   trackInboundEvent?: () => void;
 }) {
   registerDiscordListener(
@@ -261,6 +266,24 @@ export function registerDiscordMonitorListeners(params: {
   registerDiscordListener(
     params.client.listeners,
     new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
+  );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordTypingStartListener(
+      params.accountId,
+      params.messageHandler.emitInboundActivity,
+      params.logger,
+      params.trackInboundEvent,
+    ),
+  );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordMessageDeleteListener(
+      params.accountId,
+      params.messageHandler.emitInboundActivity,
+      params.logger,
+      params.trackInboundEvent,
+    ),
   );
 
   if (shouldRegisterDiscordReactionListeners(params)) {

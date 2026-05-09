@@ -3,9 +3,11 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
   type Client,
   InteractionCreateListener,
+  MessageDeleteListener,
   MessageCreateListener,
   PresenceUpdateListener,
   ThreadUpdateListener,
+  TypingStartListener,
 } from "../internal/discord.js";
 import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
 export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listeners.reactions.js";
@@ -17,6 +19,18 @@ type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").create
 
 export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 export type DiscordInteractionEvent = Parameters<InteractionCreateListener["handle"]>[0];
+export type DiscordTypingStartEvent = Parameters<TypingStartListener["handle"]>[0];
+export type DiscordMessageDeleteEvent = Parameters<MessageDeleteListener["handle"]>[0];
+
+export type DiscordInboundActivityEmitter = (event: {
+  source: "message" | "typing" | "delete" | "update";
+  key: string;
+  authorId?: string;
+  messageId?: string;
+  channelId: string;
+  timestamp: number;
+  raw?: unknown;
+}) => Promise<void>;
 
 export type DiscordMessageHandler = (
   data: DiscordMessageEvent,
@@ -51,6 +65,72 @@ export class DiscordMessageListener extends MessageCreateListener {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));
       });
+  }
+}
+
+export class DiscordTypingStartListener extends TypingStartListener {
+  constructor(
+    private accountId: string,
+    private emitActivity: DiscordInboundActivityEmitter,
+    private logger?: Logger,
+    private onEvent?: () => void,
+  ) {
+    super();
+  }
+
+  async handle(data: DiscordTypingStartEvent) {
+    this.onEvent?.();
+    const userId = typeof data.user_id === "string" ? data.user_id : undefined;
+    const channelId = typeof data.channel_id === "string" ? data.channel_id : undefined;
+    if (!userId || !channelId) {
+      return;
+    }
+    const key = `discord:${this.accountId}:${channelId}:${userId}`;
+    void this.emitActivity({
+      source: "typing",
+      key,
+      authorId: userId,
+      channelId,
+      timestamp: Date.now(),
+      raw: data,
+    }).catch((err) => {
+      const logger = this.logger ?? discordEventQueueLog;
+      logger.error(danger(`discord typing activity hook failed: ${String(err)}`));
+    });
+  }
+}
+
+export class DiscordMessageDeleteListener extends MessageDeleteListener {
+  constructor(
+    private accountId: string,
+    private emitActivity: DiscordInboundActivityEmitter,
+    private logger?: Logger,
+    private onEvent?: () => void,
+  ) {
+    super();
+  }
+
+  async handle(data: DiscordMessageDeleteEvent) {
+    this.onEvent?.();
+    const channelId = typeof data.channel_id === "string" ? data.channel_id : undefined;
+    const messageId = typeof data.id === "string" ? data.id : undefined;
+    if (!channelId || !messageId) {
+      return;
+    }
+    // Discord delete payloads do not include the original author. Use a
+    // channel-scoped key so sibling hooks can still cancel their own side state.
+    const key = `discord:${this.accountId}:${channelId}:*`;
+    void this.emitActivity({
+      source: "delete",
+      key,
+      messageId,
+      channelId,
+      timestamp: Date.now(),
+      raw: data,
+    }).catch((err) => {
+      const logger = this.logger ?? discordEventQueueLog;
+      logger.error(danger(`discord delete activity hook failed: ${String(err)}`));
+    });
   }
 }
 

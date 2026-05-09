@@ -4,6 +4,7 @@ import {
   type APIReaction,
   type GatewayPresenceUpdateDispatchData,
   type GatewayThreadUpdateDispatchData,
+  type GatewayTypingStartDispatchData,
 } from "discord-api-types/v10";
 import type { Client } from "./client.js";
 import { Guild, Message, User } from "./structures.js";
@@ -36,6 +37,12 @@ export type DiscordReactionDispatchData = {
   rawMessage?: APIMessage;
 };
 
+export type DiscordMessageDeleteDispatchData = {
+  id: string;
+  channel_id: string;
+  guild_id?: string;
+};
+
 export abstract class BaseListener {
   abstract readonly type: string;
   abstract handle(data: unknown, client: Client): Promise<void> | void;
@@ -66,6 +73,22 @@ export abstract class MessageReactionAddListener extends BaseListener {
 export abstract class MessageReactionRemoveListener extends BaseListener {
   readonly type = GatewayDispatchEvents.MessageReactionRemove;
   abstract override handle(data: DiscordReactionDispatchData, client: Client): Promise<void> | void;
+}
+
+export abstract class TypingStartListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.TypingStart;
+  abstract override handle(
+    data: GatewayTypingStartDispatchData,
+    client: Client,
+  ): Promise<void> | void;
+}
+
+export abstract class MessageDeleteListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.MessageDelete;
+  abstract override handle(
+    data: DiscordMessageDeleteDispatchData,
+    client: Client,
+  ): Promise<void> | void;
 }
 
 export abstract class PresenceUpdateListener extends BaseListener {

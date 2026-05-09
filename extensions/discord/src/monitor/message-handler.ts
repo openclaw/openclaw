@@ -2,6 +2,11 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import type {
+  PluginHookInboundActivityContext,
+  PluginHookInboundActivityEvent,
+} from "openclaw/plugin-sdk/plugin-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { createDiscordRestClient } from "../client.js";
@@ -58,6 +63,7 @@ async function loadMessagePreflightRuntime() {
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
+  emitInboundActivity: (activity: PluginHookInboundActivityEvent) => Promise<void>;
 };
 
 function isNonEmptyString(value: string | undefined): value is string {
@@ -94,6 +100,30 @@ function queueAcceptedDiscordTypingCue(ctx: DiscordMessagePreflightContext): voi
   });
 }
 
+function createDiscordInboundActivityContext(params: {
+  event: PluginHookInboundActivityEvent;
+  cfg: DiscordMessageHandlerParams["cfg"];
+  accountId: string;
+  runtime: DiscordMessageHandlerParams["runtime"];
+  extend: (ms: number) => void;
+  cancel: () => void;
+}): PluginHookInboundActivityContext {
+  return {
+    config: params.cfg,
+    logger: {
+      info: (message) => params.runtime.log?.(message),
+      warn: (message) => params.runtime.error?.(danger(message)),
+      error: (message) => params.runtime.error?.(danger(message)),
+    },
+    channelId: params.event.channelId,
+    accountId: params.accountId,
+    senderId: params.event.authorId,
+    messageId: params.event.messageId,
+    extend: params.extend,
+    cancel: params.cancel,
+  };
+}
+
 export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams,
 ): DiscordMessageHandlerWithLifecycle {
@@ -108,6 +138,7 @@ export function createDiscordMessageHandler(
     "group-mentions";
   const preflightDiscordMessageImpl = params.__testing?.preflightDiscordMessage;
   const replayGuard = createDiscordInboundReplayGuard();
+  const pendingMessageKeys = new Map<string, string>();
   const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
     setStatus: params.setStatus,
@@ -116,12 +147,15 @@ export function createDiscordMessageHandler(
     __testing: params.__testing,
   });
 
-  const { debouncer } = createChannelInboundDebouncer<{
-    data: DiscordMessageEvent;
-    client: Client;
-    abortSignal?: AbortSignal;
-    replayKey?: string;
-  }>({
+  const { debouncer } = createChannelInboundDebouncer<
+    {
+      data: DiscordMessageEvent;
+      client: Client;
+      abortSignal?: AbortSignal;
+      replayKey?: string;
+    },
+    PluginHookInboundActivityEvent
+  >({
     cfg: params.cfg,
     channel: "discord",
     buildKey: (entry) => {
@@ -138,6 +172,48 @@ export function createDiscordMessageHandler(
         return null;
       }
       return `discord:${params.accountId}:${channelId}:${authorId}`;
+    },
+    buildActivity: (entry, key) => {
+      const message = entry.data.message;
+      const channelId = message
+        ? resolveDiscordMessageChannelId({
+            message,
+            eventChannelId: entry.data.channel_id,
+          })
+        : entry.data.channel_id;
+      if (!channelId) {
+        return null;
+      }
+      const messageId = message?.id ?? entry.data.id;
+      if (messageId) {
+        pendingMessageKeys.set(messageId, key);
+      }
+      return {
+        source: "message",
+        key,
+        authorId: entry.data.author?.id ?? message?.author?.id,
+        messageId,
+        channelId,
+        timestamp: Date.now(),
+        raw: entry.data,
+      };
+    },
+    onActivity: async (event, controls) => {
+      const hookRunner = getGlobalHookRunner();
+      if (!hookRunner?.hasHooks("inbound_activity")) {
+        return;
+      }
+      return hookRunner.runInboundActivity(
+        event,
+        createDiscordInboundActivityContext({
+          event,
+          cfg: params.cfg,
+          accountId: params.accountId,
+          runtime: params.runtime,
+          extend: controls.extend,
+          cancel: controls.cancel,
+        }),
+      );
     },
     shouldDebounce: (entry) => {
       const message = entry.data.message;
@@ -159,6 +235,12 @@ export function createDiscordMessageHandler(
         return;
       }
       const replayKeys = entries.map((entry) => entry.replayKey).filter(isNonEmptyString);
+      for (const entry of entries) {
+        const messageId = entry.data.message?.id ?? entry.data.id;
+        if (messageId) {
+          pendingMessageKeys.delete(messageId);
+        }
+      }
       const abortSignal = last.abortSignal;
       if (abortSignal?.aborted) {
         releaseDiscordInboundReplay({
@@ -263,6 +345,20 @@ export function createDiscordMessageHandler(
     onError: (err) => {
       params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
     },
+    onCancel: (entries) => {
+      const replayKeys = entries.map((entry) => entry.replayKey).filter(isNonEmptyString);
+      releaseDiscordInboundReplay({
+        replayKeys,
+        replayGuard,
+        error: new Error("discord inbound debounce cancelled by inbound_activity hook"),
+      });
+      for (const entry of entries) {
+        const messageId = entry.data.message?.id ?? entry.data.id;
+        if (messageId) {
+          pendingMessageKeys.delete(messageId);
+        }
+      }
+    },
   });
 
   const handler: DiscordMessageHandlerWithLifecycle = async (data, client, options) => {
@@ -304,6 +400,16 @@ export function createDiscordMessageHandler(
   };
 
   handler.deactivate = messageRunQueue.deactivate;
+  handler.emitInboundActivity = async (activity) => {
+    const key =
+      activity.source === "delete" && activity.messageId
+        ? (pendingMessageKeys.get(activity.messageId) ?? activity.key)
+        : activity.key;
+    await debouncer.emitActivity({ ...activity, key }, key);
+    if (activity.source === "delete" && activity.messageId) {
+      pendingMessageKeys.delete(activity.messageId);
+    }
+  };
 
   return handler;
 }
