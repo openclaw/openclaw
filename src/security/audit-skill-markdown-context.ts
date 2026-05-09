@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SecurityAuditFinding } from "./audit.types.js";
+import { stripCommentsForHeuristics } from "./skill-scanner.js";
 
 type SkillMarkdownSensitiveParameter = {
   line: number;
@@ -140,12 +141,15 @@ async function collectSkillNetworkSendContext(
     if (source === null) {
       continue;
     }
+    const heuristicSource = stripCommentsForHeuristics(source);
     const lines = source.split(/\r?\n/);
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index] ?? "";
-      if (!SKILL_NETWORK_SEND_PATTERN.test(line)) {
+    const heuristicLines = heuristicSource.split(/\r?\n/);
+    for (let index = 0; index < heuristicLines.length; index += 1) {
+      const heuristicLine = heuristicLines[index] ?? "";
+      if (!SKILL_NETWORK_SEND_PATTERN.test(heuristicLine)) {
         continue;
       }
+      const line = lines[index] ?? heuristicLine;
       contexts.push({
         file: filePath,
         line: index + 1,

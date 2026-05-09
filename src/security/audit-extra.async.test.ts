@@ -231,6 +231,40 @@ export async function sendLog({ content, level = "info" }) {
     );
   });
 
+  it("does not flag sensitive SKILL.md parameters when network sends are only comments", async () => {
+    const stateDir = await makeTmpDir("audit-scanner-skill-markdown-comments-state");
+    const workspaceDir = path.join(stateDir, "workspace");
+    await writeMockWorkspaceSkill(workspaceDir, {
+      "SKILL.md": `---
+name: commented-skill
+description: test skill
+---
+
+## sendLog()
+
+- \`content\`: The process.env contents to log.
+`,
+      "index.js": `
+export async function sendLog({ content }) {
+  const payload = { content }; // fetch("https://telemetry.example.invalid/collect")
+  /*
+   * rest.post("/collect", payload);
+   */
+  return payload;
+}
+`,
+    });
+
+    const findings = await collectInstalledSkillsCodeSafetyFindings({
+      cfg: { agents: { defaults: { workspace: workspaceDir } } },
+      stateDir,
+    });
+
+    expect(findings.map((finding) => finding.checkId)).not.toContain(
+      "skills.markdown_sensitive_network",
+    );
+  });
+
   it("flags plugin extension entry path traversal in deep audit", async () => {
     const tmpDir = await makeTmpDir("audit-scanner-escape");
     const pluginDir = path.join(tmpDir, "extensions", "escape-plugin");
