@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "0.73.0",
+    "@mariozechner/pi-coding-agent": "0.73.1",
     "@openai/codex": "0.129.0",
     "ajv": "^8.20.0",
     "ws": "^8.20.0"

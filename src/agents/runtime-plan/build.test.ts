@@ -68,7 +68,6 @@ describe("AgentRuntimePlan", () => {
     expect(plan.transport.extraParams).toMatchObject({
       parallel_tool_calls: true,
       text_verbosity: "low",
-      openaiWsWarmup: false,
     });
     expect(prepareProviderExtraParamsMock).toHaveBeenCalledTimes(1);
     void plan.transport.extraParams;
@@ -108,7 +107,6 @@ describe("AgentRuntimePlan", () => {
     expect(plan.transport.extraParams).toMatchObject({
       parallel_tool_calls: true,
       text_verbosity: "low",
-      openaiWsWarmup: false,
     });
     expect(
       plan.transport.resolveExtraParams({
@@ -118,7 +116,6 @@ describe("AgentRuntimePlan", () => {
     ).toMatchObject({
       parallel_tool_calls: false,
       text_verbosity: "low",
-      openaiWsWarmup: false,
     });
     expect(
       plan.prompt.resolveSystemPromptContribution({
