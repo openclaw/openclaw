@@ -142,7 +142,7 @@ describe("media store", () => {
         const entries = await fs.readdir(failedDir).catch(() => []);
         expect(attemptedRelPaths).toHaveLength(1);
         expect(path.basename(attemptedRelPaths[0] ?? "")).toMatch(/^[^/\\]+\.ogg$/);
-        expect(entries).toEqual([]);
+        expect(entries).toStrictEqual([]);
       });
     } finally {
       vi.doUnmock("../infra/file-store.js");

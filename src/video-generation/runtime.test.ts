@@ -104,8 +104,8 @@ describe("video-generation runtime", () => {
 
     expect(result.provider).toBe("video-plugin");
     expect(result.model).toBe("vid-v1");
-    expect(result.attempts).toEqual([]);
-    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
+    expect(result.ignoredOverrides).toStrictEqual([]);
     expect(seenAuthStore).toEqual(authStore);
     expect(seenTimeoutMs).toBe(12_345);
     expect(result.videos).toEqual([
@@ -151,7 +151,7 @@ describe("video-generation runtime", () => {
     const result = await runGenerateVideo(params);
 
     expect(result.provider).toBe("video-plugin");
-    expect(listedConfigs).toEqual([]);
+    expect(listedConfigs).toStrictEqual([]);
   });
 
   it("auto-detects and falls through to another configured video-generation provider by default", async () => {
@@ -439,7 +439,7 @@ describe("video-generation runtime", () => {
     });
 
     expect(result.provider).toBe("fal");
-    expect(result.attempts).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
     expect(seenRequest).toEqual({
       inputImages: [{ url: "https://example.com/reference.png" }],
       inputVideos: [{ url: "https://example.com/reference.mp4" }],
@@ -636,7 +636,7 @@ describe("video-generation runtime", () => {
       normalizedDurationSeconds: 6,
       supportedDurationSeconds: [4, 6, 8],
     });
-    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.ignoredOverrides).toStrictEqual([]);
   });
 
   it("ignores unsupported optional overrides per provider", async () => {
@@ -738,7 +738,7 @@ describe("video-generation runtime", () => {
     });
 
     expect(seenResolution).toBe("768P");
-    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.ignoredOverrides).toStrictEqual([]);
     expect(result.normalization).toMatchObject({
       resolution: {
         requested: "720P",
@@ -844,7 +844,7 @@ describe("video-generation runtime", () => {
       aspectRatio: "16:9",
       resolution: undefined,
     });
-    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.ignoredOverrides).toStrictEqual([]);
     expect(result.normalization).toMatchObject({
       aspectRatio: {
         applied: "16:9",

@@ -52,7 +52,7 @@ describe("image-generation provider registry", () => {
   it("delegates provider resolution to the capability provider boundary", () => {
     const cfg = {} as OpenClawConfig;
 
-    expect(listImageGenerationProviders(cfg)).toEqual([]);
+    expect(listImageGenerationProviders(cfg)).toStrictEqual([]);
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "imageGenerationProviders",
       cfg,

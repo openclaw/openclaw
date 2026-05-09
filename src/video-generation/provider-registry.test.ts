@@ -46,7 +46,7 @@ describe("video-generation provider registry", () => {
   });
 
   it("delegates provider resolution to the capability provider boundary", () => {
-    expect(listVideoGenerationProviders()).toEqual([]);
+    expect(listVideoGenerationProviders()).toStrictEqual([]);
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "videoGenerationProviders",
       cfg: undefined,
