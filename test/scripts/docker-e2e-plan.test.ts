@@ -361,24 +361,38 @@ describe("scripts/lib/docker-e2e-plan", () => {
       releaseChunk: "plugins-integrations",
     });
 
-    expect(packageUpdate.lanes.map((lane) => lane.name)).toEqual(
-      expect.arrayContaining([
-        "install-e2e-openai",
-        "install-e2e-anthropic",
-        "update-channel-switch",
-      ]),
+    const bundledPluginSweepLanes = Array.from(
+      { length: BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS },
+      (_, index) => `bundled-plugin-install-uninstall-${index}`,
     );
-    expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual(
-      expect.arrayContaining([
-        "plugins",
-        "bundled-plugin-install-uninstall-0",
-        "bundled-plugin-install-uninstall-23",
-        "openwebui",
-      ]),
-    );
-    expect(legacy.lanes.map((lane) => lane.name)).toEqual(
-      expect.arrayContaining(["plugins", "bundled-plugin-install-uninstall-0", "openwebui"]),
-    );
+
+    expect(packageUpdate.lanes.map((lane) => lane.name)).toEqual([
+      "install-e2e-openai",
+      "install-e2e-anthropic",
+      "npm-onboard-channel-agent",
+      "npm-onboard-discord-channel-agent",
+      "npm-onboard-slack-channel-agent",
+      "doctor-switch",
+      "update-channel-switch",
+      "upgrade-survivor",
+      "published-upgrade-survivor",
+      "update-restart-auth",
+    ]);
+    expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([
+      "plugins",
+      ...bundledPluginSweepLanes,
+      "cron-mcp-cleanup",
+      "openai-web-search-minimal",
+      "openwebui",
+    ]);
+    expect(legacy.lanes.map((lane) => lane.name)).toEqual([
+      "plugins",
+      ...bundledPluginSweepLanes,
+      "cron-mcp-cleanup",
+      "openai-web-search-minimal",
+      "plugin-update",
+      "openwebui",
+    ]);
   });
 
   it("expands the published upgrade survivor lane across deduped baselines", () => {
