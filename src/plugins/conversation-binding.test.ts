@@ -13,7 +13,9 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 
 const tempDirs: string[] = [];
 const tempRoot = makeTrackedTempDir("openclaw-plugin-binding", tempDirs);
+const stateDir = path.join(tempRoot, "state");
 const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
+const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 
 const sessionBindingState = vi.hoisted(() => {
   const records = new Map<string, SessionBindingRecord>();
@@ -165,6 +167,11 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
 }
 
 afterAll(() => {
+  if (originalOpenClawStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+  }
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -410,8 +417,9 @@ describe("plugin conversation binding approvals", () => {
     __testing.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());
     closeOpenClawStateDatabaseForTest();
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     fs.rmSync(approvalsPath, { force: true });
-    fs.rmSync(path.join(tempRoot, "state"), { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "work" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "isolated" });
