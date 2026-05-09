@@ -487,8 +487,8 @@ export async function runGatewayLoop(params: {
       }
       const authorized = consumeGatewaySigusr1RestartAuthorization();
       if (!authorized) {
+        markGatewaySigusr1RestartHandled();
         if (!isGatewaySigusr1RestartExternallyAllowed()) {
-          markGatewaySigusr1RestartHandled();
           gatewayLog.warn(
             "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
           );
