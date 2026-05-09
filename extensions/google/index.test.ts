@@ -138,7 +138,7 @@ describe("google provider plugin hooks", () => {
         provider: "google-gemini-cli",
         tools: [tool],
       } as never),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("wires google-thinking stream hooks for direct and Gemini CLI providers", async () => {
