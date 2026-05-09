@@ -292,14 +292,12 @@ describe("SQLite session transcript store", () => {
       events: [{ type: "session", id: "session-1" }],
       now: () => 100,
     });
-    replaceSqliteSessionTranscriptEvents({
+    appendSqliteSessionTranscriptMessage({
       env,
       agentId: "main",
       sessionId: "session-1",
-      events: [
-        { type: "session", id: "session-1" },
-        { type: "message", id: "m1", message: { role: "assistant", content: "ok" } },
-      ],
+      sessionVersion: 3,
+      message: { role: "assistant", content: "ok" },
       now: () => 100,
     });
 
@@ -318,12 +316,12 @@ describe("SQLite session transcript store", () => {
       mode: "append",
       frontier: {
         sessionId: "session-1",
-        updatedAt: 100,
+        updatedAt: 101,
         eventCount: 2,
         lastSeq: 1,
         baseCreatedAt: 100,
       },
-      events: [{ seq: 1, event: { type: "message", id: "m1" } }],
+      events: [{ seq: 1, event: { type: "message" } }],
     });
   });
 
@@ -368,6 +366,55 @@ describe("SQLite session transcript store", () => {
         eventCount: 2,
         lastSeq: 1,
         baseCreatedAt: 200,
+      },
+      events: [{ seq: 0 }, { seq: 1, event: { type: "message", id: "m2" } }],
+    });
+  });
+
+  it("returns reset delta after a same-millisecond replace with the same count and last seq", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    replaceSqliteSessionTranscriptEvents({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      events: [
+        { type: "session", id: "session-1" },
+        { type: "message", id: "m1", message: { role: "user", content: "one" } },
+      ],
+      now: () => 100,
+    });
+    replaceSqliteSessionTranscriptEvents({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      events: [
+        { type: "session", id: "session-1" },
+        { type: "message", id: "m2", message: { role: "assistant", content: "rewritten" } },
+      ],
+      now: () => 100,
+    });
+
+    expect(
+      loadSqliteSessionTranscriptDelta({
+        env,
+        agentId: "main",
+        sessionId: "session-1",
+        cursor: {
+          eventCount: 2,
+          lastSeq: 1,
+          baseCreatedAt: 100,
+        },
+      }),
+    ).toMatchObject({
+      mode: "reset",
+      frontier: {
+        sessionId: "session-1",
+        updatedAt: 101,
+        eventCount: 2,
+        lastSeq: 1,
+        baseCreatedAt: 101,
       },
       events: [{ seq: 0 }, { seq: 1, event: { type: "message", id: "m2" } }],
     });

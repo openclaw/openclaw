@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.js";
 import type { MemoryIndexManager } from "./manager.js";
 import "./test-runtime-mocks.js";
 
