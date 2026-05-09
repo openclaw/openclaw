@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
+import { readMediaBuffer, setMediaStoreNetworkDepsForTest } from "../media/store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { readOpenClawStateKvJson, writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
@@ -976,12 +976,49 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     });
     readSessionMessagesMock.mockReturnValue([]);
 
-    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
+    const result = await cleanupManagedOutgoingImageRecords({ stateDir, transientMaxAgeMs: 0 });
 
     expect(result.deletedRecordCount).toBe(1);
     expect(result.deletedFileCount).toBe(1);
     expect(result.retainedCount).toBe(0);
     await expectPathMissing(fixture.originalPath);
+  });
+
+  it("cleans up dereferenced SQLite media blobs", async () => {
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
+      stateDir,
+    });
+    const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
+    const record = readManagedImageRecordFromSqlite(stateDir, attachmentId) as {
+      original?: { path?: string };
+    };
+    const originalPath = record.original?.path;
+    if (typeof originalPath !== "string") {
+      throw new Error("expected managed image record original path");
+    }
+    const mediaId = path.basename(originalPath);
+    await expect(readMediaBuffer(mediaId, "outgoing/originals")).resolves.toMatchObject({
+      id: mediaId,
+    });
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "openclaw-state.sqlite"),
+      entry: { sessionId: "sess-main" },
+    });
+    readSessionMessagesMock.mockReturnValue([]);
+
+    const result = await cleanupManagedOutgoingImageRecords({ stateDir, transientMaxAgeMs: 0 });
+
+    expect(result).toMatchObject({
+      deletedRecordCount: 1,
+      deletedFileCount: 1,
+      retainedCount: 0,
+    });
+    await expect(readMediaBuffer(mediaId, "outgoing/originals")).rejects.toThrow(
+      /does not resolve to a file/,
+    );
+    await expectPathMissing(originalPath);
   });
 
   it("retains committed records that are still referenced by a full-image block", async () => {
