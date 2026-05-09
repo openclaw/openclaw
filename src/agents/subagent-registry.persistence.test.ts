@@ -3,10 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
-import {
-  importLegacySubagentRegistryFileToSqlite,
-  resolveLegacySubagentRegistryPath,
-} from "../commands/doctor/legacy/subagent-registry.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -32,6 +28,7 @@ import {
 } from "./subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromState,
+  normalizeSubagentRunRecordsSnapshot,
   saveSubagentRegistryToState,
 } from "./subagent-registry.store.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -121,19 +118,21 @@ describe("subagent registry persistence", () => {
 
   const writePersistedRegistry = async (
     persisted: Record<string, unknown>,
-    opts?: { seedChildSessions?: boolean; importLegacy?: boolean },
+    opts?: { seedChildSessions?: boolean },
   ) => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
-    await fs.mkdir(path.dirname(registryPath), { recursive: true });
-    await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
     if (opts?.seedChildSessions !== false) {
       await seedChildSessionsForPersistedRuns(persisted);
     }
-    if (opts?.importLegacy !== false) {
-      importLegacySubagentRegistryFileToSqlite(process.env);
-    }
+    const runsRaw = ((persisted.runs ?? {}) as Record<string, unknown>) ?? {};
+    saveSubagentRegistryToState(
+      normalizeSubagentRunRecordsSnapshot({
+        runsRaw,
+        isLegacy: persisted.version === 1,
+      }),
+    );
     return registryPath;
   };
 
@@ -258,10 +257,6 @@ describe("subagent registry persistence", () => {
   });
 
   it("skips cleanup when cleanupHandled was persisted", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-
-    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
     const persisted = {
       version: 2,
       runs: {
@@ -279,9 +274,7 @@ describe("subagent registry persistence", () => {
         },
       },
     };
-    await fs.mkdir(path.dirname(registryPath), { recursive: true });
-    await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
-    importLegacySubagentRegistryFileToSqlite(process.env);
+    await writePersistedRegistry(persisted);
     await writeChildSessionEntry({
       sessionKey: "agent:main:subagent:two",
       sessionId: "sess-two",
@@ -364,60 +357,6 @@ describe("subagent registry persistence", () => {
       requesterSessionKey: "agent:main:main",
       spawnMode: "run",
     });
-  });
-
-  it("merges legacy registry imports into existing SQLite runs", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
-    const existing: SubagentRunRecord = {
-      runId: "run-existing",
-      childSessionKey: "agent:main:subagent:existing",
-      requesterSessionKey: "agent:main:main",
-      controllerSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "existing sqlite run",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 2,
-      spawnMode: "run",
-    };
-    saveSubagentRegistryToState(new Map([[existing.runId, existing]]));
-    await fs.mkdir(path.dirname(registryPath), { recursive: true });
-    await fs.writeFile(
-      registryPath,
-      `${JSON.stringify({
-        version: 2,
-        runs: {
-          "run-imported": {
-            runId: "run-imported",
-            childSessionKey: "agent:main:subagent:imported",
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "main",
-            task: "imported legacy run",
-            cleanup: "keep",
-            createdAt: 3,
-            startedAt: 4,
-            spawnMode: "run",
-          },
-        },
-      })}\n`,
-      "utf8",
-    );
-
-    expect(importLegacySubagentRegistryFileToSqlite(process.env)).toEqual({
-      imported: true,
-      runs: 1,
-    });
-
-    const restored = loadSubagentRegistryFromState();
-    expect(restored.get("run-existing")).toMatchObject({
-      childSessionKey: "agent:main:subagent:existing",
-    });
-    expect(restored.get("run-imported")).toMatchObject({
-      childSessionKey: "agent:main:subagent:imported",
-    });
-    await expect(fs.access(registryPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("returns isolated clones for unchanged persisted registry snapshots", async () => {
@@ -817,9 +756,12 @@ describe("subagent registry persistence", () => {
     });
 
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
-    await fs.mkdir(path.dirname(registryPath), { recursive: true });
-    await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
-    importLegacySubagentRegistryFileToSqlite(process.env);
+    saveSubagentRegistryToState(
+      normalizeSubagentRunRecordsSnapshot({
+        runsRaw: persisted.runs,
+        isLegacy: false,
+      }),
+    );
 
     restartRegistry();
     await waitForRegistryWork(async () => {
@@ -963,11 +905,5 @@ describe("subagent registry persistence", () => {
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
     const persisted = loadSubagentRegistryFromState();
     expect(persisted.has(runId)).toBe(false);
-  });
-
-  it("uses isolated temp state when OPENCLAW_STATE_DIR is unset in tests", () => {
-    delete process.env.OPENCLAW_STATE_DIR;
-    const registryPath = resolveLegacySubagentRegistryPath();
-    expect(registryPath).toContain(path.join(os.tmpdir(), "openclaw-test-state"));
   });
 });
