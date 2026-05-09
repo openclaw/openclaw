@@ -21,6 +21,7 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  __testing as chatTesting,
   augmentChatHistoryWithCanvasBlocks,
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
@@ -1045,6 +1046,21 @@ describe("sanitizeChatSendMessageInput", () => {
   ])("$name", ({ input, expected }) => {
     expect(sanitizeChatSendMessageInput(input)).toEqual(expected);
   });
+});
+
+describe("buildWebchatPreflightAcknowledgement", () => {
+  it("does not suppress acknowledgements for normal prompts that say exactly", () => {
+    expect(
+      chatTesting.buildWebchatPreflightAcknowledgement("explain exactly why the UI is slow"),
+    ).toBe("Got it. I am checking that now.");
+  });
+
+  it.each(["return only NO_REPLY", "respond only with JSON", "return exactly NO_REPLY"])(
+    "suppresses acknowledgements for explicit output-only prompt: %s",
+    (message) => {
+      expect(chatTesting.buildWebchatPreflightAcknowledgement(message)).toBeUndefined();
+    },
+  );
 });
 
 describe("gateway chat transcript writes (guardrail)", () => {

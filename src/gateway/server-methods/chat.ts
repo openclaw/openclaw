@@ -1854,8 +1854,10 @@ function shouldSkipWebchatPreflightAcknowledgement(message: string): boolean {
     return true;
   }
   const lower = trimmed.toLowerCase();
-  return /\b(no reply|do not reply|don't reply|silent|no commentary|return only|respond only|exactly)\b/.test(
-    lower,
+  return (
+    /\b(no reply|do not reply|don't reply|silent|no commentary)\b/.test(lower) ||
+    /\b(return|respond)\s+(only|exactly)\b/.test(lower) ||
+    /\bexactly\s+(this|the following)\b/.test(lower)
   );
 }
 
@@ -1909,6 +1911,10 @@ function broadcastWebchatPreflightAcknowledgement(params: {
   params.context.broadcast("chat", payload, { dropIfSlow: true });
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
 }
+
+export const __testing = {
+  buildWebchatPreflightAcknowledgement,
+};
 
 function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
   btw: { question: string };

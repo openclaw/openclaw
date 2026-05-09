@@ -444,7 +444,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const id = typeof m.id === "string" ? m.id : undefined;
   const rawSenderLabel =
     typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
-  const senderLabel = rawSenderLabel === "openclaw-control-ui" ? null : rawSenderLabel;
+  const senderLabel =
+    role === "user" && rawSenderLabel === "openclaw-control-ui" ? null : rawSenderLabel;
 
   content = stripMessageDisplayMetadata(content);
 
