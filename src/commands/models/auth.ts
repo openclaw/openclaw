@@ -573,7 +573,6 @@ export async function modelsAuthPasteTokenCommand(
     profileId?: string;
     expiresIn?: string;
     agent?: string;
-    token?: string;
   },
   runtime: RuntimeEnv,
 ) {
@@ -601,23 +600,11 @@ export async function modelsAuthPasteTokenCommand(
     }
     return undefined;
   };
-  const rawToken = normalizeOptionalString(opts.token);
-  if (opts.token !== undefined && !rawToken) {
-    throw new Error("--token value must not be empty");
-  }
-  if (rawToken !== undefined) {
-    const rawTokenValidation = validateTokenInput(rawToken);
-    if (rawTokenValidation) {
-      throw new Error(rawTokenValidation);
-    }
-  }
-  const tokenInput =
-    rawToken ??
-    (await readPastedSecret({
-      message: `Paste token for ${provider}`,
-      masked: false,
-      validate: validateTokenInput,
-    }));
+  const tokenInput = await readPastedSecret({
+    message: `Paste token for ${provider}`,
+    masked: false,
+    validate: validateTokenInput,
+  });
   const token =
     provider === "anthropic"
       ? tokenInput.replaceAll(/\s+/g, "").trim()

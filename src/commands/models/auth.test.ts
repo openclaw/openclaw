@@ -55,6 +55,7 @@ const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
   isRemoteEnvironment: vi.fn(() => false),
+  validateAnthropicSetupToken: vi.fn<() => string | undefined>(() => undefined),
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
@@ -170,7 +171,7 @@ vi.mock("../../plugins/provider-oauth-flow.js", () => ({
 }));
 
 vi.mock("../auth-token.js", () => ({
-  validateAnthropicSetupToken: vi.fn(() => undefined),
+  validateAnthropicSetupToken: mocks.validateAnthropicSetupToken,
 }));
 
 vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) => {
@@ -356,6 +357,8 @@ describe("modelsAuthLoginCommand", () => {
     mocks.clackPassword.mockReset();
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
+    mocks.validateAnthropicSetupToken.mockReset();
+    mocks.validateAnthropicSetupToken.mockReturnValue(undefined);
     mocks.upsertAuthProfileWithLock.mockReset();
     mocks.upsertAuthProfileWithLock.mockResolvedValue({ version: 1, profiles: {} });
     mocks.promoteAuthProfileInOrder.mockReset();
