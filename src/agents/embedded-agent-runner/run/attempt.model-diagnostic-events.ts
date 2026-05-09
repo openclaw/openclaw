@@ -80,6 +80,7 @@ type ModelCallObservationState = {
   timeToFirstByteMs?: number;
   modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
+  outputTextChunks: string[];
   contentCapture?: DiagnosticModelContentCapturePolicy;
   lastStreamProgressAt?: number;
 };
@@ -205,6 +206,158 @@ function observeResponseChunk(
   if (bytes !== undefined) {
     state.responseStreamBytes += bytes;
   }
+  if (!state.contentCapture?.outputMessages) {
+    return;
+  }
+  const text = extractTextFromChunk(chunk);
+  if (text) {
+    state.outputTextChunks.push(text);
+  }
+}
+
+function extractTextFromChunk(chunk: unknown): string | undefined {
+  if (!isRecord(chunk)) {
+    return undefined;
+  }
+
+  if (chunk.type === "text_delta" && typeof chunk.delta === "string" && chunk.delta.length > 0) {
+    return chunk.delta;
+  }
+  if (chunk.type === "text" && typeof chunk.text === "string" && chunk.text.length > 0) {
+    return chunk.text;
+  }
+
+  const choices = chunk.choices;
+  if (Array.isArray(choices) && choices.length > 0) {
+    const firstChoice = choices[0];
+    if (isRecord(firstChoice) && isRecord(firstChoice.delta)) {
+      const content = firstChoice.delta.content;
+      if (typeof content === "string" && content.length > 0) {
+        return content;
+      }
+    }
+  }
+
+  if (
+    chunk.type === "response.output_text.delta" &&
+    typeof chunk.delta === "string" &&
+    chunk.delta.length > 0
+  ) {
+    return chunk.delta;
+  }
+
+  return undefined;
+}
+
+function extractInputMessages(model: unknown): string[] {
+  if (!isRecord(model)) {
+    return [];
+  }
+  const messages: string[] = [];
+  const shouldCaptureRole = (role: unknown): boolean => {
+    if (typeof role !== "string") {
+      return true;
+    }
+    const normalizedRole = role.trim().toLowerCase();
+    return (
+      normalizedRole !== "system" && normalizedRole !== "developer" && normalizedRole !== "tool"
+    );
+  };
+
+  const chatMessages = model.messages;
+  if (Array.isArray(chatMessages)) {
+    for (const msg of chatMessages) {
+      if (!isRecord(msg) || !shouldCaptureRole(msg.role)) {
+        continue;
+      }
+      const content = msg.content;
+      if (typeof content === "string" && content.length > 0) {
+        messages.push(content);
+      } else if (Array.isArray(content)) {
+        for (const part of content) {
+          if (
+            isRecord(part) &&
+            part.type === "text" &&
+            typeof part.text === "string" &&
+            part.text.length > 0
+          ) {
+            messages.push(part.text);
+          }
+        }
+      }
+    }
+    return messages;
+  }
+
+  const input = model.input;
+  if (typeof input === "string" && input.length > 0) {
+    messages.push(input);
+    return messages;
+  }
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (!isRecord(item) || !shouldCaptureRole(item.role)) {
+        continue;
+      }
+      const content = item.content;
+      if (typeof content === "string" && content.length > 0) {
+        messages.push(content);
+      } else if (Array.isArray(content)) {
+        for (const part of content) {
+          if (
+            isRecord(part) &&
+            part.type === "input_text" &&
+            typeof part.text === "string" &&
+            part.text.length > 0
+          ) {
+            messages.push(part.text);
+          }
+        }
+      }
+    }
+    return messages;
+  }
+
+  return messages;
+}
+
+function extractOutputFromResult(result: unknown): string[] {
+  if (!isRecord(result)) {
+    return [];
+  }
+  const messages: string[] = [];
+
+  const choices = result.choices;
+  if (Array.isArray(choices) && choices.length > 0) {
+    const firstChoice = choices[0];
+    if (isRecord(firstChoice) && isRecord(firstChoice.message)) {
+      const content = firstChoice.message.content;
+      if (typeof content === "string" && content.length > 0) {
+        messages.push(content);
+      }
+    }
+    return messages;
+  }
+
+  const output = result.output;
+  if (Array.isArray(output)) {
+    for (const item of output) {
+      if (!isRecord(item) || !Array.isArray(item.content)) {
+        continue;
+      }
+      for (const part of item.content) {
+        if (
+          isRecord(part) &&
+          part.type === "output_text" &&
+          typeof part.text === "string" &&
+          part.text.length > 0
+        ) {
+          messages.push(part.text);
+        }
+      }
+    }
+  }
+  return messages;
 }
 
 function maybeEmitModelCallStreamProgress(
@@ -306,12 +459,17 @@ function modelContentPrivateData(modelContent: DiagnosticModelCallContent | unde
 }
 
 function modelCallCompletedContent(state: ModelCallObservationState) {
-  if (!state.modelContent && !state.outputMessages) {
+  const outputMessages =
+    state.outputMessages ??
+    (state.contentCapture?.outputMessages && state.outputTextChunks.length > 0
+      ? [state.outputTextChunks.join("")]
+      : undefined);
+  if (!state.modelContent && !outputMessages) {
     return undefined;
   }
   return {
     ...state.modelContent,
-    ...(state.outputMessages ? { outputMessages: state.outputMessages } : {}),
+    ...(outputMessages ? { outputMessages } : {}),
   };
 }
 
@@ -480,7 +638,20 @@ function withDiagnosticTraceparentHeader(
 ): ModelCallStreamOptions {
   const traceparent = formatDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
+  const observeInputMessages = (payload: unknown): void => {
+    if (!state.contentCapture?.inputMessages) {
+      return;
+    }
+    const messages = extractInputMessages(payload);
+    if (messages.length > 0) {
+      state.modelContent = {
+        ...state.modelContent,
+        inputMessages: messages,
+      };
+    }
+  };
   const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
+    observeInputMessages(payload);
     if (!originalOnPayload) {
       assignRequestPayloadBytes(state, payload);
       return undefined;
@@ -488,10 +659,12 @@ function withDiagnosticTraceparentHeader(
     const result = originalOnPayload(payload, model);
     if (isPromiseLike(result)) {
       return result.then((replacement) => {
+        observeInputMessages(replacement ?? payload);
         assignRequestPayloadBytes(state, replacement ?? payload);
         return replacement;
       });
     }
+    observeInputMessages(result ?? payload);
     assignRequestPayloadBytes(state, result ?? payload);
     return result;
   };
@@ -633,6 +806,12 @@ function observeModelCallResult(
       state,
     );
   }
+  if (state.contentCapture?.outputMessages) {
+    const outputMessages = extractOutputFromResult(result);
+    if (outputMessages.length > 0) {
+      state.outputTextChunks = outputMessages;
+    }
+  }
   emitModelCallCompleted(eventBase, startedAt, state);
   return result;
 }
@@ -657,6 +836,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     const state: ModelCallObservationState = {
       responseStreamBytes: 0,
       modelContent,
+      outputTextChunks: [],
       contentCapture: ctx.contentCapture,
     };
     const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);

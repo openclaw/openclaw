@@ -523,6 +523,10 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
   contextWindowReferenceTokens?: number;
   upstreamRequestIdHash?: string;
+  /** Raw model input text emitted after captureContent opt-in; consumers/exporters own truncation, redaction, and final export policy. */
+  inputMessages?: string[];
+  /** Raw model output text emitted after captureContent opt-in; consumers/exporters own truncation, redaction, and final export policy. */
+  outputMessages?: string[];
 };
 
 export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
