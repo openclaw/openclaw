@@ -93,11 +93,11 @@ describe("createMattermostDirectChannelWithRetry", () => {
     expect(result.id).toBe("dm-channel-456");
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(onRetry).toHaveBeenCalledTimes(1);
-    expect(onRetry).toHaveBeenCalledWith(
-      1,
-      expect.any(Number),
-      expect.objectContaining({ message: expect.stringContaining("429") }),
-    );
+    const retryCall = onRetry.mock.calls[0];
+    expect(retryCall?.[0]).toBe(1);
+    expect(retryCall?.[1]).toBeGreaterThanOrEqual(10);
+    expect(retryCall?.[1]).toBeLessThanOrEqual(20);
+    expect(retryCall?.[2]).toMatchObject({ message: expect.stringContaining("429") });
   });
 
   it("retries on port 443 connection errors (not misclassified as 4xx)", async () => {
