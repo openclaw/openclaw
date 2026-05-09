@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { readInstalledPluginIndex as readSqliteInstalledPluginIndex } from "../installed-plugin-index.mjs";
 
 const command = process.argv[2];
@@ -20,6 +21,9 @@ const PERSONA_FILES = new Map([
   ["USER.md", "# Existing User\n\nPrefers survivor tests.\n"],
   ["MEMORY.md", "# Existing Memory\n\nUpgrade reports came from real users.\n"],
 ]);
+const LEGACY_SESSION_KEY = "agent:main:upgrade-survivor";
+const LEGACY_SESSION_ID = "upgrade-survivor-legacy-session";
+const LEGACY_SESSION_FILE = `${LEGACY_SESSION_ID}.jsonl`;
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -99,6 +103,83 @@ function hasCoverage(coverage) {
   return !!coverage;
 }
 
+function legacySessionDir(stateDir) {
+  return path.join(stateDir, "agents", "main", "sessions");
+}
+
+function legacySessionIndexPath(stateDir) {
+  return path.join(legacySessionDir(stateDir), "sessions.json");
+}
+
+function legacyTranscriptPath(stateDir) {
+  return path.join(legacySessionDir(stateDir), LEGACY_SESSION_FILE);
+}
+
+function seedLegacySessionState(stateDir) {
+  write(
+    legacyTranscriptPath(stateDir),
+    [
+      { type: "session", version: 3, id: LEGACY_SESSION_ID },
+      {
+        type: "message",
+        id: "upgrade-survivor-user",
+        parentId: LEGACY_SESSION_ID,
+        message: { role: "user", content: "Existing user session" },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
+  );
+  writeJson(legacySessionIndexPath(stateDir), {
+    [LEGACY_SESSION_KEY]: {
+      sessionId: LEGACY_SESSION_ID,
+      sessionFile: LEGACY_SESSION_FILE,
+      updatedAt: Date.now(),
+      displayName: "Existing user session",
+    },
+  });
+}
+
+function assertLegacySessionSourcesExist(stateDir) {
+  assert(fs.existsSync(legacySessionIndexPath(stateDir)), "legacy sessions.json missing");
+  assert(fs.existsSync(legacyTranscriptPath(stateDir)), "legacy transcript JSONL missing");
+}
+
+function assertLegacySessionImported(stateDir) {
+  assert(
+    !fs.existsSync(legacySessionIndexPath(stateDir)),
+    "legacy sessions.json survived candidate doctor migration",
+  );
+  assert(
+    !fs.existsSync(legacyTranscriptPath(stateDir)),
+    "legacy transcript JSONL survived candidate doctor migration",
+  );
+
+  const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  assert(fs.existsSync(dbPath), "agent SQLite database missing after doctor migration");
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const sessionRow = db
+      .prepare("select entry_json from session_entries where session_key = ?")
+      .get(LEGACY_SESSION_KEY);
+    assert(sessionRow, "migrated legacy session row missing from SQLite");
+    const sessionEntry = JSON.parse(String(sessionRow.entry_json));
+    assert(
+      sessionEntry.sessionId === LEGACY_SESSION_ID,
+      `migrated session id mismatch: ${sessionEntry.sessionId}`,
+    );
+    const transcriptRow = db
+      .prepare("select count(*) as count from transcript_events where session_id = ?")
+      .get(LEGACY_SESSION_ID);
+    assert(
+      Number(transcriptRow?.count ?? 0) >= 2,
+      "migrated legacy transcript events missing from SQLite",
+    );
+  } finally {
+    db.close();
+  }
+}
+
 function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
@@ -117,11 +198,7 @@ function seedState() {
     version: 1,
     setupCompletedAt: "2026-04-01T00:00:00.000Z",
   });
-  writeJson(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json"), {
-    id: "legacy-session",
-    agentId: "main",
-    title: "Existing user session",
-  });
+  seedLegacySessionState(stateDir);
 
   const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
   for (const plugin of ["discord", "telegram", "whatsapp"]) {
@@ -332,11 +409,12 @@ function assertStateSurvived() {
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
   const scenario = getScenario();
   assert(fs.existsSync(path.join(workspace, "IDENTITY.md")), "workspace identity file missing");
-  assert(
-    fs.existsSync(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json")),
-    "legacy session file missing",
-  );
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
+  if (stage === "baseline") {
+    assertLegacySessionSourcesExist(stateDir);
+  } else {
+    assertLegacySessionImported(stateDir);
+  }
   const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
   if (stage === "baseline") {
     if (fs.existsSync(legacyRuntimeRoot)) {
