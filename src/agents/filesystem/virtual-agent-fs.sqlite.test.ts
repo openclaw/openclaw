@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type { VirtualAgentFsEntry } from "./agent-filesystem.js";
+import { parseVirtualAgentFsEntryKind } from "./agent-filesystem.js";
 import { createSqliteVirtualAgentFs } from "./virtual-agent-fs.sqlite.js";
 
 function createTempStateDir(): string {
@@ -16,6 +18,21 @@ afterEach(() => {
 });
 
 describe("SqliteVirtualAgentFs", () => {
+  it("types public results and rejects invalid persisted entry kinds", () => {
+    const scratch = createSqliteVirtualAgentFs({
+      agentId: "main",
+      namespace: "scratch",
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+
+    expectTypeOf(scratch.stat("/tmp")).toEqualTypeOf<VirtualAgentFsEntry | null>();
+    expect(parseVirtualAgentFsEntryKind("file")).toBe("file");
+    expect(parseVirtualAgentFsEntryKind("directory")).toBe("directory");
+    expect(() => parseVirtualAgentFsEntryKind("socket")).toThrow(
+      "Invalid persisted VFS entry kind",
+    );
+  });
+
   it("stores scratch files by agent and namespace", () => {
     const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
     const mainScratch = createSqliteVirtualAgentFs({

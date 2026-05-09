@@ -16,6 +16,14 @@ import {
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import {
+  parseOptionalTaskTerminalOutcome,
+  parseTaskDeliveryStatus,
+  parseTaskNotifyPolicy,
+  parseTaskRuntime,
+  parseTaskScopeKind,
+  parseTaskStatus,
+} from "./task-registry.types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
@@ -94,6 +102,25 @@ describe("task-registry store runtime", () => {
     };
     expect(latestSnapshot.tasks.size).toBe(2);
     expect(latestSnapshot.tasks.get("task-restored")?.task).toBe("Restored task");
+  });
+
+  it("rejects invalid persisted task enum values", () => {
+    expect(parseTaskRuntime("cron")).toBe("cron");
+    expect(parseTaskScopeKind("system")).toBe("system");
+    expect(parseTaskStatus("running")).toBe("running");
+    expect(parseTaskDeliveryStatus("pending")).toBe("pending");
+    expect(parseTaskNotifyPolicy("done_only")).toBe("done_only");
+    expect(parseOptionalTaskTerminalOutcome("blocked")).toBe("blocked");
+    expect(parseOptionalTaskTerminalOutcome(null)).toBeUndefined();
+
+    expect(() => parseTaskRuntime("timer")).toThrow("Invalid persisted task runtime");
+    expect(() => parseTaskScopeKind("workspace")).toThrow("Invalid persisted task scope kind");
+    expect(() => parseTaskStatus("done")).toThrow("Invalid persisted task status");
+    expect(() => parseTaskDeliveryStatus("ok")).toThrow("Invalid persisted task delivery status");
+    expect(() => parseTaskNotifyPolicy("verbose")).toThrow("Invalid persisted task notify policy");
+    expect(() => parseOptionalTaskTerminalOutcome("failed")).toThrow(
+      "Invalid persisted task terminal outcome",
+    );
   });
 
   it("emits incremental observer events for restore, mutation, and delete", () => {
