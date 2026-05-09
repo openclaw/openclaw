@@ -113,7 +113,7 @@ describe("prepareImageModelFallbacks", () => {
     );
   });
 
-  it("falls back to raw string when alias resolution fails but string is in allowlist", () => {
+  it("drops fallbacks that cannot be resolved into a runnable model ref", () => {
     mockBuildAllowedModelSet.mockReturnValue({
       allowAny: false,
       allowedKeys: new Set(["gpt-4o"]),
@@ -124,7 +124,7 @@ describe("prepareImageModelFallbacks", () => {
       ...baseParams,
       fallbacks: ["gpt-4o"],
     });
-    expect(result).toEqual(["gpt-4o"]);
+    expect(result).toEqual([]);
   });
 
   it("filters out empty and whitespace-only fallbacks", () => {

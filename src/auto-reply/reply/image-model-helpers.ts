@@ -263,10 +263,7 @@ export function prepareImageModelFallbacks(params: PrepareImageModelFallbacksPar
       });
 
       if (!resolved) {
-        if (!allowAny && !allowedKeys.has(trimmed)) {
-          return null;
-        }
-        return trimmed;
+        return null;
       }
 
       const key = modelKey(resolved.ref.provider, resolved.ref.model);

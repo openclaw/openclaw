@@ -24,6 +24,10 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
+const PNG_1X1_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const PDF_BASE64 = Buffer.from("%PDF-1.4\n%test\n").toString("base64");
+const DOCX_LIKE_BASE64 = Buffer.from("PK\u0003\u0004fake-docx-content").toString("base64");
 
 let ws: WebSocket;
 let port: number;
@@ -220,6 +224,279 @@ describe("gateway server chat", () => {
       releaseBlockedReply?.();
     };
   };
+
+  test("chat.send keeps image attachments inline when imageModel enables vision", async () => {
+    await withMainSessionStore(async () => {
+      testState.agentConfig = {
+        model: { primary: "anthropic/claude-3-5-haiku" },
+        imageModel: { primary: "openai/gpt-4o" },
+      };
+      let observed:
+        | {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+          }
+        | undefined;
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+            dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
+          },
+        ];
+        observed = {
+          ctx: params.ctx,
+          replyOptions: params.replyOptions,
+        };
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return undefined;
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "see image",
+          idempotencyKey: "idem-image-model-inline",
+          attachments: [
+            {
+              type: "image",
+              mimeType: "image/png",
+              fileName: "dot.png",
+              content: `data:image/png;base64,${PNG_1X1_BASE64}`,
+            },
+          ],
+        });
+
+        expect(res.ok).toBe(true);
+        await vi.waitFor(() => expect(observed).toBeDefined());
+        expect(observed?.replyOptions.modelOverride).toBe("openai/gpt-4o");
+        expect(observed?.replyOptions.images).toHaveLength(1);
+        expect(observed?.ctx.MediaPaths).toBeUndefined();
+      } finally {
+        testState.agentConfig = undefined;
+      }
+    });
+  });
+
+  test("chat.send detects image attachments from sniffed content without metadata", async () => {
+    await withMainSessionStore(async () => {
+      testState.agentConfig = {
+        model: { primary: "anthropic/claude-3-5-haiku" },
+        imageModel: { primary: "openai/gpt-4o" },
+      };
+      let observed:
+        | {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+          }
+        | undefined;
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+            dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
+          },
+        ];
+        observed = {
+          ctx: params.ctx,
+          replyOptions: params.replyOptions,
+        };
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return undefined;
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "see sniffed image",
+          idempotencyKey: "idem-image-sniff-no-metadata",
+          attachments: [
+            {
+              type: "file",
+              mimeType: "application/octet-stream",
+              fileName: "blob",
+              content: PNG_1X1_BASE64,
+            },
+          ],
+        });
+
+        expect(res.ok).toBe(true);
+        await vi.waitFor(() => expect(observed).toBeDefined());
+        expect(observed?.replyOptions.modelOverride).toBe("openai/gpt-4o");
+        expect(observed?.replyOptions.images).toHaveLength(1);
+        expect(observed?.ctx.MediaPaths).toBeUndefined();
+      } finally {
+        testState.agentConfig = undefined;
+      }
+    });
+  });
+
+  test("chat.send detects image attachments from data URLs without metadata", async () => {
+    await withMainSessionStore(async () => {
+      testState.agentConfig = {
+        model: { primary: "anthropic/claude-3-5-haiku" },
+        imageModel: { primary: "openai/gpt-4o" },
+      };
+      let observed:
+        | {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+          }
+        | undefined;
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+            dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
+          },
+        ];
+        observed = {
+          ctx: params.ctx,
+          replyOptions: params.replyOptions,
+        };
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return undefined;
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "see data url image",
+          idempotencyKey: "idem-image-data-url-no-metadata",
+          attachments: [
+            {
+              type: "file",
+              content: `data:image/png;base64,${PNG_1X1_BASE64}`,
+            },
+          ],
+        });
+
+        expect(res.ok).toBe(true);
+        await vi.waitFor(() => expect(observed).toBeDefined());
+        expect(observed?.replyOptions.modelOverride).toBe("openai/gpt-4o");
+        expect(observed?.replyOptions.images).toHaveLength(1);
+        expect(observed?.ctx.MediaPaths).toBeUndefined();
+      } finally {
+        testState.agentConfig = undefined;
+      }
+    });
+  });
+
+  test("chat.send does not apply imageModel override for non-image attachments", async () => {
+    await withMainSessionStore(async () => {
+      testState.agentConfig = {
+        model: { primary: "anthropic/claude-3-5-haiku" },
+        imageModel: { primary: "openai/gpt-4o" },
+      };
+      let observed:
+        | {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+          }
+        | undefined;
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+            dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
+          },
+        ];
+        observed = {
+          ctx: params.ctx,
+          replyOptions: params.replyOptions,
+        };
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return undefined;
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "read this pdf",
+          idempotencyKey: "idem-non-image-no-override",
+          attachments: [
+            {
+              type: "file",
+              mimeType: "application/pdf",
+              fileName: "report.pdf",
+              content: PDF_BASE64,
+            },
+          ],
+        });
+
+        expect(res.ok).toBe(true);
+        await vi.waitFor(() => expect(observed).toBeDefined());
+        expect(observed?.replyOptions.modelOverride).toBeUndefined();
+        expect(observed?.replyOptions.images).toBeUndefined();
+        expect(observed?.ctx.MediaPaths).toHaveLength(1);
+      } finally {
+        testState.agentConfig = undefined;
+      }
+    });
+  });
+
+  test("chat.send ignores fake image metadata when sniffed content is non-image", async () => {
+    await withMainSessionStore(async () => {
+      testState.agentConfig = {
+        model: { primary: "anthropic/claude-3-5-haiku" },
+        imageModel: { primary: "openai/gpt-4o" },
+      };
+      let observed:
+        | {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+          }
+        | undefined;
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+            dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
+          },
+        ];
+        observed = {
+          ctx: params.ctx,
+          replyOptions: params.replyOptions,
+        };
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return undefined;
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "read disguised doc",
+          idempotencyKey: "idem-fake-image-metadata",
+          attachments: [
+            {
+              type: "file",
+              mimeType: "image/png",
+              fileName: "report.docx",
+              content: DOCX_LIKE_BASE64,
+            },
+          ],
+        });
+
+        expect(res.ok).toBe(true);
+        await vi.waitFor(() => expect(observed).toBeDefined());
+        expect(observed?.replyOptions.modelOverride).toBeUndefined();
+        expect(observed?.replyOptions.images).toBeUndefined();
+        expect(observed?.ctx.MediaPaths).toHaveLength(1);
+      } finally {
+        testState.agentConfig = undefined;
+      }
+    });
+  });
 
   test("sessions.send accepts dashboard messages for existing sessions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-"));
