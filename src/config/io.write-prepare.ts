@@ -329,21 +329,79 @@ function preserveUntouchedIncludes(params: {
   return next;
 }
 
+/**
+ * Inject values at explicitly-set paths that equal the runtime default and therefore
+ * produced an empty merge-patch entry. Without this, a caller that explicitly sets a
+ * key to its runtime default value sees the write silently dropped because
+ * createMergePatch(runtimeConfig, nextConfig) emits no diff for equal values.
+ *
+ * Only injects path segments that:
+ * 1. Were explicitly declared by the caller via explicitSetPaths.
+ * 2. Are absent from the persisted candidate (not already included via the normal patch).
+ */
+function injectExplicitlySetPaths(
+  nextConfig: unknown,
+  persistedCandidate: unknown,
+  explicitSetPaths: readonly (readonly string[])[],
+): unknown {
+  if (explicitSetPaths.length === 0 || !isRecord(persistedCandidate)) {
+    return persistedCandidate;
+  }
+  let result: Record<string, unknown> | null = null;
+  for (const path of explicitSetPaths) {
+    if (path.length === 0) {
+      continue;
+    }
+    const [head, ...tail] = path;
+    if (isBlockedObjectKey(head)) {
+      continue;
+    }
+    const nextValue = isRecord(nextConfig) ? nextConfig[head] : undefined;
+    if (nextValue === undefined || nextValue === null) {
+      continue;
+    }
+    const persistedValue = (result ?? persistedCandidate)[head];
+    if (tail.length === 0) {
+      if (!(head in (result ?? persistedCandidate))) {
+        result ??= { ...persistedCandidate };
+        result[head] = cloneUnknown(nextValue);
+      }
+    } else {
+      const injected = injectExplicitlySetPaths(nextValue, persistedValue ?? {}, [tail]);
+      if (injected !== persistedValue) {
+        result ??= { ...persistedCandidate };
+        result[head] = injected;
+      }
+    }
+  }
+  return result ?? persistedCandidate;
+}
+
 export function resolvePersistCandidateForWrite(params: {
   runtimeConfig: unknown;
   sourceConfig: unknown;
   nextConfig: unknown;
   rootAuthoredConfig?: unknown;
   unsetPaths?: readonly string[][];
+  /**
+   * Paths that were explicitly set by the caller. Values at these paths are
+   * injected into the persisted candidate even when they equal the runtime
+   * default (which would otherwise produce an empty merge-patch and be dropped).
+   */
+  explicitSetPaths?: readonly (readonly string[])[];
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
-  const persisted = preserveUntouchedIncludes({
+  const persistedBase = preserveUntouchedIncludes({
     patch,
     rootAuthoredConfig,
     persistedCandidate: applyMergePatch(projectedSource, patch),
   });
+  const persisted =
+    params.explicitSetPaths && params.explicitSetPaths.length > 0
+      ? injectExplicitlySetPaths(params.nextConfig, persistedBase, params.explicitSetPaths)
+      : persistedBase;
   const withSchema = preserveRootSchemaUri({
     rootAuthoredConfig,
     nextConfig: params.nextConfig,

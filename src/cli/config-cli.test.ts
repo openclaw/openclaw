@@ -1791,7 +1791,7 @@ describe("config cli", () => {
           .channels as Record<string, unknown>,
       ).toEqual({ maintainers: { enabled: true, requireMention: true } });
       expect((written.channels as Record<string, unknown>).slack).not.toHaveProperty("appToken");
-      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toMatchObject({
         unsetPaths: [["channels", "slack", "appToken"]],
       });
     });
