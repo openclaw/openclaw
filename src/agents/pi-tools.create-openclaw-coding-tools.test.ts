@@ -200,6 +200,23 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
+  it("passes source reply delivery mode to OpenClaw tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      forceMessageTool: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    );
+  });
+
   it("skips unrelated tool families when construction is planned from a narrow allowlist", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

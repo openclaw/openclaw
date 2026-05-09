@@ -901,6 +901,7 @@ export async function runEmbeddedAttempt(
             modelHasVision: params.model.input?.includes("image") ?? false,
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
