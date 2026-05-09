@@ -279,40 +279,29 @@ describe("imessage message actions", () => {
   });
 
   describe("reply with attachment (openclaw/imsg#114 plumbing)", () => {
+    // The core message-action runner hydrates path/media/filePath/etc.
+    // through the outbound media resolver (mediaLocalRoots/sandbox/size)
+    // before reaching this handler, writing the result into `buffer` +
+    // `filename`. These tests cover the post-hydration contract: the
+    // handler trusts only the buffer and refuses any unhydrated path
+    // param so an agent cannot bypass the resolver.
     const stringPath = "/tmp/cute-lobster.png";
+    const base64Png = Buffer.from("PNGDATA").toString("base64");
 
-    it("threads a path attachment through to sendRichMessage when imsg supports send-rich --file", async () => {
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-        cliCapabilities: { sendRichSupportsAttachment: true },
-      });
-      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
-      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+    function readLastAttachment():
+      | {
+          kind?: string;
+          buffer?: Uint8Array;
+          filename?: string;
+        }
+      | undefined {
+      const call = runtimeMock.sendRichMessage.mock.calls.at(-1)?.[0] as
+        | { attachment?: { kind: string; buffer?: Uint8Array; filename?: string } }
+        | undefined;
+      return call?.attachment;
+    }
 
-      for (const field of ["filePath", "path", "media", "mediaUrl", "fileUrl"]) {
-        runtimeMock.sendRichMessage.mockClear();
-        await imessageMessageActions.handleAction?.({
-          action: "reply",
-          cfg: cfg(),
-          params: {
-            chatIdentifier: "team-thread",
-            messageId: "message-guid",
-            text: "🦞 here it is",
-            [field]: stringPath,
-          },
-        } as never);
-        expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
-          expect.objectContaining({
-            replyToMessageId: "message-guid",
-            attachment: { kind: "path", path: stringPath },
-          }),
-        );
-      }
-    });
-
-    it("threads the first usable mediaUrls entry through as a path attachment", async () => {
+    it("threads a hydrated buffer attachment through to sendRichMessage when imsg supports send-rich --file", async () => {
       probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
         available: true,
         v2Ready: true,
@@ -329,44 +318,72 @@ describe("imessage message actions", () => {
           chatIdentifier: "team-thread",
           messageId: "message-guid",
           text: "🦞 here it is",
-          mediaUrls: ["", stringPath, "/tmp/extra.png"],
-        },
-      } as never);
-      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          attachment: { kind: "path", path: stringPath },
-        }),
-      );
-    });
-
-    it("decodes a base64 buffer + filename into a buffer-shaped attachment", async () => {
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-        cliCapabilities: { sendRichSupportsAttachment: true },
-      });
-      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
-      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
-
-      const base64 = Buffer.from("PNGDATA").toString("base64");
-      await imessageMessageActions.handleAction?.({
-        action: "reply",
-        cfg: cfg(),
-        params: {
-          chatIdentifier: "team-thread",
-          messageId: "message-guid",
-          text: "🦞 here it is",
-          buffer: base64,
+          buffer: base64Png,
           filename: "card.png",
         },
       } as never);
-      const call = runtimeMock.sendRichMessage.mock.calls.at(-1)?.[0] as {
-        attachment?: { kind: string; buffer?: Uint8Array; filename?: string };
-      };
-      expect(call?.attachment?.kind).toBe("buffer");
-      expect(call?.attachment?.filename).toBe("card.png");
-      expect(Buffer.from(call?.attachment?.buffer ?? new Uint8Array()).toString()).toBe("PNGDATA");
+      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ replyToMessageId: "message-guid" }),
+      );
+      const attachment = readLastAttachment();
+      expect(attachment?.kind).toBe("buffer");
+      expect(attachment?.filename).toBe("card.png");
+      expect(Buffer.from(attachment?.buffer ?? new Uint8Array()).toString()).toBe("PNGDATA");
+    });
+
+    it("falls back to attachment.bin when filename is missing (post-hydration)", async () => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: true },
+      });
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+      await imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "🦞 here it is",
+          buffer: base64Png,
+        },
+      } as never);
+      expect(readLastAttachment()?.filename).toBe("attachment.bin");
+    });
+
+    it("rejects unhydrated path-shaped params so agents cannot bypass the media resolver", async () => {
+      // The runner's hydrateAttachmentParamsForAction loads any
+      // path/media/filePath/mediaUrl/fileUrl through the media resolver
+      // and writes the result into `buffer`. If we ever see a path-shaped
+      // param without a `buffer`, hydration was skipped — refuse instead
+      // of forwarding a raw host path to imsg.
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: true },
+      });
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+
+      for (const field of ["filePath", "path", "media", "mediaUrl", "fileUrl"]) {
+        runtimeMock.sendRichMessage.mockClear();
+        await expect(
+          imessageMessageActions.handleAction?.({
+            action: "reply",
+            cfg: cfg(),
+            params: {
+              chatIdentifier: "team-thread",
+              messageId: "message-guid",
+              text: "🦞 here it is",
+              [field]: stringPath,
+            },
+          } as never),
+        ).rejects.toThrow(/did not pass through the outbound media resolver/);
+        expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+      }
     });
 
     it("rejects reply + attachment when imsg does not advertise send-rich --file", async () => {
@@ -381,34 +398,7 @@ describe("imessage message actions", () => {
       });
       runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
 
-      for (const field of ["filePath", "path", "media", "mediaUrl", "fileUrl", "buffer"]) {
-        runtimeMock.sendRichMessage.mockClear();
-        await expect(
-          imessageMessageActions.handleAction?.({
-            action: "reply",
-            cfg: cfg(),
-            params: {
-              chatIdentifier: "team-thread",
-              messageId: "message-guid",
-              text: "🦞 here it is",
-              [field]: field === "buffer" ? Buffer.from("x").toString("base64") : stringPath,
-              ...(field === "buffer" ? { filename: "x.png" } : {}),
-            },
-          } as never),
-        ).rejects.toThrow(/needs an imsg build that exposes `send-rich --file`/);
-        expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
-      }
-    });
-
-    it("rejects reply + http(s) media URL with a targeted error before touching the bridge", async () => {
-      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-        available: true,
-        v2Ready: true,
-        selectors: {},
-        cliCapabilities: { sendRichSupportsAttachment: true },
-      });
-      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
-
+      runtimeMock.sendRichMessage.mockClear();
       await expect(
         imessageMessageActions.handleAction?.({
           action: "reply",
@@ -416,11 +406,12 @@ describe("imessage message actions", () => {
           params: {
             chatIdentifier: "team-thread",
             messageId: "message-guid",
-            text: "🦞 remote image",
-            media: "https://example.com/cute.png",
+            text: "🦞 here it is",
+            buffer: base64Png,
+            filename: "card.png",
           },
         } as never),
-      ).rejects.toThrow(/threaded send path cannot fetch/);
+      ).rejects.toThrow(/needs an imsg build that exposes `send-rich --file`/);
       expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
     });
   });

@@ -240,11 +240,10 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
   return Uint8Array.from(Buffer.from(base64Buffer, "base64"));
 }
 
-// Param names that any caller would reasonably treat as "attach this file
-// to the message". Covers everything the shared message-tool send schema
-// declares (`media`, `buffer`, `path`, `filePath`) plus the plural/url
-// variants that agents and channel adapters tend to reach for. Probed in
-// order so the first non-empty match wins.
+// Path-shaped attachment params the message-tool schema declares. We only
+// look at these to detect an unhydrated bypass attempt — the resolver in
+// hydrateAttachmentParamsForAction is responsible for loading them into
+// `buffer`/`filename` after enforcing localRoots, sandbox, and size limits.
 const REPLY_ATTACHMENT_PATH_PARAM_NAMES: readonly string[] = [
   "filePath",
   "path",
@@ -253,42 +252,19 @@ const REPLY_ATTACHMENT_PATH_PARAM_NAMES: readonly string[] = [
   "fileUrl",
 ] as const;
 
-type ReplyAttachmentSpec =
-  | { kind: "path"; path: string }
-  | { kind: "buffer"; buffer: Uint8Array; filename: string };
+type ReplyAttachmentSpec = { kind: "buffer"; buffer: Uint8Array; filename: string };
 
-// Pull a concrete local-file or buffer attachment off the reply params,
-// normalizing the various aliases agents reach for. Remote URLs and array
-// shapes return the original param name so the caller can surface a
-// targeted error: we deliberately do not try to resolve `https://...`
-// attachments from inside the reply path because that would silently
-// duplicate the outbound media-resolver layer used by `send`.
+// Reply attachments must arrive hydrated: the core message-action runner
+// loads `path`/`media`/`mediaUrl`/`filePath`/`fileUrl` through the outbound
+// media resolver (mediaLocalRoots / sandbox / size limits / SSRF) and writes
+// the result into `buffer` + `filename`. We deliberately do not consume raw
+// path params here — accepting them would let an agent send any host file
+// imsg can read, bypassing the resolver. If a path-shaped param is present
+// without a corresponding `buffer`, the caller skipped hydration (most
+// likely calling handleAction directly in a test); fail loudly instead.
 function extractReplyAttachment(
   params: Record<string, unknown>,
-):
-  | { spec: ReplyAttachmentSpec; sourceParam: string }
-  | { spec: null; unsupportedParam: string }
-  | null {
-  for (const name of REPLY_ATTACHMENT_PATH_PARAM_NAMES) {
-    const value = readStringParam(params, name);
-    if (!value) {
-      continue;
-    }
-    if (/^https?:\/\//i.test(value)) {
-      return { spec: null, unsupportedParam: name };
-    }
-    return { spec: { kind: "path", path: value }, sourceParam: name };
-  }
-  const mediaUrls = params.mediaUrls;
-  if (Array.isArray(mediaUrls)) {
-    const first = mediaUrls.find((entry) => typeof entry === "string" && entry.trim().length > 0);
-    if (typeof first === "string") {
-      if (/^https?:\/\//i.test(first)) {
-        return { spec: null, unsupportedParam: "mediaUrls" };
-      }
-      return { spec: { kind: "path", path: first }, sourceParam: "mediaUrls" };
-    }
-  }
+): { spec: ReplyAttachmentSpec; sourceParam: string } | { spec: null; bypassParam: string } | null {
   const buffer = readStringParam(params, "buffer");
   if (buffer) {
     const filename = readStringParam(params, "filename") ?? "attachment.bin";
@@ -300,6 +276,11 @@ function extractReplyAttachment(
       },
       sourceParam: "buffer",
     };
+  }
+  for (const name of REPLY_ATTACHMENT_PATH_PARAM_NAMES) {
+    if (readStringParam(params, name)) {
+      return { spec: null, bypassParam: name };
+    }
   }
   return null;
 }
@@ -536,8 +517,9 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (attachment) {
         if (attachment.spec === null) {
           throw new Error(
-            `iMessage reply received \`${attachment.unsupportedParam}\` as an http(s) URL, which the threaded send path cannot fetch. ` +
-              "Pass a local filesystem path, base64 `buffer` + `filename`, or use action 'upload-file'/'send' for remote media.",
+            `iMessage reply rejected \`${attachment.bypassParam}\` because it did not pass through the outbound media resolver. ` +
+              'Pass a base64 `buffer` + `filename` directly, or invoke message(action: "reply") through the runner so the resolver ' +
+              "can validate the path against mediaLocalRoots/sandbox/size before sending.",
           );
         }
         // Reply-with-attachment requires the `imsg send-rich --file` flag

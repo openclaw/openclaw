@@ -395,16 +395,15 @@ export const imessageActionsRuntime = {
     effectId?: string;
     replyToMessageId?: string;
     partIndex?: number;
-    // Optional attachment, either an existing local file path or an
-    // in-memory buffer that we stage to a temp file before invoking imsg.
-    // Requires an imsg build that accepts `send-rich --file` (added by
-    // openclaw/imsg#114); callers must feature-detect via the cached
-    // private-api status before passing this. Older builds will reject the
-    // unknown option, so the action handler refuses to hit this path
-    // unless the capability is confirmed.
-    attachment?:
-      | { kind: "path"; path: string }
-      | { kind: "buffer"; buffer: Uint8Array; filename: string };
+    // Optional attachment as an in-memory buffer that we stage to a temp
+    // file before invoking imsg. The buffer must already have been loaded
+    // by the outbound media resolver (mediaLocalRoots/sandbox/size limits)
+    // — this runtime intentionally does not accept a raw filesystem path,
+    // because that would let an attacker-controlled path bypass the
+    // resolver and let imsg send any host-readable file. Requires an imsg
+    // build that accepts `send-rich --file` (openclaw/imsg#114); callers
+    // must feature-detect via the cached private-api status first.
+    attachment?: { kind: "buffer"; buffer: Uint8Array; filename: string };
     options: IMessageBridgeActionOptions;
   }): Promise<IMessageBridgeSendResult> {
     // Extract markdown bold/italic/underline/strikethrough into typed-run
@@ -427,7 +426,7 @@ export const imessageActionsRuntime = {
       ...(filePath ? ["--file", filePath] : []),
     ];
 
-    if (params.attachment?.kind === "buffer") {
+    if (params.attachment) {
       return await withTempFile(
         { buffer: params.attachment.buffer, filename: params.attachment.filename },
         async (filePath) => {
@@ -437,8 +436,7 @@ export const imessageActionsRuntime = {
       );
     }
 
-    const filePath = params.attachment?.kind === "path" ? params.attachment.path : undefined;
-    const result = await runIMessageCliJson(buildArgs(filePath), params.options);
+    const result = await runIMessageCliJson(buildArgs(), params.options);
     return { messageId: resolveMessageId(result) };
   },
 
