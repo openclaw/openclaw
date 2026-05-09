@@ -141,11 +141,11 @@ describe("acp translator stable lifecycle handlers", () => {
 
     expect(capabilities.loadSession).toBe(true);
     expect(typeof agent.loadSession).toBe("function");
-    expect(capabilities.sessionCapabilities?.list).toEqual({});
+    expect(capabilities.sessionCapabilities?.list).toStrictEqual({});
     expect(typeof agent.listSessions).toBe("function");
-    expect(capabilities.sessionCapabilities?.resume).toEqual({});
+    expect(capabilities.sessionCapabilities?.resume).toStrictEqual({});
     expect(typeof agent.resumeSession).toBe("function");
-    expect(capabilities.sessionCapabilities?.close).toEqual({});
+    expect(capabilities.sessionCapabilities?.close).toStrictEqual({});
     expect(typeof agent.closeSession).toBe("function");
     expect(capabilities.sessionCapabilities?.fork).toBeUndefined();
     expect("unstable_listSessions" in agent).toBe(false);
@@ -401,7 +401,9 @@ describe("acp translator stable lifecycle handlers", () => {
     });
     const pending = await startPendingPrompt({ agent, sentRunIds, sessionId: "session-1" });
 
-    await expect(agent.closeSession(createCloseSessionRequest("session-1"))).resolves.toEqual({});
+    await expect(agent.closeSession(createCloseSessionRequest("session-1"))).resolves.toStrictEqual(
+      {},
+    );
 
     expect(request).toHaveBeenCalledWith("chat.abort", {
       sessionKey: "agent:main:work",
