@@ -957,39 +957,34 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
-function appendFileWithAbort(
+async function appendFileWithAbort(
   signal: AbortSignal | undefined,
   append: () => Promise<void>,
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(createAbortError());
-      return;
+  if (signal?.aborted) {
+    throwAbortError();
+  }
+
+  let aborted = false;
+  const onAbort = () => {
+    aborted = true;
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    await append();
+  } catch (error: unknown) {
+    if (aborted || signal?.aborted) {
+      throwAbortError();
     }
+    throw error instanceof Error ? error : new Error(String(error));
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
 
-    let aborted = false;
-    const onAbort = () => {
-      aborted = true;
-      reject(createAbortError());
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-
-    void (async () => {
-      try {
-        await append();
-        if (aborted) {
-          return;
-        }
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      } catch (error: unknown) {
-        signal?.removeEventListener("abort", onAbort);
-        if (!aborted) {
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      }
-    })();
-  });
+  if (aborted || signal?.aborted) {
+    throwAbortError();
+  }
 }
 
 function createSandboxWriteOperations(params: SandboxToolParams) {

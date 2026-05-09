@@ -452,17 +452,35 @@ describe("FS tools with workspaceOnly=false", () => {
     });
 
     const controller = new AbortController();
-    const append = writeTool.execute(
-      "active-append",
-      { path: activeFile, content: "active\n", append: true },
-      controller.signal,
-    );
+    let appendSettled = false;
+    const append = writeTool
+      .execute(
+        "active-append",
+        { path: activeFile, content: "active\n", append: true },
+        controller.signal,
+      )
+      .finally(() => {
+        appendSettled = true;
+      });
     await appendStarted;
 
     controller.abort();
-    await expect(append).rejects.toMatchObject({ name: "AbortError" });
-    releaseAppend();
+    const nextAppend = writeTool.execute("next-append", {
+      path: activeFile,
+      content: "next\n",
+      append: true,
+    });
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(appendSettled).toBe(false);
     expect(mutations).toEqual(["active\n"]);
+
+    releaseAppend();
+    await expect(append).rejects.toMatchObject({ name: "AbortError" });
+    await nextAppend;
+    expect(mutations).toEqual(["active\n", "next\n"]);
   });
 
   it("restricts memory-triggered writes to append-only canonical memory files", async () => {
