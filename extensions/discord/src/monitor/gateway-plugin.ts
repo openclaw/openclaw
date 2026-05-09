@@ -84,7 +84,9 @@ export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayInten
     discordGateway.GatewayIntents.MessageContent |
     discordGateway.GatewayIntents.DirectMessages |
     discordGateway.GatewayIntents.GuildMessageReactions |
-    discordGateway.GatewayIntents.DirectMessageReactions;
+    discordGateway.GatewayIntents.DirectMessageReactions |
+    discordGateway.GatewayIntents.GuildMessageTyping |
+    discordGateway.GatewayIntents.DirectMessageTyping;
   if (voiceStatesEnabled) {
     intents |= discordGateway.GatewayIntents.GuildVoiceStates;
   }
