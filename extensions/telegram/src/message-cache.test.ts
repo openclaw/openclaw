@@ -1,6 +1,6 @@
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import type { Message } from "@grammyjs/types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildTelegramReplyChain,
   createTelegramMessageCache,
@@ -48,8 +48,10 @@ describe("telegram message cache", () => {
         } as Message,
       });
 
-      const secondCache = createTelegramMessageCache({ persistedPath });
-      const chain = buildTelegramReplyChain({
+      vi.resetModules();
+      const reloaded = await import("./message-cache.js");
+      const secondCache = reloaded.createTelegramMessageCache({ persistedPath });
+      const chain = reloaded.buildTelegramReplyChain({
         cache: secondCache,
         accountId: "default",
         chatId: 7,
@@ -143,6 +145,76 @@ describe("telegram message cache", () => {
       });
 
       expect(chain.map((entry) => entry.messageId)).toEqual(["9101", "9100"]);
+    } finally {
+      await rm(persistedPath, { force: true });
+    }
+  });
+
+  it("appends cached records between compactions and reloads the bounded cache window", async () => {
+    const storePath = `/tmp/openclaw-telegram-message-cache-append-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    await rm(persistedPath, { force: true });
+    try {
+      const cache = createTelegramMessageCache({ persistedPath, maxMessages: 4 });
+      for (let index = 0; index < 5; index++) {
+        cache.record({
+          accountId: "default",
+          chatId: 7,
+          msg: {
+            chat: { id: 7, type: "private", first_name: "Nora" },
+            message_id: 9150 + index,
+            date: 1736380700 + index,
+            text: `Message ${index}`,
+            from: { id: 1, is_bot: false, first_name: "Nora" },
+          } as Message,
+        });
+      }
+
+      const lines = (await readFile(persistedPath, "utf-8")).trim().split("\n");
+      expect(lines).toHaveLength(5);
+
+      vi.resetModules();
+      const reloaded = await import("./message-cache.js");
+      const reloadedCache = reloaded.createTelegramMessageCache({ persistedPath, maxMessages: 4 });
+      expect(reloadedCache.get({ accountId: "default", chatId: 7, messageId: "9150" })).toBeNull();
+      expect(
+        reloadedCache.get({ accountId: "default", chatId: 7, messageId: "9151" })?.messageId,
+      ).toBe("9151");
+    } finally {
+      await rm(persistedPath, { force: true });
+    }
+  });
+
+  it("keeps the persisted log bounded by compacting cached records", async () => {
+    const storePath = `/tmp/openclaw-telegram-message-cache-compact-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    await rm(persistedPath, { force: true });
+    try {
+      const cache = createTelegramMessageCache({ persistedPath, maxMessages: 3 });
+      for (let index = 0; index < 7; index++) {
+        cache.record({
+          accountId: "default",
+          chatId: 7,
+          msg: {
+            chat: { id: 7, type: "private", first_name: "Nora" },
+            message_id: 9200 + index,
+            date: 1736380700 + index,
+            text: `Message ${index}`,
+            from: { id: 1, is_bot: false, first_name: "Nora" },
+          } as Message,
+        });
+      }
+
+      const lines = (await readFile(persistedPath, "utf-8")).trim().split("\n");
+      expect(lines).toHaveLength(3);
+      expect(
+        lines.map((line) => {
+          const entry = JSON.parse(line) as {
+            node: { sourceMessage: { message_id: number } };
+          };
+          return entry.node.sourceMessage.message_id;
+        }),
+      ).toEqual([9204, 9205, 9206]);
     } finally {
       await rm(persistedPath, { force: true });
     }
