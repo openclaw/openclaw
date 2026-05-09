@@ -5,10 +5,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import { savePersistedAuthProfileSecretsStore } from "./auth-profiles/persisted.js";
 import {
   loadPersistedAuthProfileState,
   savePersistedAuthProfileState,
 } from "./auth-profiles/state.js";
+import type { AuthProfileSecretsStore } from "./auth-profiles/types.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
@@ -178,15 +180,15 @@ async function writeAuthStore(
     }
   >,
 ) {
-  await fs.writeFile(
-    path.join(agentDir, "auth-profiles.json"),
-    JSON.stringify({
+  savePersistedAuthProfileSecretsStore(
+    {
       version: 1,
       profiles: {
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai" },
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
-    }),
+    } as AuthProfileSecretsStore,
+    agentDir,
   );
   savePersistedAuthProfileState(
     {
@@ -219,9 +221,8 @@ function expectFailureCount(
 }
 
 async function writeMultiProfileAuthStore(agentDir: string) {
-  await fs.writeFile(
-    path.join(agentDir, "auth-profiles.json"),
-    JSON.stringify({
+  savePersistedAuthProfileSecretsStore(
+    {
       version: 1,
       profiles: {
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai-1" },
@@ -229,7 +230,8 @@ async function writeMultiProfileAuthStore(agentDir: string) {
         "openai:p3": { type: "api_key", provider: "openai", key: "sk-openai-3" },
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
-    }),
+    } as AuthProfileSecretsStore,
+    agentDir,
   );
   savePersistedAuthProfileState(
     {
