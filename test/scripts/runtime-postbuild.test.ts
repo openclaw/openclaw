@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { discoverStaticExtensionAssets } from "../../scripts/lib/static-extension-assets.mjs";
+import {
+  copyStaticExtensionAssetsToRuntimeOverlay,
+  discoverStaticExtensionAssets,
+} from "../../scripts/lib/static-extension-assets.mjs";
 import {
   copyStaticExtensionAssets,
   listStaticExtensionAssetOutputs,
@@ -133,6 +136,75 @@ describe("runtime postbuild static assets", () => {
     );
     await expect(fs.readFile(path.join(rootDir, runtimeAsset), "utf8")).resolves.toBe(
       "export const viewer = true;\n",
+    );
+  });
+
+  it("skips runtime overlay asset copies when the runtime extension root is absent", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    await fs.mkdir(path.join(rootDir, "extensions", "demo", "assets"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "extensions", "demo", "assets", "viewer.js"),
+      "viewer\n",
+      "utf8",
+    );
+
+    copyStaticExtensionAssetsToRuntimeOverlay({
+      rootDir,
+      assets: [
+        {
+          src: "extensions/demo/assets/viewer.js",
+          dest: "dist/extensions/demo/assets/viewer.js",
+        },
+      ],
+    });
+
+    await expectPathMissing(path.join(rootDir, "dist-runtime", "extensions", "demo", "assets"));
+  });
+
+  it("ignores runtime overlay static assets outside dist extensions", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    await fs.mkdir(path.join(rootDir, "dist-runtime", "extensions"), { recursive: true });
+    await fs.mkdir(path.join(rootDir, "extensions", "demo", "assets"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "extensions", "demo", "assets", "viewer.js"),
+      "viewer\n",
+      "utf8",
+    );
+
+    copyStaticExtensionAssetsToRuntimeOverlay({
+      rootDir,
+      assets: [
+        {
+          src: "extensions/demo/assets/viewer.js",
+          dest: "dist/other/demo/assets/viewer.js",
+        },
+      ],
+    });
+
+    await expectPathMissing(path.join(rootDir, "dist-runtime", "other", "demo", "assets"));
+  });
+
+  it("warns when a runtime overlay static asset source is missing", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const warn = vi.fn();
+    await fs.mkdir(path.join(rootDir, "dist-runtime", "extensions"), { recursive: true });
+
+    copyStaticExtensionAssetsToRuntimeOverlay({
+      rootDir,
+      assets: [
+        {
+          src: "extensions/demo/assets/missing.js",
+          dest: "dist/extensions/demo/assets/missing.js",
+        },
+      ],
+      warn,
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[runtime-postbuild] static asset not found, skipping: extensions/demo/assets/missing.js",
+    );
+    await expectPathMissing(
+      path.join(rootDir, "dist-runtime", "extensions", "demo", "assets", "missing.js"),
     );
   });
 
