@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionTranscriptEntry,
+  createSqliteSessionTranscriptRef,
   listSessionTranscriptsForAgent,
   readSessionTranscriptDeltaStats,
   resolveSessionTranscriptScope,
@@ -603,9 +604,14 @@ export abstract class MemoryManagerSyncOps {
       if (!trimmed) {
         continue;
       }
-      const resolved = path.resolve(trimmed);
-      if (this.isSessionTranscriptForAgent(resolved)) {
-        normalized.add(resolved);
+      const scope = resolveSessionTranscriptScope(trimmed);
+      if (scope?.agentId === this.agentId) {
+        normalized.add(
+          createSqliteSessionTranscriptRef({
+            agentId: scope.agentId,
+            sessionId: scope.sessionId,
+          }),
+        );
       }
     }
     return normalized.size > 0 ? normalized : null;

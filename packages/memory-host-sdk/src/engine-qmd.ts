@@ -3,8 +3,8 @@
 export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js";
 export {
   buildSessionTranscriptEntry,
+  createSqliteSessionTranscriptRef,
   listSessionTranscriptsForAgent,
-  normalizeSessionTranscriptPathForComparison,
   readSessionTranscriptDeltaStats,
   resolveSessionTranscriptScope,
   sessionPathForTranscript,

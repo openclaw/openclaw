@@ -12,7 +12,6 @@ import {
   isSilentReplyPayloadText,
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
   parseUsageCountedSessionIdFromFileName,
   stripInboundMetadata,
   stripInternalRuntimeContext,
@@ -154,29 +153,21 @@ function isCronRunGeneratedRecord(record: unknown): boolean {
   return hasCronRunSessionKey(nested.sessionKey);
 }
 
-function normalizeComparablePath(pathname: string): string {
-  const resolved = path.resolve(pathname);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-export function normalizeSessionTranscriptPathForComparison(pathname: string): string {
-  return normalizeComparablePath(pathname);
-}
-
-function createSqliteSessionTranscriptRef(params: { agentId: string; sessionId: string }): string {
+export function createSqliteSessionTranscriptRef(params: {
+  agentId: string;
+  sessionId: string;
+}): string {
   return `${SQLITE_TRANSCRIPT_REF_PREFIX}${encodeURIComponent(params.agentId)}/${encodeURIComponent(
     params.sessionId,
   )}.jsonl`;
 }
 
 export async function listSessionTranscriptsForAgent(agentId: string): Promise<string[]> {
-  return listSqliteSessionTranscripts({ agentId }).map(
-    (transcript) =>
-      transcript.path ??
-      createSqliteSessionTranscriptRef({
-        agentId: transcript.agentId,
-        sessionId: transcript.sessionId,
-      }),
+  return listSqliteSessionTranscripts({ agentId }).map((transcript) =>
+    createSqliteSessionTranscriptRef({
+      agentId: transcript.agentId,
+      sessionId: transcript.sessionId,
+    }),
   );
 }
 
@@ -201,19 +192,6 @@ function parseSqliteSessionTranscriptRef(locator: string): {
   }
 }
 
-function extractAgentIdFromSessionPath(absPath: string): string | null {
-  const parts = path.normalize(path.resolve(absPath)).split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.lastIndexOf("sessions");
-  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
-    return null;
-  }
-  return parts[sessionsIndex - 1] || null;
-}
-
-function resolveSessionIdFromTranscriptPath(absPath: string): string | null {
-  return parseUsageCountedSessionIdFromFileName(path.basename(absPath));
-}
-
 export function sessionPathForTranscript(absPath: string): string {
   const sqliteRef = parseSqliteSessionTranscriptRef(absPath);
   if (sqliteRef) {
@@ -221,10 +199,7 @@ export function sessionPathForTranscript(absPath: string): string {
       .join("sessions", sqliteRef.agentId, `${sqliteRef.sessionId}.jsonl`)
       .replace(/\\/g, "/");
   }
-  const agentId = extractAgentIdFromSessionPath(absPath);
-  return path
-    .join("sessions", ...(agentId ? [agentId] : []), path.basename(absPath))
-    .replace(/\\/g, "/");
+  return path.join("sessions", "unknown.jsonl").replace(/\\/g, "/");
 }
 
 export function resolveSessionTranscriptScope(locator: string): {
@@ -236,15 +211,7 @@ export function resolveSessionTranscriptScope(locator: string): {
   if (sqliteRef) {
     return sqliteRef;
   }
-  const transcriptPath = path.resolve(locator);
-  const rememberedScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
-  const agentId = rememberedScope?.agentId ?? extractAgentIdFromSessionPath(transcriptPath);
-  const sessionId =
-    rememberedScope?.sessionId ?? resolveSessionIdFromTranscriptPath(transcriptPath);
-  if (!agentId || !sessionId) {
-    return null;
-  }
-  return { agentId, sessionId, transcriptPath };
+  return null;
 }
 
 export function readSessionTranscriptDeltaStats(
