@@ -1,10 +1,10 @@
 ---
 summary: "ACP streaming markers, broadcast layering, and session/load history model"
 read_when:
-  - Investigating log markers during ACP tool deliveries
-  - Debugging why stream=tool does not appear for ACP turns
-  - Understanding how each channel adapter emits WS broadcast events for ACP
-  - Understanding how session/load works and why conversation history is not on the wire
+  - Investigating log markers during ACPX channel-adapter tool deliveries
+  - Debugging which runtime path produced a stream=tool event in gateway logs
+  - Understanding how each channel adapter emits WS broadcast events for ACPX
+  - Understanding how session/load works and why conversation history is not carried on the wire
 title: "ACP streaming and session model"
 ---
 
@@ -14,31 +14,38 @@ This page clarifies three commonly misunderstood aspects of ACP delivery:
 the meaning of `stream=tool` log markers, the per-channel broadcast layer,
 and how `session/load` handles conversation history.
 
-## Streaming markers and the PI boundary
+## Streaming markers and the channel-adapter delivery boundary
 
-`stream=tool` is a **PI agent marker**, not an ACP marker.
+`stream=tool` is **not an ACPX channel-adapter delivery marker**.
 
-It originates from `src/agents/pi-embedded-subscribe.handlers.tools.ts`,
-which handles tool events for the embedded PI runtime. When you see
-`stream=tool` in gateway logs, the event is on the PI path.
+The marker appears in multiple runtime paths: it originates in the
+embedded PI runtime (`src/agents/pi-embedded-subscribe.handlers.tools.ts`),
+in the native Codex app-server (`extensions/codex/src/app-server/run-attempt.ts`
+and `event-projector.ts`), and the ACP bridge itself reads `stream === "tool"`
+in `src/acp/translator.ts` to route tool-result callbacks. Seeing `stream=tool`
+in gateway logs therefore does not uniquely identify the ACPX harness path.
 
-ACP tool deliveries follow a different route:
+What distinguishes ACPX channel-adapter delivery is the per-adapter broadcast
+path that begins at the `options.deliver` callback, not a shared `stream=tool`
+label. The ACPX delivery route is:
 
 ```
-ACP harness → dispatcher.sendToolResult(payload)
-                → enqueue("tool", payload)   [reply-dispatcher.ts:309]
-                → options.deliver callback   [reply-dispatcher.ts:264]
-                → channel-specific adapter delivery
+ACPX harness → dispatcher.sendToolResult(payload)
+                 → enqueue("tool", payload)   [reply-dispatcher.ts:309]
+                 → options.deliver callback   [reply-dispatcher.ts:264]
+                 → channel-specific adapter delivery
 ```
 
-There is no `stream=tool` emitted for ACP tool results. Each channel
-adapter emits its own log markers when it broadcasts to WebSocket. If
-you are tracing an ACP tool delivery and see no `stream=tool`, that is
-correct and expected.
+There is no `stream=tool` emitted by the channel adapters themselves for
+ACPX tool results. If you are tracing an ACPX tool delivery and see
+`stream=tool` in logs, the event is from another producer (PI, native Codex,
+or the ACP bridge callback layer), not from the channel-adapter broadcast.
+Narrow your log search to the adapter deliver callsite for the channel in
+question.
 
-**Future work:** centralizing ACP broadcast labels into a single marker
-layer (similar to the PI path) would make cross-channel tracing easier.
-Today, narrow your log search to the adapter delivery callsite instead.
+**Future work:** centralizing ACPX adapter broadcast labels into a single
+marker layer would make cross-channel tracing easier. Today, instrument the
+adapter deliver function per-channel instead.
 
 ## Broadcast layering: per-channel, not centralized
 
@@ -67,9 +74,16 @@ shared broadcast label.
 
 `session/load` does **not** carry conversation history on the wire.
 
-The wire request contains only `sessionId`. The wire response carries
-config, model, and mode state. No transcript flows between OpenClaw
-and the ACP harness during `session/load`.
+The wire request includes `sessionId` plus optional setup fields
+(`cwd`, `mcpServers`, `_meta`). The wire response carries config,
+model, and mode state. No conversation transcript is exchanged between
+OpenClaw and the ACP harness on the wire during `session/load`.
+
+History reconstruction happens locally on each side: the ACPX harness
+replays its own `events.jsonl`, and the OpenClaw bridge reads its
+own ledger or session transcript (see `src/acp/translator.ts` —
+`loadSession` drives ledger or transcript replay entirely from
+locally stored state, not from wire payload).
 
 ### Parallel transcripts
 
