@@ -160,7 +160,7 @@ WORKDIR /app
 # `error setting certificate file`.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates procps hostname curl git lsof openssl python3 tini && \
+      ca-certificates procps hostname curl git lsof openssl python3 tini gosu && \
     update-ca-certificates
 
 RUN chown node:node /app
@@ -262,10 +262,18 @@ RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
 
 ENV NODE_ENV=production
 
-# Security hardening: Run as non-root user
-# The node:24-bookworm image includes a 'node' user (uid 1000)
-# This reduces the attack surface by preventing container escape via root privileges
-USER node
+# Custom entrypoint that runs briefly as root to chown the persistent
+# state-dir volume (Railway-managed volumes are root-owned by default,
+# which crashes the gateway with EACCES on first start). The
+# entrypoint drops privileges to `node` via gosu before executing the
+# CMD — the container effectively still runs unprivileged once the
+# permission bootstrap is done.
+COPY scripts/docker/openclaw-entrypoint.sh /usr/local/bin/openclaw-entrypoint.sh
+RUN chmod +x /usr/local/bin/openclaw-entrypoint.sh
+
+# NOTE: USER node would normally go here, but the entrypoint needs
+# root briefly to chown the volume mount. The entrypoint script
+# drops to node before exec'ing the CMD.
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
@@ -281,5 +289,5 @@ USER node
 # For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-ENTRYPOINT ["tini", "-s", "--"]
+ENTRYPOINT ["/usr/local/bin/openclaw-entrypoint.sh"]
 CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
