@@ -54,8 +54,8 @@ If invoked from a non-DM context, refuse silently.
 
 | Tier | Operations | Behaviour |
 |---|---|---|
-| **Auto** (read-only) | `list_guilds`, `guild_state`, `list_channels`, `list_cases`, `deploy_status`, `recent_errors`, `scheduled_runs`, `search_docs`, `fetch_page`, `sitemap` | Execute immediately, return JSON / text to the user. |
-| **Gated** (destructive) | `ban`, `kick`, `timeout`, `warn` | DM the operator with action summary + Approve/Deny buttons. Execute ONLY after `Approve`. Timeout 5 min. |
+| **Auto** (read-only) | `list_guilds`, `guild_state`, `list_channels`, `list_cases`, `deploy_status`, `recent_errors`, `scheduled_runs`, `get_ai_scope`, `search_docs`, `fetch_page`, `sitemap` | Execute immediately, return JSON / text to the user. |
+| **Gated** (destructive) | `ban`, `kick`, `timeout`, `warn`, `reload_cog`, `set_ai_scope` | DM the operator with action summary + Approve/Deny buttons. Execute ONLY after `Approve`. Timeout 5 min. |
 
 **Never auto-execute a gated op.** The dashboard's audit trail (ModerationCase) cannot be undone — the gate is the only safety net.
 
@@ -156,6 +156,17 @@ curl -sf "https://slothlee.xyz/homepage/sitemap.xml"
 
 Use this to discover new pages the LLM should know about.
 
+### Read AI scope policy
+
+The per-guild policy that controls what the chat tools can do (allowed categories, blocked tool names, owner-required gate, action rate limit).
+
+```bash
+curl -sf -H "Authorization: Bearer $SLOTHLEE_API_TOKEN" \
+  "$SLOTHLEE_API_BASE/api/public/v1/guilds/<guild_id>/ai-scope"
+```
+
+Returns `{guild_id, allowed_categories, blocked_tools, destructive_requires_owner, max_actions_per_hour, is_default}`. `is_default: true` means no row has been written yet — the values shown are the documented defaults.
+
 ## Gated-tier operations
 
 ### Approval flow (mandatory before each destructive call)
@@ -223,6 +234,36 @@ curl -sf -X POST \
   -d '{"user_id": "<id>", "reason": "<reason>", "target_name": "<name>"}' \
   "$SLOTHLEE_API_BASE/api/public/v1/guilds/<guild_id>/moderation/warn"
 ```
+
+### Reload bot cog (write:system scope)
+
+Hot-reload a Discord-bot cog without restarting the bot. Allowlist: `tickets, moderation, economy, leveling, welcome, automod, antinuke, music, fun, polls, starboard, reaction_roles, scheduled, support_chat`. Other names → 404.
+
+```bash
+curl -sf -X POST -H "Authorization: Bearer $SLOTHLEE_API_TOKEN" \
+  "$SLOTHLEE_API_BASE/api/public/v1/system/cogs/<cog_name>/reload"
+```
+
+Response confirms dispatch; reload completion appears in the bot's logs (async via Redis pub/sub).
+
+### Update AI scope policy (write:moderation scope)
+
+Partial PATCH — only fields in the body change. Pass `null` on `allowed_categories`/`blocked_tools` to reset to default; pass `[]` to explicitly block everything.
+
+```bash
+curl -sf -X PATCH \
+  -H "Authorization: Bearer $SLOTHLEE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "allowed_categories": ["moderation", "inspection"],
+    "blocked_tools": ["server_delete_role"],
+    "destructive_requires_owner": true,
+    "max_actions_per_hour": 50
+  }' \
+  "$SLOTHLEE_API_BASE/api/public/v1/guilds/<guild_id>/ai-scope"
+```
+
+Validation up front: unknown categories or out-of-range values return 400 with the known set echoed. Returns the full updated state.
 
 ## Response shape
 
