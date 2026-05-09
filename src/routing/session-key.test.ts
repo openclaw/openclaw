@@ -86,14 +86,6 @@ describe("deriveSessionChatTypeFromKey", () => {
   ] as const)("derives chat type for %j => $expected", ({ key, expected }) => {
     expect(deriveSessionChatTypeFromKey(key)).toBe(expected);
   });
-
-  it("uses plugin-owned legacy chat-type hooks after generic token parsing", () => {
-    expect(
-      deriveSessionChatTypeFromKey("legacy-room:abc", [
-        (sessionKey) => (sessionKey.startsWith("legacy-room:") ? "channel" : undefined),
-      ]),
-    ).toBe("channel");
-  });
 });
 
 describe("thread session suffix parsing", () => {

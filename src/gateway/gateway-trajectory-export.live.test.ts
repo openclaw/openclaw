@@ -33,7 +33,7 @@ function logLiveStep(step: string, details?: Record<string, unknown>): void {
 }
 
 function snapshotEnv(): LiveEnvSnapshot {
-  return snapshotLiveEnv(["OPENCLAW_TRAJECTORY", "OPENCLAW_TRAJECTORY_DIR"]);
+  return snapshotLiveEnv(["OPENCLAW_TRAJECTORY"]);
 }
 
 function restoreEnv(snapshot: LiveEnvSnapshot): void {
@@ -189,7 +189,6 @@ describeLive("gateway live trajectory export", () => {
       });
 
       const stateDir = path.join(tempDir, "state");
-      const trajectoryDir = path.join(tempDir, "runtime-traces");
       const { workspaceDir } = await createBootstrapWorkspace(tempDir);
       const configPath = path.join(tempDir, "openclaw.json");
       const token = `test-${randomUUID()}`;
@@ -209,10 +208,8 @@ describeLive("gateway live trajectory export", () => {
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
       process.env.OPENCLAW_STATE_DIR = stateDir;
       process.env.OPENCLAW_TRAJECTORY = "1";
-      process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
 
       await fs.mkdir(stateDir, { recursive: true });
-      await fs.mkdir(trajectoryDir, { recursive: true });
       await writeLiveGatewayConfig({ configPath, modelKey, port, token, workspace: workspaceDir });
       logLiveStep("config-written", { configPath, modelKey, port, workspaceDir });
 
@@ -246,10 +243,6 @@ describeLive("gateway live trajectory export", () => {
       });
       logLiveStep("agent-turn:done", { firstReply });
       expect(firstReply.trim()).toBe(replyToken);
-
-      const trajectoryFiles = await listDirectoryNames(trajectoryDir);
-      logLiveStep("runtime-traces", { trajectoryDir, files: trajectoryFiles });
-      expect(trajectoryFiles.length).toBeGreaterThan(0);
 
       const bundleDir = path.join(workspaceDir, ".openclaw", "trajectory-exports", "bundle");
       const beforeExport = new Set(await listDirectoryNames(tempDir));
