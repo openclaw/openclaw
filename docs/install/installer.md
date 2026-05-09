@@ -183,11 +183,15 @@ Designed for environments where you want everything under a local prefix
 by default, plus git-checkout installs under the same prefix flow.
 </Info>
 
+<Warning>
+`install-cli.sh` manages its own Node runtime pinned to **Node 22.22.0** by default. This is intentionally separate from your system Node and from `install.sh`, which installs Node 24. If you install native add-ons (like OpenClaw memory plugins) outside the local prefix and they are rebuilt with your system Node, you may see native ABI errors (`NODE_MODULE_VERSION` mismatches) when OpenClaw loads them with its managed Node 22. To opt into Node 24, pass `--node-version 24.x.x` (see flags below).
+</Warning>
+
 ### Flow (install-cli.sh)
 
 <Steps>
   <Step title="Install local Node runtime">
-    Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
+    Downloads a pinned Node LTS tarball (currently **22.22.0** by default; pass `--node-version` to override) to `<prefix>/tools/node-v<version>` and verifies SHA-256. Skips the download if an existing managed Node at `<prefix>/tools/` has a major version ≥ 22.
   </Step>
   <Step title="Ensure Git">
     If Git is missing, attempts install via apt/dnf/yum on Linux or Homebrew on macOS.
@@ -237,20 +241,20 @@ by default, plus git-checkout installs under the same prefix flow.
 <AccordionGroup>
   <Accordion title="Flags reference">
 
-| Flag                        | Description                                                                     |
-| --------------------------- | ------------------------------------------------------------------------------- |
-| `--prefix <path>`           | Install prefix (default: `~/.openclaw`)                                         |
-| `--install-method npm\|git` | Choose install method (default: `npm`). Alias: `--method`                       |
-| `--npm`                     | Shortcut for npm method                                                         |
-| `--git`, `--github`         | Shortcut for git method                                                         |
-| `--git-dir <path>`          | Git checkout directory (default: `~/openclaw`). Alias: `--dir`                  |
-| `--version <ver>`           | OpenClaw version or dist-tag (default: `latest`)                                |
-| `--node-version <ver>`      | Node version (default: `22.22.0`)                                               |
-| `--json`                    | Emit NDJSON events                                                              |
-| `--onboard`                 | Run `openclaw onboard` after install                                            |
-| `--no-onboard`              | Skip onboarding (default)                                                       |
-| `--set-npm-prefix`          | On Linux, force npm prefix to `~/.npm-global` if current prefix is not writable |
-| `--help`                    | Show usage (`-h`)                                                               |
+| Flag                        | Description                                                                                                    |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `--prefix <path>`           | Install prefix (default: `~/.openclaw`)                                                                        |
+| `--install-method npm\|git` | Choose install method (default: `npm`). Alias: `--method`                                                      |
+| `--npm`                     | Shortcut for npm method                                                                                        |
+| `--git`, `--github`         | Shortcut for git method                                                                                        |
+| `--git-dir <path>`          | Git checkout directory (default: `~/openclaw`). Alias: `--dir`                                                 |
+| `--version <ver>`           | OpenClaw version or dist-tag (default: `latest`)                                                               |
+| `--node-version <ver>`      | Node version for the managed local runtime (default: `22.22.0`; use `24.x.x` to match the recommended runtime) |
+| `--json`                    | Emit NDJSON events                                                                                             |
+| `--onboard`                 | Run `openclaw onboard` after install                                                                           |
+| `--no-onboard`              | Skip onboarding (default)                                                                                      |
+| `--set-npm-prefix`          | On Linux, force npm prefix to `~/.npm-global` if current prefix is not writable                                |
+| `--help`                    | Show usage (`-h`)                                                                                              |
 
   </Accordion>
 
