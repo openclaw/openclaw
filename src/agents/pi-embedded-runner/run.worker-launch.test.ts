@@ -28,7 +28,7 @@ function makeParams(): RunEmbeddedPiAgentParams {
     model: "gpt-5.5",
     prompt: "hello",
     runId: "run-1",
-    transcriptLocator: "/tmp/legacy-session.jsonl",
+    transcriptLocator: "sqlite-transcript://agent-1/stale-session",
     sessionId: "session-1",
     sessionKey: "session-key-1",
     timeoutMs: 1_000,
