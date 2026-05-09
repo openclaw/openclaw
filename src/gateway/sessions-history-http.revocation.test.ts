@@ -6,7 +6,6 @@ let transcriptUpdateHandler:
   | ((update: {
       agentId?: string;
       sessionId?: string;
-      transcriptLocator?: string;
       message?: unknown;
       messageId?: string;
     }) => void)
@@ -22,10 +21,6 @@ let gatewayConfig: {
   webchat: { chatHistoryMaxChars: 2000 },
 };
 let authCheckCalls = 0;
-const transcriptFixtures = vi.hoisted(() => ({
-  sessionOne: "sqlite-transcript://main/session-1",
-  otherSession: "sqlite-transcript://main/other-session",
-}));
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({
@@ -36,7 +31,6 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   getSessionEntry: () => ({
     sessionId: "session-1",
-    transcriptLocator: transcriptFixtures.sessionOne,
   }),
   listSessionEntries: () => [],
 }));

@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getRuntimeConfig } from "../config/io.js";
 import { getSessionEntry } from "../config/sessions.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
@@ -140,10 +139,6 @@ export async function handleSessionHistoryHttpRequest(
     typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
       ? cfg.gateway.webchat.chatHistoryMaxChars
       : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  const transcriptLocator = createSqliteSessionTranscriptLocator({
-    agentId: target.agentId,
-    sessionId: entry.sessionId,
-  });
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
       ? await readRecentSessionMessagesWithStatsAsync(
@@ -195,7 +190,6 @@ export async function handleSessionHistoryHttpRequest(
     target: {
       agentId: target.agentId,
       sessionId: entry.sessionId,
-      transcriptLocator,
     },
     rawMessages: rawSnapshot,
     rawTranscriptSeq: boundedSnapshot?.totalMessages,

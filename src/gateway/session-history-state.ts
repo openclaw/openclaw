@@ -31,7 +31,6 @@ type SessionHistorySnapshot = {
 type SessionHistoryTranscriptTarget = {
   agentId?: string;
   sessionId: string;
-  transcriptLocator?: string;
 };
 
 type SessionHistoryRawSnapshot = {
