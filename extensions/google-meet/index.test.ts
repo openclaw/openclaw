@@ -4199,15 +4199,13 @@ describe("google-meet plugin", () => {
       name: "openclaw_agent_consult",
       args: { question: "What should I say about launch timing?" },
     });
-    expect(bridge.submitToolResult).toHaveBeenNthCalledWith(
-      1,
-      "tool-call-1",
-      expect.objectContaining({
-        status: "working",
-        tool: "openclaw_agent_consult",
-      }),
-      { willContinue: true },
-    );
+    expect(bridge.submitToolResult).toHaveBeenCalled();
+    const firstToolResultCall = bridge.submitToolResult.mock.calls[0];
+    expect(firstToolResultCall?.[0]).toBe("tool-call-1");
+    expect(firstToolResultCall?.[2]).toStrictEqual({ willContinue: true });
+    const progressPayload = requireRecord(firstToolResultCall?.[1], "tool progress payload");
+    expect(progressPayload.status).toBe("working");
+    expect(progressPayload.tool).toBe("openclaw_agent_consult");
 
     expect(spawnMock).toHaveBeenNthCalledWith(1, "play-meet", [], {
       stdio: ["pipe", "ignore", "pipe"],
@@ -4226,45 +4224,40 @@ describe("google-meet plugin", () => {
     expect(bridge.triggerGreeting).not.toHaveBeenCalled();
     handle.speak("Say exactly: hello from the meeting.");
     expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the meeting.");
-    expect(handle.getHealth()).toMatchObject({
-      providerConnected: true,
-      realtimeReady: true,
-      audioInputActive: true,
-      audioOutputActive: true,
-      lastInputBytes: 3,
-      lastOutputBytes: 4,
-      realtimeTranscriptLines: 2,
-      lastRealtimeTranscriptRole: "user",
-      lastRealtimeTranscriptText: "Please summarize the launch.",
-      lastRealtimeEventType: "server:response.done",
-      lastRealtimeEventDetail: "status=completed",
-      recentRealtimeTranscript: [
-        expect.objectContaining({ role: "assistant", text: "How can I help you?" }),
-        expect.objectContaining({ role: "user", text: "Please summarize the launch." }),
-      ],
-      recentRealtimeEvents: [
-        expect.objectContaining({ direction: "client", type: "response.create" }),
-        expect.objectContaining({
-          direction: "server",
-          type: "response.done",
-          detail: "status=completed",
-        }),
-      ],
-      clearCount: 1,
+    const health = handle.getHealth();
+    expect(health.providerConnected).toBe(true);
+    expect(health.realtimeReady).toBe(true);
+    expect(health.audioInputActive).toBe(true);
+    expect(health.audioOutputActive).toBe(true);
+    expect(health.lastInputBytes).toBe(3);
+    expect(health.lastOutputBytes).toBe(4);
+    expect(health.realtimeTranscriptLines).toBe(2);
+    expect(health.lastRealtimeTranscriptRole).toBe("user");
+    expect(health.lastRealtimeTranscriptText).toBe("Please summarize the launch.");
+    expect(health.lastRealtimeEventType).toBe("server:response.done");
+    expect(health.lastRealtimeEventDetail).toBe("status=completed");
+    expect(health.clearCount).toBe(1);
+    expect(health.recentRealtimeTranscript).toHaveLength(2);
+    expect(health.recentRealtimeTranscript?.[0]?.role).toBe("assistant");
+    expect(health.recentRealtimeTranscript?.[0]?.text).toBe("How can I help you?");
+    expect(health.recentRealtimeTranscript?.[1]?.role).toBe("user");
+    expect(health.recentRealtimeTranscript?.[1]?.text).toBe("Please summarize the launch.");
+    expect(health.recentRealtimeEvents).toHaveLength(2);
+    expect(health.recentRealtimeEvents?.[0]?.direction).toBe("client");
+    expect(health.recentRealtimeEvents?.[0]?.type).toBe("response.create");
+    expect(health.recentRealtimeEvents?.[1]?.direction).toBe("server");
+    expect(health.recentRealtimeEvents?.[1]?.type).toBe("response.done");
+    expect(health.recentRealtimeEvents?.[1]?.detail).toBe("status=completed");
+    if (!callbacks) {
+      throw new Error("Expected realtime bridge callbacks");
+    }
+    expect(callbacks.audioFormat).toStrictEqual({
+      encoding: "pcm16",
+      sampleRateHz: 24000,
+      channels: 1,
     });
-    expect(callbacks).toMatchObject({
-      audioFormat: {
-        encoding: "pcm16",
-        sampleRateHz: 24000,
-        channels: 1,
-      },
-      autoRespondToAudio: true,
-      tools: [
-        expect.objectContaining({
-          name: "openclaw_agent_consult",
-        }),
-      ],
-    });
+    expect(callbacks.autoRespondToAudio).toBe(true);
+    expect(callbacks.tools?.map((tool) => tool.name)).toContain("openclaw_agent_consult");
     await vi.waitFor(() => {
       expect(bridge.submitToolResult).toHaveBeenLastCalledWith(
         "tool-call-1",
@@ -4274,32 +4267,41 @@ describe("google-meet plugin", () => {
         undefined,
       );
     });
-    expect(handle.getHealth().recentTalkEvents?.map((event) => event.type)).toEqual(
-      expect.arrayContaining([
-        "session.started",
-        "session.ready",
-        "input.audio.delta",
-        "output.audio.delta",
-        "output.audio.done",
-        "transcript.done",
-        "output.text.done",
-        "tool.call",
-        "tool.progress",
-        "tool.result",
-        "turn.ended",
-      ]),
+    const talkEventTypes = handle.getHealth().recentTalkEvents?.map((event) => event.type) ?? [];
+    for (const type of [
+      "session.started",
+      "session.ready",
+      "input.audio.delta",
+      "output.audio.delta",
+      "output.audio.done",
+      "transcript.done",
+      "output.text.done",
+      "tool.call",
+      "tool.progress",
+      "tool.result",
+      "turn.ended",
+    ]) {
+      expect(talkEventTypes).toContain(type);
+    }
+    expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    const agentRequest = requireRecord(
+      runtime.agent.runEmbeddedPiAgent.mock.calls[0]?.[0],
+      "embedded agent request",
     );
-    expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageProvider: "google-meet",
-        agentId: "jay",
-        spawnedBy: "agent:jay:main",
-        sessionKey: "agent:jay:subagent:google-meet:meet-1",
-        sandboxSessionKey: "agent:jay:subagent:google-meet:meet-1",
-        thinkLevel: "high",
-        toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
-      }),
-    );
+    expect(agentRequest.messageProvider).toBe("google-meet");
+    expect(agentRequest.agentId).toBe("jay");
+    expect(agentRequest.spawnedBy).toBe("agent:jay:main");
+    expect(agentRequest.sessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
+    expect(agentRequest.sandboxSessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
+    expect(agentRequest.thinkLevel).toBe("high");
+    expect(agentRequest.toolsAllow).toStrictEqual([
+      "read",
+      "web_search",
+      "web_fetch",
+      "x_search",
+      "memory_search",
+      "memory_get",
+    ]);
     expect(sessionStore).toHaveProperty("agent:jay:subagent:google-meet:meet-1");
 
     await handle.stop();
