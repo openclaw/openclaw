@@ -41,6 +41,7 @@ const DISCORD_REALTIME_TALKBACK_DEBOUNCE_MS = 350;
 const DISCORD_REALTIME_FALLBACK_TEXT = "I hit an error while checking that. Please try again.";
 const DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT = 32;
 const DISCORD_REALTIME_LOG_PREVIEW_CHARS = 500;
+const DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 
 export type DiscordVoiceMode = "stt-tts" | "talk-buffer" | "bidi";
 
@@ -68,6 +69,9 @@ function formatRealtimeInterruptionLog(event: RealtimeVoiceBridgeEvent): string 
   if (event.direction === "client") {
     if (event.type === "response.cancel") {
       return `discord voice: realtime model interrupt requested ${event.direction}:${event.type}${detail}`;
+    }
+    if (event.type === "conversation.item.truncate.skipped") {
+      return `discord voice: realtime model interrupt ignored ${event.direction}:${event.type}${detail}`;
     }
     if (event.type === "conversation.item.truncate") {
       return `discord voice: realtime model audio truncated ${event.direction}:${event.type}${detail}`;
@@ -260,7 +264,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
           realtimeConfig: this.realtimeConfig,
           providerId: resolved.provider.id,
         },
-      )}`,
+      )} minBargeInAudioEndMs=${resolveDiscordRealtimeMinBargeInAudioEndMs(this.realtimeConfig)}`,
     );
     const voiceSdk = loadDiscordVoiceSdk();
     this.params.entry.player.on(voiceSdk.AudioPlayerStatus.Idle, this.playerIdleHandler);
@@ -323,7 +327,6 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     this.bridge?.handleBargeIn({ audioPlaybackActive: true });
-    this.clearOutputAudio();
   }
 
   isBargeInEnabled(): boolean {
@@ -516,8 +519,19 @@ function buildProviderConfigOverrides(
   const overrides = {
     ...(realtimeConfig?.model ? { model: realtimeConfig.model } : {}),
     ...(realtimeConfig?.voice ? { voice: realtimeConfig.voice } : {}),
+    ...(typeof realtimeConfig?.minBargeInAudioEndMs === "number"
+      ? { minBargeInAudioEndMs: realtimeConfig.minBargeInAudioEndMs }
+      : {}),
   };
   return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
+function resolveDiscordRealtimeMinBargeInAudioEndMs(
+  realtimeConfig: DiscordRealtimeVoiceConfig,
+): number {
+  return typeof realtimeConfig?.minBargeInAudioEndMs === "number"
+    ? realtimeConfig.minBargeInAudioEndMs
+    : DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS;
 }
 
 function buildDiscordRealtimeInstructions(params: {

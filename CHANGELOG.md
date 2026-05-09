@@ -6,6 +6,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Dependencies: refresh workspace dependency pins and lockfile, including `@openai/codex` `0.130.0`, `acpx` `0.7.0`, AWS SDK `3.1044.0`, OpenTelemetry `0.217.0`, `typebox` `1.1.38`, `vite` `8.0.11`, `oxfmt` `0.48.0`, and `oxlint` `1.63.0`, and update the Codex harness model snapshot for the new bundled app-server catalog.
+- Plugins/install: add guarded plugin install overrides so onboarding and repair tests can route specific plugins to registry specs or local `npm pack` artifacts via environment variables.
+- Tests/Docker: add Codex on-demand install and live plugin-tool dependency E2E lanes for packaged onboarding and npm-pack plugin proof.
 - Plugins/ACPX: accept an optional `args` array in `agents.<name>` config so paths and flag values containing spaces stay intact when spawning ACP agent processes. Thanks @TheArchitectit and @BunsDev.
 - Agents: inject the current provider/model identity into system prompts, including configured prompt overrides and CLI hook prompt replacements, so agents can answer model-identity questions from the actual runtime selection.
 - Plugins/CLI: add the optional bundled `oc-path` plugin, providing `openclaw path` for surgical `oc://` access to markdown, JSONC, and JSONL workspace files.
@@ -43,6 +46,7 @@ Docs: https://docs.openclaw.ai
 - Discord/voice: make duplicate same-guild auto-join entries resolve to the last configured channel so moving an agent between voice channels does not keep joining the stale channel.
 - Discord/voice: add realtime `/vc` modes so Discord voice channels can run as STT/TTS, a realtime talk buffer with the OpenClaw agent brain, or a bidi realtime session with `openclaw_agent_consult`.
 - Discord/voice: add bounded realtime gateway logs for voice channel joins, realtime model/voice selection, transcripts, consult routing/answers, and playback start, allow OpenAI realtime Discord sessions to disable input-triggered response interruption for echo-heavy rooms while keeping explicit Discord barge-in available for new and already-active speakers, and allow voice turns to target an existing Discord channel agent session.
+- Discord/voice: add `voice.realtime.minBargeInAudioEndMs` and let the realtime provider own playback clearing, so speaker echo no longer cuts OpenAI realtime model audio at `audioEndMs=0` while low-echo rooms can opt back into immediate barge-in with `0`.
 - Discord/voice: include a bounded one-line STT transcript preview in verbose voice logs so live voice debugging shows what speakers said before the agent reply.
 - Codex app-server: pin the managed Codex harness and Codex CLI smoke package to `@openai/codex@0.129.0`, defer OpenClaw integration dynamic tools behind Codex tool search by default, and accept current Codex service-tier values so legacy `fast` settings survive the stable harness upgrade as `priority`.
 - Codex app-server: annotate message-tool-only direct chat turns in the dynamic `message` tool spec so visible replies are sent through `message(action="send")` instead of staying private. (#79704)
@@ -148,6 +152,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Memory/QMD: warn with a manual stale collection removal hint when QMD reports a path/pattern conflict but `collection list` lacks verifiable metadata, avoiding unsafe stderr-only rebinds. Refs #71783. (#72297) Thanks @MonkeyLeeT.
+- Models/auth: make `openclaw models status --check` and dashboard auth health honor effective auth profile order while keeping stale profiles visible. (#79685) Thanks @nimbleenigma.
 - Docs/Subagents: correct the listed sub-agent bootstrap context files to include `SOUL.md`, `IDENTITY.md`, and `USER.md`. (#79470) Thanks @lastguru-net.
 - Backup: keep live backup archives from copying current agent session transcripts, cron run logs, and delivery queues while preserving workspace lock/temp files and keeping `--json` output parseable when volatile files are skipped. Fixes #72249. (#72251) Thanks @abnershang.
 - OpenAI/Codex: install the Codex runtime plugin from npm during OpenAI onboarding and load it automatically for implicit OpenAI model routes, while preserving manual PI runtime overrides. Fixes #79358.

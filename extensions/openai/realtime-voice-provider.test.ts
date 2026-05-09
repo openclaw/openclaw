@@ -703,7 +703,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         }),
       ),
     );
-    bridge.setMediaTimestamp(1240);
+    bridge.setMediaTimestamp(1300);
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
 
@@ -714,7 +714,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       type: "conversation.item.truncate",
       item_id: "item_1",
       content_index: 0,
-      audio_end_ms: 240,
+      audio_end_ms: 300,
     });
   });
 
@@ -904,6 +904,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       "message",
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
+    bridge.setMediaTimestamp(1000);
     socket.emit(
       "message",
       Buffer.from(
@@ -914,6 +915,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         }),
       ),
     );
+    bridge.setMediaTimestamp(1300);
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
@@ -927,7 +929,106 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(onEvent).toHaveBeenCalledWith({
       direction: "client",
       type: "conversation.item.truncate",
-      detail: "reason=barge-in audioEndMs=0",
+      detail: "reason=barge-in audioEndMs=300",
+    });
+  });
+
+  it("ignores zero-length playback barge-in without clearing audio", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onClearAudio = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio,
+      onEvent,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+    bridge.setMediaTimestamp(1000);
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.audio.delta",
+          item_id: "item_1",
+          delta: Buffer.from("assistant audio").toString("base64"),
+        }),
+      ),
+    );
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+
+    expect(onClearAudio).not.toHaveBeenCalled();
+    expect(parseSent(socket)).not.toContainEqual({ type: "response.cancel" });
+    expect(parseSent(socket).some((event) => event.type === "conversation.item.truncate")).toBe(
+      false,
+    );
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "client",
+      type: "conversation.item.truncate.skipped",
+      detail: "reason=barge-in audioEndMs=0 minAudioEndMs=250",
+    });
+  });
+
+  it("allows immediate playback barge-in when the minimum audio window is zero", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onClearAudio = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "sk-test", // pragma: allowlist secret
+        minBargeInAudioEndMs: 0,
+      },
+      onAudio: vi.fn(),
+      onClearAudio,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+    bridge.setMediaTimestamp(1000);
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.audio.delta",
+          item_id: "item_1",
+          delta: Buffer.from("assistant audio").toString("base64"),
+        }),
+      ),
+    );
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+
+    expect(onClearAudio).toHaveBeenCalledTimes(1);
+    expect(parseSent(socket)).toContainEqual({ type: "response.cancel" });
+    expect(parseSent(socket)).toContainEqual({
+      type: "conversation.item.truncate",
+      item_id: "item_1",
+      content_index: 0,
+      audio_end_ms: 0,
     });
   });
 

@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "commander": "^14.0.3",
-    "typebox": "1.1.37",
+    "typebox": "1.1.38",
     "ws": "^8.20.0"
   },
   "devDependencies": {

@@ -1195,6 +1195,7 @@
                   "plugins/reference",
                   "plugins/bundles",
                   "plugins/dependency-resolution",
+                  "plugins/install-overrides",
                   "plugins/codex-harness",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",

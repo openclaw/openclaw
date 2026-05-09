@@ -551,6 +551,7 @@ const DiscordVoiceRealtimeSchema = z
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
     consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
     bargeIn: z.boolean().optional(),
+    minBargeInAudioEndMs: z.number().int().min(0).max(10_000).optional(),
     debounceMs: z.number().int().positive().max(10_000).optional(),
     providers: z.record(z.string(), z.record(z.string(), z.unknown()).optional()).optional(),
   })
