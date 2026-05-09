@@ -50,14 +50,6 @@ const loadModelAuthRuntime = createLazyRuntimeModule(
 );
 const loadAcpRuntime = createLazyRuntimeModule(() => import("./runtime-acp.runtime.js"));
 
-function createRuntimeAcp(): PluginRuntime["acp"] {
-  const bindAcpRuntime = createLazyRuntimeMethodBinder(loadAcpRuntime);
-  return {
-    spawn: bindAcpRuntime((runtime) => runtime.spawnPluginAcp),
-    prompt: bindAcpRuntime((runtime) => runtime.promptPluginAcp),
-  };
-}
-
 function createRuntimeTts(): PluginRuntime["tts"] {
   const bindTtsRuntime = createLazyRuntimeMethodBinder(loadTtsRuntime);
   return {
