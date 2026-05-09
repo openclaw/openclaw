@@ -76,26 +76,27 @@ describe("resolveSessionKeyForTranscriptLocator", () => {
   it("drops stale cached mappings and falls back to the current store contents", () => {
     let store: Record<string, SessionEntry> = {
       "agent:main:alpha": { sessionId: "sess-alpha", updatedAt: now },
-      "agent:main:beta": { sessionId: "sess-beta", updatedAt: now },
+      "agent:main:beta": { sessionId: "shared", updatedAt: now },
     };
     loadCombinedSessionEntriesForGatewayMock.mockImplementation(() => ({
       databasePath: "(multiple)",
       entries: store,
     }));
-    resolveSessionTranscriptCandidatesMock.mockImplementation(
-      (sessionId: string, sessionFile?: string) => {
-        if (sessionId === "sess-alpha") {
-          return [locator("sess-alpha")];
-        }
-        if (sessionId === "sess-beta") {
-          return sessionFile ? [sessionFile] : [locator("shared")];
-        }
-        if (sessionId === "sess-alpha-2") {
-          return [locator("shared")];
-        }
-        return [];
-      },
-    );
+    resolveSessionTranscriptCandidatesMock.mockImplementation((sessionId: string) => {
+      if (sessionId === "sess-alpha") {
+        return [locator("sess-alpha")];
+      }
+      if (sessionId === "sess-beta") {
+        return [locator("sess-beta")];
+      }
+      if (sessionId === "shared") {
+        return [locator("shared")];
+      }
+      if (sessionId === "sess-alpha-2") {
+        return [locator("shared")];
+      }
+      return [];
+    });
 
     expect(resolveSessionKeyForTranscriptLocator(locator("shared"))).toBe("agent:main:beta");
 
@@ -104,7 +105,6 @@ describe("resolveSessionKeyForTranscriptLocator", () => {
       "agent:main:beta": {
         sessionId: "sess-beta",
         updatedAt: now + 1,
-        sessionFile: locator("sess-beta"),
       },
     };
 

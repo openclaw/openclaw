@@ -32,9 +32,10 @@ export function createSqliteSessionTranscriptLocator(params: {
       : typeof params.topicId === "number"
         ? String(params.topicId)
         : undefined;
-  const fileName =
-    safeTopicId !== undefined ? `${sessionId}-topic-${safeTopicId}.jsonl` : `${sessionId}.jsonl`;
-  return `${SQLITE_SESSION_TRANSCRIPT_LOCATOR_PREFIX}${encodeURIComponent(agentId)}/${fileName}`;
+  const topicSuffix = safeTopicId !== undefined ? `?topic=${safeTopicId}` : "";
+  return `${SQLITE_SESSION_TRANSCRIPT_LOCATOR_PREFIX}${encodeURIComponent(
+    agentId,
+  )}/${encodeURIComponent(sessionId)}${topicSuffix}`;
 }
 
 export function parseSqliteSessionTranscriptLocator(locator: string):
@@ -51,17 +52,14 @@ export function parseSqliteSessionTranscriptLocator(locator: string):
   try {
     const url = new URL(trimmed);
     const agentId = decodeURIComponent(url.hostname).trim();
-    const fileName = decodeURIComponent(url.pathname.replace(/^\/+/u, "")).trim();
-    if (!fileName.endsWith(".jsonl")) {
+    const rawPath = decodeURIComponent(url.pathname.replace(/^\/+/u, "")).trim();
+    if (!rawPath) {
       return undefined;
     }
-    const withoutExt = fileName.slice(0, -".jsonl".length);
-    const topicIndex = withoutExt.lastIndexOf("-topic-");
-    const sessionId = topicIndex > 0 ? withoutExt.slice(0, topicIndex) : withoutExt;
-    const topicId = topicIndex > 0 ? withoutExt.slice(topicIndex + "-topic-".length) : undefined;
+    const topicId = url.searchParams.get("topic") ?? undefined;
     return {
       agentId: normalizeAgentId(agentId),
-      sessionId: validateSessionId(sessionId),
+      sessionId: validateSessionId(rawPath),
       ...(topicId ? { topicId } : {}),
     };
   } catch {
@@ -75,16 +73,9 @@ export function isSqliteSessionTranscriptLocator(locator: string | undefined): b
 
 export function resolveSessionTranscriptLocator(
   sessionId: string,
-  entry?: { sessionFile?: string },
+  entry?: { transcriptLocator?: string },
   opts?: SessionTranscriptLocatorOptions,
 ): string {
-  const candidate = entry?.sessionFile?.trim();
-  const parsed = candidate ? parseSqliteSessionTranscriptLocator(candidate) : undefined;
-  if (
-    parsed?.sessionId === sessionId &&
-    (!opts?.agentId || parsed.agentId === normalizeAgentId(opts.agentId))
-  ) {
-    return candidate!;
-  }
+  void entry;
   return createSqliteSessionTranscriptLocator({ agentId: opts?.agentId, sessionId });
 }

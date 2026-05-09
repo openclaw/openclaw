@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { getSqliteSessionTranscriptStats } from "../config/sessions/transcript-store.sqlite.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
@@ -692,11 +693,15 @@ async function getSessionManagedOutgoingAttachmentIndex(
     sessionManagedOutgoingAttachmentIndexCache.delete(sessionKey);
   }
 
-  const messages = await readSessionMessagesAsync(sessionId, entry.sessionFile, {
-    agentId,
-    mode: "full",
-    reason: "managed outgoing attachment index",
-  });
+  const messages = await readSessionMessagesAsync(
+    sessionId,
+    createSqliteSessionTranscriptLocator({ agentId, sessionId }),
+    {
+      agentId,
+      mode: "full",
+      reason: "managed outgoing attachment index",
+    },
+  );
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for (const message of messages) {
     const meta = (message as { __openclaw?: { id?: string } } | null)?.__openclaw;

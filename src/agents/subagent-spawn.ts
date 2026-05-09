@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-policy.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
@@ -300,7 +301,7 @@ type PreparedSpawnContext =
       mode: "fork";
       parentEntry: SessionEntry;
       childEntry?: SessionEntry;
-      forked: { sessionId: string; sessionFile: string };
+      forked: { sessionId: string; transcriptLocator: string };
       forkFallbackNote?: never;
     }
   | { status: "error"; error: string };
@@ -347,7 +348,7 @@ async function prepareSubagentSessionContext(params: {
       parentEntry,
       agentId: params.requesterAgentId,
     });
-    let forked: { sessionId: string; sessionFile: string } | null = null;
+    let forked: { sessionId: string; transcriptLocator: string } | null = null;
     if (forkDecision.status === "skip") {
       forkFallbackNote = forkDecision.message;
     } else {
@@ -362,7 +363,7 @@ async function prepareSubagentSessionContext(params: {
       }
       const nextChildEntry = mergeSessionEntry(childEntry, {
         sessionId: forked.sessionId,
-        sessionFile: forked.sessionFile,
+        transcriptLocator: forked.transcriptLocator,
         forkedFromParent: true,
       });
       await subagentSpawnDeps.upsertSessionEntry({
@@ -421,20 +422,38 @@ async function prepareContextEngineSubagentSpawn(params: {
   try {
     subagentSpawnDeps.ensureContextEnginesInitialized();
     const engine = await subagentSpawnDeps.resolveContextEngine(params.cfg);
+    const parentAgentId = normalizeAgentId(
+      parseAgentSessionKey(params.requesterInternalKey)?.agentId ?? "main",
+    );
+    const childAgentId = normalizeAgentId(
+      parseAgentSessionKey(params.childSessionKey)?.agentId ?? parentAgentId,
+    );
+    const parentSessionId = params.context.parentEntry?.sessionId;
+    const childSessionId =
+      params.context.mode === "fork"
+        ? params.context.forked.sessionId
+        : params.context.childEntry?.sessionId;
     const preparation = await engine.prepareSubagentSpawn?.({
       parentSessionKey: params.requesterInternalKey,
       childSessionKey: params.childSessionKey,
       contextMode: params.context.mode,
-      parentSessionId: params.context.parentEntry?.sessionId,
-      parentSessionFile: params.context.parentEntry?.sessionFile,
-      childSessionId:
+      parentSessionId,
+      parentTranscriptLocator: parentSessionId
+        ? createSqliteSessionTranscriptLocator({
+            agentId: parentAgentId,
+            sessionId: parentSessionId,
+          })
+        : undefined,
+      childSessionId,
+      childTranscriptLocator:
         params.context.mode === "fork"
-          ? params.context.forked.sessionId
-          : params.context.childEntry?.sessionId,
-      childSessionFile:
-        params.context.mode === "fork"
-          ? params.context.forked.sessionFile
-          : params.context.childEntry?.sessionFile,
+          ? params.context.forked.transcriptLocator
+          : childSessionId
+            ? createSqliteSessionTranscriptLocator({
+                agentId: childAgentId,
+                sessionId: childSessionId,
+              })
+            : undefined,
       ttlMs: params.runTimeoutSeconds > 0 ? params.runTimeoutSeconds * 1000 : undefined,
     });
     return { status: "ok", preparation };

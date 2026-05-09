@@ -172,7 +172,7 @@ async function resolveTelegramCommandTranscriptLocator(params: {
   agentId: string;
   sessionKey: string;
   threadId?: string | number;
-}): Promise<{ sessionId?: string; sessionFile?: string }> {
+}): Promise<{ sessionId?: string; transcriptLocator?: string }> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return {};
@@ -184,14 +184,14 @@ async function resolveTelegramCommandTranscriptLocator(params: {
       sessionKey,
     });
     const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
-    const persisted = await resolveAndPersistSessionTranscriptIdentity({
+    const identity = await resolveAndPersistSessionTranscriptIdentity({
       sessionId,
       sessionKey: resolved.normalizedKey,
       sessionEntry: resolved.existing,
       agentId: params.agentId,
       topicId: params.threadId,
     });
-    return { sessionId, sessionFile: persisted.transcriptLocator };
+    return { sessionId, transcriptLocator: identity.transcriptLocator };
   } catch {
     return {};
   }
@@ -1327,7 +1327,7 @@ export const registerTelegramNativeCommands = ({
           } catch {}
         }
 
-        const sessionFileContext = await resolveTelegramCommandTranscriptLocator({
+        const transcriptLocatorContext = await resolveTelegramCommandTranscriptLocator({
           cfg: runtimeCfg,
           agentId: route.agentId,
           sessionKey: route.sessionKey,
@@ -1343,8 +1343,8 @@ export const registerTelegramNativeCommands = ({
             isAuthorizedSender: commandAuthorized,
             senderIsOwner,
             sessionKey: route.sessionKey,
-            sessionId: sessionFileContext.sessionId,
-            sessionFile: sessionFileContext.sessionFile,
+            sessionId: transcriptLocatorContext.sessionId,
+            transcriptLocator: transcriptLocatorContext.transcriptLocator,
             commandBody,
             config: runtimeCfg,
             from,
