@@ -36,6 +36,20 @@ const LOG_HEADER_MAX_LEN = 300;
 const LOG_HEADER_FORMAT_REGEX = /\p{Cf}/gu;
 const MAX_QUEUED_MESSAGE_HANDLER_FRAMES = 16;
 
+// Ordered handshake lifecycle for failure-only diagnostic phase logging.
+// Phases advance monotonically; the last completed phase is included in close
+// metadata when a connection ends before reaching `ready`.
+export const WS_HANDSHAKE_PHASES = [
+  "tcp_accepted",
+  "ws_upgrade_started",
+  "auth_token_received",
+  "auth_validated",
+  "session_attached",
+  "subscriptions_registered",
+  "ready",
+] as const;
+export type WsHandshakePhase = (typeof WS_HANDSHAKE_PHASES)[number];
+
 function replaceControlChars(value: string): string {
   let cleaned = "";
   for (const char of value) {
@@ -263,12 +277,21 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     logWs("in", "open", { connId, remoteAddr, remotePort, localAddr, localPort, endpoint });
     let handshakeState: "pending" | "connected" | "failed" = "pending";
+    let lastHandshakePhase: WsHandshakePhase = "tcp_accepted";
     let holdsPreauthBudget = true;
     let closeCause: string | undefined;
     let closeMeta: Record<string, unknown> = {};
     let lastFrameType: string | undefined;
     let lastFrameMethod: string | undefined;
     let lastFrameId: string | undefined;
+
+    const advanceHandshakePhase = (next: WsHandshakePhase) => {
+      const currentIdx = WS_HANDSHAKE_PHASES.indexOf(lastHandshakePhase);
+      const nextIdx = WS_HANDSHAKE_PHASES.indexOf(next);
+      if (nextIdx > currentIdx) {
+        lastHandshakePhase = next;
+      }
+    };
 
     const setCloseCause = (cause: string, meta?: Record<string, unknown>) => {
       if (!closeCause) {
@@ -309,6 +332,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       event: "connect.challenge",
       payload: { nonce: connectNonce, ts: Date.now() },
     });
+    advanceHandshakePhase("ws_upgrade_started");
 
     let pingTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -355,9 +379,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       const logHost = sanitizeLogValue(requestHost);
       const logUserAgent = sanitizeLogValue(requestUserAgent);
       const logReason = sanitizeLogValue(reason?.toString());
+      // Failure-only: only attach the last-completed handshake phase when the
+      // connection ended before reaching `ready`. A successful, fully-handshaked
+      // session would otherwise emit a redundant `phase=ready` on every close.
+      const handshakeIncomplete = lastHandshakePhase !== "ready";
       const closeContext = {
         cause: closeCause,
         handshake: handshakeState,
+        ...(handshakeIncomplete ? { phase: lastHandshakePhase } : {}),
         durationMs,
         lastFrameType,
         lastFrameMethod,
@@ -378,7 +407,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           ? logWsControl.debug
           : logWsControl.warn;
         logFn(
-          `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}`,
+          `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"} phase=${lastHandshakePhase}`,
           closeContext,
         );
       }
@@ -412,6 +441,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         durationMs,
         cause: closeCause,
         handshake: handshakeState,
+        ...(handshakeIncomplete ? { phase: lastHandshakePhase } : {}),
         lastFrameType,
         lastFrameMethod,
         lastFrameId,
@@ -429,9 +459,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         setCloseCause("handshake-timeout", {
           handshakeMs: Date.now() - openedAt,
           endpoint,
+          phase: lastHandshakePhase,
         });
         logWsControl.warn(
-          `handshake timeout conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"}`,
+          `handshake timeout conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} phase=${lastHandshakePhase}`,
         );
         close();
       }
@@ -488,6 +519,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       setHandshakeState: (next) => {
         handshakeState = next;
       },
+      advanceHandshakePhase,
       setCloseCause,
       setLastFrameMeta,
       originCheckMetrics,

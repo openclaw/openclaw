@@ -91,6 +91,7 @@ async function connectTestWs(
     socket: { localAddress: "127.0.0.1" },
   };
   const clients = params.clients ?? new Set<unknown>();
+  const logWsControl = createLogger();
 
   attachGatewayWsConnectionHandler({
     wss,
@@ -104,7 +105,7 @@ async function connectTestWs(
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     logGateway: createLogger() as never,
     logHealth: createLogger() as never,
-    logWsControl: createLogger() as never,
+    logWsControl: logWsControl as never,
     extraHandlers: {},
     broadcast: vi.fn(),
     buildRequestContext: () =>
@@ -124,6 +125,7 @@ async function connectTestWs(
   return {
     clients,
     socket,
+    logWsControl,
     passed: attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as unknown,
   };
 }
@@ -244,6 +246,78 @@ describe("attachGatewayWsConnectionHandler", () => {
     socket.emit("close", 1000, Buffer.from("done"));
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes a monotonic handshake phase tracker that starts at ws_upgrade_started", async () => {
+    const { passed } = await connectTestWs();
+    const handlerParams = passed as {
+      advanceHandshakePhase: (phase: string) => void;
+    };
+    expect(handlerParams.advanceHandshakePhase).toBeTypeOf("function");
+    expect(() => handlerParams.advanceHandshakePhase("ready")).not.toThrow();
+    expect(() => handlerParams.advanceHandshakePhase("auth_token_received")).not.toThrow();
+  });
+
+  it("includes the last-completed handshake phase in the pre-connect close log", async () => {
+    const { socket, logWsControl } = await connectTestWs();
+
+    socket.emit("close", 1006, Buffer.from("client disappeared"));
+
+    expect(logWsControl.warn).toHaveBeenCalled();
+    const [message, context] = logWsControl.warn.mock.calls[0] as [
+      string,
+      { phase?: string; cause?: string },
+    ];
+    expect(message).toContain("closed before connect");
+    expect(message).toContain("phase=ws_upgrade_started");
+    expect(context).toMatchObject({ phase: "ws_upgrade_started" });
+  });
+
+  it("includes the last-completed handshake phase on handshake timeout", async () => {
+    vi.useFakeTimers();
+    const { logWsControl } = await connectTestWs({
+      options: { preauthHandshakeTimeoutMs: 100 },
+    });
+
+    vi.advanceTimersByTime(150);
+
+    expect(logWsControl.warn).toHaveBeenCalledWith(
+      expect.stringContaining("phase=ws_upgrade_started"),
+    );
+    expect(logWsControl.warn).toHaveBeenCalledWith(expect.stringContaining("handshake timeout"));
+  });
+
+  it("omits the handshake phase from close logs once the session reaches ready", async () => {
+    const { socket, logWsControl, passed } = await connectTestWs();
+    const handlerParams = passed as {
+      advanceHandshakePhase: (phase: string) => void;
+      setHandshakeState: (state: "pending" | "connected" | "failed") => void;
+      setClient: (client: unknown) => boolean;
+    };
+    handlerParams.advanceHandshakePhase("auth_token_received");
+    handlerParams.advanceHandshakePhase("auth_validated");
+    handlerParams.setHandshakeState("connected");
+    handlerParams.advanceHandshakePhase("session_attached");
+    expect(
+      handlerParams.setClient({
+        socket,
+        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+        connId: "ready-conn",
+        usesSharedGatewayAuth: false,
+      }),
+    ).toBe(true);
+    handlerParams.advanceHandshakePhase("subscriptions_registered");
+    handlerParams.advanceHandshakePhase("ready");
+
+    socket.emit("close", 1000, Buffer.from("normal"));
+
+    for (const call of logWsControl.warn.mock.calls) {
+      const [message, context] = call as [string, Record<string, unknown> | undefined];
+      expect(message).not.toContain("phase=");
+      if (context) {
+        expect(context).not.toHaveProperty("phase");
+      }
+    }
   });
 
   it("skips node presence disconnects for stale reconnected sockets", async () => {
