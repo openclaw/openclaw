@@ -2671,4 +2671,83 @@ describe("resolveModel", () => {
     const transport = getModelProviderRequestTransport(model!);
     expect(transport?.headers?.["X-Agent-Only"]).toBeUndefined();
   });
+
+  it("applies agent-level provider headers even without global provider config", () => {
+    /// Agent-only headers should reach the model even when models.providers is
+    /// empty, i.e. for discovered models that have no global provider block.
+    mockDiscoveredModel(discoverModels, {
+      provider: "llmmllab",
+      modelId: "discovered-model",
+      templateModel: {
+        ...makeModel("discovered-model"),
+        provider: "llmmllab",
+        baseUrl: "https://api.llmmllab.com/v1",
+        api: "openai-completions",
+      },
+    });
+
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "header-agent",
+            providers: {
+              llmmllab: {
+                request: {
+                  headers: {
+                    "X-Agent-Only": "agent-value",
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    const model = resolveModelWithRegistry({
+      provider: "llmmllab",
+      modelId: "discovered-model",
+      cfg,
+      agentId: "header-agent",
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expect(model).toBeDefined();
+    const transport = getModelProviderRequestTransport(model!);
+    expect(transport?.headers?.["X-Agent-Only"]).toBe("agent-value");
+  });
+
+  it("applies job-level provider headers even without global provider config", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "llmmllab",
+      modelId: "discovered-model",
+      templateModel: {
+        ...makeModel("discovered-model"),
+        provider: "llmmllab",
+        baseUrl: "https://api.llmmllab.com/v1",
+        api: "openai-completions",
+      },
+    });
+
+    const jobProviderRequest = {
+      headers: {
+        "X-Job-Header": "job-value",
+      },
+    };
+
+    const model = resolveModelWithRegistry({
+      provider: "llmmllab",
+      modelId: "discovered-model",
+      cfg: {},
+      jobProviderRequest,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expect(model).toBeDefined();
+    const transport = getModelProviderRequestTransport(model!);
+    expect(transport?.headers?.["X-Job-Header"]).toBe("job-value");
+  });
 });

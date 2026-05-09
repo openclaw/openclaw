@@ -493,28 +493,32 @@ async function prepareCronRunContext(params: {
   // Merge job-level provider overrides into the agent config so they take
   // precedence over agent-level and global provider request config.
   if (input.job.payload.kind === "agentTurn" && input.job.payload.providers) {
-    const agentList = cfgWithAgentDefaults.agents?.list
-      ? cfgWithAgentDefaults.agents.list.map((a) => ({ ...a }))
-      : undefined;
-    if (agentList) {
-      const idx = agentList.findIndex((a) => a.id === agentId);
-      if (idx >= 0) {
-        const existing = agentList[idx].providers ?? {};
-        const merged: Record<string, { request?: Record<string, unknown> }> = {
-          ...existing,
-          ...input.job.payload.providers,
-        };
-        for (const [pid, jp] of Object.entries(input.job.payload.providers)) {
-          if (existing[pid]?.request) {
-            merged[pid] = {
-              ...existing[pid],
-              ...jp,
-              request: { ...existing[pid].request, ...jp.request },
-            };
-          }
+    const existingList = cfgWithAgentDefaults.agents?.list;
+    let agentList = existingList ? existingList.map((a) => ({ ...a })) : [];
+    const idx = agentList.findIndex((a) => a.id === agentId);
+    if (idx >= 0) {
+      const existing = agentList[idx].providers ?? {};
+      const merged: Record<string, { request?: Record<string, unknown> }> = {
+        ...existing,
+        ...input.job.payload.providers,
+      };
+      for (const [pid, jp] of Object.entries(input.job.payload.providers)) {
+        if (existing[pid]?.request) {
+          merged[pid] = {
+            ...existing[pid],
+            ...jp,
+            request: { ...existing[pid].request, ...jp.request },
+          };
         }
-        agentList[idx] = { ...agentList[idx], providers: merged };
       }
+      agentList[idx] = { ...agentList[idx], providers: merged };
+    } else {
+      // Default-agent cron jobs without an agents.list entry: create one so
+      // resolveAgentProviderRequest can find the job-level overrides.
+      agentList.push({
+        id: agentId,
+        providers: input.job.payload.providers,
+      });
     }
     cfgWithAgentDefaults = {
       ...cfgWithAgentDefaults,

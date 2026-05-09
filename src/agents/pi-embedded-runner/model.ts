@@ -528,17 +528,42 @@ function applyConfiguredProviderOverrides(params: {
     provider: params.provider,
     modelId,
   });
+  // Resolve agent/job-level overrides before the no-providerConfig path so
+  // agent-only headers still apply to discovered models without global config.
+  const agentRequest = resolveAgentProviderRequest(params.cfg, params.agentId, params.provider);
   if (!providerConfig) {
+    const mergedRequest = mergeModelProviderRequestOverrides(
+      agentRequest,
+      params.jobProviderRequest,
+    );
     const resolvedParams = mergeModelParams(
       readModelParams(discoveredModel.params),
       defaultModelParams,
     );
-    return {
+    const base = {
       ...discoveredModel,
       ...(resolvedParams ? { params: resolvedParams } : {}),
       // Discovered models originate from models.json and may contain persistence markers.
       headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
+    if (mergedRequest) {
+      const requestConfig = resolveProviderRequestConfig({
+        provider: params.provider,
+        api: normalizeResolvedTransportApi(discoveredModel.api) ?? "openai-responses",
+        baseUrl: discoveredModel.baseUrl,
+        discoveredHeaders: sanitizeModelHeaders(discoveredModel.headers, {
+          stripSecretRefMarkers: true,
+        }),
+        request: mergedRequest,
+        capability: "llm",
+        transport: "stream",
+      });
+      return attachModelProviderRequestTransport(
+        { ...base, headers: requestConfig.headers },
+        mergedRequest,
+      );
+    }
+    return base;
   }
   const configuredModel =
     findConfiguredProviderModel(providerConfig, params.provider, modelId) ??
@@ -556,7 +581,6 @@ function applyConfiguredProviderOverrides(params: {
     stripSecretRefMarkers: true,
   });
   const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig.request);
-  const agentRequest = resolveAgentProviderRequest(params.cfg, params.agentId, params.provider);
   const mergedRequest = mergeModelProviderRequestOverrides(
     providerRequest,
     agentRequest,
