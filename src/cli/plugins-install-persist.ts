@@ -1,6 +1,8 @@
 import { replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -9,8 +11,15 @@ import {
 } from "../plugins/installed-plugin-index-records.js";
 import type { PluginInstallUpdate } from "../plugins/installs.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
+import { buildPluginSnapshotReport } from "../plugins/status.js";
+import {
+  applyPluginUninstallDirectoryRemoval,
+  planPluginUninstall,
+  type PluginUninstallDirectoryRemoval,
+} from "../plugins/uninstall.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import {
   applySlotSelectionForPlugin,
   enableInternalHookEntries,
@@ -58,6 +67,118 @@ export type ConfigSnapshotForInstallPersist = {
   baseHash: string | undefined;
 };
 
+function sourceMatchesInstalledPath(params: {
+  activeSource: string;
+  installedSource: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const activeSource = resolveUserPath(params.activeSource, params.env);
+  const installedSource = resolveUserPath(params.installedSource, params.env);
+  return activeSource === installedSource || isPathInside(installedSource, activeSource);
+}
+
+function logShadowedNpmInstallWarning(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+  install: Omit<PluginInstallUpdate, "pluginId">;
+  runtime: RuntimeEnv;
+}): void {
+  if (params.install.source !== "npm") {
+    return;
+  }
+  const installedSource = params.install.installPath ?? params.install.sourcePath;
+  if (!installedSource) {
+    return;
+  }
+  const report = buildPluginSnapshotReport({
+    config: params.config,
+    effectiveOnly: true,
+    onlyPluginIds: [params.pluginId],
+  });
+  const active = report.plugins.find((plugin) => plugin.id === params.pluginId);
+  if (
+    !active ||
+    active.origin !== "config" ||
+    sourceMatchesInstalledPath({ activeSource: active.source, installedSource })
+  ) {
+    return;
+  }
+
+  params.runtime.log(
+    theme.warn(
+      [
+        `Warning: installed plugin "${params.pluginId}" is not the active source because a config-selected plugin with the same id is currently selected:`,
+        `  active config source: ${shortenHomePath(active.source)}`,
+        `  installed npm source: ${shortenHomePath(installedSource)}`,
+        "Run `openclaw plugins doctor` for repair options.",
+      ].join("\n"),
+    ),
+  );
+}
+
+function resolveComparableInstallPath(
+  install: Pick<PluginInstallRecord, "installPath" | "sourcePath">,
+) {
+  return install.installPath ?? install.sourcePath;
+}
+
+function shouldPreserveReplacedInstallPath(params: {
+  removalTarget: string;
+  nextInstallPath: string;
+}) {
+  const removalTarget = resolveUserPath(params.removalTarget);
+  const nextInstallPath = resolveUserPath(params.nextInstallPath);
+  return (
+    isPathInside(removalTarget, nextInstallPath) || isPathInside(nextInstallPath, removalTarget)
+  );
+}
+
+function resolveReplacedManagedInstallRemoval(params: {
+  pluginId: string;
+  previousInstall?: PluginInstallRecord;
+  nextInstall: Omit<PluginInstallUpdate, "pluginId">;
+}): PluginUninstallDirectoryRemoval | null {
+  if (!params.previousInstall) {
+    return null;
+  }
+  const previousInstallPath = resolveComparableInstallPath(params.previousInstall);
+  const nextInstallPath = resolveComparableInstallPath(params.nextInstall);
+  if (!previousInstallPath || !nextInstallPath) {
+    return null;
+  }
+  if (
+    shouldPreserveReplacedInstallPath({
+      removalTarget: previousInstallPath,
+      nextInstallPath,
+    })
+  ) {
+    return null;
+  }
+  const plan = planPluginUninstall({
+    config: {
+      plugins: {
+        installs: {
+          [params.pluginId]: params.previousInstall,
+        },
+      },
+    } as OpenClawConfig,
+    pluginId: params.pluginId,
+    deleteFiles: true,
+  });
+  if (!plan.ok || !plan.directoryRemoval) {
+    return null;
+  }
+  if (
+    shouldPreserveReplacedInstallPath({
+      removalTarget: plan.directoryRemoval.target,
+      nextInstallPath,
+    })
+  ) {
+    return null;
+  }
+  return plan.directoryRemoval;
+}
+
 export async function persistPluginInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
@@ -86,6 +207,11 @@ export async function persistPluginInstall(params: {
     () => loadInstalledPluginIndexInstallRecords(),
     { command: "install" },
   );
+  const replacedInstallRemoval = resolveReplacedManagedInstallRemoval({
+    pluginId: params.pluginId,
+    previousInstall: installRecords[params.pluginId],
+    nextInstall: params.install,
+  });
   const nextInstallRecords = recordPluginInstallInRecords(installRecords, {
     pluginId: params.pluginId,
     ...params.install,
@@ -113,6 +239,23 @@ export async function persistPluginInstall(params: {
       }),
     { command: "install" },
   );
+  if (replacedInstallRemoval) {
+    const removalResult = await tracePluginLifecyclePhaseAsync(
+      "replaced install cleanup",
+      () => applyPluginUninstallDirectoryRemoval(replacedInstallRemoval),
+      { command: "install", pluginId: params.pluginId },
+    );
+    for (const warning of removalResult.warnings) {
+      runtime.log(theme.warn(warning));
+    }
+    if (removalResult.directoryRemoved) {
+      runtime.log(
+        theme.muted(
+          `Removed previous plugin install directory: ${shortenHomePath(replacedInstallRemoval.target)}`,
+        ),
+      );
+    }
+  }
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
     reason: "source-changed",
@@ -127,6 +270,12 @@ export async function persistPluginInstall(params: {
     runtime.log(theme.warn(params.warningMessage));
   }
   runtime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
+  logShadowedNpmInstallWarning({
+    config: next,
+    pluginId: params.pluginId,
+    install: params.install,
+    runtime,
+  });
   runtime.log("Restart the gateway to load plugins.");
   return next;
 }

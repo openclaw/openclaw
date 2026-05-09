@@ -13,6 +13,7 @@ const deliverOutboundPayloadsMock = vi.hoisted(() =>
 );
 vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: deliverOutboundPayloadsMock,
+  deliverOutboundPayloadsInternal: deliverOutboundPayloadsMock,
 }));
 
 const createReplyMediaPathNormalizerMock = vi.hoisted(() =>
@@ -213,6 +214,86 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(deliverArgs?.payloads[0]).toMatchObject({
       mediaUrls: ["/tmp/agent-workspace/out/photo.png"],
     });
+  });
+
+  it("reports successful requested delivery", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([]);
+
+    const delivered = await deliverMediaReplyForTest({
+      key: "agent:tester:slack:direct:alice",
+      agentId: "tester",
+    } as never);
+
+    expect(delivered.deliverySucceeded).toBe(true);
+  });
+
+  it("does not report success when best-effort delivery records an error", async () => {
+    deliverOutboundPayloadsMock.mockImplementationOnce(async (params: unknown) => {
+      (
+        params as {
+          onError?: (err: unknown, payload: ReplyPayload) => void;
+          onPayloadDeliveryOutcome?: (outcome: {
+            index: number;
+            payload: ReplyPayload;
+            status: "failed";
+            error: Error;
+            stage: "send";
+          }) => void;
+        }
+      ).onError?.(new Error("send failed"), { text: "here you go" });
+      (
+        params as {
+          onPayloadDeliveryOutcome?: (outcome: {
+            index: number;
+            payload: ReplyPayload;
+            status: "failed";
+            error: Error;
+            stage: "send";
+          }) => void;
+        }
+      ).onPayloadDeliveryOutcome?.({
+        index: 0,
+        payload: { text: "here you go" },
+        status: "failed",
+        error: new Error("send failed"),
+        stage: "send",
+      });
+      return [];
+    });
+
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        bestEffortDeliver: true,
+        replyChannel: "slack",
+        replyTo: "#general",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      sessionEntry: undefined,
+      payloads: [{ text: "here you go" }],
+      result: createResult(),
+    });
+
+    expect(delivered.deliverySucceeded).toBe(false);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("send failed"));
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bestEffort: true,
+        queuePolicy: "best_effort",
+      }),
+    );
   });
 
   it("threads agentId into the normalizer when sessionKey is unresolved", async () => {

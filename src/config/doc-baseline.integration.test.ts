@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   type ConfigDocBaselineEntry,
@@ -8,6 +8,14 @@ import {
   renderConfigDocBaselineArtifacts,
   writeConfigDocBaselineArtifacts,
 } from "./doc-baseline.js";
+
+vi.mock("./doc-baseline.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doc-baseline.runtime.js")>();
+  return {
+    ...actual,
+    collectBundledChannelConfigs: () => undefined,
+  };
+});
 
 describe("config doc baseline integration", () => {
   let sharedRenderedPromise: Promise<
@@ -106,9 +114,13 @@ describe("config doc baseline integration", () => {
     expect(byPath.get("bindings.*")).toMatchObject({
       hasChildren: true,
     });
-    expect(byPath.get("bindings.*.type")).toBeDefined();
-    expect(byPath.get("bindings.*.match.channel")).toBeDefined();
-    expect(byPath.get("bindings.*.match.peer.id")).toBeDefined();
+    expect(byPath.get("bindings.*.type")).toMatchObject({ path: "bindings.*.type" });
+    expect(byPath.get("bindings.*.match.channel")).toMatchObject({
+      path: "bindings.*.match.channel",
+    });
+    expect(byPath.get("bindings.*.match.peer.id")).toMatchObject({
+      path: "bindings.*.match.peer.id",
+    });
   });
 
   it("supports check mode for stale hash files", async () => {

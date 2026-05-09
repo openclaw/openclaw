@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { getApiProvider, streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import * as providerTransportStream from "../provider-transport-stream.js";
 import {
@@ -84,6 +84,21 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
       }),
     ).toBe("session-custom");
   });
+
+  it("describes runtime-auth custom session streams as boundary-aware", () => {
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: vi.fn() as never,
+        shouldUseWebSocketTransport: false,
+        model: {
+          api: "anthropic-messages",
+          provider: "cloudflare-ai-gateway",
+          id: "claude-sonnet-4-6",
+        } as never,
+        resolvedApiKey: "runtime-key",
+      }),
+    ).toBe("boundary-aware:anthropic-messages");
+  });
 });
 
 describe("resolveEmbeddedAgentStreamFn", () => {
@@ -145,6 +160,62 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
 
     expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("routes PI native OpenAI-compatible provider streams through boundary-aware transports", async () => {
+    const nativeStreamFn = getApiProvider("openai-completions")?.streamSimple;
+    if (!nativeStreamFn) {
+      throw new Error("expected native OpenAI-compatible stream function");
+    }
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: nativeStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "llama",
+        id: "qwen36-35b-a3b",
+      } as never,
+      resolvedApiKey: "local-token",
+    });
+
+    expect(streamFn).not.toBe(nativeStreamFn);
+    await expect(
+      streamFn({ provider: "llama", id: "qwen36-35b-a3b" } as never, {} as never, {}),
+    ).resolves.toMatchObject({ apiKey: "local-token" });
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes runtime-auth custom session streams for supported APIs through boundary-aware transports", async () => {
+    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "anthropic-messages",
+        provider: "cloudflare-ai-gateway",
+        id: "claude-sonnet-4-6",
+      } as never,
+      resolvedApiKey: "anthropic-runtime-key",
+    });
+
+    expect(streamFn).not.toBe(currentStreamFn);
+    await expect(
+      streamFn(
+        { provider: "cloudflare-ai-gateway", id: "claude-sonnet-4-6" } as never,
+        {} as never,
+        {},
+      ),
+    ).resolves.toMatchObject({ apiKey: "anthropic-runtime-key" });
+    expect(currentStreamFn).not.toHaveBeenCalled();
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
   });
 
   it("injects the resolved run api key into provider-owned stream functions", async () => {

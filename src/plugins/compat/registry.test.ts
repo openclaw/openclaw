@@ -133,7 +133,7 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "legacy-root-sdk-import",
     file: "src/plugin-sdk/compat.ts",
-    marker: "@deprecated Use `openclaw/plugin-sdk/channel-reply-pipeline`.",
+    marker: "@deprecated Use `openclaw/plugin-sdk/channel-message`.",
   },
   {
     code: "channel-route-key-aliases",
@@ -179,7 +179,7 @@ describe("plugin compatibility registry", () => {
       const maxRemoveAfter = addUtcMonths(parseDate(record.warningStarts), 3);
       const removeAfter = parseDate(record.removeAfter);
       expect(removeAfter <= maxRemoveAfter, record.code).toBe(true);
-      expect(record.replacement, record.code).toBeTruthy();
+      expect(record.replacement, record.code).toMatch(/\S/u);
       expect(record.docsPath, record.code).toMatch(/^\//u);
     }
   });

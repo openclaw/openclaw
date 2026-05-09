@@ -49,7 +49,7 @@ describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
     const xml = `<rss><channel>${makeItem("2026.2.26", "202602260")}</channel></rss>`;
 
-    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+    expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
 
   it("requires lane-floor builds on and after lane-floor cutover", () => {
@@ -63,7 +63,7 @@ describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts canonical stable lane builds on and after lane-floor cutover", () => {
     const xml = `<rss><channel>${makeItem("2026.3.1", "2026030190")}</channel></rss>`;
 
-    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+    expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
 });
 
@@ -237,7 +237,7 @@ describe("collectBundledExtensionManifestErrors", () => {
           },
         },
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags non-object install metadata instead of throwing", () => {
@@ -292,16 +292,16 @@ describe("bundled plugin package dependency checks", () => {
       );
       writeFileSync(
         join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
         "utf8",
       );
       writeFileSync(
         join(tempRoot, "dist", "lancedb-runtime-7TYK-Pto.js"),
-        `//#region extensions/memory-lancedb/lancedb-runtime.ts\nimport("@lancedb/lancedb");\n`,
+        `//#region extensions/memory-lancedb/lancedb-runtime.ts\nimport("root-owned-test-dep");\n`,
         "utf8",
       );
 
-      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toStrictEqual([]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -319,17 +319,17 @@ describe("bundled plugin package dependency checks", () => {
       );
       writeFileSync(
         join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
         "utf8",
       );
       writeFileSync(
         join(tempRoot, "dist", "root-runtime.js"),
-        `import("@lancedb/lancedb");\n`,
+        `import("root-owned-test-dep");\n`,
         "utf8",
       );
 
       expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([
-        "installed package root is missing declared runtime dependency '@lancedb/lancedb' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'root-owned-test-dep' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
       ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -531,7 +531,7 @@ describe("collectMissingPackPaths", () => {
         "dist/channel-catalog.json",
         PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
@@ -574,7 +574,7 @@ describe("collectPackUnpackedSizeErrors", () => {
   it("accepts pack results within the unpacked size budget", () => {
     expect(
       collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.14.tgz", 120_354_302)]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags oversized pack results that risk low-memory startup failures", () => {

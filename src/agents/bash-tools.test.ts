@@ -106,11 +106,16 @@ vi.mock("../process/supervisor/index.js", () => {
   const immediate = () => new Promise<void>((resolve) => setImmediate(resolve));
   const readEnvPath = (env?: NodeJS.ProcessEnv) => env?.PATH ?? env?.Path ?? "";
   const extractCommand = (input: SpawnInput) => input.ptyCommand ?? input.argv?.at(-1) ?? "";
-  const splitCommands = (command: string) =>
-    command
-      .split(";")
-      .map((part) => part.trim())
-      .filter(Boolean);
+  const splitCommands = (command: string) => {
+    const commands: string[] = [];
+    for (const part of command.split(";")) {
+      const trimmed = part.trim();
+      if (trimmed.length > 0) {
+        commands.push(trimmed);
+      }
+    }
+    return commands;
+  };
   const stdoutForSegment = (segment: string, env?: NodeJS.ProcessEnv) => {
     if (segment === "echo $PATH" || segment === "Write-Output $env:PATH") {
       return `${readEnvPath(env)}\n`;
@@ -513,7 +518,7 @@ const expectNotifyNoopEvents = (
   label: string,
 ) => {
   if (!notifyOnExitEmptySuccess) {
-    expect(events, label).toEqual([]);
+    expect(events, label).toStrictEqual([]);
     return;
   }
   expect(events.length, label).toBeGreaterThan(0);
@@ -763,7 +768,11 @@ describe("exec notifyOnExit", () => {
     );
     const formatted = await drainNotifyEvents();
 
-    expect(finished).toBeTruthy();
+    expect(finished).toMatchObject({
+      id: sessionId,
+      status: PROCESS_STATUS_COMPLETED,
+      exitCode: 0,
+    });
     expect(hasEvent).toBe(true);
     expect(queuedEvent).toMatchObject({ trusted: false });
     expect(formatted).toBeUndefined();
@@ -956,18 +965,12 @@ describe("exec backgrounded onUpdate suppression", () => {
       // Abort almost immediately so the signal fires while the command
       // is still producing output.
       setTimeout(() => abortController.abort(), 0);
-      const result = await execTool.execute(
-        nextCallId(),
-        { command },
-        abortController.signal,
-        onUpdateSpy,
-      );
+      await execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy);
       const callsAtAbort = onUpdateSpy.mock.calls.length;
       // Allow a tick for any straggling stdout data events.
       await waitOneTurn();
       // After abort, no new onUpdate calls should have been made.
       expect(onUpdateSpy.mock.calls.length).toBe(callsAtAbort);
-      expect(result).toBeDefined();
     },
     isWin ? 10_000 : 5_000,
   );

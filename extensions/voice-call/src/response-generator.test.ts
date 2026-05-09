@@ -191,10 +191,9 @@ describe("generateVoiceResponse", () => {
       modelOverride: "gpt-4.1-nano",
       modelOverrideSource: "auto",
     });
-    expect(updateSessionStore).toHaveBeenCalledWith(
-      "/tmp/openclaw/main/sessions.json",
-      expect.any(Function),
-    );
+    const updateSessionStoreCall = updateSessionStore.mock.calls[0];
+    expect(updateSessionStoreCall?.[0]).toBe("/tmp/openclaw/main/sessions.json");
+    expect(updateSessionStoreCall?.[1]).toBeTypeOf("function");
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
@@ -225,7 +224,9 @@ describe("generateVoiceResponse", () => {
     });
 
     expect(result.text).toBe("Fresh call context.");
-    expect(sessionStore["voice:call:call-123"]).toBeDefined();
+    expect(sessionStore["voice:call:call-123"]).toMatchObject({
+      sessionId: expect.stringMatching(/\S/),
+    });
     expect(sessionStore["voice:15550001111"]).toBeUndefined();
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -244,6 +245,7 @@ describe("generateVoiceResponse", () => {
       resolveAgentIdentity,
       resolveStorePath,
       resolveSessionFilePath,
+      sessionStore,
     } = createAgentRuntime([{ text: '{"spoken":"Default agent."}' }]);
     const coreConfig = {} as CoreConfig;
 
@@ -261,9 +263,15 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "main");
-    expect(resolveSessionFilePath).toHaveBeenCalledWith(expect.any(String), expect.any(Object), {
-      agentId: "main",
-    });
+    const defaultSessionEntry = sessionStore["voice:15550001111"];
+    expect(defaultSessionEntry).toBeDefined();
+    expect(resolveSessionFilePath).toHaveBeenCalledWith(
+      defaultSessionEntry?.sessionId,
+      defaultSessionEntry,
+      {
+        agentId: "main",
+      },
+    );
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw/agents/main",
@@ -284,6 +292,7 @@ describe("generateVoiceResponse", () => {
       resolveAgentIdentity,
       resolveStorePath,
       resolveSessionFilePath,
+      sessionStore,
     } = createAgentRuntime([{ text: '{"spoken":"Voice agent."}' }]);
     const coreConfig = {} as CoreConfig;
 
@@ -305,9 +314,15 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "voice");
-    expect(resolveSessionFilePath).toHaveBeenCalledWith(expect.any(String), expect.any(Object), {
-      agentId: "voice",
-    });
+    const voiceSessionEntry = sessionStore["voice:15550001111"];
+    expect(voiceSessionEntry).toBeDefined();
+    expect(resolveSessionFilePath).toHaveBeenCalledWith(
+      voiceSessionEntry?.sessionId,
+      voiceSessionEntry,
+      {
+        agentId: "voice",
+      },
+    );
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw/agents/voice",

@@ -47,7 +47,7 @@ describe("Dockerfile", () => {
     expect(collapsed).toContain("update-ca-certificates");
   });
 
-  it("installs python3 in the slim runtime stage for workspace scripts", async () => {
+  it("installs python3 and tini in the slim runtime stage", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
     const runtimeIndex = dockerfile.indexOf(
       "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
@@ -59,7 +59,10 @@ describe("Dockerfile", () => {
     expect(runtimeIndex).toBeGreaterThan(-1);
     expect(pythonInstallIndex).toBeGreaterThan(runtimeIndex);
     expect(pythonInstallIndex).toBeLessThan(dockerfile.indexOf("RUN chown node:node /app"));
-    expect(dockerfile).toContain("ca-certificates procps hostname curl git lsof openssl python3");
+    expect(dockerfile).toContain(
+      "ca-certificates procps hostname curl git lsof openssl python3 tini",
+    );
+    expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
   });
 
   it("installs optional browser dependencies after pnpm install", async () => {
@@ -105,12 +108,24 @@ describe("Dockerfile", () => {
 
   it("prunes runtime dependencies after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
+    const normalizedExtensionLoop =
+      "for ext in $(printf '%s\\n' \"$OPENCLAW_EXTENSIONS\" | tr ',' ' '); do \\";
     expect(dockerfile).toContain("FROM build AS runtime-assets");
     expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
     expect(dockerfile).toContain("ARG OPENCLAW_BUNDLED_PLUGIN_DIR");
+    expect(dockerfile).toContain(
+      "Opt-in plugin dependencies at build time (space- or comma-separated directory names).",
+    );
+    expect(dockerfile).toContain(
+      'Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .',
+    );
+    expect(dockerfile.split(normalizedExtensionLoop).length - 1).toBe(2);
     expect(dockerfile).toContain("pnpm-workspace.runtime.yaml");
     expect(dockerfile).toContain("  - ui\\n");
     expect(dockerfile).toContain("CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod");
+    expect(dockerfile).toContain(
+      'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs',
+    );
     expect(dockerfile).toContain("prune must not rediscover unrelated workspaces");
     expect(dockerfile).not.toContain(
       `npm install --prefix "${BUNDLED_PLUGIN_ROOT_DIR}/$ext" --omit=dev --silent`,

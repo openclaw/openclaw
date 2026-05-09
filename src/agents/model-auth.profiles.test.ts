@@ -44,6 +44,21 @@ async function expectVertexAdcEnvApiKey(params: {
   }
 }
 
+function testModelDefinition(id: string): Model<Api> {
+  return {
+    id,
+    name: id,
+    provider: "test",
+    api: "responses",
+    baseUrl: "https://example.test/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  };
+}
+
 vi.mock("../plugins/setup-registry.js", async () => {
   const { readFileSync } = await import("node:fs");
   return {
@@ -255,6 +270,21 @@ const BEDROCK_PROVIDER_CFG = {
   },
 } as const;
 
+const BEDROCK_PROVIDER_CFG_WITH_PROFILE = {
+  ...BEDROCK_PROVIDER_CFG,
+  auth: {
+    order: {
+      "amazon-bedrock": ["amazon-bedrock:default"],
+    },
+    profiles: {
+      "amazon-bedrock:default": {
+        provider: "amazon-bedrock",
+        mode: "aws-sdk",
+      },
+    },
+  },
+} as const;
+
 async function resolveBedrockProvider() {
   return resolveApiKeyForProvider({
     provider: "amazon-bedrock",
@@ -274,6 +304,37 @@ async function expectBedrockAuthSource(params: {
     expect(resolved.source).toContain(params.expectedSource);
   });
 }
+
+it("resolves config-only aws-sdk profiles without stored credentials", async () => {
+  const resolved = await resolveApiKeyForProvider({
+    provider: "amazon-bedrock",
+    profileId: "amazon-bedrock:default",
+    store: { version: 1, profiles: {} },
+    cfg: BEDROCK_PROVIDER_CFG_WITH_PROFILE as never,
+  });
+
+  expect(resolved).toMatchObject({
+    mode: "aws-sdk",
+    profileId: "amazon-bedrock:default",
+    source: "profile:amazon-bedrock:default",
+  });
+  expect(resolved.apiKey).toBeUndefined();
+});
+
+it("uses configured aws-sdk profile order without stored credentials", async () => {
+  const resolved = await resolveApiKeyForProvider({
+    provider: "amazon-bedrock",
+    store: { version: 1, profiles: {} },
+    cfg: BEDROCK_PROVIDER_CFG_WITH_PROFILE as never,
+  });
+
+  expect(resolved).toMatchObject({
+    mode: "aws-sdk",
+    profileId: "amazon-bedrock:default",
+    source: "profile:amazon-bedrock:default",
+  });
+  expect(resolved.apiKey).toBeUndefined();
+});
 
 function buildDemoLocalStore(keys: string[]) {
   return {
@@ -311,15 +372,13 @@ async function resolveDemoLocalApiKey(params: {
   storedKeys: string[];
   configuredApiKey: string;
 }) {
-  let resolved!: Awaited<ReturnType<typeof resolveApiKeyForProvider>>;
-  await withEnvAsync({ DEMO_LOCAL_API_KEY: params.envApiKey }, async () => {
-    resolved = await resolveApiKeyForProvider({
+  return await withEnvAsync({ DEMO_LOCAL_API_KEY: params.envApiKey }, async () => {
+    return await resolveApiKeyForProvider({
       provider: "demo-local",
       store: buildDemoLocalStore(params.storedKeys),
       cfg: buildDemoLocalProviderCfg(params.configuredApiKey),
     });
   });
-  return resolved;
 }
 
 describe("getApiKeyForModel", () => {
@@ -625,6 +684,51 @@ describe("getApiKeyForModel", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("reuses runtime auth availability for provider auth checks", () => {
+    const store = { version: 1 as const, profiles: {} };
+    const localNoKeyConfig = {
+      models: {
+        providers: {
+          vllm: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [testModelDefinition("meta-llama/Meta-Llama-3-8B-Instruct")],
+          },
+          remote: {
+            api: "openai-completions",
+            baseUrl: "https://remote.example.com/v1",
+            models: [testModelDefinition("remote-model")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      hasAuthForModelProvider({
+        provider: "amazon-bedrock",
+        cfg: {} as OpenClawConfig,
+        env: {},
+        store,
+      }),
+    ).toBe(true);
+    expect(
+      hasAuthForModelProvider({
+        provider: "vllm",
+        cfg: localNoKeyConfig,
+        env: {},
+        store,
+      }),
+    ).toBe(true);
+    expect(
+      hasAuthForModelProvider({
+        provider: "remote",
+        cfg: localNoKeyConfig,
+        env: {},
+        store,
+      }),
+    ).toBe(false);
   });
 
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {
@@ -1003,7 +1107,7 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("resolveEnvApiKey('anthropic-vertex') uses the provided env snapshot", async () => {
+  it("resolveEnvApiKey('anthropic-vertex') uses the provided env snapshot", () => {
     const resolved = resolveEnvApiKey("anthropic-vertex", {
       GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
     } as NodeJS.ProcessEnv);
@@ -1011,7 +1115,7 @@ describe("getApiKeyForModel", () => {
     expect(resolved).toBeNull();
   });
 
-  it("resolveEnvApiKey('google-vertex') uses the provided env snapshot", async () => {
+  it("resolveEnvApiKey('google-vertex') uses the provided env snapshot", () => {
     const resolved = resolveEnvApiKey("google-vertex", {
       GOOGLE_CLOUD_API_KEY: "google-cloud-api-key",
     } as NodeJS.ProcessEnv);
@@ -1218,7 +1322,7 @@ describe("getApiKeyForModel", () => {
     });
   });
 
-  it("resolveEnvApiKey('anthropic-vertex') accepts explicit metadata auth opt-in", async () => {
+  it("resolveEnvApiKey('anthropic-vertex') accepts explicit metadata auth opt-in", () => {
     const resolved = resolveEnvApiKey("anthropic-vertex", {
       ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
     } as NodeJS.ProcessEnv);

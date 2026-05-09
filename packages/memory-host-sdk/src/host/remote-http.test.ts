@@ -44,7 +44,7 @@ describe("package withRemoteHttpResponse", () => {
       ...deps,
     });
 
-    expect(deps.calls[0]).toBeDefined();
+    expect(deps.calls).toHaveLength(1);
     expect(deps.calls[0]).not.toHaveProperty("mode");
   });
 });

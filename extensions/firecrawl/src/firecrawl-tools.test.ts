@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   DEFAULT_FIRECRAWL_MAX_AGE_MS,
@@ -65,6 +65,12 @@ describe("firecrawl tools", () => {
     ssrfMock?.mockRestore();
     ssrfMock = undefined;
     global.fetch = priorFetch;
+    vi.unstubAllEnvs();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./firecrawl-client.js");
+    vi.resetModules();
   });
 
   it("exposes selection metadata and enables the plugin in config", () => {
@@ -76,7 +82,11 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webSearch.apiKey");
-    expect(applied.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.firecrawl;
+    if (!pluginEntry) {
+      throw new Error("expected Firecrawl plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("parses scrape payloads into wrapped external-content results", () => {
@@ -208,10 +218,10 @@ describe("firecrawl tools", () => {
     expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 
-  it("blocks private and non-http scrape targets before Firecrawl requests", async () => {
-    expect(() =>
+  it("blocks private and non-http scrape targets before Firecrawl requests", () => {
+    expect(
       firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     for (const blockedUrl of [
       "http://localhost/admin",
@@ -342,7 +352,11 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
-    expect(applied.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.firecrawl;
+    if (!pluginEntry) {
+      throw new Error("expected Firecrawl fetch plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("passes proxy and storeInCache through the fetch provider tool", async () => {

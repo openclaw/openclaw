@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 import "./agent-command.test-mocks.js";
 import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
+import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -25,11 +26,18 @@ const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
 }));
+const pluginRegistryMocks = vi.hoisted(() => ({
+  ensurePluginRegistryLoaded: vi.fn(),
+}));
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: configIoMocks.loadConfig,
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
+}));
+
+vi.mock("../plugins/runtime/runtime-registry-loader.js", () => ({
+  ensurePluginRegistryLoaded: pluginRegistryMocks.ensurePluginRegistryLoaded,
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => {
@@ -185,12 +193,15 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
   };
   const joinPath = (...parts: string[]): string => {
     const separator = parts.some((part) => part.includes("\\")) ? "\\" : "/";
-    return parts
-      .map((part, index) =>
-        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, ""),
-      )
-      .filter(Boolean)
-      .join(separator);
+    const normalizedParts: string[] = [];
+    for (const [index, part] of parts.entries()) {
+      const normalized =
+        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, "");
+      if (normalized.length > 0) {
+        normalizedParts.push(normalized);
+      }
+    }
+    return normalizedParts.join(separator);
   };
   const resolveSessionFile = (sessionId: string, agentId: string, sessionsDir?: string): string =>
     joinPath(sessionsDir ?? ".openclaw", "agents", agentId, "sessions", `${sessionId}.jsonl`);
@@ -233,7 +244,11 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
 const runtime = createThrowingTestRuntime();
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-agent-", skipSessionCleanup: true });
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-agent-",
+    skipHomeCleanup: true,
+    skipSessionCleanup: true,
+  });
 }
 
 function mockConfig(
@@ -324,6 +339,61 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it("enables the Codex runtime plugin for one-shot OpenAI model overrides", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      mockConfig(home, storePath, { models: undefined });
+
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "main",
+          model: "openai/gpt-5.2",
+          allowModelOverride: true,
+        },
+        runtime,
+      );
+
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+        scope: "all",
+        config: expect.any(Object),
+        activationSourceConfig: expect.any(Object),
+        workspaceDir: path.join(home, "openclaw"),
+        onlyPluginIds: ["codex"],
+      });
+      expectLastRunProviderModel("openai", "gpt-5.2");
+    });
+  });
+
+  it("does not enable Codex for one-shot OpenAI overrides when the provider forces PI", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, storePath, { models: undefined });
+      cfg.models = {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "pi" },
+            models: [],
+          },
+        },
+      };
+
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "main",
+          model: "openai/gpt-5.2",
+          allowModelOverride: true,
+        },
+        runtime,
+      );
+
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+      expectLastRunProviderModel("openai", "gpt-5.2");
+    });
+  });
+
   it("enforces ingress trust flags", async () => {
     await expect(
       // Runtime guard for non-TS callers; TS callsites are statically typed.
@@ -389,6 +459,72 @@ describe("agentCommand", () => {
       expect(parsed.payloads[0].text).toBe("json-reply");
       expect(parsed.payloads[0].mediaUrl).toBe("http://x.test/a.jpg");
       expect(parsed.meta.durationMs).toBe(42);
+    });
+  });
+
+  it("persists embedded-runner turns to the session transcript", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        ...base,
+        meta: {
+          ...base.meta,
+          executionTrace: { runner: "embedded" },
+        },
+      });
+
+      await agentCommand({ message: "hello from user", agentId: "main" }, runtime);
+
+      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
+      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
+      expect(persistArgs?.body).toBe("hello from user");
+      expect(persistArgs?.result.meta?.executionTrace?.runner).toBe("embedded");
+    });
+  });
+
+  it("gap-fills Telegram-visible embedded replies without a runner trace", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const sendMessageTelegram = vi.fn(async () => undefined);
+      const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        ...base,
+        meta: {
+          ...base.meta,
+          finalAssistantVisibleText: "assistant-visible",
+        },
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "call a tool then answer",
+          agentId: "main",
+          to: "+1222",
+          channel: "telegram",
+          messageChannel: "telegram",
+          deliver: true,
+          senderIsOwner: false,
+          allowModelOverride: false,
+        },
+        runtime,
+        { sendMessageTelegram },
+      );
+
+      expect(sendMessageTelegram).toHaveBeenCalledWith(
+        "+1222",
+        "assistant-visible",
+        expect.objectContaining({ verbose: false }),
+      );
+      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
+      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
+      expect(persistArgs?.body).toBe("call a tool then answer");
     });
   });
 
@@ -585,6 +721,44 @@ describe("agentCommand", () => {
 
       const matching = assistantEvents.filter((evt) => evt.text === "hello");
       expect(matching).toHaveLength(1);
+    });
+  });
+
+  it("does not publish Codex app-server events from the core command callback", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      const codexEvents: Array<{ runId: string; phase?: string }> = [];
+      const stop = onAgentEvent((evt) => {
+        if (evt.stream !== "codex_app_server.lifecycle") {
+          return;
+        }
+        codexEvents.push({
+          runId: evt.runId,
+          phase: typeof evt.data?.phase === "string" ? evt.data.phase : undefined,
+        });
+      });
+
+      vi.mocked(runEmbeddedPiAgent).mockImplementationOnce(async (params) => {
+        (
+          params as {
+            onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+          }
+        ).onAgentEvent?.({
+          stream: "codex_app_server.lifecycle",
+          data: { phase: "startup" },
+        });
+        return {
+          payloads: [{ text: "hello" }],
+          meta: { agentMeta: { provider: "p", model: "m" } },
+        } as never;
+      });
+
+      await agentCommand({ message: "hi", to: "+1555", thinking: "low" }, runtime);
+      stop();
+
+      expect(codexEvents).toHaveLength(0);
     });
   });
 

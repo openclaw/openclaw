@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { __testing, cleanupLegacyPluginDependencyState } from "./plugin-dependency-cleanup.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("cleanupLegacyPluginDependencyState", () => {
   let tempDir: string;
 
@@ -80,15 +84,52 @@ describe("cleanupLegacyPluginDependencyState", () => {
 
     const result = await cleanupLegacyPluginDependencyState({ env, packageRoot });
 
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(result.changes.length).toBeGreaterThanOrEqual(6);
-    await expect(fs.stat(legacyRuntimeRoot)).rejects.toThrow();
-    await expect(fs.stat(legacyLocalRoot)).rejects.toThrow();
-    await expect(fs.stat(legacyExtensionNodeModules)).rejects.toThrow();
-    await expect(fs.stat(legacyExtensionStamp)).rejects.toThrow();
-    await expect(fs.stat(legacyManifest)).rejects.toThrow();
-    await expect(fs.stat(thirdPartyNodeModules)).resolves.toBeDefined();
-    await expect(fs.stat(explicitStageDir)).rejects.toThrow();
-    await expect(fs.stat(path.join(stateDirectory, "plugin-runtime-deps"))).rejects.toThrow();
+    await expectPathMissing(legacyRuntimeRoot);
+    await expectPathMissing(legacyLocalRoot);
+    await expectPathMissing(legacyExtensionNodeModules);
+    await expectPathMissing(legacyExtensionStamp);
+    await expectPathMissing(legacyManifest);
+    expect((await fs.stat(thirdPartyNodeModules)).isDirectory()).toBe(true);
+    await expectPathMissing(explicitStageDir);
+    await expectPathMissing(path.join(stateDirectory, "plugin-runtime-deps"));
+  });
+
+  it("removes dangling global plugin-runtime symlinks that point at legacy runtime deps", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "prefix", "lib", "node_modules", "openclaw");
+    const nodeModulesRoot = path.dirname(packageRoot);
+    const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
+    const legacyTarget = path.join(
+      legacyRuntimeRoot,
+      "openclaw-2026.4.29-slack",
+      "node_modules",
+      "@slack",
+      "web-api",
+    );
+    const slackScope = path.join(nodeModulesRoot, "@slack");
+    const slackLink = path.join(slackScope, "web-api");
+    const liveTarget = path.join(tempDir, "live", "@slack", "bolt");
+    const liveLink = path.join(slackScope, "bolt");
+
+    await fs.mkdir(legacyTarget, { recursive: true });
+    await fs.writeFile(path.join(legacyTarget, "package.json"), "{}\n");
+    await fs.mkdir(liveTarget, { recursive: true });
+    await fs.writeFile(path.join(liveTarget, "package.json"), "{}\n");
+    await fs.mkdir(slackScope, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.symlink(legacyTarget, slackLink, "dir");
+    await fs.symlink(liveTarget, liveLink, "dir");
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(`Removed stale plugin-runtime symlink: ${slackLink}`);
+    await expectPathMissing(slackLink);
+    expect((await fs.lstat(liveLink)).isSymbolicLink()).toBe(true);
   });
 });

@@ -26,6 +26,10 @@ describe("compileMemoryWikiVault", () => {
     return path.join(suiteRoot, `case-${caseId++}`);
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
   it("writes root and directory indexes for native markdown", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -168,6 +172,24 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8")).resolves.toContain(
       "[Gamma](concepts/gamma.md)",
     );
+  });
+
+  it("does not rewrite empty source pages into related-only stubs", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    const emptySourcePath = path.join(rootDir, "sources", "empty.md");
+    const whitespaceSourcePath = path.join(rootDir, "sources", "whitespace.md");
+    await fs.writeFile(emptySourcePath, "", "utf8");
+    await fs.writeFile(whitespaceSourcePath, " \n\t", "utf8");
+
+    const result = await compileMemoryWikiVault(config);
+
+    await expect(fs.readFile(emptySourcePath, "utf8")).resolves.toBe("");
+    await expect(fs.readFile(whitespaceSourcePath, "utf8")).resolves.toBe(" \n\t");
+    expect(result.updatedFiles).not.toContain(emptySourcePath);
+    expect(result.updatedFiles).not.toContain(whitespaceSourcePath);
   });
 
   it("does not relate every page through a broad shared source", async () => {
@@ -350,7 +372,7 @@ describe("compileMemoryWikiVault", () => {
 
     await compileMemoryWikiVault(config);
 
-    await expect(fs.access(path.join(rootDir, "reports", "open-questions.md"))).rejects.toThrow();
+    await expectPathMissing(path.join(rootDir, "reports", "open-questions.md"));
   });
 
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {
@@ -474,7 +496,7 @@ describe("compileMemoryWikiVault", () => {
     await compileMemoryWikiVault(config);
     const second = await compileMemoryWikiVault(config);
 
-    expect(second.updatedFiles).toEqual([]);
+    expect(second.updatedFiles).toStrictEqual([]);
     await expect(fs.readFile(path.join(rootDir, "entities", "beta.md"), "utf8")).resolves.toContain(
       "[Gamma](concepts/gamma.md)",
     );

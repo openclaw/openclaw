@@ -63,7 +63,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: () => {},
     });
 
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 
   it("drops caller-provided groupId when it disagrees with session-derived group context", () => {
@@ -126,7 +126,9 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(warnings.some((w) => w.includes("unknown entries"))).toBe(false);
+    expect(warnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("unknown entries")]),
+    );
   });
 
   it("still warns on genuinely unknown entries in the bundled pass", () => {
@@ -137,7 +139,9 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(warnings.some((w) => w.includes("totally-made-up-tool"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("totally-made-up-tool")]),
+    );
   });
 
   it("keeps bundle MCP tools in the coding profile via plugin metadata", () => {
@@ -163,6 +167,6 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: () => {},
     });
 
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 });

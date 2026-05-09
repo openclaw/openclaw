@@ -4,11 +4,13 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import { loadExecApprovals, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
+import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
@@ -164,6 +166,18 @@ function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): string[] {
   return [];
 }
 
+function collectExecFilesystemPolicyWarnings(cfg: OpenClawConfig): string[] {
+  return collectExecFilesystemPolicyDriftHits(cfg).map((hit) =>
+    [
+      `- ${hit.scopeLabel}: filesystem write tools are disabled, but exec is still available.`,
+      `  Runtime tools: ${hit.runtimeTools.join(", ")}; disabled filesystem tools: ${hit.disabledFilesystemTools.join(", ")}.`,
+      `  Effective exec host is "${hit.execHost}" with sandbox.mode="${hit.sandboxMode}" and workspaceAccess="${hit.sandboxWorkspaceAccess}".`,
+      "  The exec shell can still write wherever that host or sandbox filesystem permits.",
+      '  For read-only agents, also deny exec/process; otherwise use sandbox mode "all" with workspaceAccess "ro" or "none".',
+    ].join("\n"),
+  );
+}
+
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
@@ -178,6 +192,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
 
   warnings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
   warnings.push(...collectExecPolicyConflictWarnings(cfg));
+  warnings.push(...collectExecFilesystemPolicyWarnings(cfg));
   warnings.push(...collectDurableExecApprovalWarnings(cfg));
 
   // ===========================================
@@ -250,6 +265,11 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
         ...saferRemoteAccessLines,
       );
     }
+  }
+
+  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg, env: process.env });
+  if (tokenConflict) {
+    warnings.push(...tokenConflict.warningLines);
   }
 
   const warnDmPolicy = async (params: {

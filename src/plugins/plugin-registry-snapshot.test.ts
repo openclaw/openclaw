@@ -5,6 +5,7 @@ import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index
 import { loadInstalledPluginIndex, type InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -20,6 +21,7 @@ function makeTempDir() {
 function createHermeticEnv(rootDir: string): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(rootDir, "bundled"),
+    OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
     OPENCLAW_VERSION: "2026.4.26",
     VITEST: "true",
   };
@@ -72,6 +74,61 @@ function createManifestlessClaudeBundleIndex(params: {
 }
 
 describe("loadPluginRegistrySnapshotWithMetadata", () => {
+  it("recovers managed npm plugins missing from a stale persisted registry", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = {};
+    const whatsappDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/whatsapp",
+      pluginId: "whatsapp",
+      version: "2026.5.2",
+    });
+    const staleIndex = loadInstalledPluginIndex({
+      config,
+      env,
+      stateDir,
+      installRecords: {},
+    });
+    expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("whatsapp");
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    );
+    expect(result.snapshot.installRecords).toMatchObject({
+      whatsapp: {
+        source: "npm",
+        spec: "@openclaw/whatsapp@2026.5.2",
+        installPath: whatsappDir,
+        version: "2026.5.2",
+        resolvedName: "@openclaw/whatsapp",
+        resolvedVersion: "2026.5.2",
+        resolvedSpec: "@openclaw/whatsapp@2026.5.2",
+      },
+    });
+    expect(result.snapshot.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "whatsapp",
+          origin: "global",
+        }),
+      ]),
+    );
+  });
+
   it("keeps persisted manifestless Claude bundles on the fast path", () => {
     const tempRoot = makeTempDir();
     const rootDir = path.join(tempRoot, "workspace");
@@ -93,7 +150,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
   });
 
   it("keeps persisted package plugins when file hashes match", () => {
@@ -109,8 +166,19 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     writePackagePlugin(rootDir);
     const index = loadInstalledPluginIndex({ config, env });
     const [record] = index.plugins;
-    expect(record?.manifestFile).toBeDefined();
-    expect(record?.packageJson?.fileSignature).toBeDefined();
+    if (!record?.packageJson?.fileSignature || !record.manifestFile) {
+      throw new Error("expected package plugin index record with file signatures");
+    }
+    expect(record.manifestFile).toEqual(
+      expect.objectContaining({
+        size: fs.statSync(path.join(rootDir, "openclaw.plugin.json")).size,
+      }),
+    );
+    expect(record.packageJson.fileSignature).toEqual(
+      expect.objectContaining({
+        size: fs.statSync(path.join(rootDir, "package.json")).size,
+      }),
+    );
     writePersistedInstalledPluginIndexSync(index, { stateDir });
 
     const result = loadPluginRegistrySnapshotWithMetadata({
@@ -120,7 +188,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
   });
 
   it("detects same-size same-mtime manifest replacements", () => {

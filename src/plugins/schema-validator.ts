@@ -20,11 +20,7 @@ type AjvLike = {
 };
 const ajvSingletons = new Map<"default" | "defaults", AjvLike>();
 
-function getAjv(mode: "default" | "defaults"): AjvLike {
-  const cached = ajvSingletons.get(mode);
-  if (cached) {
-    return cached;
-  }
+function createAjv(mode: "default" | "defaults"): AjvLike {
   const ajvModule = require("ajv") as { default?: new (opts?: object) => AjvLike };
   const AjvCtor =
     typeof ajvModule.default === "function"
@@ -44,6 +40,15 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
       return URL.canParse(value);
     },
   });
+  return instance;
+}
+
+function getAjv(mode: "default" | "defaults"): AjvLike {
+  const cached = ajvSingletons.get(mode);
+  if (cached) {
+    return cached;
+  }
+  const instance = createAjv(mode);
   ajvSingletons.set(mode, instance);
   return instance;
 }
@@ -86,6 +91,7 @@ export type JsonSchemaValidationError = {
   path: string;
   message: string;
   text: string;
+  additionalProperty?: string;
   allowedValues?: string[];
   allowedValuesHiddenCount?: number;
 };
@@ -152,6 +158,16 @@ function getAjvAllowedValuesSummary(error: ErrorObject): ReturnType<typeof summa
   return summarizeAllowedValues(allowedValues);
 }
 
+function resolveAdditionalProperty(error: ErrorObject): string | undefined {
+  if (error.keyword !== "additionalProperties") {
+    return undefined;
+  }
+  const additionalProperty = (error.params as { additionalProperty?: unknown }).additionalProperty;
+  return typeof additionalProperty === "string" && additionalProperty.trim()
+    ? additionalProperty
+    : undefined;
+}
+
 function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaValidationError[] {
   if (!errors || errors.length === 0) {
     return [{ path: "<root>", message: "invalid config", text: "<root>: invalid config" }];
@@ -160,6 +176,7 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
     const path = resolveAjvErrorPath(error);
     const baseMessage = error.message ?? "invalid";
     const allowedValuesSummary = getAjvAllowedValuesSummary(error);
+    const additionalProperty = resolveAdditionalProperty(error);
     const message = allowedValuesSummary
       ? appendAllowedValuesHint(baseMessage, allowedValuesSummary)
       : baseMessage;
@@ -169,6 +186,7 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
       path,
       message,
       text: `${safePath}: ${safeMessage}`,
+      ...(additionalProperty ? { additionalProperty } : {}),
       ...(allowedValuesSummary
         ? {
             allowedValues: allowedValuesSummary.values,
@@ -184,7 +202,24 @@ export function validateJsonSchemaValue(params: {
   cacheKey: string;
   value: unknown;
   applyDefaults?: boolean;
+  cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
+  const useCache = params.cache !== false;
+  if (!useCache) {
+    const validate = createAjv(params.applyDefaults ? "defaults" : "default").compile(
+      params.schema,
+    );
+    const value =
+      params.applyDefaults && schemaHasDefaults(params.schema)
+        ? cloneValidationValue(params.value)
+        : params.value;
+    const ok = validate(value);
+    if (ok) {
+      return { ok: true, value };
+    }
+    return { ok: false, errors: formatAjvErrors(validate.errors) };
+  }
+
   const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
   let cached = schemaCache.get(cacheKey);
   const schemaFingerprint =

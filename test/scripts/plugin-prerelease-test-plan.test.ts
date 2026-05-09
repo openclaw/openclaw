@@ -22,6 +22,14 @@ function readPluginPrereleaseWorkflow() {
   return parse(readFileSync(".github/workflows/plugin-prerelease.yml", "utf8"));
 }
 
+function getDockerLane(name: string) {
+  const lane = findLaneByName(name);
+  if (!lane) {
+    throw new Error(`Missing Docker E2E lane ${name}`);
+  }
+  return lane;
+}
+
 describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   it("covers every pre-release plugin skill surface in the plugin prerelease plan", () => {
     const plan = assertPluginPrereleaseTestPlanComplete();
@@ -37,6 +45,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(plan.dockerLanes).toEqual([
       "npm-onboard-channel-agent",
       "npm-onboard-discord-channel-agent",
+      "npm-onboard-slack-channel-agent",
       "doctor-switch",
       "update-channel-switch",
       "plugins-offline",
@@ -54,7 +63,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ]);
 
     for (const lane of plan.dockerLanes) {
-      expect(findLaneByName(lane), lane).toBeTruthy();
+      expect(getDockerLane(lane).name).toBe(lane);
     }
   });
 
@@ -82,7 +91,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   });
 
   it("uses kitchen-sink npm and ClawHub scenarios as the registry install canary", () => {
-    const lane = findLaneByName("kitchen-sink-plugin");
+    const lane = getDockerLane("kitchen-sink-plugin");
     const script = readFileSync("scripts/e2e/kitchen-sink-plugin-docker.sh", "utf8");
     const sweepScript = readFileSync("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh", "utf8");
     const assertionsScript = readFileSync(
@@ -99,9 +108,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         stateScenario: "empty",
       }),
     );
-    expect(script).toContain("npm:@openclaw/kitchen-sink@0.1.5");
-    expect(script).toContain("npm-pinned-conformance");
-    expect(script).toContain("npm-pinned-adversarial");
+    expect(script).toContain("npm:@openclaw/kitchen-sink@latest");
+    expect(script).toContain("npm-latest-conformance");
+    expect(script).toContain("npm-latest-adversarial");
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
@@ -152,7 +161,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   });
 
   it("keeps the generic plugin Docker lane as an external install contract canary", () => {
-    const lane = findLaneByName("plugins");
+    const lane = getDockerLane("plugins");
     const sweepScript = readFileSync("scripts/e2e/lib/plugins/sweep.sh", "utf8");
     const clawhubScript = readFileSync("scripts/e2e/lib/plugins/clawhub.sh", "utf8");
     const assertionsScript = readFileSync("scripts/e2e/lib/plugins/assertions.mjs", "utf8");
@@ -344,6 +353,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "normal_ci",
       "plugin_prerelease",
       "release_checks",
+      "prepare_release_package",
       "npm_telegram",
       "summary",
     ]) {

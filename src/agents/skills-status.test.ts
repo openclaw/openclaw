@@ -38,7 +38,7 @@ describe("buildWorkspaceSkillStatus", () => {
 
     const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
     expect(report.skills).toHaveLength(1);
-    expect(report.skills[0]?.install).toEqual([]);
+    expect(report.skills[0]?.install).toStrictEqual([]);
   });
 
   it("does not expose raw config values in config checks", () => {
@@ -157,8 +157,18 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(report.agentId).toBe("specialist");
     expect(report.agentSkillFilter).toEqual(["alpha"]);
     expect(report.skills.find((skill) => skill.name === "alpha")?.blockedByAgentFilter).toBe(false);
-    expect(report.skills.find((skill) => skill.name === "alpha")?.modelVisible).toBe(true);
-    expect(report.skills.find((skill) => skill.name === "beta")?.blockedByAgentFilter).toBe(true);
+    expect(report.skills).toContainEqual(
+      expect.objectContaining({
+        name: "alpha",
+        modelVisible: true,
+      }),
+    );
+    expect(report.skills).toContainEqual(
+      expect.objectContaining({
+        name: "beta",
+        blockedByAgentFilter: true,
+      }),
+    );
     expect(report.skills.find((skill) => skill.name === "beta")?.modelVisible).toBe(false);
   });
 

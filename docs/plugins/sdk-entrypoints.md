@@ -71,12 +71,12 @@ export default definePluginEntry({
 
 | Field          | Type                                                             | Required | Default             |
 | -------------- | ---------------------------------------------------------------- | -------- | ------------------- |
-| `id`           | `string`                                                         | Yes      | —                   |
-| `name`         | `string`                                                         | Yes      | —                   |
-| `description`  | `string`                                                         | Yes      | —                   |
-| `kind`         | `string`                                                         | No       | —                   |
+| `id`           | `string`                                                         | Yes      | -                   |
+| `name`         | `string`                                                         | Yes      | -                   |
+| `description`  | `string`                                                         | Yes      | -                   |
+| `kind`         | `string`                                                         | No       | -                   |
 | `configSchema` | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
-| `register`     | `(api: OpenClawPluginApi) => void`                               | Yes      | —                   |
+| `register`     | `(api: OpenClawPluginApi) => void`                               | Yes      | -                   |
 
 - `id` must match your `openclaw.plugin.json` manifest.
 - `kind` is for exclusive slots: `"memory"` or `"context-engine"`.
@@ -112,14 +112,14 @@ export default defineChannelPluginEntry({
 
 | Field                 | Type                                                             | Required | Default             |
 | --------------------- | ---------------------------------------------------------------- | -------- | ------------------- |
-| `id`                  | `string`                                                         | Yes      | —                   |
-| `name`                | `string`                                                         | Yes      | —                   |
-| `description`         | `string`                                                         | Yes      | —                   |
-| `plugin`              | `ChannelPlugin`                                                  | Yes      | —                   |
+| `id`                  | `string`                                                         | Yes      | -                   |
+| `name`                | `string`                                                         | Yes      | -                   |
+| `description`         | `string`                                                         | Yes      | -                   |
+| `plugin`              | `ChannelPlugin`                                                  | Yes      | -                   |
 | `configSchema`        | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
-| `setRuntime`          | `(runtime: PluginRuntime) => void`                               | No       | —                   |
-| `registerCliMetadata` | `(api: OpenClawPluginApi) => void`                               | No       | —                   |
-| `registerFull`        | `(api: OpenClawPluginApi) => void`                               | No       | —                   |
+| `setRuntime`          | `(runtime: PluginRuntime) => void`                               | No       | -                   |
+| `registerCliMetadata` | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
+| `registerFull`        | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
 
 - `setRuntime` is called during registration so you can store the runtime reference
   (typically via `createPluginRuntimeStore`). It is skipped during CLI metadata
@@ -140,8 +140,13 @@ export default defineChannelPluginEntry({
   memoizes the resolved schema on first access.
 - For plugin-owned root CLI commands, prefer `api.registerCli(..., { descriptors: [...] })`
   when you want the command to stay lazy-loaded without disappearing from the
-  root CLI parse tree. For channel plugins, prefer registering those descriptors
-  from `registerCliMetadata(...)` and keep `registerFull(...)` focused on runtime-only work.
+  root CLI parse tree. For paired-node feature commands, prefer
+  `api.registerNodeCliFeature(...)` so the command lands under `openclaw nodes`.
+  For other nested plugin commands, add `parentPath` and register commands on
+  the `program` object passed to the registrar; OpenClaw resolves it to the
+  parent command before calling the plugin. For channel plugins, prefer
+  registering those descriptors from `registerCliMetadata(...)` and keep
+  `registerFull(...)` focused on runtime-only work.
 - If `registerFull(...)` also registers gateway RPC methods, keep them on a
   plugin-specific prefix. Reserved core admin namespaces (`config.*`,
   `exec.approvals.*`, `wizard.*`, `update.*`) are always coerced to
@@ -275,8 +280,8 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 
 ## Related
 
-- [SDK Overview](/plugins/sdk-overview) — registration API and subpath reference
-- [Runtime Helpers](/plugins/sdk-runtime) — `api.runtime` and `createPluginRuntimeStore`
-- [Setup and Config](/plugins/sdk-setup) — manifest, setup entry, deferred loading
-- [Channel Plugins](/plugins/sdk-channel-plugins) — building the `ChannelPlugin` object
-- [Provider Plugins](/plugins/sdk-provider-plugins) — provider registration and hooks
+- [SDK Overview](/plugins/sdk-overview) - registration API and subpath reference
+- [Runtime Helpers](/plugins/sdk-runtime) - `api.runtime` and `createPluginRuntimeStore`
+- [Setup and Config](/plugins/sdk-setup) - manifest, setup entry, deferred loading
+- [Channel Plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
+- [Provider Plugins](/plugins/sdk-provider-plugins) - provider registration and hooks

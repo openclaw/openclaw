@@ -45,7 +45,7 @@ const mocks = vi.hoisted(() => {
     loadModelsConfigWithSource: vi.fn(),
     ensureOpenClawModelsJson: vi.fn(),
     ensureAuthProfileStore: vi.fn(),
-    resolveOpenClawAgentDir: vi.fn(),
+    resolveDefaultAgentDir: vi.fn(),
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
     loadProviderCatalogModelsForList: vi.fn(),
@@ -69,7 +69,7 @@ function resetMocks() {
   });
   mocks.ensureOpenClawModelsJson.mockResolvedValue({ wrote: false });
   mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {}, order: {} });
-  mocks.resolveOpenClawAgentDir.mockReturnValue("/tmp/openclaw-agent");
+  mocks.resolveDefaultAgentDir.mockReturnValue("/tmp/openclaw-agent");
   mocks.loadModelRegistry.mockResolvedValue({
     models: [],
     availableKeys: new Set(),
@@ -109,6 +109,14 @@ function createRuntime() {
 
 function lastPrintedRows<T>() {
   return (mocks.printModelTable.mock.calls.at(-1)?.[0] ?? []) as T[];
+}
+
+function requireRow<T extends { key: string }>(rows: T[], key: string): T {
+  const row = rows.find((entry) => entry.key === key);
+  if (!row) {
+    throw new Error(`expected model row ${key}`);
+  }
+  return row;
 }
 
 let modelsListCommand: typeof import("./list.list-command.js").modelsListCommand;
@@ -201,8 +209,10 @@ function installModelsListCommandForwardCompatMocks() {
     loadAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
   }));
 
-  vi.doMock("../../agents/agent-paths.js", () => ({
-    resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
+  vi.doMock("../../agents/agent-scope.js", () => ({
+    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+    resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
+    resolveDefaultAgentId: vi.fn(() => "main"),
   }));
 
   vi.doMock("../../agents/model-catalog.js", () => ({
@@ -245,7 +255,10 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
   const context = {
     cfg: mocks.resolvedConfig,
     agentDir: "/tmp/openclaw-agent",
-    authIndex: { hasProviderAuth: (provider: string) => provider === "openai-codex" },
+    authIndex: {
+      hasProviderAuth: (provider: string) => provider === "openai-codex",
+      allowsProviderAuthAvailabilityFallback: () => false,
+    },
     availableKeys: loaded.availableKeys,
     configuredByKey: new Map(),
     discoveredKeys: new Set(
@@ -391,6 +404,40 @@ describe("modelsListCommand forward-compat", () => {
       ]);
     });
 
+    it("keeps scoped provider fallback rows filtered by model suppression", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      const currentModel = {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        input: ["text", "image"],
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      };
+      const suppressedModel = {
+        ...currentModel,
+        id: "gpt-5.3-codex-spark",
+        name: "GPT-5.3 Codex Spark",
+      };
+      mocks.loadModelRegistry.mockResolvedValueOnce({
+        models: [currentModel],
+        availableKeys: undefined,
+        registry: {
+          getAll: () => [currentModel, suppressedModel],
+        },
+      });
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true, provider: "openai" }, runtime as never);
+
+      expect(lastPrintedRows<{ key: string }>()).toEqual([
+        expect.objectContaining({ key: "openai/gpt-5.5" }),
+      ]);
+    });
+
     it("uses provider static catalog rows for provider filters without --all", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
@@ -514,10 +561,9 @@ describe("modelsListCommand forward-compat", () => {
         missing: boolean;
       }>();
 
-      const codex = rows.find((row) => row.key === "openai-codex/gpt-5.4");
-      expect(codex).toBeTruthy();
-      expect(codex?.missing).toBe(false);
-      expect(codex?.tags).not.toContain("missing");
+      const codex = requireRow(rows, "openai-codex/gpt-5.4");
+      expect(codex.missing).toBe(false);
+      expect(codex.tags).not.toContain("missing");
     });
 
     it("does not mark configured codex mini as missing when forward-compat can build a fallback", async () => {
@@ -542,10 +588,9 @@ describe("modelsListCommand forward-compat", () => {
         missing: boolean;
       }>();
 
-      const codexMini = rows.find((row) => row.key === "openai-codex/gpt-5.4-mini");
-      expect(codexMini).toBeTruthy();
-      expect(codexMini?.missing).toBe(false);
-      expect(codexMini?.tags).not.toContain("missing");
+      const codexMini = requireRow(rows, "openai-codex/gpt-5.4-mini");
+      expect(codexMini.missing).toBe(false);
+      expect(codexMini.tags).not.toContain("missing");
     });
 
     it("does not mark configured codex gpt-5.4-pro as missing when forward-compat can build a fallback", async () => {
@@ -570,10 +615,9 @@ describe("modelsListCommand forward-compat", () => {
         missing: boolean;
       }>();
 
-      const codexPro = rows.find((row) => row.key === "openai-codex/gpt-5.4-pro");
-      expect(codexPro).toBeTruthy();
-      expect(codexPro?.missing).toBe(false);
-      expect(codexPro?.tags).not.toContain("missing");
+      const codexPro = requireRow(rows, "openai-codex/gpt-5.4-pro");
+      expect(codexPro.missing).toBe(false);
+      expect(codexPro.tags).not.toContain("missing");
     });
 
     it("does not load the model registry for configured-mode listing", async () => {
@@ -1178,7 +1222,10 @@ describe("modelsListCommand forward-compat", () => {
         ] as never,
         context: {
           cfg: mocks.resolvedConfig,
-          authIndex: { hasProviderAuth: () => false },
+          authIndex: {
+            hasProviderAuth: () => false,
+            allowsProviderAuthAvailabilityFallback: () => false,
+          },
           availableKeys: new Set(["openai-codex/gpt-5.4"]),
           configuredByKey: new Map(),
           discoveredKeys: new Set(),

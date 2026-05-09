@@ -29,7 +29,6 @@ function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendRes
   return {
     kind,
     messageId: id,
-    messageIds: [id],
     keys: [{ id }],
     providerAccepted: true,
   };
@@ -347,7 +346,7 @@ describe("web auto-reply util", () => {
       expect(isLikelyWhatsAppCryptoError(err)).toBe(true);
     });
 
-    it("does not throw on circular objects", () => {
+    it("returns false for circular objects", () => {
       const circular: Record<string, unknown> = {};
       circular.self = circular;
       expect(isLikelyWhatsAppCryptoError(circular)).toBe(false);

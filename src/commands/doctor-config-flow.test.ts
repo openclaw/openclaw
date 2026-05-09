@@ -196,11 +196,17 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     return changes.length > 0 ? { next, changes } : { next: null, changes: [] };
   }
 
+  let partiallyValidOverride: boolean | undefined;
+
   return {
     migrate,
     migrateLegacyConfig: (raw: unknown) => {
       const { next, changes } = migrate(raw);
-      return { config: next, changes };
+      const partiallyValid = partiallyValidOverride;
+      return { config: next, changes, ...(partiallyValid ? { partiallyValid } : {}) };
+    },
+    setPartiallyValidOverride(value: boolean | undefined) {
+      partiallyValidOverride = value;
     },
   };
 });
@@ -595,7 +601,7 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
 }));
 
 vi.mock("./doctor/shared/legacy-config-migrate.js", () => ({
-  migrateLegacyConfig: legacyConfigMigrationForTest.migrateLegacyConfig,
+  migrateLegacyConfig: (raw: unknown) => legacyConfigMigrationForTest.migrateLegacyConfig(raw),
 }));
 
 vi.mock("./doctor/shared/bundled-plugin-load-paths.js", () => ({
@@ -1346,7 +1352,13 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
     config,
     run: loadAndMaybeMigrateDoctorConfig,
   });
-  return noteSpy.mock.calls.filter((call) => call[1] === "Doctor warnings").map((call) => call[0]);
+  const warnings: string[] = [];
+  for (const [message, title] of noteSpy.mock.calls) {
+    if (title === "Doctor warnings") {
+      warnings.push(message);
+    }
+  }
+  return warnings;
 }
 
 type DiscordGuildRule = {
@@ -1402,7 +1414,9 @@ describe("doctor config flow", () => {
         },
       },
     });
-    expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("mutable allowlist")]),
+    );
   });
 
   it("warns when hooks transformsDir points outside the hook transforms root", async () => {
@@ -1527,14 +1541,16 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes(
+    expect(doctorWarnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
           'channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false.',
         ),
-      ),
-    ).toBe(true);
-    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
+      ]),
+    );
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("first-time setup mode")]),
+    );
   });
 
   it("shows plugin-blocked guidance instead of first-time Telegram guidance when plugins are disabled globally", async () => {
@@ -1550,14 +1566,16 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes(
+    expect(doctorWarnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
           "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
         ),
-      ),
-    ).toBe(true);
-    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
+      ]),
+    );
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("first-time setup mode")]),
+    );
   });
 
   it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
@@ -1591,7 +1609,9 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(doctorWarnings.some((line) => line.includes("channels.zalouser.groups"))).toBe(false);
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("channels.zalouser.groups")]),
+    );
   });
 
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
@@ -2010,8 +2030,8 @@ describe("doctor config flow", () => {
         .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
         .map((call) => call[0]);
       const joinedOutputs = outputs.join("\n");
-      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
-      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
+      expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
+      expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
       expect(joinedOutputs).toContain('channels.slack.accounts.opsopen.allowFrom: set to ["*"]');
       expect(joinedOutputs).toContain('required by dmPolicy="open"');
       expect(
@@ -2635,12 +2655,31 @@ describe("doctor config flow", () => {
             .filter((call) => call[1] === "Doctor changes")
             .map((call) => call[0])
             .filter((line) => line.includes("Normalized talk.provider/providers shape"));
-          expect(secondRunTalkNormalizationLines).toEqual([]);
+          expect(secondRunTalkNormalizationLines).toStrictEqual([]);
         } finally {
           noteSpy.mockClear();
         }
       },
       { skipSessionCleanup: true },
     );
+  });
+
+  it("sets skipPluginValidationOnWrite when legacy migration is only partially valid (#76800)", async () => {
+    legacyConfigMigrationForTest.setPartiallyValidOverride(true);
+    try {
+      const result = await runDoctorConfigWithInput({
+        config: {
+          heartbeat: { model: "openai/gpt-4o", every: 60 },
+          tools: { web: { search: { provider: "brave" } } },
+        },
+        repair: true,
+        preflightMode: "compat",
+        run: ({ options, confirm }) =>
+          loadAndMaybeMigrateDoctorConfig({ options, confirm: async () => confirm() }),
+      });
+      expect(result.skipPluginValidationOnWrite).toBe(true);
+    } finally {
+      legacyConfigMigrationForTest.setPartiallyValidOverride(undefined);
+    }
   });
 });

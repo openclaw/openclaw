@@ -338,7 +338,7 @@ describe("setupSearch", () => {
       expect(result.plugins?.entries?.[entry.pluginId]?.enabled).toBe(true);
       if (entry.textMessage) {
         expect(prompter.text).toHaveBeenCalledWith(
-          expect.objectContaining({ message: entry.textMessage }),
+          expect.objectContaining({ message: entry.textMessage, sensitive: true }),
         );
       }
     }
@@ -387,7 +387,9 @@ describe("setupSearch", () => {
       expect(result.tools?.web?.search?.provider).toBe("brave");
       expect(result.tools?.web?.search?.enabled).toBeUndefined();
       const missingNote = notes.find((n) => n.message.includes("No Brave Search API key stored"));
-      expect(missingNote).toBeDefined();
+      expect(missingNote).toMatchObject({
+        message: expect.stringContaining("No Brave Search API key stored"),
+      });
     } finally {
       if (original === undefined) {
         delete process.env.BRAVE_API_KEY;

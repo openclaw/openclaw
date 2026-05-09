@@ -53,6 +53,14 @@ class FakeTransport implements OpenClawTransport {
   }
 }
 
+function requireTransportCall(calls: readonly RequestCall[], index: number): RequestCall {
+  const call = calls[index];
+  if (!call) {
+    throw new Error(`Expected transport call ${index}`);
+  }
+  return call;
+}
+
 describe("OpenClaw SDK", () => {
   it("runs an agent through the Gateway agent method", async () => {
     const transport = new FakeTransport({
@@ -319,35 +327,20 @@ describe("OpenClaw SDK", () => {
     await expect(oc.artifacts.download("artifact_123", undefined as never)).rejects.toThrow(
       "oc.artifacts.download requires one of sessionKey, runId, or taskId",
     );
-    expect(transport.calls).toEqual([]);
+    expect(transport.calls).toStrictEqual([]);
   });
 
   it("throws explicit unsupported errors for SDK namespaces without Gateway RPCs", async () => {
     const transport = new FakeTransport({});
     const oc = new OpenClaw({ transport });
 
-    await expect(oc.tasks.list()).rejects.toThrow(
-      "oc.tasks.list is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.tasks.get("task_123")).rejects.toThrow(
-      "oc.tasks.get is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.tasks.cancel("task_123")).rejects.toThrow(
-      "oc.tasks.cancel is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.environments.list()).rejects.toThrow(
-      "oc.environments.list is not supported by the current OpenClaw Gateway yet",
-    );
     await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
       "oc.environments.create is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.environments.status("environment_123")).rejects.toThrow(
-      "oc.environments.status is not supported by the current OpenClaw Gateway yet",
     );
     await expect(oc.environments.delete("environment_123")).rejects.toThrow(
       "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
     );
-    expect(transport.calls).toEqual([]);
+    expect(transport.calls).toStrictEqual([]);
   });
 
   it("invokes tools through the Gateway tools.invoke method", async () => {
@@ -379,6 +372,100 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
+  it("calls task ledger Gateway methods", async () => {
+    const transport = new FakeTransport({
+      "tasks.list": {
+        tasks: [
+          {
+            id: "task_123",
+            status: "running",
+            title: "Investigate issue",
+            runId: "run_123",
+            sessionKey: "agent:main:main",
+          },
+        ],
+      },
+      "tasks.get": {
+        task: {
+          id: "task_123",
+          status: "running",
+          title: "Investigate issue",
+        },
+      },
+      "tasks.cancel": {
+        found: true,
+        cancelled: true,
+        task: {
+          id: "task_123",
+          status: "cancelled",
+        },
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(
+      oc.tasks.list({ status: "running", agentId: "main", sessionKey: "agent:main:main" }),
+    ).resolves.toMatchObject({ tasks: [{ id: "task_123", status: "running" }] });
+    await expect(oc.tasks.get("task_123")).resolves.toMatchObject({
+      task: { id: "task_123" },
+    });
+    await expect(
+      oc.tasks.cancel("task_123", { reason: "user stopped task" }),
+    ).resolves.toMatchObject({
+      found: true,
+      cancelled: true,
+      task: { status: "cancelled" },
+    });
+
+    expect(transport.calls).toEqual([
+      {
+        method: "tasks.list",
+        params: { status: "running", agentId: "main", sessionKey: "agent:main:main" },
+        options: undefined,
+      },
+      {
+        method: "tasks.get",
+        params: { taskId: "task_123" },
+        options: undefined,
+      },
+      {
+        method: "tasks.cancel",
+        params: { taskId: "task_123", reason: "user stopped task" },
+        options: undefined,
+      },
+    ]);
+  });
+
+  it("lists and reads environment status through current Gateway methods", async () => {
+    const gatewayEnvironment = {
+      id: "gateway",
+      type: "local",
+      label: "Gateway local",
+      status: "available",
+      capabilities: ["agent.run"],
+    };
+    const transport = new FakeTransport({
+      "environments.list": { environments: [gatewayEnvironment] },
+      "environments.status": gatewayEnvironment,
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.environments.list()).resolves.toEqual({
+      environments: [gatewayEnvironment],
+    });
+    await expect(oc.environments.status("gateway")).resolves.toEqual(gatewayEnvironment);
+    await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
+      "oc.environments.create is not supported by the current OpenClaw Gateway yet",
+    );
+    await expect(oc.environments.delete("gateway")).rejects.toThrow(
+      "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
+    );
+    expect(transport.calls).toEqual([
+      { method: "environments.list", params: {}, options: undefined },
+      { method: "environments.status", params: { environmentId: "gateway" }, options: undefined },
+    ]);
+  });
+
   it("cancels runs and checks model auth status through current Gateway methods", async () => {
     const transport = new FakeTransport({
       agent: { status: "accepted", runId: "run_without_session" },
@@ -399,8 +486,10 @@ describe("OpenClaw SDK", () => {
       "sessions.abort",
       "models.authStatus",
     ]);
-    expect(transport.calls[1]?.params).toEqual({ runId: "run_without_session" });
-    expect(transport.calls[2]?.params).toEqual({ probe: false });
+    expect(requireTransportCall(transport.calls, 1).params).toEqual({
+      runId: "run_without_session",
+    });
+    expect(requireTransportCall(transport.calls, 2).params).toEqual({ probe: false });
   });
 
   it("replays fast run events emitted before the caller starts iterating", async () => {

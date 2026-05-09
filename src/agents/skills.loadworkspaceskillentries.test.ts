@@ -52,6 +52,16 @@ let envSnapshot: SkillsHomeEnvSnapshot;
 let tempRoot = "";
 let workspaceCaseIndex = 0;
 
+function collectMatching<T>(items: readonly T[], predicate: (item: T) => boolean): T[] {
+  const matches: T[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(item);
+    }
+  }
+  return matches;
+}
+
 async function createTempWorkspaceDir() {
   const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -77,6 +87,7 @@ function loadTestWorkspaceSkillEntries(
   return loadWorkspaceSkillEntries(workspaceDir, {
     managedSkillsDir: path.join(workspaceDir, ".managed"),
     bundledSkillsDir: "",
+    pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
     ...opts,
   });
 }
@@ -195,7 +206,17 @@ describe("loadWorkspaceSkillEntries", () => {
       managedSkillsDir: managedDir,
     });
 
-    expect(enabledEntries.map((entry) => entry.skill.name)).toContain("browser-automation");
+    const browserEntry = enabledEntries.find((entry) => entry.skill.name === "browser-automation");
+    const browserSkillDir = path.join(pluginRoot, "skills", "browser-automation");
+    expect(browserEntry?.skill.baseDir).toBe(
+      path.join(workspaceDir, ".plugin-skills", "browser-automation"),
+    );
+    expect(browserEntry?.skill.filePath).toBe(
+      path.join(workspaceDir, ".plugin-skills", "browser-automation", "SKILL.md"),
+    );
+    await expect(
+      fs.readlink(path.join(workspaceDir, ".plugin-skills", "browser-automation")),
+    ).resolves.toBe(browserSkillDir);
 
     const blockedEntries = loadTestWorkspaceSkillEntries(workspaceDir, {
       config: {
@@ -207,6 +228,9 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("browser-automation");
+    await expect(
+      fs.lstat(path.join(workspaceDir, ".plugin-skills", "browser-automation")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("loads frontmatter edge cases in one workspace", async () => {
@@ -547,7 +571,9 @@ describe("loadWorkspaceSkillEntries", () => {
         },
       }).map((entry) => entry.skill.name);
 
-      expect(names.filter((name) => name.startsWith("nested-skill-"))).toHaveLength(2);
+      expect(
+        names.reduce((count, name) => count + (name.startsWith("nested-skill-") ? 1 : 0), 0),
+      ).toBe(2);
       expect(
         warn.mock.calls
           .map(([line]) => String(line))
@@ -583,7 +609,10 @@ describe("loadWorkspaceSkillEntries", () => {
         },
       }).map((entry) => entry.skill.name);
 
-      expect(names.filter((name) => name.startsWith("valid-"))).toEqual(["valid-a", "valid-b"]);
+      expect(collectMatching(names, (name) => name.startsWith("valid-"))).toEqual([
+        "valid-a",
+        "valid-b",
+      ]);
     });
   });
 });

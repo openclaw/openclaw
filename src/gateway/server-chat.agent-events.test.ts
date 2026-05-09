@@ -28,6 +28,17 @@ vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
   loadGatewaySessionRow: vi.fn(),
 }));
 
+vi.mock("./session-utils.js", () => ({
+  loadSessionEntry: vi.fn(() => ({
+    cfg: {},
+    storePath: "/tmp/sessions.json",
+    store: {},
+    entry: undefined,
+    canonicalKey: "session-1",
+    legacyKey: undefined,
+  })),
+}));
+
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import {
@@ -37,6 +48,7 @@ import {
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 describe("agent event handler", () => {
   beforeEach(() => {
@@ -45,6 +57,14 @@ describe("agent event handler", () => {
       showOk: false,
       showAlerts: true,
       useIndicator: true,
+    });
+    vi.mocked(loadSessionEntry).mockReset().mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: undefined,
+      canonicalKey: "session-1",
+      legacyKey: undefined,
     });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
@@ -126,6 +146,13 @@ describe("agent event handler", () => {
 
   function sessionChatCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
     return nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
+  }
+
+  function requireCall<T>(call: T | undefined, label: string): T {
+    if (call === undefined) {
+      throw new Error(`expected ${label}`);
+    }
+    return call;
   }
 
   const FALLBACK_LIFECYCLE_DATA = {
@@ -760,6 +787,79 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("uses newer session verbose state for in-flight tool events", () => {
+    const { nodeSendToSession, handler } = createHarness({
+      now: 1_000,
+      resolveSessionKeyForRun: () => "session-1",
+    });
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 },
+      canonicalKey: "session-1",
+      legacyKey: undefined,
+    });
+
+    registerAgentRunContext("run-tool-toggle", {
+      sessionKey: "session-1",
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-tool-toggle",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "start", name: "read", toolCallId: "t-toggle" },
+    });
+
+    const nodeToolCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    expect(nodeToolCalls).toHaveLength(1);
+    expect(nodeToolCalls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        stream: "tool",
+        data: expect.objectContaining({
+          phase: "start",
+          name: "read",
+        }),
+      }),
+    );
+    resetAgentRunContextForTest();
+  });
+
+  it("keeps one-shot run verbose over older session state", () => {
+    const { nodeSendToSession, handler } = createHarness({
+      now: 2_000,
+      resolveSessionKeyForRun: () => "session-1",
+    });
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: { sessionId: "session-1", verboseLevel: "off", updatedAt: 1_500 },
+      canonicalKey: "session-1",
+      legacyKey: undefined,
+    });
+
+    registerAgentRunContext("run-tool-inline", {
+      sessionKey: "session-1",
+      verboseLevel: "on",
+    });
+
+    handler({
+      runId: "run-tool-inline",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "start", name: "read", toolCallId: "t-inline" },
+    });
+
+    const nodeToolCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    expect(nodeToolCalls).toHaveLength(1);
+    resetAgentRunContextForTest();
+  });
+
   it("mirrors tool events to session subscribers so late-joining operator UIs can render them", () => {
     const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
@@ -1108,7 +1208,7 @@ describe("agent event handler", () => {
     );
   });
 
-  it("strips tool output when verbose is on", () => {
+  it("keeps tool output for Control UI recipients when verbose is on", () => {
     const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
@@ -1132,8 +1232,8 @@ describe("agent event handler", () => {
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
     const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
-    expect(payload.data?.result).toBeUndefined();
-    expect(payload.data?.partialResult).toBeUndefined();
+    expect(payload.data?.result).toEqual({ content: [{ type: "text", text: "secret" }] });
+    expect(payload.data?.partialResult).toEqual({ content: [{ type: "text", text: "partial" }] });
     resetAgentRunContextForTest();
   });
 
@@ -1438,7 +1538,7 @@ describe("agent event handler", () => {
     emitLifecycleEnd(handler, "run-hidden", 2);
 
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
-    expect(broadcast.mock.calls.filter(([event]) => event === "agent")).toHaveLength(0);
+    expect(broadcast.mock.calls.some(([event]) => event === "agent")).toBe(false);
     expect(nodeSendToSession).not.toHaveBeenCalled();
     expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith({
       sessionKey: "session-hidden",
@@ -1644,9 +1744,11 @@ describe("agent event handler", () => {
       });
 
       const chatCalls = chatBroadcastCalls(broadcast);
-      const finalCall = chatCalls.find(([, p]) => p.state === "final");
-      expect(finalCall).toBeDefined();
-      expect(finalCall![1]).toMatchObject({
+      const finalCall = requireCall(
+        chatCalls.find(([, p]) => p.state === "final"),
+        "final chat call",
+      );
+      expect(finalCall[1]).toMatchObject({
         sessionKey: "agent:coder:subagent:abc",
         spawnedBy: "agent:conductor:task:parent-1",
         state: "final",
@@ -1780,9 +1882,11 @@ describe("agent event handler", () => {
       });
 
       const chatCalls = chatBroadcastCalls(broadcast);
-      const errorCall = chatCalls.find(([, p]) => p.state === "error");
-      expect(errorCall).toBeDefined();
-      expect(errorCall![1]).toMatchObject({
+      const errorCall = requireCall(
+        chatCalls.find(([, p]) => p.state === "error"),
+        "error chat call",
+      );
+      expect(errorCall[1]).toMatchObject({
         sessionKey: "agent:coder:subagent:err",
         spawnedBy: "agent:conductor:task:parent-err",
         state: "error",
@@ -1840,11 +1944,14 @@ describe("agent event handler", () => {
       });
 
       const chatCalls = chatBroadcastCalls(broadcast);
-      const flushedDelta = chatCalls.find(
-        ([, p]) => p.state === "delta" && p.message?.content?.[0]?.text === "before tool expanded",
+      const flushedDelta = requireCall(
+        chatCalls.find(
+          ([, p]) =>
+            p.state === "delta" && p.message?.content?.[0]?.text === "before tool expanded",
+        ),
+        "flushed delta chat call",
       );
-      expect(flushedDelta).toBeDefined();
-      expect(flushedDelta![1]).toMatchObject({
+      expect(flushedDelta[1]).toMatchObject({
         spawnedBy: "agent:conductor:task:parent-flush",
       });
 
@@ -1883,11 +1990,11 @@ describe("agent event handler", () => {
       });
 
       const agentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
-      const gapError = agentCalls.find(
-        ([, p]) => p.stream === "error" && p.data?.reason === "seq gap",
+      const gapError = requireCall(
+        agentCalls.find(([, p]) => p.stream === "error" && p.data?.reason === "seq gap"),
+        "seq gap error agent call",
       );
-      expect(gapError).toBeDefined();
-      expect(gapError![1]).toMatchObject({
+      expect(gapError[1]).toMatchObject({
         sessionKey: "agent:coder:subagent:gap",
         spawnedBy: "agent:conductor:task:parent-gap",
         data: { reason: "seq gap", expected: 2, received: 5 },

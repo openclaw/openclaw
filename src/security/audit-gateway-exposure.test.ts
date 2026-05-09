@@ -10,6 +10,20 @@ function hasFinding(
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
 
+function requireDangerousFlagsFinding(
+  findings: ReturnType<typeof collectGatewayConfigFindings>,
+  label: string,
+) {
+  const finding = findings.find((entry) => entry.checkId === "config.insecure_or_dangerous_flags");
+  expect(finding, label).toMatchObject({
+    checkId: "config.insecure_or_dangerous_flags",
+  });
+  if (!finding) {
+    throw new Error(`Expected dangerous flags finding for ${label}`);
+  }
+  return finding;
+}
+
 describe("security audit gateway exposure findings", () => {
   it("warns on insecure or dangerous flags", () => {
     const cases = [
@@ -69,13 +83,10 @@ describe("security audit gateway exposure findings", () => {
           expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
         );
       }
-      const finding = findings.find(
-        (entry) => entry.checkId === "config.insecure_or_dangerous_flags",
-      );
-      expect(finding, testCase.name).toBeTruthy();
-      expect(finding?.severity, testCase.name).toBe("warn");
+      const finding = requireDangerousFlagsFinding(findings, testCase.name);
+      expect(finding.severity, testCase.name).toBe("warn");
       for (const snippet of testCase.expectedDangerousDetails) {
-        expect(finding?.detail, `${testCase.name}:${snippet}`).toContain(snippet);
+        expect(finding.detail, `${testCase.name}:${snippet}`).toContain(snippet);
       }
     }
   });
@@ -126,7 +137,7 @@ describe("security audit gateway exposure findings", () => {
     const findings = collectGatewayConfigFindings(cfg, cfg, {});
     expect(findings).toEqual(expect.arrayContaining([expect.objectContaining(expectedFinding)]));
     if (expectedNoFinding) {
-      expect(findings.some((finding) => finding.checkId === expectedNoFinding)).toBe(false);
+      expect(findings.map((finding) => finding.checkId)).not.toContain(expectedNoFinding);
     }
   });
 
@@ -148,10 +159,8 @@ describe("security audit gateway exposure findings", () => {
     expect(
       findings.some((finding) => finding.checkId === "gateway.control_ui.allowed_origins_required"),
     ).toBe(false);
-    const flags = findings.find(
-      (finding) => finding.checkId === "config.insecure_or_dangerous_flags",
-    );
-    expect(flags?.detail ?? "").toContain(
+    const flags = requireDangerousFlagsFinding(findings, "host header origin fallback");
+    expect(flags.detail).toContain(
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true",
     );
   });
@@ -408,10 +417,9 @@ describe("security audit gateway exposure findings", () => {
         testCase.name,
       ).toBe(true);
       if (testCase.suppressesGenericSharedSecretFindings) {
-        expect(findings.some((finding) => finding.checkId === "gateway.bind_no_auth")).toBe(false);
-        expect(findings.some((finding) => finding.checkId === "gateway.auth_no_rate_limit")).toBe(
-          false,
-        );
+        const checkIds = findings.map((finding) => finding.checkId);
+        expect(checkIds).not.toContain("gateway.bind_no_auth");
+        expect(checkIds).not.toContain("gateway.auth_no_rate_limit");
       }
     }
   });

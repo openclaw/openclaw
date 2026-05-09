@@ -147,16 +147,78 @@ describe("discord config schema", () => {
     expect(cfg.voice?.model).toBe("openai/gpt-5.4-mini");
   });
 
+  it("accepts voice agent session target routing", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        agentSession: {
+          mode: "target",
+          target: "channel:123456789012345678",
+        },
+      },
+    });
+
+    expect(cfg.voice?.agentSession).toEqual({
+      mode: "target",
+      target: "channel:123456789012345678",
+    });
+  });
+
+  it("accepts Discord realtime voice modes", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        mode: "bidi",
+        model: "openai-codex/gpt-5.5",
+        realtime: {
+          provider: "openai",
+          model: "gpt-realtime-2",
+          voice: "cedar",
+          toolPolicy: "safe-read-only",
+          consultPolicy: "always",
+          bargeIn: true,
+          providers: {
+            openai: {
+              apiKey: "sk-test",
+              voice: "marin",
+            },
+          },
+        },
+      },
+    });
+
+    expect(cfg.voice?.mode).toBe("bidi");
+    expect(cfg.voice?.model).toBe("openai-codex/gpt-5.5");
+    expect(cfg.voice?.realtime?.provider).toBe("openai");
+    expect(cfg.voice?.realtime?.model).toBe("gpt-realtime-2");
+    expect(cfg.voice?.realtime?.voice).toBe("cedar");
+    expect(cfg.voice?.realtime?.toolPolicy).toBe("safe-read-only");
+    expect(cfg.voice?.realtime?.consultPolicy).toBe("always");
+    expect(cfg.voice?.realtime?.bargeIn).toBe(true);
+  });
+
+  it("rejects invalid Discord realtime voice modes", () => {
+    for (const voice of [
+      { mode: "realtime" },
+      { mode: "bidi", realtime: { toolPolicy: "dangerous" } },
+      { mode: "talk-buffer", realtime: { consultPolicy: "substantive" } },
+      { mode: "talk-buffer", realtime: { debounceMs: 10_001 } },
+      { agentSession: { mode: "target" } },
+    ]) {
+      expectInvalidDiscordConfig({ voice });
+    }
+  });
+
   it("accepts Discord voice timing overrides", () => {
     const cfg = expectValidDiscordConfig({
       voice: {
         connectTimeoutMs: 45_000,
         reconnectGraceMs: 20_000,
+        captureSilenceGraceMs: 3_500,
       },
     });
 
     expect(cfg.voice?.connectTimeoutMs).toBe(45_000);
     expect(cfg.voice?.reconnectGraceMs).toBe(20_000);
+    expect(cfg.voice?.captureSilenceGraceMs).toBe(3_500);
   });
 
   it("rejects invalid Discord voice timing overrides", () => {
@@ -165,6 +227,8 @@ describe("discord config schema", () => {
       { connectTimeoutMs: 120_001 },
       { reconnectGraceMs: -1 },
       { reconnectGraceMs: 1.5 },
+      { captureSilenceGraceMs: 0 },
+      { captureSilenceGraceMs: 30_001 },
     ]) {
       expectInvalidDiscordConfig({ voice });
     }

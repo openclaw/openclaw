@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
@@ -11,6 +13,10 @@ import {
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
+import {
+  resolveClawHubInstallSpecsForUpdateChannel,
+  resolveNpmInstallSpecsForUpdateChannel,
+} from "../plugins/install-channel-specs.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
@@ -18,6 +24,7 @@ import type { PluginPackageInstall } from "../plugins/manifest.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { withTimeout } from "../utils/with-timeout.js";
+import { VERSION } from "../version.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 type InstallChoice = "clawhub" | "npm" | "local" | "skip";
@@ -32,6 +39,7 @@ export type OnboardingPluginInstallEntry = {
   label: string;
   install: PluginPackageInstall;
   trustedSourceLinkedOfficialInstall?: boolean;
+  preferRemoteInstall?: boolean;
 };
 
 export type OnboardingPluginInstallStatus = "installed" | "skipped" | "failed" | "timed_out";
@@ -325,6 +333,8 @@ async function promptInstallChoice(params: {
    *  to that source. Useful when the caller already knows the user's intent
    *  (e.g. they just picked the channel in a previous menu). */
   autoConfirmSingleSource?: boolean;
+  effectiveNpmSpec?: string | null;
+  effectiveClawHubSpec?: string | null;
 }): Promise<InstallChoice> {
   const rawClawHubSpec = resolveClawHubSpecForOnboarding(params.entry.install);
   const rawNpmSpec = resolveNpmSpecForOnboarding(params.entry.install);
@@ -336,8 +346,10 @@ async function promptInstallChoice(params: {
   // case is misleading; those catalog specs only exist as fallback metadata for
   // non-bundled builds. Hide them so bundled channels like Tlon look identical
   // to Twitch / Slack in the menu.
-  const clawhubSpec = params.bundledLocalPath ? null : rawClawHubSpec;
-  const npmSpec = params.bundledLocalPath ? null : rawNpmSpec;
+  const clawhubSpec = params.bundledLocalPath
+    ? null
+    : (params.effectiveClawHubSpec ?? rawClawHubSpec);
+  const npmSpec = params.bundledLocalPath ? null : (params.effectiveNpmSpec ?? rawNpmSpec);
   const safeLabel = sanitizeTerminalText(params.entry.label);
   const safeClawHubSpec = clawhubSpec ? sanitizeTerminalText(clawhubSpec) : null;
   const safeNpmSpec = npmSpec ? sanitizeTerminalText(npmSpec) : null;
@@ -719,16 +731,38 @@ export async function ensureOnboardingPluginInstalled(params: {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
   const allowLocal = hasGitWorkspace(workspaceDir);
-  const bundledLocalPath = resolveBundledLocalPath({ entry, workspaceDir });
+  const bundledLocalPath = entry.preferRemoteInstall
+    ? null
+    : resolveBundledLocalPath({ entry, workspaceDir });
   const localPath =
     bundledLocalPath ??
-    resolveLocalPath({
-      entry,
-      workspaceDir,
-      allowLocal,
-    });
+    (entry.preferRemoteInstall
+      ? null
+      : resolveLocalPath({
+          entry,
+          workspaceDir,
+          allowLocal,
+        }));
   const clawhubSpec = resolveClawHubSpecForOnboarding(entry.install);
   const npmSpec = resolveNpmSpecForOnboarding(entry.install);
+  const updateChannel = resolveRegistryUpdateChannel({
+    configChannel: normalizeUpdateChannel(next.update?.channel),
+    currentVersion: VERSION,
+  });
+  const clawhubSpecs = clawhubSpec
+    ? resolveClawHubInstallSpecsForUpdateChannel({
+        spec: clawhubSpec,
+        updateChannel,
+      })
+    : null;
+  const npmSpecs = npmSpec
+    ? resolveNpmInstallSpecsForUpdateChannel({
+        spec: npmSpec,
+        updateChannel,
+      })
+    : null;
+  const clawhubInstallSpec = clawhubSpecs?.installSpec ?? clawhubSpec;
+  const npmInstallSpec = npmSpecs?.installSpec ?? npmSpec;
   const defaultChoice = resolveInstallDefaultChoice({
     cfg: next,
     entry,
@@ -747,6 +781,8 @@ export async function ensureOnboardingPluginInstalled(params: {
           defaultChoice,
           prompter,
           autoConfirmSingleSource: params.autoConfirmSingleSource,
+          effectiveClawHubSpec: clawhubInstallSpec,
+          effectiveNpmSpec: npmInstallSpec,
         });
 
   if (choice === "skip") {
@@ -757,6 +793,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       status: "skipped",
     };
   }
+  assertConfigWriteAllowedInCurrentMode();
 
   if (choice === "local" && localPath) {
     const enableResult = await applyPluginEnablement({
@@ -793,10 +830,10 @@ export async function ensureOnboardingPluginInstalled(params: {
   }
 
   let shouldTryNpm = choice === "npm";
-  if (choice === "clawhub" && clawhubSpec) {
+  if (choice === "clawhub" && clawhubInstallSpec) {
     const installOutcome = await installPluginFromClawHubSpecWithProgress({
       entry,
-      clawhubSpec,
+      clawhubSpec: clawhubInstallSpec,
       prompter,
       runtime,
     });
@@ -804,13 +841,13 @@ export async function ensureOnboardingPluginInstalled(params: {
     if (installOutcome.status === "timed_out") {
       await prompter.note(
         [
-          `Installing ${sanitizeTerminalText(clawhubSpec)} timed out after ${formatDurationLabel(ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS)}.`,
+          `Installing ${sanitizeTerminalText(clawhubInstallSpec)} timed out after ${formatDurationLabel(ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS)}.`,
           "Returning to selection.",
         ].join("\n"),
         "Plugin install",
       );
       runtime.error?.(
-        `Plugin install timed out after ${ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS}ms: ${sanitizeTerminalText(clawhubSpec)}`,
+        `Plugin install timed out after ${ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS}ms: ${sanitizeTerminalText(clawhubInstallSpec)}`,
       );
       return {
         cfg: next,
@@ -841,7 +878,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       next = recordPluginInstall(next, {
         pluginId: result.pluginId,
         ...buildClawHubPluginInstallRecordFields(result.clawhub),
-        spec: clawhubSpec,
+        spec: clawhubSpecs?.recordSpec ?? clawhubInstallSpec,
         installPath: result.targetDir,
       });
       return {
@@ -854,13 +891,13 @@ export async function ensureOnboardingPluginInstalled(params: {
 
     await prompter.note(
       [
-        `Failed to install ${sanitizeTerminalText(clawhubSpec)}: ${summarizeInstallError(result.error)}`,
+        `Failed to install ${sanitizeTerminalText(clawhubInstallSpec)}: ${summarizeInstallError(result.error)}`,
         "Returning to selection.",
       ].join("\n"),
       "Plugin install",
     );
 
-    if (!npmSpec || !shouldFallbackClawHubToNpm(result)) {
+    if (!npmInstallSpec || !shouldFallbackClawHubToNpm(result)) {
       runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
       return {
         cfg: next,
@@ -871,7 +908,7 @@ export async function ensureOnboardingPluginInstalled(params: {
     }
 
     shouldTryNpm = await prompter.confirm({
-      message: `Use npm package instead? (${sanitizeTerminalText(npmSpec)})`,
+      message: `Use npm package instead? (${sanitizeTerminalText(npmInstallSpec)})`,
       initialValue: true,
     });
     if (!shouldTryNpm) {
@@ -885,7 +922,7 @@ export async function ensureOnboardingPluginInstalled(params: {
     }
   }
 
-  if (!shouldTryNpm || !npmSpec) {
+  if (!shouldTryNpm || !npmInstallSpec) {
     await prompter.note(
       `No remote install source is available for ${sanitizeTerminalText(entry.label)}. Returning to selection.`,
       "Plugin install",
@@ -903,7 +940,7 @@ export async function ensureOnboardingPluginInstalled(params: {
 
   const installOutcome = await installPluginFromNpmSpecWithProgress({
     entry,
-    npmSpec,
+    npmSpec: npmInstallSpec,
     prompter,
     runtime,
   });
@@ -911,13 +948,13 @@ export async function ensureOnboardingPluginInstalled(params: {
   if (installOutcome.status === "timed_out") {
     await prompter.note(
       [
-        `Installing ${sanitizeTerminalText(npmSpec)} timed out after ${formatDurationLabel(ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS)}.`,
+        `Installing ${sanitizeTerminalText(npmInstallSpec)} timed out after ${formatDurationLabel(ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS)}.`,
         "Returning to selection.",
       ].join("\n"),
       "Plugin install",
     );
     runtime.error?.(
-      `Plugin install timed out after ${ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS}ms: ${sanitizeTerminalText(npmSpec)}`,
+      `Plugin install timed out after ${ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS}ms: ${sanitizeTerminalText(npmInstallSpec)}`,
     );
     return {
       cfg: next,
@@ -949,7 +986,7 @@ export async function ensureOnboardingPluginInstalled(params: {
     const install = {
       pluginId: result.pluginId,
       source: "npm",
-      spec: npmSpec,
+      spec: npmSpecs?.recordSpec ?? npmInstallSpec,
       installPath: result.targetDir,
       version: result.version,
       ...buildNpmResolutionInstallFields(result.npmResolution),
@@ -965,7 +1002,7 @@ export async function ensureOnboardingPluginInstalled(params: {
 
   await prompter.note(
     [
-      `Failed to install ${sanitizeTerminalText(npmSpec)}: ${summarizeInstallError(result.error)}`,
+      `Failed to install ${sanitizeTerminalText(npmInstallSpec)}: ${summarizeInstallError(result.error)}`,
       "Returning to selection.",
     ].join("\n"),
     "Plugin install",

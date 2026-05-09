@@ -8,7 +8,8 @@ const mocks = vi.hoisted(() => ({
   resolveAuthProfileDisplayLabel: vi.fn(),
   resolveUsableCustomProviderApiKey: vi.fn(() => null),
   resolveEnvApiKey: vi.fn<() => { apiKey: string; source: string } | null>(() => null),
-  readCodexCliCredentialsCached: vi.fn<() => unknown>(() => null),
+  readClaudeCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
+  readCodexCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
 }));
 
 vi.mock("./auth-profiles.js", () => ({
@@ -25,7 +26,7 @@ vi.mock("./model-auth.js", () => ({
 }));
 
 vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
+  readClaudeCliCredentialsCached: mocks.readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
 }));
 
@@ -46,6 +47,8 @@ describe("resolveModelAuthLabel", () => {
     mocks.resolveUsableCustomProviderApiKey.mockReturnValue(null);
     mocks.resolveEnvApiKey.mockReset();
     mocks.resolveEnvApiKey.mockReturnValue(null);
+    mocks.readClaudeCliCredentialsCached.mockReset();
+    mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
     mocks.readCodexCliCredentialsCached.mockReset();
     mocks.readCodexCliCredentialsCached.mockReturnValue(null);
   });
@@ -144,6 +147,36 @@ describe("resolveModelAuthLabel", () => {
     });
 
     expect(label).toBe("oauth (codex-cli)");
+    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith({
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
+  });
+
+  it("shows claude cli auth for claude-cli provider without auth profiles", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "claude-cli",
+      access: "token",
+      refresh: "refresh",
+      expires: Date.now() + 60_000,
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "claude-cli",
+      cfg: {},
+    });
+
+    expect(label).toBe("oauth (claude-cli)");
+    expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith({
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
   });
 
   it("can skip external auth profile overlays for status labels", () => {

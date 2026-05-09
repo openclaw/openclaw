@@ -20,7 +20,7 @@ const GEMMA_PREFIX = "gemma-";
 const GEMINI_2_5_PRO_TEMPLATE_IDS = ["gemini-2.5-pro"] as const;
 const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
 const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
-const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
+const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3.1-pro-preview", "gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 const GEMINI_3_PRO_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-pro-low", "gemini-3-pro-high"] as const;
@@ -28,6 +28,13 @@ const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
 // Gemma uses the Gemini flash template as a forward-compat approximation
 // until a dedicated Gemma template is registered in the catalog.
 const GEMMA_TEMPLATE_IDS = GEMINI_3_1_FLASH_TEMPLATE_IDS;
+
+function normalizeGeminiProRequestId(id: string): string {
+  if (id === "gemini-3-pro" || id === "gemini-3-pro-preview" || id === "gemini-3.1-pro") {
+    return "gemini-3.1-pro-preview";
+  }
+  return id;
+}
 
 type GoogleForwardCompatFamily = {
   googleTemplateIds: readonly string[];
@@ -120,7 +127,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
   templateProviderId?: string;
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
-  const trimmed = params.ctx.modelId.trim();
+  const trimmed = normalizeGeminiProRequestId(params.ctx.modelId.trim());
   const lower = normalizeOptionalLowercaseString(trimmed) ?? "";
 
   let family: GoogleForwardCompatFamily;

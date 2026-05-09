@@ -35,6 +35,11 @@ on:
           - minimum
           - stable
           - full
+      run_release_soak:
+        description: Run exhaustive live/Docker and upgrade-survivor soak lanes; forced on for release_profile=full
+        required: false
+        default: false
+        type: boolean
       rerun_group:
         description: Validation group to run
         required: false
@@ -54,7 +59,12 @@ on:
           - qa-live
           - npm-telegram
       live_suite_filter:
-        description: Optional exact live suite id for focused live/E2E reruns; blank runs all selected live suites
+        description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram; blank runs all selected live suites
+        required: false
+        default: ""
+        type: string
+      cross_os_suite_filter:
+        description: Optional focused cross-OS suite filter, e.g. windows/packaged-upgrade or packaged-fresh
         required: false
         default: ""
         type: string
@@ -98,6 +108,8 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_REPO: ${{ github.repository }}
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.32.1"
 
 jobs:
   resolve_target:
@@ -134,8 +146,10 @@ jobs:
           EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
         run: |
           {
             echo "## Full release validation"
@@ -143,9 +157,13 @@ jobs:
             echo "- Target ref: \`${TARGET_REF}\`"
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Child workflow ref: \`${CHILD_WORKFLOW_REF}\`"
+            echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
             if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
               echo "- Live suite filter: \`${LIVE_SUITE_FILTER}\`"
+            fi
+            if [[ -n "${CROSS_OS_SUITE_FILTER// }" ]]; then
+              echo "- Cross-OS suite filter: \`${CROSS_OS_SUITE_FILTER}\`"
             fi
             if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "ci" ]]; then
               echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
@@ -165,7 +183,7 @@ jobs:
             if [[ -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" ]]; then
               echo "- Published-package Telegram E2E: \`${NPM_TELEGRAM_PACKAGE_SPEC}\`"
             elif [[ "$RERUN_GROUP" == "all" && "$RELEASE_PROFILE" == "full" ]]; then
-              echo "- Package Telegram E2E: release package artifact from \`OpenClaw Release Checks\`"
+              echo "- Package Telegram E2E: parent \`release-package-under-test\` artifact"
             else
               echo "- Package Telegram E2E: skipped unless \`release_profile=full\` or \`npm_telegram_package_spec\` is provided"
             fi
@@ -204,7 +222,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url
+            local before_json dispatch_output run_id status conclusion url poll_count
             before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
             dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
@@ -244,10 +262,16 @@ jobs:
             }
             trap cancel_child EXIT INT TERM
 
+            poll_count=0
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
+              fi
+              poll_count=$((poll_count + 1))
+              if (( poll_count % 10 == 0 )); then
+                echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
               fi
               sleep 30
             done
@@ -297,7 +321,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url
+            local before_json dispatch_output run_id status conclusion url poll_count
             before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
             dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
@@ -337,10 +361,16 @@ jobs:
             }
             trap cancel_child EXIT INT TERM
 
+            poll_count=0
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
+              fi
+              poll_count=$((poll_count + 1))
+              if (( poll_count % 10 == 0 )); then
+                echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
               fi
               sleep 30
             done
@@ -386,8 +416,10 @@ jobs:
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
         run: |
           set -euo pipefail
@@ -396,7 +428,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url
+            local before_json dispatch_output run_id status conclusion url poll_count
             before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
             dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
@@ -436,10 +468,16 @@ jobs:
             }
             trap cancel_child EXIT INT TERM
 
+            poll_count=0
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
+              fi
+              poll_count=$((poll_count + 1))
+              if (( poll_count % 10 == 0 )); then
+                echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
               fi
               sleep 30
             done
@@ -463,9 +501,13 @@ jobs:
             echo "- Provider: \`${PROVIDER}\`"
             echo "- Cross-OS mode: \`${MODE}\`"
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
+            echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
             if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
               echo "- Live suite filter: \`${LIVE_SUITE_FILTER}\`"
+            fi
+            if [[ -n "${CROSS_OS_SUITE_FILTER// }" ]]; then
+              echo "- Cross-OS suite filter: \`${CROSS_OS_SUITE_FILTER}\`"
             fi
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
@@ -483,10 +525,14 @@ jobs:
             -f provider="$PROVIDER"
             -f mode="$MODE"
             -f release_profile="$RELEASE_PROFILE"
+            -f run_release_soak="$RUN_RELEASE_SOAK"
             -f rerun_group="$child_rerun_group"
           )
           if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
             args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")
+          fi
+          if [[ -n "${CROSS_OS_SUITE_FILTER// }" ]]; then
+            args+=(-f cross_os_suite_filter="$CROSS_OS_SUITE_FILTER")
           fi
           if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             args+=(-f package_acceptance_package_spec="$PACKAGE_ACCEPTANCE_PACKAGE_SPEC")
@@ -494,9 +540,80 @@ jobs:
 
           dispatch_and_wait openclaw-release-checks.yml "${args[@]}"
 
+  prepare_release_package:
+    name: Prepare release package artifact
+    needs: [resolve_target]
+    if: ${{ inputs.npm_telegram_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      artifact_name: ${{ steps.artifact.outputs.name }}
+      package_sha256: ${{ steps.package.outputs.sha256 }}
+      package_version: ${{ steps.package.outputs.package_version }}
+      source_sha: ${{ steps.package.outputs.source_sha }}
+    steps:
+      - name: Checkout trusted workflow ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Set artifact metadata
+        id: artifact
+        run: echo "name=release-package-under-test" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          install-deps: "false"
+
+      - name: Resolve release package artifact
+        id: package
+        shell: bash
+        env:
+          PACKAGE_REF: ${{ needs.resolve_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          node scripts/resolve-openclaw-package-candidate.mjs \
+            --source ref \
+            --package-ref "$PACKAGE_REF" \
+            --output-dir .artifacts/docker-e2e-package \
+            --output-name openclaw-current.tgz \
+            --metadata .artifacts/docker-e2e-package/package-candidate.json \
+            --github-output "$GITHUB_OUTPUT"
+          digest="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).sha256")"
+          version="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).version")"
+          source_sha="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).packageSourceSha")"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Release package artifact"
+            echo
+            echo "- Artifact: \`release-package-under-test\`"
+            echo "- Package ref: \`$PACKAGE_REF\`"
+            echo "- SHA-256: \`$digest\`"
+            echo "- Version: \`$version\`"
+            echo "- Source SHA: \`$source_sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-package-under-test
+          path: |
+            .artifacts/docker-e2e-package/openclaw-current.tgz
+            .artifacts/docker-e2e-package/package-candidate.json
+          if-no-files-found: error
+
   npm_telegram:
     name: Run package Telegram E2E
-    needs: [resolve_target, release_checks]
+    needs: [resolve_target, prepare_release_package]
     if: ${{ always() && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || (inputs.rerun_group == 'all' && inputs.release_profile == 'full')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -512,7 +629,8 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
-          RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
+          PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_release_package.outputs.artifact_name }}
+          PREPARE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
           PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           SCENARIO: ${{ inputs.npm_telegram_scenario }}
         run: |
@@ -522,13 +640,13 @@ jobs:
 
           args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}" -f harness_ref="$TARGET_SHA" -f provider_mode="$PROVIDER_MODE")
           if [[ -z "${PACKAGE_SPEC// }" ]]; then
-            if [[ -z "${RELEASE_CHECKS_RUN_ID// }" ]]; then
-              echo "Full release Telegram requires either npm_telegram_package_spec or a release_checks child run with the release-package-under-test artifact." >&2
+            if [[ "$PREPARE_PACKAGE_RESULT" != "success" || -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
+              echo "Full release Telegram requires either npm_telegram_package_spec or a prepared release-package-under-test artifact." >&2
               exit 1
             fi
             args+=(
-              -f package_artifact_name=release-package-under-test
-              -f package_artifact_run_id="$RELEASE_CHECKS_RUN_ID"
+              -f package_artifact_name="$PACKAGE_ARTIFACT_NAME"
+              -f package_artifact_run_id="${GITHUB_RUN_ID}"
               -f package_label="full-release-${TARGET_SHA:0:12}"
             )
           fi
@@ -566,10 +684,16 @@ jobs:
           }
           trap cancel_child EXIT INT TERM
 
+          poll_count=0
           while true; do
             status="$(gh run view "$run_id" --json status --jq '.status')"
             if [[ "$status" == "completed" ]]; then
               break
+            fi
+            poll_count=$((poll_count + 1))
+            if (( poll_count % 10 == 0 )); then
+              echo "Still waiting on npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
             fi
             sleep 30
           done

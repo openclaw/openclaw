@@ -20,6 +20,10 @@ import {
   searchClawHubSkills,
 } from "./clawhub.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("clawhub helpers", () => {
   const originalHome = process.env.HOME;
 
@@ -98,6 +102,12 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("2026.3.22", ">=2026.3.22")).toBe(true);
     expect(satisfiesPluginApiRange("2026.3.21", ">=2026.3.22")).toBe(false);
     expect(satisfiesPluginApiRange("invalid", "^1.2.0")).toBe(false);
+  });
+
+  it("treats OpenClaw CalVer correction versions as stable plugin API hosts", () => {
+    expect(satisfiesPluginApiRange("2026.5.3-1", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.3-2", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.3-beta.1", ">=2026.5.3")).toBe(false);
   });
 
   it("accepts legacy bare major.minor plugin api ranges as lower bounds", () => {
@@ -231,7 +241,7 @@ describe("clawhub helpers", () => {
       });
     };
 
-    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
+    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toStrictEqual([]);
   });
 
   it("fetches typed package readiness reports", async () => {
@@ -353,7 +363,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -392,7 +402,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -414,6 +424,66 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/declared sha256/);
   });
 
+  it("annotates 429 errors with the reset hint and a sign-in hint when unauthenticated", async () => {
+    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("Rate limit exceeded", {
+            status: 429,
+            headers: {
+              "RateLimit-Limit": "30",
+              "RateLimit-Remaining": "0",
+              "RateLimit-Reset": "42",
+            },
+          }),
+      }),
+    ).rejects.toThrow(/Rate limit exceeded \(resets in 42s\) Sign in for higher rate limits\.$/);
+  });
+
+  it("degrades gracefully on 429 when the response carries no rate-limit headers", async () => {
+    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () => new Response("Rate limit exceeded", { status: 429 }),
+      }),
+    ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
+  });
+
+  it("annotates 429 errors with the reset hint but no sign-in hint when authenticated", async () => {
+    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("Rate limit exceeded", {
+            status: 429,
+            headers: {
+              "RateLimit-Limit": "180",
+              "RateLimit-Remaining": "0",
+              "RateLimit-Reset": "10",
+            },
+          }),
+      }),
+    ).rejects.toThrow(/Rate limit exceeded \(resets in 10s\)$/);
+  });
+
+  it("skips the reset suffix on 429 when Retry-After is an HTTP-date", async () => {
+    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("Rate limit exceeded", {
+            status: 429,
+            headers: { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" },
+          }),
+      }),
+    ).rejects.toThrow(/Rate limit exceeded$/);
+  });
+
   it("downloads skill archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubSkillArchive({
       slug: "agentreceipt",
@@ -431,7 +501,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 });

@@ -9,7 +9,7 @@ import {
 } from "./channel-policy.js";
 
 describe("createRestrictSendersChannelSecurity", () => {
-  it("builds dm policy resolution and open-group warnings from one descriptor", async () => {
+  it("builds dm policy resolution and open-group warnings from one descriptor", () => {
     const security = createRestrictSendersChannelSecurity<{
       accountId: string;
       allowFrom?: string[];
@@ -105,7 +105,7 @@ describe("createDangerousNameMatchingMutableAllowlistWarningCollector", () => {
           },
         } as never,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 
@@ -115,8 +115,8 @@ describe("normalizeAllowFromList", () => {
   });
 
   it("returns an empty list for non-arrays", () => {
-    expect(normalizeAllowFromList(undefined)).toEqual([]);
-    expect(normalizeAllowFromList(null)).toEqual([]);
+    expect(normalizeAllowFromList(undefined)).toStrictEqual([]);
+    expect(normalizeAllowFromList(null)).toStrictEqual([]);
   });
 });
 

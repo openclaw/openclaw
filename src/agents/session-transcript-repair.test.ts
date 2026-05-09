@@ -8,7 +8,14 @@ import {
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
-const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 function getAssistantToolCallBlocks(messages: AgentMessage[]) {
   const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
@@ -168,7 +175,7 @@ describe("sanitizeToolUseResultPairing", () => {
     ]);
 
     const out = sanitizeToolUseResultPairing(input);
-    expect(out.filter((m) => m.role === "toolResult")).toHaveLength(1);
+    expect(out.reduce((count, m) => count + (m.role === "toolResult" ? 1 : 0), 0)).toBe(1);
   });
 
   it("drops duplicate tool results for the same id across the transcript", () => {
@@ -316,7 +323,30 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 });
 
-describe("sanitizeToolCallInputs", () => {
+describe("sanitizeToolCallInputs legacy block filtering", () => {
+  it("drops malformed snake_case tool call blocks", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "before" },
+          { type: "tool_use", id: "tool_1", name: "read" },
+          { type: "tool_call", tool_call_id: "tool_2", name: "write", arguments: {} },
+          { type: "function_call", call_id: "tool_3", name: "exec", arguments: "{}" },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["write", "exec"] });
+
+    expect(getAssistantToolCallBlocks(out)).toMatchObject([
+      { type: "tool_call", name: "write" },
+      { type: "function_call", name: "exec" },
+    ]);
+  });
+});
+
+describe("sanitizeToolCallInputs allowed-name filtering", () => {
   function sanitizeAssistantContent(
     content: unknown[],
     options?: Parameters<typeof sanitizeToolCallInputs>[1],
@@ -459,7 +489,7 @@ describe("sanitizeToolCallInputs", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
   });
 
   it("drops signed-thinking assistant turns when sibling tool calls reuse an id", () => {
@@ -483,7 +513,7 @@ describe("sanitizeToolCallInputs", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
   });
 
   it("drops later signed-thinking assistant turns that reuse an earlier signed tool id", () => {
@@ -549,7 +579,7 @@ describe("sanitizeToolCallInputs", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toStrictEqual([]);
     expect(JSON.stringify(out)).not.toContain(secret);
   });
 

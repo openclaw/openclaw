@@ -144,6 +144,37 @@ class MissingDoneEventError extends Error {
   }
 }
 
+class WebSocketLiveAttemptTimeoutError extends Error {
+  constructor(label: string, timeoutMs: number) {
+    super(`${label} timed out after ${timeoutMs}ms`);
+    this.name = "WebSocketLiveAttemptTimeoutError";
+  }
+}
+
+async function withWebSocketLiveAttemptTimeout<T>(
+  label: string,
+  timeoutMs: number,
+  run: () => Promise<T>,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new WebSocketLiveAttemptTimeoutError(label, timeoutMs)),
+          timeoutMs,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function isTransientWebSocketLiveError(error: unknown): boolean {
   if (error instanceof MissingDoneEventError) {
     return true;
@@ -181,6 +212,34 @@ function extractToolCall(message: AssistantMessage) {
     | undefined;
 }
 
+function requireToolCall(message: AssistantMessage) {
+  const toolCall = extractToolCall(message);
+  if (!toolCall?.id) {
+    throw new Error("expected assistant tool call with id");
+  }
+  return toolCall;
+}
+
+function requireCompletedResponse(responses: ResponseObject[], index: number): ResponseObject {
+  const response = responses[index];
+  if (!response) {
+    throw new Error(`expected completed OpenAI response at index ${index}`);
+  }
+  return response;
+}
+
+function requireRawToolCall(
+  response: ResponseObject,
+): Extract<OutputItem, { type: "function_call" }> {
+  const rawToolCall = response.output.find(
+    (item): item is Extract<OutputItem, { type: "function_call" }> => item.type === "function_call",
+  );
+  if (!rawToolCall) {
+    throw new Error("expected raw function_call output item");
+  }
+  return rawToolCall;
+}
+
 function parseReasoningSignature(value: string | undefined) {
   if (!value) {
     return null;
@@ -204,21 +263,21 @@ function extractReasoningText(item: { summary?: unknown; content?: unknown }): s
     return summary.trim();
   }
   if (Array.isArray(summary)) {
-    const summaryText = summary
-      .map((part) => {
-        if (typeof part === "string") {
-          return part.trim();
-        }
-        if (!part || typeof part !== "object") {
-          return "";
-        }
-        return typeof (part as { text?: unknown }).text === "string"
-          ? ((part as { text: string }).text ?? "").trim()
-          : "";
-      })
-      .filter(Boolean)
-      .join("\n")
-      .trim();
+    const textParts: string[] = [];
+    for (const part of summary) {
+      const text =
+        typeof part === "string"
+          ? part.trim()
+          : part &&
+              typeof part === "object" &&
+              typeof (part as { text?: unknown }).text === "string"
+            ? (part as { text: string }).text.trim()
+            : "";
+      if (text.length > 0) {
+        textParts.push(text);
+      }
+    }
+    const summaryText = textParts.join("\n").trim();
     if (summaryText) {
       return summaryText;
     }
@@ -325,17 +384,14 @@ describe("OpenAI WebSocket e2e", () => {
         } as unknown as StreamFnParams[2]),
       );
       const firstDone = expectDone(firstEvents);
-      const toolCall = firstDone.content.find((block) => block.type === "toolCall") as
-        | { type: "toolCall"; id: string; name: string }
-        | undefined;
-      expect(toolCall?.name).toBe("noop");
-      expect(toolCall?.id).toBeTruthy();
+      const toolCall = requireToolCall(firstDone);
+      expect(toolCall.name).toBe("noop");
 
       const secondDone = await runWebsocketToolFollowupTurn({
         streamFn,
         context: firstContext,
         firstDone,
-        toolCallId: toolCall!.id,
+        toolCallId: toolCall.id,
         output: "TOOL_OK",
       });
 
@@ -351,78 +407,80 @@ describe("OpenAI WebSocket e2e", () => {
     async () => {
       let lastError: unknown;
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        const sid = freshSession(`tool-reasoning-${attempt}`);
         try {
-          const sid = freshSession(`tool-reasoning-${attempt}`);
-          const completedResponses: ResponseObject[] = [];
-          openAIWsStreamModule.__testing.setDepsForTest({
-            createManager: (options) => {
-              const manager = new openAIWsConnectionModule.OpenAIWebSocketManager(options);
-              manager.onMessage((event) => {
-                if (event.type === "response.completed") {
-                  completedResponses.push(event.response);
-                }
+          await withWebSocketLiveAttemptTimeout(
+            `OpenAI WebSocket reasoning metadata attempt ${attempt + 1}`,
+            75_000,
+            async () => {
+              const completedResponses: ResponseObject[] = [];
+              openAIWsStreamModule.__testing.setDepsForTest({
+                createManager: (options) => {
+                  const manager = new openAIWsConnectionModule.OpenAIWebSocketManager(options);
+                  manager.onMessage((event) => {
+                    if (event.type === "response.completed") {
+                      completedResponses.push(event.response);
+                    }
+                  });
+                  return manager;
+                },
               });
-              return manager;
+              const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid);
+              const firstContext = makeToolContext(
+                "Think carefully, call the tool `noop` with {} first, then after the tool result reply with exactly TOOL_OK.",
+              );
+              const firstDone = expectDone(
+                await collectEvents(
+                  streamFn(model, firstContext, {
+                    transport: "websocket",
+                    toolChoice: "required",
+                    reasoningEffort: "high",
+                    reasoningSummary: "detailed",
+                    maxTokens: 256,
+                  } as unknown as StreamFnParams[2]),
+                ),
+              );
+
+              const firstResponse = requireCompletedResponse(completedResponses, 0);
+
+              const rawReasoningItems = firstResponse.output.filter(
+                (
+                  item,
+                ): item is Extract<OutputItem, { type: "reasoning" | `reasoning.${string}` }> =>
+                  item.type === "reasoning" || item.type.startsWith("reasoning."),
+              );
+              const replayableReasoningItems = rawReasoningItems.filter(
+                (item) => typeof item.id === "string" && item.id.startsWith("rs_"),
+              );
+              const thinkingBlocks = extractThinkingBlocks(firstDone);
+              expect(thinkingBlocks).toHaveLength(replayableReasoningItems.length);
+              expect(thinkingBlocks.map((block) => block.thinking)).toEqual(
+                replayableReasoningItems.map((item) => extractReasoningText(item)),
+              );
+              expect(
+                thinkingBlocks.map((block) => parseReasoningSignature(block.thinkingSignature)),
+              ).toEqual(replayableReasoningItems.map((item) => toExpectedReasoningSignature(item)));
+
+              const rawToolCall = requireRawToolCall(firstResponse);
+              const toolCall = requireToolCall(firstDone);
+              expect(toolCall.name).toBe(rawToolCall.name);
+              expect(toolCall.id).toBe(`${rawToolCall.call_id}|${rawToolCall.id}`);
+
+              const secondDone = await runWebsocketToolFollowupTurn({
+                streamFn,
+                context: firstContext,
+                firstDone,
+                toolCallId: toolCall.id,
+                output: "TOOL_OK",
+              });
+
+              expect(assistantText(secondDone)).toMatch(/TOOL_OK/);
             },
-          });
-          const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid);
-          const firstContext = makeToolContext(
-            "Think carefully, call the tool `noop` with {} first, then after the tool result reply with exactly TOOL_OK.",
           );
-          const firstDone = expectDone(
-            await collectEvents(
-              streamFn(model, firstContext, {
-                transport: "websocket",
-                toolChoice: "required",
-                reasoningEffort: "high",
-                reasoningSummary: "detailed",
-                maxTokens: 256,
-              } as unknown as StreamFnParams[2]),
-            ),
-          );
-
-          const firstResponse = completedResponses[0];
-          expect(firstResponse).toBeDefined();
-
-          const rawReasoningItems = (firstResponse?.output ?? []).filter(
-            (item): item is Extract<OutputItem, { type: "reasoning" | `reasoning.${string}` }> =>
-              item.type === "reasoning" || item.type.startsWith("reasoning."),
-          );
-          const replayableReasoningItems = rawReasoningItems.filter(
-            (item) => typeof item.id === "string" && item.id.startsWith("rs_"),
-          );
-          const thinkingBlocks = extractThinkingBlocks(firstDone);
-          expect(thinkingBlocks).toHaveLength(replayableReasoningItems.length);
-          expect(thinkingBlocks.map((block) => block.thinking)).toEqual(
-            replayableReasoningItems.map((item) => extractReasoningText(item)),
-          );
-          expect(
-            thinkingBlocks.map((block) => parseReasoningSignature(block.thinkingSignature)),
-          ).toEqual(replayableReasoningItems.map((item) => toExpectedReasoningSignature(item)));
-
-          const rawToolCall = firstResponse?.output.find(
-            (item): item is Extract<OutputItem, { type: "function_call" }> =>
-              item.type === "function_call",
-          );
-          expect(rawToolCall).toBeDefined();
-          const toolCall = extractToolCall(firstDone);
-          expect(toolCall?.name).toBe(rawToolCall?.name);
-          expect(toolCall?.id).toBe(
-            rawToolCall ? `${rawToolCall.call_id}|${rawToolCall.id}` : undefined,
-          );
-
-          const secondDone = await runWebsocketToolFollowupTurn({
-            streamFn,
-            context: firstContext,
-            firstDone,
-            toolCallId: toolCall!.id,
-            output: "TOOL_OK",
-          });
-
-          expect(assistantText(secondDone)).toMatch(/TOOL_OK/);
           return;
         } catch (error) {
           lastError = error;
+          openAIWsStreamModule.releaseWsSession(sid);
           openAIWsStreamModule.__testing.setDepsForTest();
           if (!isTransientWebSocketLiveError(error) || attempt === 1) {
             throw error;

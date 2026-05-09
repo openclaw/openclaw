@@ -19,6 +19,7 @@ const DATABASE_PREFIX = "openclaw-matrix-persistence-test";
 const OTHER_DATABASE_PREFIX = "openclaw-matrix-persistence-other-test";
 const cryptoDatabaseName = `${DATABASE_PREFIX}::matrix-sdk-crypto`;
 const otherCryptoDatabaseName = `${OTHER_DATABASE_PREFIX}::matrix-sdk-crypto`;
+const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
 
 async function clearTestIndexedDbState(): Promise<void> {
   await clearAllIndexedDbState({ databasePrefix: DATABASE_PREFIX });
@@ -62,7 +63,9 @@ describe("Matrix IndexedDB persistence", () => {
     expect(fs.existsSync(snapshotPath)).toBe(true);
 
     const mode = fs.statSync(snapshotPath).mode & 0o777;
-    expect(mode).toBe(0o600);
+    if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
+      expect(mode).toBe(0o600);
+    }
 
     await clearTestIndexedDbState();
 
@@ -76,7 +79,7 @@ describe("Matrix IndexedDB persistence", () => {
     expect(restoredRecords).toEqual([{ key: "room-1", value: { session: "abc123" } }]);
 
     const dbs = await indexedDB.databases();
-    expect(dbs.some((entry) => entry.name === otherCryptoDatabaseName)).toBe(false);
+    expect(dbs.map((entry) => entry.name)).not.toContain(otherCryptoDatabaseName);
   });
 
   it("returns false and logs a warning for malformed snapshots", async () => {
@@ -100,7 +103,7 @@ describe("Matrix IndexedDB persistence", () => {
     expect(restored).toBe(false);
 
     const dbs = await indexedDB.databases();
-    expect(dbs).toEqual([]);
+    expect(dbs).toStrictEqual([]);
   });
 
   it("returns false without warning when the snapshot does not exist yet", async () => {

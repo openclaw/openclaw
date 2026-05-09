@@ -33,6 +33,22 @@ async function startJsonServer(
   };
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 describe("qa-bus client", () => {
   const stops: Array<() => Promise<void>> = [];
 
@@ -67,6 +83,43 @@ describe("qa-bus client", () => {
         timeoutMs: 0,
       }),
     ).rejects.toThrow(SyntaxError);
+  });
+
+  it("rejects immediately when a poll request is aborted", async () => {
+    const server = createServer((_req, _res) => {
+      // Keep the request open so the client abort path owns the outcome.
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("test server failed to bind");
+    }
+
+    stops.push(async () => {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    });
+
+    const abort = new AbortController();
+    const request = pollQaBus({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 30_000,
+      signal: abort.signal,
+    });
+    abort.abort();
+
+    await expect(withTimeout(request, 500, "poll abort did not settle")).rejects.toMatchObject({
+      name: "AbortError",
+    });
   });
 
   it("preserves baseUrl path prefixes when composing bus URLs", async () => {

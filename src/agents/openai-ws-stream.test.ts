@@ -29,6 +29,32 @@ import type { InputItem, ResponseCreateEvent } from "./openai-ws-types.js";
 import { log } from "./pi-embedded-runner/logger.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock OpenAIWebSocketManager
 // ─────────────────────────────────────────────────────────────────────────────
@@ -253,6 +279,13 @@ async function resolveStream(
   return stream instanceof Promise ? await stream : stream;
 }
 
+function requireValue<T>(value: T | null | undefined, message: string): T {
+  if (value == null) {
+    throw new Error(message);
+  }
+  return value;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Fixtures
 // ─────────────────────────────────────────────────────────────────────────────
@@ -381,11 +414,11 @@ function makeResponseObject(
 
 describe("convertTools", () => {
   it("returns empty array for undefined tools", () => {
-    expect(convertTools(undefined)).toEqual([]);
+    expect(convertTools(undefined)).toStrictEqual([]);
   });
 
   it("returns empty array for empty tools", () => {
-    expect(convertTools([])).toEqual([]);
+    expect(convertTools([])).toStrictEqual([]);
   });
 
   it("converts tools to FunctionToolDefinition format", () => {
@@ -666,9 +699,11 @@ describe("convertMessagesToInputItems", () => {
       typeof convertMessagesToInputItems
     >[0]);
     // Should produce a text message and a function_call item
-    const textItem = items.find((i) => i.type === "message");
+    const textItem = requireValue(
+      items.find((i) => i.type === "message"),
+      "assistant text item missing",
+    );
     const fcItem = items.find((i) => i.type === "function_call");
-    expect(textItem).toBeDefined();
     expect(fcItem).toMatchObject({
       type: "function_call",
       call_id: "call_1",
@@ -959,7 +994,7 @@ describe("convertMessagesToInputItems", () => {
     const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
-    expect(items).toEqual([]);
+    expect(items).toStrictEqual([]);
   });
 
   it("falls back to toolUseId when toolCallId is missing", () => {
@@ -998,9 +1033,9 @@ describe("convertMessagesToInputItems", () => {
     const fcItem = items.find((i) => i.type === "function_call");
     const outputItem = items.find((i) => i.type === "function_call_output");
 
-    expect(userItem).toBeDefined();
-    expect(fcItem).toBeDefined();
-    expect(outputItem).toBeDefined();
+    expect(userItem).toMatchObject({ type: "message", role: "user" });
+    expect(fcItem).toMatchObject({ type: "function_call", call_id: "call_1" });
+    expect(outputItem).toMatchObject({ type: "function_call_output", call_id: "call_1" });
   });
 
   it("handles assistant messages with only tool calls (no text)", () => {
@@ -1017,7 +1052,7 @@ describe("convertMessagesToInputItems", () => {
     const items = convertMessagesToInputItems([msg] as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
-    expect(items).toEqual([]);
+    expect(items).toStrictEqual([]);
   });
 
   it("skips thinking blocks in assistant messages", () => {
@@ -1170,7 +1205,7 @@ describe("convertMessagesToInputItems", () => {
   });
 
   it("returns empty array for empty messages", () => {
-    expect(convertMessagesToInputItems([])).toEqual([]);
+    expect(convertMessagesToInputItems([])).toStrictEqual([]);
   });
 });
 
@@ -1197,13 +1232,17 @@ describe("buildAssistantMessageFromResponse", () => {
   it("extracts tool call from function_call output item", () => {
     const response = makeResponseObject("resp_2", undefined, "exec");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
-    const tc = msg.content.find((c) => c.type === "toolCall") as {
-      type: string;
-      id: string;
-      name: string;
-      arguments: Record<string, unknown>;
-    };
-    expect(tc).toBeDefined();
+    const tc = requireValue(
+      msg.content.find((c) => c.type === "toolCall") as
+        | {
+            type: string;
+            id: string;
+            name: string;
+            arguments: Record<string, unknown>;
+          }
+        | undefined,
+      "tool call missing",
+    );
     expect(tc.name).toBe("exec");
     expect(tc.id).toBe("call_abc|item_2");
     expect(tc.arguments).toEqual({ arg: "value" });
@@ -1229,13 +1268,17 @@ describe("buildAssistantMessageFromResponse", () => {
     };
 
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
-    const tc = msg.content.find((c) => c.type === "toolCall") as {
-      type: string;
-      name: string;
-      arguments: unknown;
-    };
+    const tc = requireValue(
+      msg.content.find((c) => c.type === "toolCall") as
+        | {
+            type: string;
+            name: string;
+            arguments: unknown;
+          }
+        | undefined,
+      "tool call missing",
+    );
 
-    expect(tc).toBeDefined();
     expect(tc.name).toBe("exec");
     expect(tc.arguments).toBe("not valid json");
   });
@@ -1249,8 +1292,7 @@ describe("buildAssistantMessageFromResponse", () => {
   it("includes both text and tool calls when both present", () => {
     const response = makeResponseObject("resp_4", "Running...", "exec");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
-    expect(msg.content.some((c) => c.type === "text")).toBe(true);
-    expect(msg.content.some((c) => c.type === "toolCall")).toBe(true);
+    expect(msg.content.map((c) => c.type)).toEqual(["text", "toolCall"]);
     expect(msg.stopReason).toBe("toolUse");
   });
 
@@ -1314,7 +1356,7 @@ describe("buildAssistantMessageFromResponse", () => {
   it("handles empty output gracefully", () => {
     const response = makeResponseObject("resp_7");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
-    expect(msg.content).toEqual([]);
+    expect(msg.content).toStrictEqual([]);
     expect(msg.stopReason).toBe("stop");
   });
 
@@ -2130,8 +2172,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
           message: { content: Array<{ text: string }> };
         }
       | undefined;
-    expect(doneEvent).toBeDefined();
-    expect(doneEvent?.message.content[0]?.text).toBe("Hello back!");
+    expect(requireValue(doneEvent, "done event missing").message.content[0]?.text).toBe(
+      "Hello back!",
+    );
   });
 
   it("suppresses commentary-only text on completed WebSocket responses", async () => {
@@ -2676,7 +2719,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
       expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
 
       // The failed manager is closed before the replacement session manager is installed.
-      expect(MockManager.instances.some((instance) => instance.closeCallCount >= 1)).toBe(true);
+      expect(
+        countMatching(MockManager.instances, (instance) => instance.closeCallCount >= 1),
+      ).toBeGreaterThanOrEqual(1);
     } finally {
       MockManager.globalConnectShouldFail = false;
     }
@@ -2693,16 +2738,15 @@ describe("createOpenAIWebSocketStreamFn", () => {
     );
 
     await expect(
-      Promise.race([
+      withTimeout(
         (
           stream as unknown as {
             result: () => Promise<{ content?: Array<{ text?: string }> }>;
           }
         ).result(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("SSE fallback result timed out")), 100),
-        ),
-      ]),
+        100,
+        "SSE fallback result timed out",
+      ),
     ).resolves.toMatchObject({
       content: [{ text: "http fallback response" }],
     });
@@ -2732,7 +2776,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
     expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
-    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(countMatching(events, (event) => event.type === "start")).toBe(1);
     expect(events.some((event) => event.type === "error")).toBe(false);
     const doneEvent = events.find((event) => event.type === "done");
     expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
@@ -2766,7 +2810,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
     expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
-    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(countMatching(events, (event) => event.type === "start")).toBe(1);
     expect(events.some((event) => event.type === "error")).toBe(false);
     const doneEvent = events.find((event) => event.type === "done");
     expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
@@ -2801,7 +2845,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     expect(streamSimpleCalls).toHaveLength(0);
     expect(firstManager.closeCallCount).toBeGreaterThanOrEqual(1);
-    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(countMatching(events, (event) => event.type === "start")).toBe(1);
     const doneEvent = events.find((event) => event.type === "done");
     expect(doneEvent?.message?.content?.[0]?.text).toBe("retry succeeded");
   });
@@ -2833,8 +2877,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const secondPayload = secondManager.sentEvents[0] as { metadata?: Record<string, string> };
     expect(firstPayload.metadata?.openclaw_session_id).toBe("sess-turn-metadata-retry");
     expect(firstPayload.metadata?.openclaw_transport).toBe("websocket");
-    expect(firstPayload.metadata?.openclaw_turn_id).toBeTruthy();
-    expect(secondPayload.metadata?.openclaw_turn_id).toBe(firstPayload.metadata?.openclaw_turn_id);
+    const turnId = requireValue(firstPayload.metadata?.openclaw_turn_id, "turn id missing");
+    expect(turnId).not.toBe("");
+    expect(secondPayload.metadata?.openclaw_turn_id).toBe(turnId);
     expect(firstPayload.metadata?.openclaw_turn_attempt).toBe("1");
     expect(secondPayload.metadata?.openclaw_turn_attempt).toBe("2");
   });
@@ -3007,8 +3052,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent2.previous_response_id).toBe("resp_turn1");
     // Input should only contain tool results, not the full history
     const inputTypes = (sent2.input ?? []).map((i) => i.type);
-    expect(inputTypes.every((t) => t === "function_call_output")).toBe(true);
-    expect(inputTypes).toHaveLength(1);
+    expect(inputTypes).toEqual(["function_call_output"]);
   });
 
   it("sends only a follow-up user message when the full context is a strict extension", async () => {
@@ -3151,7 +3195,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
       input: Array<{ type: string; id?: string; call_id?: string }>;
     };
     expect(sent2.previous_response_id).toBe("resp_turn1_reasoning");
-    expect(sent2.input).toEqual([]);
+    expect(sent2.input).toStrictEqual([]);
   });
 
   it("replays encrypted-only reasoning when websocket must send full context", async () => {
@@ -4073,7 +4117,7 @@ describe("releaseWsSession / hasWsSession", () => {
   });
 
   it("releaseWsSession is a no-op for unknown sessions", () => {
-    expect(() => releaseWsSession("nonexistent-session")).not.toThrow();
+    expect(releaseWsSession("nonexistent-session")).toBeUndefined();
   });
 
   it("recreates the cached manager when request overrides change for the same session", async () => {

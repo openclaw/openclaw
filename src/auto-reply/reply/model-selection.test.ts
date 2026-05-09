@@ -22,8 +22,34 @@ vi.mock("../../channels/plugins/session-conversation.js", () => ({
     sessionKey?.replace(/:thread:[^:]+$/, "").replace(/:topic:[^:]+$/, "") ?? null,
 }));
 
+const authProfileStoreMock = vi.hoisted(() => {
+  let store = { version: 1, profiles: {} } as {
+    version: 1;
+    profiles: Record<string, { type: "api_key"; provider: string; key: string }>;
+  };
+  const ensureAuthProfileStore = vi.fn(() => store);
+  return {
+    get store() {
+      return store;
+    },
+    set store(next) {
+      store = next;
+    },
+    ensureAuthProfileStore,
+    reset() {
+      store = { version: 1, profiles: {} };
+      ensureAuthProfileStore.mockClear();
+    },
+  };
+});
+
+vi.mock("../../agents/auth-profiles.runtime.js", () => ({
+  ensureAuthProfileStore: authProfileStoreMock.ensureAuthProfileStore,
+}));
+
 afterEach(() => {
   MODEL_CONTEXT_TOKEN_CACHE.clear();
+  authProfileStoreMock.reset();
 });
 
 const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
@@ -205,6 +231,47 @@ describe("createModelSelectionState catalog loading", () => {
 
     expect(loadModelCatalog).toHaveBeenCalledOnce();
   });
+
+  it("preserves OpenAI API-key session auth when model policy explicitly pins PI", async () => {
+    authProfileStoreMock.store = {
+      version: 1,
+      profiles: {
+        "openai:work": { type: "api_key", provider: "openai", key: "sk-test" },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: 1,
+      authProfileOverride: "openai:work",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    await createModelSelectionState({
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      agentCfg: undefined,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+    });
+
+    expect(sessionEntry.authProfileOverride).toBe("openai:work");
+    expect(sessionStore.main.authProfileOverride).toBe("openai:work");
+  });
 });
 
 describe("resolveContextTokens", () => {
@@ -220,6 +287,32 @@ describe("resolveContextTokens", () => {
     });
 
     expect(result).toBe(1_000_000);
+  });
+
+  it("treats agent contextTokens as a cap, not an expansion beyond the model window", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("openai/gpt-5.5", 272_000);
+
+    const result = resolveContextTokens({
+      cfg: {} as OpenClawConfig,
+      agentCfg: { contextTokens: 1_000_000 },
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    expect(result).toBe(272_000);
+  });
+
+  it("allows agent contextTokens to lower a larger model window", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("qwen/qwen3.6-plus", 1_000_000);
+
+    const result = resolveContextTokens({
+      cfg: {} as OpenClawConfig,
+      agentCfg: { contextTokens: 180_000 },
+      provider: "qwen",
+      model: "qwen3.6-plus",
+    });
+
+    expect(result).toBe(180_000);
   });
 });
 

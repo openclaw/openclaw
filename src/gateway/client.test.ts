@@ -33,8 +33,10 @@ class MockWebSocket {
   terminateCalls = 0;
   autoCloseOnClose = true;
   readyState = MockWebSocket.CONNECTING;
+  readonly options: unknown;
 
-  constructor(_url: string, _options?: unknown) {
+  constructor(_url: string, options?: unknown) {
+    this.options = options;
     wsInstances.push(this);
   }
 
@@ -179,17 +181,36 @@ beforeAll(async () => {
 });
 
 describe("GatewayClient security checks", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
+  const envSnapshot = captureEnv([
+    "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
+    "OPENCLAW_PROXY_ACTIVE",
+    "OPENCLAW_PROXY_LOOPBACK_MODE",
+    "HTTP_PROXY",
+    "GLOBAL_AGENT_HTTP_PROXY",
+    "GLOBAL_AGENT_FORCE_GLOBAL_AGENT",
+  ]);
 
   beforeEach(() => {
     envSnapshot.restore();
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
+    delete process.env.OPENCLAW_PROXY_ACTIVE;
+    delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
+    delete process.env.HTTP_PROXY;
+    delete process.env.GLOBAL_AGENT_HTTP_PROXY;
+    delete process.env.GLOBAL_AGENT_FORCE_GLOBAL_AGENT;
+    delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
     wsInstances.length = 0;
   });
 
   afterEach(() => {
     envSnapshot.restore();
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
+    delete process.env.OPENCLAW_PROXY_ACTIVE;
+    delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
+    delete process.env.HTTP_PROXY;
+    delete process.env.GLOBAL_AGENT_HTTP_PROXY;
+    delete process.env.GLOBAL_AGENT_FORCE_GLOBAL_AGENT;
+    delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
   });
 
   it("blocks ws:// to non-loopback addresses (CWE-319)", () => {
@@ -213,8 +234,7 @@ describe("GatewayClient security checks", () => {
       onConnectError,
     });
 
-    // Should not throw
-    expect(() => client.start()).not.toThrow();
+    expect(client.start()).toBeUndefined();
 
     expectSecurityConnectError(onConnectError);
     expect(wsInstances.length).toBe(0); // No WebSocket created
@@ -232,7 +252,80 @@ describe("GatewayClient security checks", () => {
 
     expect(onConnectError).not.toHaveBeenCalled();
     expect(wsInstances.length).toBe(1); // WebSocket created
+    expect(getLatestWs().options).not.toHaveProperty("agent");
     client.stop();
+  });
+
+  it("bootstraps inherited managed proxy routing before proxy-mode loopback WebSocket creation", () => {
+    process.env.OPENCLAW_PROXY_ACTIVE = "1";
+    process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "proxy";
+    process.env.HTTP_PROXY = "http://127.0.0.1:3128";
+    process.env.GLOBAL_AGENT_HTTP_PROXY = "http://127.0.0.1:3128";
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1);
+    expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
+    expect((global as Record<string, unknown>)["GLOBAL_AGENT"]).toEqual(
+      expect.objectContaining({
+        HTTP_PROXY: "http://127.0.0.1:3128",
+        HTTPS_PROXY: "http://127.0.0.1:3128",
+      }),
+    );
+    client.stop();
+  });
+
+  it("proxies ws:// loopback addresses when active proxy loopbackMode is proxy", async () => {
+    const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+      loopbackMode: "proxy",
+    });
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    try {
+      client.start();
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(wsInstances.length).toBe(1);
+      expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
+    } finally {
+      client.stop();
+      await stopProxy(handle);
+    }
+  });
+
+  it("blocks ws:// loopback addresses when active proxy loopbackMode is block", async () => {
+    const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+      loopbackMode: "block",
+    });
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    try {
+      expect(() => client.start()).toThrow("blocked by proxy.loopbackMode");
+      expect(wsInstances.length).toBe(0);
+    } finally {
+      client.stop();
+      await stopProxy(handle);
+    }
   });
 
   it("allows wss:// to any address", () => {
@@ -441,9 +534,7 @@ describe("GatewayClient close handling", () => {
     const client = createClientWithIdentity("dev-2", onClose);
 
     client.start();
-    expect(() => {
-      getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
-    }).not.toThrow();
+    expect(getLatestWs().emitClose(1008, "unauthorized: device token mismatch")).toBeUndefined();
 
     expect(logDebugMock).toHaveBeenCalledWith(
       expect.stringContaining("failed clearing stale device-auth token"),
@@ -800,6 +891,26 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("prefers explicit shared password over bootstrap token", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      bootstrapToken: "stale-bootstrap-token",
+      password: "shared-password", // pragma: allowlist secret
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      password: "shared-password", // pragma: allowlist secret
+    });
+    expect(connectFrameFrom(ws).bootstrapToken).toBeUndefined();
+    expect(connectFrameFrom(ws).token).toBeUndefined();
+    client.stop();
+  });
+
   it("uses stored device token scopes when shared token is not provided", () => {
     loadDeviceAuthTokenMock.mockReturnValue({
       token: "stored-device-token",
@@ -819,6 +930,39 @@ describe("GatewayClient connect auth payload", () => {
       deviceToken: "stored-device-token",
     });
     expect(connectScopesFrom(ws)).toEqual(["operator.read", "operator.write"]);
+    client.stop();
+  });
+
+  it("loads stored device auth from the provided env", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-client-service-state",
+    } as NodeJS.ProcessEnv;
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      env,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(loadDeviceAuthTokenMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: expect.any(String),
+        role: "operator",
+        env,
+      }),
+    );
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "stored-device-token",
+      deviceToken: "stored-device-token",
+    });
     client.stop();
   });
 

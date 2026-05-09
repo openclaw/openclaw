@@ -15,17 +15,12 @@ describe("opencode-go provider plugin", () => {
       name: "OpenCode Go Provider",
     });
 
-    expect(mediaProviders).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "opencode-go",
-          capabilities: ["image"],
-          defaultModels: { image: "kimi-k2.6" },
-          describeImage: expect.any(Function),
-          describeImages: expect.any(Function),
-        }),
-      ]),
-    );
+    const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode-go");
+    expect(mediaProvider).toBeDefined();
+    expect(mediaProvider?.capabilities).toEqual(["image"]);
+    expect(mediaProvider?.defaultModels).toEqual({ image: "kimi-k2.6" });
+    expect(typeof mediaProvider?.describeImage).toBe("function");
+    expect(typeof mediaProvider?.describeImages).toBe("function");
   });
 
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
@@ -97,8 +92,8 @@ describe("opencode-go provider plugin", () => {
       maxTokens: 65_536,
     });
     expect(models.get("minimax-m2.7")).toMatchObject({
-      api: "anthropic-messages",
-      baseUrl: "https://opencode.ai/zen/go",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/go/v1",
       reasoning: true,
       contextWindow: 204_800,
       maxTokens: 131_072,

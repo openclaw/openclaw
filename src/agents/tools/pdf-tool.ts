@@ -13,7 +13,8 @@ import {
 } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { type ImageModelConfig } from "./image-tool.helpers.js";
+import { ToolInputError } from "./common.js";
+import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
@@ -23,6 +24,7 @@ import {
   resolvePromptAndModelOverride,
   resolveRemoteMediaSsrfPolicy,
 } from "./media-tool-shared.js";
+import { hasToolModelConfig } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
@@ -77,11 +79,25 @@ export const PdfToolSchema = Type.Object({
 
 export { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
+function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
+  return (
+    hasToolModelConfig(coercePdfModelConfig(config)) ||
+    hasToolModelConfig(coerceImageModelConfig(config))
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Build context for extraction fallback path
 // ---------------------------------------------------------------------------
 
-function buildPdfExtractionContext(prompt: string, extractions: PdfExtractedContent[]): Context {
+const CODEX_PDF_INSTRUCTIONS =
+  "Analyze the provided PDF content and answer the user's request accurately.";
+
+function buildPdfExtractionContext(
+  prompt: string,
+  extractions: PdfExtractedContent[],
+  model?: { api?: string },
+): Context {
   const content: Array<
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   > = [];
@@ -101,7 +117,10 @@ function buildPdfExtractionContext(prompt: string, extractions: PdfExtractedCont
   // Add the user prompt
   content.push({ type: "text", text: prompt });
 
+  const systemPrompt = model?.api === "openai-codex-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
+
   return {
+    ...(systemPrompt ? { systemPrompt } : {}),
     messages: [{ role: "user", content, timestamp: Date.now() }],
   };
 }
@@ -118,6 +137,7 @@ type PdfSandboxConfig = {
 async function runPdfPrompt(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
+  workspaceDir?: string;
   pdfModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
@@ -133,7 +153,8 @@ async function runPdfPrompt(params: {
 }> {
   const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.pdfModelConfig);
 
-  await ensureOpenClawModelsJson(effectiveCfg, params.agentDir);
+  const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
+  await ensureOpenClawModelsJson(effectiveCfg, params.agentDir, modelsOptions);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
 
@@ -206,7 +227,7 @@ async function runPdfPrompt(params: {
           text: e.text,
           images: [],
         }));
-        const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions);
+        const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
         const message = await complete(model, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
@@ -215,7 +236,7 @@ async function runPdfPrompt(params: {
         return { text, provider, model: modelId, native: false };
       }
 
-      const context = buildPdfExtractionContext(params.prompt, extractions);
+      const context = buildPdfExtractionContext(params.prompt, extractions, model);
       const message = await complete(model, context, {
         apiKey,
         maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
@@ -249,23 +270,32 @@ export function createPdfTool(options?: {
   workspaceDir?: string;
   sandbox?: PdfSandboxConfig;
   fsPolicy?: ToolFsPolicy;
+  /**
+   * Avoid resolving auto PDF-provider/model candidates while registering the
+   * tool. The concrete PDF model is still resolved before execution.
+   */
+  deferAutoModelResolution?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
+  const hasExplicitModelConfig = hasExplicitPdfToolModelConfig(options?.config);
   if (!agentDir) {
-    const explicit = coercePdfModelConfig(options?.config);
-    if (explicit.primary?.trim() || (explicit.fallbacks?.length ?? 0) > 0) {
+    if (hasExplicitModelConfig) {
       throw new Error("createPdfTool requires agentDir when enabled");
     }
     return null;
   }
 
-  const pdfModelConfig = resolvePdfModelConfigForTool({
-    cfg: options?.config,
-    agentDir,
-    workspaceDir: options?.workspaceDir,
-    authStore: options?.authProfileStore,
-  });
-  if (!pdfModelConfig) {
+  const shouldDeferAutoModelResolution =
+    options?.deferAutoModelResolution === true && !hasExplicitModelConfig;
+  const registrationPdfModelConfig = shouldDeferAutoModelResolution
+    ? null
+    : resolvePdfModelConfigForTool({
+        cfg: options?.config,
+        agentDir,
+        workspaceDir: options?.workspaceDir,
+        authStore: options?.authProfileStore,
+      });
+  if (!registrationPdfModelConfig && !shouldDeferAutoModelResolution) {
     return null;
   }
 
@@ -324,6 +354,18 @@ export function createPdfTool(options?: {
 
       // Parse page range
       const pagesRaw = normalizeOptionalString(record.pages);
+
+      const pdfModelConfig =
+        registrationPdfModelConfig ??
+        resolvePdfModelConfigForTool({
+          cfg: options?.config,
+          agentDir,
+          workspaceDir: options?.workspaceDir,
+          authStore: options?.authProfileStore,
+        });
+      if (!pdfModelConfig) {
+        throw new ToolInputError("No PDF model configured.");
+      }
 
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options.sandbox.root.trim()
@@ -452,6 +494,7 @@ export function createPdfTool(options?: {
       const result = await runPdfPrompt({
         cfg: options?.config,
         agentDir,
+        ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
         pdfModelConfig,
         modelOverride,
         prompt: promptRaw,

@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
+  describeInterpreterInlineEval,
+  type InterpreterInlineEvalHit,
+} from "../infra/command-analysis/inline-eval.js";
+import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import {
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
@@ -9,10 +14,6 @@ import {
   hasDurableExecApproval,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
-import {
-  describeInterpreterInlineEval,
-  detectInterpreterInlineEvalArgv,
-} from "../infra/exec-inline-eval.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
@@ -46,7 +47,7 @@ type NodeApprovalAnalysis = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied: boolean;
-  inlineEvalHit: ReturnType<typeof detectInterpreterInlineEvalArgv>;
+  inlineEvalHit: InterpreterInlineEvalHit | null;
 };
 
 export function shouldSkipNodeApprovalPrepare(params: {
@@ -118,6 +119,11 @@ export async function resolveNodeExecutionTarget(
     throw err;
   }
   const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
+  if (nodeInfo?.connected === false) {
+    throw new Error(
+      `exec host=node requires a connected node (${nodeId} is currently disconnected). Start or reconnect the companion app or node host, or select a connected node.`,
+    );
+  }
   const declaredCommands = Array.isArray(nodeInfo?.commands) ? nodeInfo.commands : [];
   const supportsSystemRun = declaredCommands.includes("system.run");
   if (!supportsSystemRun) {
@@ -241,9 +247,10 @@ function buildLocalPreparedNodeRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
 }): PreparedNodeRun {
+  const rawCommand = formatExecCommand(params.target.argv);
   const command = resolveSystemRunCommandRequest({
     command: params.target.argv,
-    rawCommand: params.request.command,
+    rawCommand,
   });
   if (!command.ok) {
     throw new Error(command.message);
@@ -252,7 +259,7 @@ function buildLocalPreparedNodeRun(params: {
     throw new Error("command required");
   }
   const commandText = formatExecCommand(command.argv);
-  const previewText = command.previewText?.trim();
+  const previewText = params.request.command.trim() || command.previewText?.trim();
   const commandPreview = previewText && previewText !== commandText ? previewText : null;
   const plan = {
     argv: [...command.argv],
@@ -293,11 +300,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   let durableApprovalSatisfied = false;
   const inlineEvalHit =
     params.request.strictInlineEval === true
-      ? (baseAllowlistEval.segments
-          .map((segment) =>
-            detectInterpreterInlineEvalArgv(segment.resolution?.effectiveArgv ?? segment.argv),
-          )
-          .find((entry) => entry !== null) ?? null)
+      ? detectPolicyInlineEval(baseAllowlistEval.segments)
       : null;
   if (inlineEvalHit) {
     params.request.warnings.push(

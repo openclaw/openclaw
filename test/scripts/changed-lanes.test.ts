@@ -8,13 +8,16 @@ import {
   isPackageScriptOnlyChange,
 } from "../../scripts/changed-lanes.mjs";
 import {
+  buildChangedCheckTestboxArgs,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
+  shouldDelegateChangedCheckToTestbox,
 } from "../../scripts/check-changed.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
+type ExecFileSyncFailure = Error & { status?: number | null; stderr?: Buffer };
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_DIR",
@@ -215,6 +218,44 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("delegates local Testbox-mode changed gates before running locally", () => {
+    expect(
+      shouldDelegateChangedCheckToTestbox(["--base", "origin/main"], {
+        OPENCLAW_TESTBOX: "1",
+        PATH: "/usr/bin",
+      }),
+    ).toBe(true);
+
+    expect(buildChangedCheckTestboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
+      "testbox:run",
+      "--",
+      "OPENCLAW_TESTBOX=1",
+      "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+      "pnpm",
+      "check:changed",
+      "--base",
+      "origin/main",
+      "--head",
+      "HEAD",
+    ]);
+  });
+
+  it("does not delegate dry-run, CI, or already-remote changed gates", () => {
+    expect(shouldDelegateChangedCheckToTestbox(["--dry-run"], { OPENCLAW_TESTBOX: "1" })).toBe(
+      false,
+    );
+    expect(
+      shouldDelegateChangedCheckToTestbox([], { OPENCLAW_TESTBOX: "1", GITHUB_ACTIONS: "true" }),
+    ).toBe(false);
+    expect(shouldDelegateChangedCheckToTestbox([], { OPENCLAW_TESTBOX: "1", CI: "1" })).toBe(false);
+    expect(
+      shouldDelegateChangedCheckToTestbox([], {
+        OPENCLAW_TESTBOX: "1",
+        OPENCLAW_TESTBOX_REMOTE_RUN: "1",
+      }),
+    ).toBe(false);
+  });
+
   it("runs changed-check lint lanes under the parent heavy-check lock", () => {
     const result = detectChangedLanes(["extensions/discord/src/index.ts"]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
@@ -294,7 +335,7 @@ describe("scripts/changed-lanes", () => {
       extensionTests: true,
       all: false,
     });
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions:test");
   });
 
@@ -309,6 +350,70 @@ describe("scripts/changed-lanes", () => {
 
   it("routes gitignore changes to tooling instead of all lanes", () => {
     const result = detectChangedLanes([".gitignore"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
+  it("routes root hygiene config changes to tooling instead of all lanes", () => {
+    const result = detectChangedLanes([
+      ".dockerignore",
+      ".jscpd.json",
+      ".npmignore",
+      ".pre-commit-config.yaml",
+      ".swiftformat",
+      ".swiftlint.yml",
+      "Makefile",
+      "config/knip.config.ts",
+      "config/markdownlint-cli2.jsonc",
+      "config/shellcheckrc",
+      "config/swiftformat",
+      "config/swiftlint.yml",
+      "deploy/fly.private.toml",
+      "docker-setup.sh",
+      "openclaw.podman.env",
+      "setup-podman.sh",
+      "skills/pyproject.toml",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
+  it("routes VS Code workspace settings to tooling instead of all lanes", () => {
+    const result = detectChangedLanes([".vscode/settings.json", ".vscode/extensions.json"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
+  it("routes legacy root sandbox Dockerfile moves to tooling instead of all lanes", () => {
+    const result = detectChangedLanes([
+      "Dockerfile.sandbox",
+      "Dockerfile.sandbox-browser",
+      "Dockerfile.sandbox-common",
+      "scripts/docker/sandbox/Dockerfile",
+      "scripts/docker/sandbox/Dockerfile.browser",
+      "scripts/docker/sandbox/Dockerfile.common",
+    ]);
     const plan = createChangedCheckPlan(result);
 
     expect(result.lanes).toMatchObject({
@@ -615,7 +720,6 @@ describe("scripts/changed-lanes", () => {
       "apps/macos/Sources/OpenClaw/Resources/Info.plist",
       "docs/.generated/config-baseline.sha256",
       "package.json",
-      "src/config/schema.base.generated.ts",
     ]);
     const plan = createChangedCheckPlan(result, { staged: true });
 
@@ -678,7 +782,7 @@ describe("scripts/changed-lanes", () => {
       "utf8",
     );
     git(dir, ["add", "package.json"]);
-    expect(() =>
+    expect(
       execFileSync(
         process.execPath,
         [path.join(repoRoot, "scripts", "check-release-metadata-only.mjs"), "--staged"],
@@ -688,7 +792,7 @@ describe("scripts/changed-lanes", () => {
           stdio: "pipe",
         },
       ),
-    ).not.toThrow();
+    ).toBeInstanceOf(Buffer);
 
     writeFileSync(
       path.join(dir, "package.json"),
@@ -696,7 +800,8 @@ describe("scripts/changed-lanes", () => {
       "utf8",
     );
     git(dir, ["add", "package.json"]);
-    expect(() =>
+    let failure: ExecFileSyncFailure | undefined;
+    try {
       execFileSync(
         process.execPath,
         [path.join(repoRoot, "scripts", "check-release-metadata-only.mjs"), "--staged"],
@@ -705,12 +810,22 @@ describe("scripts/changed-lanes", () => {
           env: createNestedGitEnv(),
           stdio: "pipe",
         },
-      ),
-    ).toThrow();
+      );
+    } catch (error) {
+      failure = error as ExecFileSyncFailure;
+    }
+
+    expect(failure?.status).toBe(1);
+    expect(failure?.stderr?.toString("utf8")).toContain(
+      "[release-metadata] package.json changed outside the top-level version field",
+    );
   });
 
   it("routes root test/support changes to the tooling test lane instead of all lanes", () => {
-    const result = detectChangedLanes(["test/git-hooks-pre-commit.test.ts"]);
+    const result = detectChangedLanes([
+      "test/git-hooks-pre-commit.test.ts",
+      "test-fixtures/legacy-root-fixture.json",
+    ]);
     const plan = createChangedCheckPlan(result);
 
     expect(result.lanes).toMatchObject({
@@ -719,6 +834,48 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
+  it("routes legacy Swabble deletions as app surface during the app move", () => {
+    const result = detectChangedLanes(["Swabble/Sources/SwabbleKit/WakeWordGate.swift"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      apps: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
+  it("routes legacy root asset deletions as tooling during root cleanup", () => {
+    const result = detectChangedLanes([
+      "assets/avatar-placeholder.svg",
+      "assets/chrome-extension/icons/icon128.png",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
+  it("routes A2UI bundle source changes as extension changes", () => {
+    const result = detectChangedLanes([
+      "extensions/canvas/src/host/a2ui-app/bootstrap.js",
+      "extensions/canvas/src/host/a2ui-app/rolldown.config.mjs",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      extensions: true,
+      extensionTests: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
   it("keeps shared Vitest wiring changes out of check test execution", () => {
@@ -737,14 +894,14 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
   });
 
-  it("does not route generated A2UI artifacts as direct Vitest targets", () => {
+  it("does not route generated plugin bundle artifacts as direct Vitest targets", () => {
     const result = detectChangedLanes([
-      "src/canvas-host/a2ui/.bundle.hash",
-      "test/scripts/bundle-a2ui.test.ts",
+      "extensions/demo/src/host/assets/.bundle.hash",
+      "extensions/canvas/scripts/bundle-a2ui.test.ts",
     ]);
     const plan = createChangedCheckPlan(result);
 
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
   });
 

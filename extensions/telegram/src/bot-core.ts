@@ -23,6 +23,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -348,8 +349,12 @@ export function createTelegramBotCore(
         }
       : undefined;
 
-  const bot = new botRuntime.Bot(opts.token, client ? { client } : undefined);
-  bot.api.config.use(botRuntime.apiThrottler());
+  const botConfig =
+    client || opts.botInfo
+      ? { ...(client ? { client } : {}), ...(opts.botInfo ? { botInfo: opts.botInfo } : {}) }
+      : undefined;
+  const bot = new botRuntime.Bot(opts.token, botConfig);
+  bot.api.config.use(getOrCreateAccountThrottler(opts.token, botRuntime.apiThrottler));
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
@@ -364,6 +369,7 @@ export function createTelegramBotCore(
   };
   const updateTracker = createTelegramUpdateTracker({
     initialUpdateId,
+    ackPolicy: "after_agent_dispatch",
     ...(typeof opts.updateOffset?.onUpdateId === "function"
       ? { onAcceptedUpdateId: opts.updateOffset.onUpdateId }
       : {}),

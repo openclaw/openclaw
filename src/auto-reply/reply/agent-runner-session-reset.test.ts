@@ -19,6 +19,10 @@ const retireSessionMcpRuntimeMock = vi.fn<
 >(async () => true);
 const errorMock = vi.fn();
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("resetReplyRunSession", () => {
   let rootDir = "";
 
@@ -186,7 +190,7 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    await expect(fs.access(oldTranscriptPath)).rejects.toThrow();
+    await expectPathMissing(oldTranscriptPath);
   });
 
   it("still cleans up the old transcript when MCP runtime disposal fails", async () => {

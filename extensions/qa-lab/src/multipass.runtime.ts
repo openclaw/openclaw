@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
@@ -111,10 +113,6 @@ function createOutputStamp() {
 
 function createVmSuffix() {
   return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function execFileAsync(file: string, args: string[], options: ExecFileOptions = {}) {
@@ -432,7 +430,7 @@ export function renderQaMultipassGuestScript(
 }
 
 async function appendMultipassLog(logPath: string, message: string) {
-  await appendFile(logPath, message, "utf8");
+  await appendRegularFile({ filePath: logPath, content: message });
 }
 
 async function runMultipassCommand(logPath: string, args: string[], options: ExecFileOptions = {}) {

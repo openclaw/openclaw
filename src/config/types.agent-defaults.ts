@@ -34,6 +34,8 @@ export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
   params?: Record<string, unknown>;
+  /** Optional agent execution runtime for this specific provider/model entry. */
+  agentRuntime?: AgentRuntimePolicyConfig;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
 };
@@ -316,6 +318,12 @@ export type AgentDefaultsConfig = {
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
+  /**
+   * Detail mode for user-visible tool progress in /verbose and editable progress drafts.
+   * - explain: compact human summary (default)
+   * - raw: include raw command/detail when available
+   */
+  toolProgressDetail?: "explain" | "raw";
   /** Default reasoning level when no /reasoning directive is present. */
   reasoningDefault?: "off" | "on" | "stream";
   /** Default elevated level when no /elevated directive is present. */

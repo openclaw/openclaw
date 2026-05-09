@@ -3,6 +3,10 @@ import {
   primeChannelOutboundSendMock,
   type OutboundPayloadHarnessParams,
 } from "openclaw/plugin-sdk/channel-contract-testing";
+import {
+  createMessageReceiptFromOutboundResults,
+  verifyChannelMessageAdapterCapabilityProofs,
+} from "openclaw/plugin-sdk/channel-message";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./accounts.test-mocks.js";
 import "./zalo-js.test-mocks.js";
@@ -12,8 +16,8 @@ import { setZalouserRuntime } from "./runtime.js";
 import * as sendModule from "./send.js";
 
 vi.mock("./send.js", () => ({
-  sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
-  sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true }),
+  sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" } as never),
+  sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true } as never),
 }));
 
 function baseCtx(payload: ReplyPayload) {
@@ -23,6 +27,47 @@ function baseCtx(payload: ReplyPayload) {
     text: "",
     payload,
   };
+}
+
+type ZalouserOutbound = NonNullable<typeof zalouserPlugin.outbound>;
+type ZalouserSendPayload = NonNullable<ZalouserOutbound["sendPayload"]>;
+type ZalouserMessageAdapter = NonNullable<typeof zalouserPlugin.message>;
+type ZalouserMessageSender = NonNullable<ZalouserMessageAdapter["send"]>;
+
+function requireZalouserSendPayload(): ZalouserSendPayload {
+  const sendPayload = zalouserPlugin.outbound?.sendPayload;
+  if (!sendPayload) {
+    throw new Error("Expected Zalouser outbound sendPayload");
+  }
+  return sendPayload;
+}
+
+function requireZalouserMessageAdapter(): ZalouserMessageAdapter {
+  const adapter = zalouserPlugin.message;
+  if (!adapter) {
+    throw new Error("Expected Zalouser message adapter");
+  }
+  return adapter;
+}
+
+function requireZalouserTextSender(
+  adapter: ZalouserMessageAdapter,
+): NonNullable<ZalouserMessageSender["text"]> {
+  const text = adapter.send?.text;
+  if (!text) {
+    throw new Error("Expected Zalouser message adapter text sender");
+  }
+  return text;
+}
+
+function requireZalouserMediaSender(
+  adapter: ZalouserMessageAdapter,
+): NonNullable<ZalouserMessageSender["media"]> {
+  const media = adapter.send?.media;
+  if (!media) {
+    throw new Error("Expected Zalouser message adapter media sender");
+  }
+  return media;
 }
 
 describe("zalouserPlugin outbound sendPayload", () => {
@@ -42,9 +87,10 @@ describe("zalouserPlugin outbound sendPayload", () => {
   });
 
   it("group target delegates with isGroup=true and stripped threadId", async () => {
-    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-g1" });
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-g1" } as never);
+    const sendPayload = requireZalouserSendPayload();
 
-    const result = await zalouserPlugin.outbound!.sendPayload!({
+    const result = await sendPayload({
       ...baseCtx({ text: "hello group" }),
       to: "group:1471383327500481391",
     });
@@ -58,9 +104,10 @@ describe("zalouserPlugin outbound sendPayload", () => {
   });
 
   it("treats bare numeric targets as direct chats for backward compatibility", async () => {
-    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-d1" });
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-d1" } as never);
+    const sendPayload = requireZalouserSendPayload();
 
-    const result = await zalouserPlugin.outbound!.sendPayload!({
+    const result = await sendPayload({
       ...baseCtx({ text: "hello" }),
       to: "987654321",
     });
@@ -74,9 +121,10 @@ describe("zalouserPlugin outbound sendPayload", () => {
   });
 
   it("preserves provider-native group ids when sending to raw g- targets", async () => {
-    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-g-native" });
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-g-native" } as never);
+    const sendPayload = requireZalouserSendPayload();
 
-    const result = await zalouserPlugin.outbound!.sendPayload!({
+    const result = await sendPayload({
       ...baseCtx({ text: "hello native group" }),
       to: "g-1471383327500481391",
     });
@@ -91,9 +139,10 @@ describe("zalouserPlugin outbound sendPayload", () => {
 
   it("passes long markdown through once so formatting happens before chunking", async () => {
     const text = `**${"a".repeat(2501)}**`;
-    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-code" });
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-code" } as never);
+    const sendPayload = requireZalouserSendPayload();
 
-    const result = await zalouserPlugin.outbound!.sendPayload!({
+    const result = await sendPayload({
       ...baseCtx({ text }),
       to: "987654321",
     });
@@ -110,6 +159,66 @@ describe("zalouserPlugin outbound sendPayload", () => {
       }),
     );
     expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-code" });
+  });
+
+  it("declares message adapter durable text and media with receipt proofs", async () => {
+    mockedSend.mockImplementation(async (_threadId, _text, opts: { mediaUrl?: string } = {}) =>
+      opts.mediaUrl
+        ? {
+            ok: true,
+            messageId: "zlu-media-1",
+            receipt: createMessageReceiptFromOutboundResults({
+              results: [{ channel: "zalouser", messageId: "zlu-media-1" }],
+              kind: "media",
+            }),
+          }
+        : {
+            ok: true,
+            messageId: "zlu-text-1",
+            receipt: createMessageReceiptFromOutboundResults({
+              results: [{ channel: "zalouser", messageId: "zlu-text-1" }],
+              kind: "text",
+            }),
+          },
+    );
+    const adapter = requireZalouserMessageAdapter();
+    const sendText = requireZalouserTextSender(adapter);
+    const sendMedia = requireZalouserMediaSender(adapter);
+
+    await expect(
+      verifyChannelMessageAdapterCapabilityProofs({
+        adapterName: "zalouser",
+        adapter,
+        proofs: {
+          text: async () => {
+            const result = await sendText({
+              cfg: {},
+              to: "user:987654321",
+              text: "hello",
+            });
+            expect(result.receipt.platformMessageIds).toEqual(["zlu-text-1"]);
+          },
+          media: async () => {
+            const result = await sendMedia({
+              cfg: {},
+              to: "user:987654321",
+              text: "image",
+              mediaUrl: "https://example.com/image.png",
+            });
+            expect(result.receipt.platformMessageIds).toEqual(["zlu-media-1"]);
+          },
+          messageSendingHooks: () => {
+            expect(adapter.durableFinal?.capabilities?.messageSendingHooks).toBe(true);
+          },
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { capability: "text", status: "verified" },
+        { capability: "media", status: "verified" },
+        { capability: "messageSendingHooks", status: "verified" },
+      ]),
+    );
   });
 });
 
@@ -131,8 +240,9 @@ describe("zalouserPlugin outbound payload contract", () => {
       text: "",
       payload: params.payload,
     };
+    const sendPayload = requireZalouserSendPayload();
     return {
-      run: async () => await zalouserPlugin.outbound!.sendPayload!(ctx),
+      run: async () => await sendPayload(ctx),
       sendMock: mockedSend,
       to: "987654321",
     };
