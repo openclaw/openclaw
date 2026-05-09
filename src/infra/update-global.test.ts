@@ -685,7 +685,7 @@ describe("update global helpers", () => {
       }
       await writePackageDistInventory(packageRoot);
 
-      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toStrictEqual([]);
 
       await fs.rm(path.join(packageRoot, MATRIX_HELPER_API));
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
@@ -757,7 +757,7 @@ describe("update global helpers", () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot);
 
-      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toStrictEqual([]);
     });
   });
 
@@ -827,7 +827,9 @@ describe("update global helpers", () => {
         await writeBundledPluginPackageJson(packageRoot, "qa-lab", "@openclaw/qa-lab");
         await writePackageDistInventory(packageRoot);
 
-        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toStrictEqual(
+          [],
+        );
       },
     );
   });
