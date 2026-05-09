@@ -2843,18 +2843,14 @@ describe("google-meet plugin", () => {
         respond,
       });
 
-      expect(respond.mock.calls[0]?.[1]).toMatchObject({
-        spoken: false,
-        session: {
-          chrome: {
-            health: {
-              micMuted: true,
-              speechReady: false,
-              speechBlockedReason: "meet-microphone-muted",
-            },
-          },
-        },
-      });
+      const payload = requireRecord(respond.mock.calls[0]?.[1], "join response payload");
+      expect(payload.spoken).toBe(false);
+      const session = requireRecord(payload.session, "join session");
+      const chrome = requireRecord(session.chrome, "join chrome session");
+      const health = requireRecord(chrome.health, "join chrome health");
+      expect(health.micMuted).toBe(true);
+      expect(health.speechReady).toBe(false);
+      expect(health.speechBlockedReason).toBe("meet-microphone-muted");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
@@ -2896,18 +2892,14 @@ describe("google-meet plugin", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       await run;
 
-      expect(respond.mock.calls[0]?.[1]).toMatchObject({
-        spoken: false,
-        session: {
-          chrome: {
-            health: {
-              micMuted: true,
-              speechReady: false,
-              speechBlockedReason: "meet-microphone-muted",
-            },
-          },
-        },
-      });
+      const payload = requireRecord(respond.mock.calls[0]?.[1], "join response payload");
+      expect(payload.spoken).toBe(false);
+      const session = requireRecord(payload.session, "join session");
+      const chrome = requireRecord(session.chrome, "join chrome session");
+      const health = requireRecord(chrome.health, "join chrome health");
+      expect(health.micMuted).toBe(true);
+      expect(health.speechReady).toBe(false);
+      expect(health.speechBlockedReason).toBe("meet-microphone-muted");
       expect(inspectCount).toBeGreaterThanOrEqual(2);
     } finally {
       vi.useRealTimers();
@@ -2941,48 +2933,66 @@ describe("google-meet plugin", () => {
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(nodesList.mock.calls[0]).toStrictEqual([]);
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId: "node-1",
-        command: "googlemeet.chrome",
-        params: expect.objectContaining({
-          action: "stopByUrl",
-          url: "https://meet.google.com/abc-defg-hij",
-          mode: "transcribe",
-        }),
-      }),
-    );
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId: "node-1",
-        command: "browser.proxy",
-        params: expect.objectContaining({
-          path: "/tabs/open",
-          body: { url: "https://meet.google.com/abc-defg-hij" },
-        }),
-      }),
-    );
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId: "node-1",
-        command: "googlemeet.chrome",
-        params: expect.objectContaining({
-          action: "start",
-          url: "https://meet.google.com/abc-defg-hij",
-          mode: "transcribe",
-          launch: false,
-        }),
-      }),
-    );
-    expect(respond.mock.calls[0]?.[1]).toMatchObject({
-      session: {
-        transport: "chrome-node",
-        chrome: {
-          nodeId: "node-1",
-          launched: true,
-        },
-      },
+    const stopCall = nodesInvoke.mock.calls.find(([rawCall]) => {
+      const call = requireRecord(rawCall, "node invoke");
+      const params = requireRecord(call.params, "node invoke params");
+      return call.command === "googlemeet.chrome" && params.action === "stopByUrl";
     });
+    if (!stopCall) {
+      throw new Error("Expected googlemeet.chrome stopByUrl node invoke");
+    }
+    expect(requireRecord(stopCall[0], "stop node invoke").nodeId).toBe("node-1");
+    expect(requireRecord(stopCall[0], "stop node invoke").command).toBe("googlemeet.chrome");
+    expect(
+      requireRecord(requireRecord(stopCall[0], "stop node invoke").params, "stop params"),
+    ).toEqual({
+      action: "stopByUrl",
+      url: "https://meet.google.com/abc-defg-hij",
+      mode: "transcribe",
+    });
+    const openCall = nodesInvoke.mock.calls.find(([rawCall]) => {
+      const call = requireRecord(rawCall, "node invoke");
+      const params = requireRecord(call.params, "node invoke params");
+      return call.command === "browser.proxy" && params.path === "/tabs/open";
+    });
+    if (!openCall) {
+      throw new Error("Expected browser.proxy /tabs/open node invoke");
+    }
+    expect(requireRecord(openCall[0], "open node invoke").nodeId).toBe("node-1");
+    expect(requireRecord(openCall[0], "open node invoke").command).toBe("browser.proxy");
+    expect(
+      requireRecord(requireRecord(openCall[0], "open node invoke").params, "open params"),
+    ).toEqual({
+      method: "POST",
+      path: "/tabs/open",
+      timeoutMs: 30000,
+      body: { url: "https://meet.google.com/abc-defg-hij" },
+    });
+    const startCall = nodesInvoke.mock.calls.find(([rawCall]) => {
+      const call = requireRecord(rawCall, "node invoke");
+      const params = requireRecord(call.params, "node invoke params");
+      return call.command === "googlemeet.chrome" && params.action === "start";
+    });
+    if (!startCall) {
+      throw new Error("Expected googlemeet.chrome start node invoke");
+    }
+    expect(requireRecord(startCall[0], "start node invoke").nodeId).toBe("node-1");
+    expect(requireRecord(startCall[0], "start node invoke").command).toBe("googlemeet.chrome");
+    const startParams = requireRecord(
+      requireRecord(startCall[0], "start node invoke").params,
+      "start params",
+    );
+    expect(startParams.action).toBe("start");
+    expect(startParams.url).toBe("https://meet.google.com/abc-defg-hij");
+    expect(startParams.mode).toBe("transcribe");
+    expect(startParams.launch).toBe(false);
+    expect(startParams.joinTimeoutMs).toBe(30000);
+    const payload = requireRecord(respond.mock.calls[0]?.[1], "join response payload");
+    const session = requireRecord(payload.session, "join session");
+    expect(session.transport).toBe("chrome-node");
+    const chrome = requireRecord(session.chrome, "join chrome session");
+    expect(chrome.nodeId).toBe("node-1");
+    expect(chrome.launched).toBe(true);
   });
 
   it("reuses an active Meet session for the same URL and transport", async () => {
@@ -3021,12 +3031,13 @@ describe("google-meet plugin", () => {
     expect(
       nodesInvoke.mock.calls.filter(([call]) => call.command === "googlemeet.chrome"),
     ).toHaveLength(2);
-    expect(second.mock.calls[0]?.[1]).toMatchObject({
-      session: {
-        chrome: { health: { inCall: true, micMuted: false } },
-        notes: expect.arrayContaining(["Reused existing active Meet session."]),
-      },
-    });
+    const payload = requireRecord(second.mock.calls[0]?.[1], "second join response payload");
+    const session = requireRecord(payload.session, "second join session");
+    const chrome = requireRecord(session.chrome, "second join chrome session");
+    const health = requireRecord(chrome.health, "second join chrome health");
+    expect(health.inCall).toBe(true);
+    expect(health.micMuted).toBe(false);
+    expect(session.notes).toContain("Reused existing active Meet session.");
   });
 
   it("reuses active Meet sessions across URL query differences", async () => {
@@ -3065,11 +3076,9 @@ describe("google-meet plugin", () => {
     expect(
       nodesInvoke.mock.calls.filter(([call]) => call.command === "googlemeet.chrome"),
     ).toHaveLength(2);
-    expect(second.mock.calls[0]?.[1]).toMatchObject({
-      session: {
-        notes: expect.arrayContaining(["Reused existing active Meet session."]),
-      },
-    });
+    const payload = requireRecord(second.mock.calls[0]?.[1], "second join response payload");
+    const session = requireRecord(payload.session, "second join session");
+    expect(session.notes).toContain("Reused existing active Meet session.");
   });
 
   it("reuses existing Meet browser tabs across URL query differences", async () => {
