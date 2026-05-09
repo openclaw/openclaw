@@ -192,7 +192,18 @@ function selectTaskRows(db: DatabaseSync): TaskRegistryRow[] {
     ])
     .orderBy("created_at", "asc")
     .orderBy("task_id", "asc");
-  return executeSqliteQuerySync<TaskRegistryRow>(db, query).rows;
+  return executeSqliteQuerySync(db, query).rows.map((row) => ({
+    ...row,
+    runtime: row.runtime as TaskRecord["runtime"],
+    scope_kind: row.scope_kind as TaskRecord["scopeKind"],
+    status: row.status as TaskRecord["status"],
+    delivery_status: row.delivery_status as TaskRecord["deliveryStatus"],
+    notify_policy: row.notify_policy as TaskRecord["notifyPolicy"],
+    terminal_outcome: row.terminal_outcome as Exclude<
+      TaskRecord["terminalOutcome"],
+      undefined
+    > | null,
+  }));
 }
 
 function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
@@ -200,7 +211,7 @@ function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
     .selectFrom("task_delivery_state")
     .select(["task_id", "requester_origin_json", "last_notified_event_at"])
     .orderBy("task_id", "asc");
-  return executeSqliteQuerySync<TaskDeliveryStateRow>(db, query).rows;
+  return executeSqliteQuerySync(db, query).rows;
 }
 
 function upsertTaskRow(db: DatabaseSync, row: Insertable<TaskRunsTable>): void {

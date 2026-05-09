@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
@@ -31,17 +32,6 @@ function makeStore() {
   const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-"));
   cleanupDirs.push(root);
   return new DebugProxyCaptureStore(path.join(root, "capture.sqlite"), path.join(root, "blobs"));
-}
-
-type CaptureStorePragma = "busy_timeout" | "foreign_keys" | "synchronous";
-
-function readPragmaNumber(
-  db: import("node:sqlite").DatabaseSync,
-  pragma: CaptureStorePragma,
-): number {
-  const row = db.prepare(`PRAGMA ${pragma}`).get() as Record<string, unknown> | undefined;
-  const value = row?.[pragma] ?? row?.timeout;
-  return typeof value === "bigint" ? Number(value) : Number(value);
 }
 
 describe("DebugProxyCaptureStore", () => {
@@ -106,9 +96,9 @@ describe("DebugProxyCaptureStore", () => {
   it("uses the shared SQLite durability pragmas", () => {
     const store = makeStore();
 
-    expect(readPragmaNumber(store.db, "busy_timeout")).toBe(30_000);
-    expect(readPragmaNumber(store.db, "foreign_keys")).toBe(1);
-    expect(readPragmaNumber(store.db, "synchronous")).toBe(1);
+    expect(readSqliteNumberPragma(store.db, "busy_timeout")).toBe(30_000);
+    expect(readSqliteNumberPragma(store.db, "foreign_keys")).toBe(1);
+    expect(readSqliteNumberPragma(store.db, "synchronous")).toBe(1);
   });
 
   it("stores sessions, blobs, and duplicate-send query results", () => {

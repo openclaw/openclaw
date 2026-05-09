@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Insertable } from "kysely";
-import { sql } from "kysely";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { pathExists, root as fsRoot } from "../infra/fs-safe.js";
@@ -161,11 +160,15 @@ function selectNextCronRunLogSeq(params: {
   storeKey: string;
   jobId: string;
 }): number {
-  const row = executeSqliteQueryTakeFirstSync<{ next_seq?: number | bigint }>(
+  const row = executeSqliteQueryTakeFirstSync(
     params.db,
     getCronRunLogKysely(params.db)
       .selectFrom("cron_run_logs")
-      .select(sql<number | bigint>`COALESCE(MAX(seq), 0) + 1`.as("next_seq"))
+      .select((eb) =>
+        eb(eb.fn.coalesce(eb.fn.max<number | bigint>("seq"), eb.lit(0)), "+", eb.lit(1)).as(
+          "next_seq",
+        ),
+      )
       .where("store_key", "=", params.storeKey)
       .where("job_id", "=", params.jobId),
   );
@@ -187,7 +190,7 @@ function pruneCronRunLogRows(params: {
   maxBytes: number;
   keepLines: number;
 }): void {
-  const rows = executeSqliteQuerySync<CronRunLogPruneRow>(
+  const rows = executeSqliteQuerySync(
     params.db,
     getCronRunLogKysely(params.db)
       .selectFrom("cron_run_logs")
@@ -296,7 +299,7 @@ export function readCronRunLogEntriesFromSqliteSync(
   assertSafeCronRunLogJobId(jobId);
   const limit = Math.max(1, Math.min(5000, Math.floor(opts?.limit ?? 200)));
   const database = openOpenClawStateDatabase();
-  const rows = executeSqliteQuerySync<CronRunLogRow>(
+  const rows = executeSqliteQuerySync(
     database.db,
     getCronRunLogKysely(database.db)
       .selectFrom("cron_run_logs")
@@ -549,7 +552,7 @@ export async function readCronRunLogEntriesPageFromSqlite(
   }
   assertSafeCronRunLogJobId(jobId);
   const database = openOpenClawStateDatabase();
-  const rows = executeSqliteQuerySync<CronRunLogRow>(
+  const rows = executeSqliteQuerySync(
     database.db,
     getCronRunLogKysely(database.db)
       .selectFrom("cron_run_logs")
@@ -570,7 +573,7 @@ export async function readCronRunLogEntriesPageAllFromSqlite(
 ): Promise<CronRunLogPageResult> {
   await drainPendingStoreWrite(opts.storePath);
   const database = openOpenClawStateDatabase();
-  const rows = executeSqliteQuerySync<CronRunLogRow>(
+  const rows = executeSqliteQuerySync(
     database.db,
     getCronRunLogKysely(database.db)
       .selectFrom("cron_run_logs")

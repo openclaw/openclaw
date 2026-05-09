@@ -491,67 +491,69 @@ export class DebugProxyCaptureStore {
     if (uniqueSessionIds.length === 0) {
       return { sessions: 0, events: 0, blobs: 0 };
     }
-    const db = getCaptureKysely(this.db);
-    const blobRows = executeSqliteQuerySync(
-      this.db,
-      db
-        .selectFrom("capture_events")
-        .select("data_blob_id as blobId")
-        .distinct()
-        .where("session_id", "in", uniqueSessionIds)
-        .where("data_blob_id", "is not", null),
-    ).rows;
-    const eventCount =
-      executeSqliteQueryTakeFirstSync(
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const db = getCaptureKysely(this.db);
+      const blobRows = executeSqliteQuerySync(
         this.db,
         db
           .selectFrom("capture_events")
-          .select((eb) => eb.fn.countAll<number>().as("count"))
-          .where("session_id", "in", uniqueSessionIds),
-      )?.count ?? 0;
-    const sessionCount =
-      executeSqliteQueryTakeFirstSync(
-        this.db,
-        db
-          .selectFrom("capture_sessions")
-          .select((eb) => eb.fn.countAll<number>().as("count"))
-          .where("id", "in", uniqueSessionIds),
-      )?.count ?? 0;
-    executeSqliteQuerySync(
-      this.db,
-      db.deleteFrom("capture_events").where("session_id", "in", uniqueSessionIds),
-    );
-    executeSqliteQuerySync(
-      this.db,
-      db.deleteFrom("capture_sessions").where("id", "in", uniqueSessionIds),
-    );
-    const candidateBlobIds = blobRows
-      .map((row) => row.blobId?.trim())
-      .filter((blobId): blobId is string => Boolean(blobId));
-    const remainingBlobRefs =
-      candidateBlobIds.length > 0
-        ? new Set(
-            executeSqliteQuerySync(
-              this.db,
-              db
-                .selectFrom("capture_events")
-                .select("data_blob_id as blobId")
-                .distinct()
-                .where("data_blob_id", "in", candidateBlobIds)
-                .where("data_blob_id", "is not", null),
-            )
-              .rows.map((row) => row.blobId?.trim())
-              .filter((blobId): blobId is string => Boolean(blobId)),
-          )
-        : new Set<string>();
-    const orphanBlobIds = candidateBlobIds.filter((blobId) => !remainingBlobRefs.has(blobId));
-    if (orphanBlobIds.length > 0) {
+          .select("data_blob_id as blobId")
+          .distinct()
+          .where("session_id", "in", uniqueSessionIds)
+          .where("data_blob_id", "is not", null),
+      ).rows;
+      const eventCount =
+        executeSqliteQueryTakeFirstSync(
+          this.db,
+          db
+            .selectFrom("capture_events")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("session_id", "in", uniqueSessionIds),
+        )?.count ?? 0;
+      const sessionCount =
+        executeSqliteQueryTakeFirstSync(
+          this.db,
+          db
+            .selectFrom("capture_sessions")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("id", "in", uniqueSessionIds),
+        )?.count ?? 0;
       executeSqliteQuerySync(
         this.db,
-        db.deleteFrom("capture_blobs").where("blob_id", "in", orphanBlobIds),
+        db.deleteFrom("capture_events").where("session_id", "in", uniqueSessionIds),
       );
-    }
-    return { sessions: sessionCount, events: eventCount, blobs: orphanBlobIds.length };
+      executeSqliteQuerySync(
+        this.db,
+        db.deleteFrom("capture_sessions").where("id", "in", uniqueSessionIds),
+      );
+      const candidateBlobIds = blobRows
+        .map((row) => row.blobId?.trim())
+        .filter((blobId): blobId is string => Boolean(blobId));
+      const remainingBlobRefs =
+        candidateBlobIds.length > 0
+          ? new Set(
+              executeSqliteQuerySync(
+                this.db,
+                db
+                  .selectFrom("capture_events")
+                  .select("data_blob_id as blobId")
+                  .distinct()
+                  .where("data_blob_id", "in", candidateBlobIds)
+                  .where("data_blob_id", "is not", null),
+              )
+                .rows.map((row) => row.blobId?.trim())
+                .filter((blobId): blobId is string => Boolean(blobId)),
+            )
+          : new Set<string>();
+      const orphanBlobIds = candidateBlobIds.filter((blobId) => !remainingBlobRefs.has(blobId));
+      if (orphanBlobIds.length > 0) {
+        executeSqliteQuerySync(
+          this.db,
+          db.deleteFrom("capture_blobs").where("blob_id", "in", orphanBlobIds),
+        );
+      }
+      return { sessions: sessionCount, events: eventCount, blobs: orphanBlobIds.length };
+    });
   }
 }
 

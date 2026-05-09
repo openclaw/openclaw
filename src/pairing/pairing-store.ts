@@ -292,7 +292,7 @@ function readChannelPairingStateFromDatabase(
   channel: PairingChannel,
 ): ChannelPairingState {
   const db = getNodeSqliteKysely<PairingDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync<PairingKvRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
       .selectFrom("kv")

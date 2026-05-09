@@ -17,7 +17,6 @@ const LEDGER_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
 const DEFAULT_MAX_EVENTS_PER_SESSION = 5_000;
 const DEFAULT_MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
-const ACP_EVENT_LEDGER_KV_SCOPE = "acp_event_ledger";
 
 export type AcpEventLedgerEntry = {
   seq: number;
@@ -86,13 +85,8 @@ type LedgerOptions = {
 
 type AcpEventLedgerDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "acp_replay_events" | "acp_replay_sessions" | "kv"
+  "acp_replay_events" | "acp_replay_sessions"
 >;
-
-type LedgerKvRow = {
-  key: string;
-  value_json: string;
-};
 
 type LedgerSessionRow = {
   complete: number;
@@ -469,35 +463,9 @@ function dbOptionsFromParams(
   };
 }
 
-function loadStoreFromLegacyKvRows(database: DatabaseSync): LedgerStore {
-  const db = getNodeSqliteKysely<AcpEventLedgerDatabase>(database);
-  const rows = executeSqliteQuerySync<LedgerKvRow>(
-    database,
-    db
-      .selectFrom("kv")
-      .select(["key", "value_json"])
-      .where("scope", "=", ACP_EVENT_LEDGER_KV_SCOPE)
-      .orderBy("key", "asc"),
-  ).rows;
-  const sessions: Record<string, LedgerSession> = {};
-  for (const row of rows) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(row.value_json) as unknown;
-    } catch {
-      continue;
-    }
-    const session = normalizeSession(parsed);
-    if (session && session.sessionId === row.key) {
-      sessions[session.sessionId] = session;
-    }
-  }
-  return { version: LEDGER_VERSION, sessions };
-}
-
 function loadStoreFromSqliteDb(database: DatabaseSync): LedgerStore {
   const db = getNodeSqliteKysely<AcpEventLedgerDatabase>(database);
-  const sessionRows = executeSqliteQuerySync<LedgerSessionRow>(
+  const sessionRows = executeSqliteQuerySync(
     database,
     db
       .selectFrom("acp_replay_sessions")
@@ -514,7 +482,7 @@ function loadStoreFromSqliteDb(database: DatabaseSync): LedgerStore {
       .orderBy("session_id", "asc"),
   ).rows;
   if (sessionRows.length === 0) {
-    return loadStoreFromLegacyKvRows(database);
+    return createEmptyStore();
   }
 
   const sessions: Record<string, LedgerSession> = {};
@@ -531,7 +499,7 @@ function loadStoreFromSqliteDb(database: DatabaseSync): LedgerStore {
     };
   }
 
-  const eventRows = executeSqliteQuerySync<LedgerEventRow>(
+  const eventRows = executeSqliteQuerySync(
     database,
     db
       .selectFrom("acp_replay_events")
@@ -569,7 +537,7 @@ function writeStoreToSqliteDb(
 ): void {
   const db = getNodeSqliteKysely<AcpEventLedgerDatabase>(database);
   if (options.pruneMissing !== false) {
-    const existing = executeSqliteQuerySync<{ session_id: string }>(
+    const existing = executeSqliteQuerySync(
       database,
       db.selectFrom("acp_replay_sessions").select("session_id"),
     ).rows;
@@ -628,10 +596,6 @@ function writeStoreToSqliteDb(
       );
     }
   }
-  executeSqliteQuerySync(
-    database,
-    db.deleteFrom("kv").where("scope", "=", ACP_EVENT_LEDGER_KV_SCOPE),
-  );
   executeSqliteQuerySync(
     database,
     db

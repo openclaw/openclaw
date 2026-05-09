@@ -4,8 +4,6 @@ import {
   migrateDefaultCommand,
   migrateListCommand,
   migratePlanCommand,
-  migrateStateApplyCommand,
-  migrateStatePlanCommand,
 } from "../../commands/migrate.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
@@ -99,11 +97,6 @@ export function registerMigrateCommand(program: Command) {
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw migrate list", "Show available migration providers."],
-          ["openclaw migrate state plan", "Preview legacy OpenClaw state import into SQLite."],
-          [
-            "openclaw migrate state apply --yes",
-            "Import legacy OpenClaw state files and old global tables into SQLite.",
-          ],
           ["openclaw migrate hermes", "Preview Hermes migration, then prompt before applying."],
           ["openclaw migrate hermes --dry-run", "Preview Hermes migration only."],
           [
@@ -142,52 +135,6 @@ export function registerMigrateCommand(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await migrateListCommand(defaultRuntime, { json: Boolean(opts.json) });
-      });
-    });
-
-  const state = migrate
-    .command("state")
-    .description("Import legacy OpenClaw state files into SQLite")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw migrate state plan", "Preview legacy state detected by doctor."],
-          ["openclaw migrate state plan --json", "Print the state migration plan as JSON."],
-          [
-            "openclaw migrate state apply --yes",
-            "Apply the state migration after writing a verified backup.",
-          ],
-        ])}`,
-    );
-
-  state
-    .command("plan")
-    .description("Preview legacy OpenClaw state imports without changing state")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        await migrateStatePlanCommand(defaultRuntime, { json: Boolean(opts.json) });
-      });
-    });
-
-  state
-    .command("apply")
-    .description("Import legacy OpenClaw state into SQLite after a verified backup")
-    .option("--yes", "Apply without prompting", false)
-    .option("--backup-output <path>", "Pre-migration backup archive path or directory")
-    .option("--no-backup", "Skip the pre-migration OpenClaw backup")
-    .option("--force", "Allow dangerous options such as --no-backup", false)
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        await migrateStateApplyCommand(defaultRuntime, {
-          yes: Boolean(opts.yes),
-          backupOutput: opts.backupOutput as string | undefined,
-          noBackup: opts.backup === false,
-          force: Boolean(opts.force),
-          json: Boolean(opts.json),
-        });
       });
     });
 

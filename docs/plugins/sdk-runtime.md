@@ -128,7 +128,7 @@ Provider and channel execution paths must use the active runtime config snapshot
     const sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
     ```
 
-    Prefer row helpers such as `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, and `upsertSessionEntry(...)` for runtime writes. They route through the SQLite session row store and preserve concurrent updates. Legacy `sessions.json` parsing belongs in doctor/migration code, not plugin runtime paths.
+    Prefer row helpers such as `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, and `upsertSessionEntry(...)` for runtime writes. They route through the SQLite session row store and preserve concurrent updates. Legacy `sessions.json` parsing belongs in doctor import code, not plugin runtime paths.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">

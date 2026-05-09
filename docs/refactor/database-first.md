@@ -45,8 +45,9 @@ proceed with these assumptions:
 - Runtime compatibility files are not required. Legacy JSON and JSONL files are
   migration inputs only. The branch-local SQLite sidecars never shipped and are
   deleted instead of imported.
-- `openclaw doctor --fix` should call the migration implementation, but the
-  migration should also be independently runnable through `openclaw migrate`.
+- `openclaw doctor --fix` owns the legacy file-to-database migration step.
+  Runtime startup and `openclaw migrate` should not carry legacy OpenClaw
+  database-upgrade paths.
 - Backup output should remain one archive file. Database contents should enter
   that archive as compact SQLite snapshots, not raw live WAL sidecars.
 - Transcript search is useful but not required for the first database-first
@@ -99,7 +100,7 @@ The branch already has a real shared SQLite base:
   remains limited to schema application, pragmas, and migration-only DDL.
 - The SQLite schemas are collapsed to `user_version = 1` because this database
   layout has not shipped yet. Runtime openers create the current schema only;
-  file-to-database import remains in doctor/migrate code, and branch-local
+  file-to-database import remains in doctor code, and branch-local
   database upgrade helpers have been deleted.
 - Relational ownership is enforced where the ownership boundary is canonical:
   transcript-file mappings cascade from `agent_databases`, source migration
@@ -174,7 +175,7 @@ The remaining cleanup is mostly consolidation and deletion:
 - `src/config/sessions/store-backend.sqlite.ts` now stores canonical session
   entries in the per-agent database and has row-level read/upsert/delete patch
   support. Runtime upsert/patch/delete no longer scans for case variants or
-  prunes legacy alias keys; doctor/migrate owns canonicalization. The
+  prunes legacy alias keys; doctor owns canonicalization. The
   standalone JSON import helper is gone, and migration merges upsert newer rows
   instead of replacing the whole session table.
 - Transcript events, VFS rows, and tool artifact rows now write to the per-agent
@@ -182,7 +183,7 @@ The remaining cleanup is mostly consolidation and deletion:
   export, and lookup.
 - Runtime transcript lookup no longer scans JSONL byte offsets or probes legacy
   transcript files. Gateway chat/media/history paths read transcript rows from
-  SQLite; JSONL is now a legacy doctor/migrate input or in-memory export
+  SQLite; JSONL is now a legacy doctor input or in-memory export
   encoding, not a runtime state file.
 - Runtime session path resolution now canonicalizes active sessions to
   `sqlite-transcript://<agent>/<session>.jsonl` locators. Legacy absolute
@@ -211,10 +212,10 @@ The remaining cleanup is mostly consolidation and deletion:
 - CLI command session resolution now returns the owning `agentId` instead of a
   `storePath`, and it no longer copies legacy main-session rows during normal
   `--to` or `--session-id` resolution. Legacy main-row canonicalization belongs
-  to doctor/migrate only.
+  to doctor only.
 - Runtime subagent depth resolution no longer reads `sessions.json` or JSON5
   session stores. It reads SQLite `session_entries` by agent id, and legacy
-  depth/session metadata can only enter through the doctor/migrate import path.
+  depth/session metadata can only enter through the doctor import path.
 - Auth profile session overrides persist through direct `{agentId, sessionKey}`
   row upserts instead of lazy-loading a file-shaped session-store runtime.
 - Auto-reply verbose gating and session update helpers now read/upsert SQLite
@@ -381,7 +382,7 @@ The remaining cleanup is mostly consolidation and deletion:
   setup/doctor migration surface, not in core migration code.
 - iMessage reply short-id mappings and sent-echo dedupe rows now use shared
   SQLite plugin state. The old `imessage/reply-cache.jsonl` and
-  `imessage/sent-echoes.jsonl` files are doctor/migrate inputs only.
+  `imessage/sent-echoes.jsonl` files are doctor inputs only.
 - Feishu message dedupe rows now use shared SQLite plugin state instead of
   `feishu/dedup/*.json` files. Its legacy JSON import plan lives in the Feishu
   plugin setup/doctor migration surface, not in core migration code.
@@ -580,20 +581,18 @@ Large values should use `blob` columns, not JSON string encoding. Keep
 `value_json` for small structured data that must remain inspectable with plain
 SQLite tooling.
 
-## Migration Command Shape
+## Doctor Migration Shape
 
-Doctor should call one migration step, but migration should be independently
-runnable and reportable:
+Doctor should call one explicit migration step that is reportable and safe to
+rerun:
 
 ```bash
-openclaw migrate state plan
-openclaw migrate state apply --yes
 openclaw doctor --fix
 ```
 
-`openclaw doctor --fix` invokes the same state migration implementation after
+`openclaw doctor --fix` invokes the state migration implementation after
 ordinary config preflight and creates a verified backup before import. Runtime
-startup must not import legacy files.
+startup and `openclaw migrate` must not import legacy OpenClaw state files.
 
 Migration properties:
 
@@ -693,9 +692,9 @@ Move these into the global database:
   `delivery_queue_entries` table under separate queue names
   (`outbound-delivery`, `session-delivery`) instead of durable
   `delivery-queue/*.json`, `delivery-queue/failed/*.json`, and
-  `session-delivery-queue/*.json` files. The doctor/migrate legacy-state step
-  imports pending and failed rows, removes stale delivered markers, and deletes
-  the old JSON files after import.
+  `session-delivery-queue/*.json` files. The doctor legacy-state step imports
+  pending and failed rows, removes stale delivered markers, and deletes the old
+  JSON files after import.
 - ACPX process leases now use SQLite plugin state under `acpx/process-leases`
   instead of `process-leases.json`.
 - Backup and migration run metadata
@@ -717,7 +716,7 @@ Move these into agent databases:
 - ACP parent stream logs. Done for runtime writes.
 - ACP replay ledger sessions. Done for runtime writes via
   `acp_replay_sessions` and `acp_replay_events`; legacy `acp/event-ledger.json`
-  remains only as doctor/migrate input.
+  remains only as doctor input.
 - Trajectory sidecars when they are not explicit export files. Done for runtime
   writes: trajectory capture writes agent-database `trajectory_runtime_events`
   rows and mirrors run-scoped artifacts into SQLite. Legacy sidecars remain
@@ -740,15 +739,12 @@ Make the durable-state boundary explicit before moving more rows:
 
 - Add a `migration_runs` table to the global database.
   Done for legacy-state migration execution reports.
-- Add a single state migration service used by both `openclaw migrate state`
-  and `openclaw doctor --fix`.
-  Done: `openclaw migrate state plan` and `openclaw migrate state apply --yes`
-  now reuse the doctor legacy-state migration implementation.
+- Add a single doctor-owned state migration service for file-to-database import.
+  Done: `openclaw doctor --fix` uses the legacy-state migration implementation.
 - Make `plan` read-only and make `apply` create a backup, import, verify, and
   then delete or quarantine old files.
-  Done: state apply creates the same verified pre-migration backup as provider
-  migrations, passes the backup path into `migration_runs`, and reuses the
-  doctor importer/removal paths.
+  Done: doctor creates a verified pre-migration backup, passes the backup path
+  into `migration_runs`, and reuses the importer/removal paths.
 - Add static bans so new runtime code cannot write legacy state files while
   migration code and tests can still seed/read them.
   Done for the currently migrated legacy stores.
@@ -852,8 +848,9 @@ Backups remain one archive file:
   requested workspace exports.
 - Omit raw live `*.sqlite-wal` and `*.sqlite-shm` files.
 - Verify by opening every DB snapshot and running `PRAGMA integrity_check`.
-- Restore copies snapshots back to their target paths, then runs schema
-  migrations forward.
+- Restore copies snapshots back to their target paths. This branch resets the
+  unshipped SQLite layout to `user_version = 1`; future shipped schema changes
+  can add explicit migrations when they are needed.
 
 ### Phase 6: Worker Runtime
 
@@ -897,14 +894,15 @@ agent id, schema version, source path, snapshot path, byte size, and integrity
 status.
 
 Restore should rebuild the global database and agent database files from the
-archive snapshots, then run schema migrations forward if the installed OpenClaw
-is newer than the backup.
+archive snapshots. Because the SQLite layout has not shipped yet, this refactor
+keeps only the version-1 schema plus doctor file-to-database import.
 
 ## Runtime Refactor Plan
 
 1. Add database registry APIs.
    - Resolve global DB and per-agent DB paths.
-   - Keep one shared schema migration runner.
+   - Keep the unshipped schemas at `user_version = 1`; do not add schema
+     migration runner code until a shipped schema needs it.
    - Add close/checkpoint/integrity helpers used by tests, backup, and doctor.
 
 2. Collapse sidecar SQLite stores.
@@ -924,11 +922,9 @@ is newer than the backup.
    - Create agent DB on demand through the global database registry. Done.
    - Move runtime session entries, transcript events, VFS rows, and tool
      artifacts to agent DBs. Done.
-   - Migrate any older shared-DB session entries, transcript events, VFS rows,
-     and tool artifacts from the global database into agent DBs. Done via the
-     legacy-state migration step, which moves rows into the owning per-agent
-     database and drops the old global tables after import.
-   - Keep temporary compatibility reads only inside the migration code.
+   - Do not migrate branch-local shared-DB session entries, transcript events,
+     VFS rows, or tool artifacts; that layout never shipped. Keep only legacy
+     file-to-database import in doctor.
 
 4. Replace session store APIs.
    - Remove `storePath` as the runtime identity. Done for the shared inbound
@@ -1023,12 +1019,12 @@ is newer than the backup.
   rows from an isolated agent database instead of reading
   `session.trajectory.jsonl`.
   Docker MCP channel seed scripts now seed SQLite rows directly. Direct
-  `sessions.json` writes are limited to doctor/migration fixtures.
+  `sessions.json` writes are limited to doctor fixtures.
   Memory-core host events and session-corpus scratch rows now live in shared
   SQLite plugin-state; `events.jsonl` and `session-corpus/*.txt` are legacy
   doctor migration inputs only.
   The runtime SQLite session backend test suite no longer fabricates a
-  `sessions.json`; legacy source fixtures now live in the doctor/migration
+  `sessions.json`; legacy source fixtures now live in the doctor
   tests that import them.
 - Keep tests that seed legacy files only for migration.
 - Replace JSON-file proof with SQL row proof.
@@ -1053,7 +1049,7 @@ is newer than the backup.
     - Failed imports must keep the original source file in place.
       Done: failed transcript imports now leave the original JSONL source at
       its detected path, and `migration_sources` records the source as
-      `warning` with `removed_source=0` for the next doctor/migrate run.
+      `warning` with `removed_source=0` for the next doctor run.
 
 ## Performance Rules
 
@@ -1169,7 +1165,7 @@ and do not get doctor import allowances.
 - Runtime no longer writes session indexes, transcript JSONL, sandbox registry
   JSON, task sidecar SQLite, or plugin-state sidecar SQLite. The unshipped task
   and plugin-state sidecar SQLite importers are deleted.
-- Legacy file import is doctor/migrate-only.
+- Legacy file import is doctor-only.
 - Backup produces one archive with compact SQLite snapshots and integrity proof.
 - Agent workers can run with disk, VFS scratch, or experimental VFS-only
   storage.

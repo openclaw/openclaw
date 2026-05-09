@@ -292,7 +292,7 @@ function mergeCronJobRowRuntimeState(job: CronStoreFile["jobs"][number], row: Cr
 
 function hydrateCronStoreFromSqlite(storePath: string): CronStoreFile {
   const database = openOpenClawStateDatabase();
-  const rows = executeSqliteQuerySync<CronJobRow>(
+  const rows = executeSqliteQuerySync(
     database.db,
     getCronJobsKysely(database.db)
       .selectFrom("cron_jobs")
@@ -366,7 +366,7 @@ function writeCronJobsToSqlite(storePath: string, store: CronStoreFile): void {
   const storeKey = cronStoreKey(storePath);
   runOpenClawStateWriteTransaction((database) => {
     const db = getCronJobsKysely(database.db);
-    const existingRows = executeSqliteQuerySync<{ job_id: string }>(
+    const existingRows = executeSqliteQuerySync(
       database.db,
       db.selectFrom("cron_jobs").select("job_id").where("store_key", "=", storeKey),
     ).rows;

@@ -157,7 +157,7 @@ function loadCommitmentStoreFromSqlite(
 ): LoadedCommitmentStore {
   const database = openOpenClawStateDatabase(sqliteOptionsForEnv(env));
   const db = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
-  const rows = executeSqliteQuerySync<CommitmentRow>(
+  const rows = executeSqliteQuerySync(
     database.db,
     db
       .selectFrom("commitments")
