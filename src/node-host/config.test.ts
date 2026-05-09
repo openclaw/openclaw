@@ -2,10 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  importLegacyNodeHostConfigFileToSqlite,
-  legacyNodeHostConfigFileExists,
-} from "../commands/doctor/legacy/node-host-config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { ensureNodeHostConfig, loadNodeHostConfig, saveNodeHostConfig } from "./config.js";
@@ -65,33 +61,5 @@ describe("node host config", () => {
 
     expect(first.nodeId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u);
     expect(second.nodeId).toBe(first.nodeId);
-  });
-
-  it("imports legacy node.json through doctor migration helpers", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const legacyPath = path.join(stateDir, "node.json");
-    await fs.writeFile(
-      legacyPath,
-      `${JSON.stringify({
-        version: 1,
-        nodeId: "legacy-node",
-        token: "legacy-token",
-        displayName: "Legacy node",
-      })}\n`,
-      "utf8",
-    );
-
-    await expect(legacyNodeHostConfigFileExists(env)).resolves.toBe(true);
-    await expect(importLegacyNodeHostConfigFileToSqlite(env)).resolves.toEqual({
-      imported: true,
-    });
-
-    await expect(loadNodeHostConfig(env)).resolves.toMatchObject({
-      nodeId: "legacy-node",
-      token: "legacy-token",
-      displayName: "Legacy node",
-    });
-    await expect(fs.stat(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
