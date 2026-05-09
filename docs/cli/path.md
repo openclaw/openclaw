@@ -44,6 +44,78 @@ automation easier to review and safer to replay. It is especially useful when
 you want to update one leaf while preserving the rest of the file's comments,
 line endings, and surrounding formatting.
 
+Use it when the thing you want has a logical address, but the physical file
+shape varies:
+
+- A hook wants to read one setting from commented JSONC without losing comments
+  when it writes the value back.
+- A maintenance script wants to find every matching event field in a JSONL log
+  without loading the whole log into a custom parser.
+- An editor extension wants to jump to a markdown section or bullet item by
+  slug, then render the exact line it resolved to.
+- An agent wants to dry-run a tiny workspace edit before applying it, with the
+  changed bytes visible in review.
+
+You probably do not need `openclaw path` for ordinary whole-file edits, rich
+config migrations, or memory-specific writes. Those should use the owner
+command or plugin. `path` is for small, addressable file operations where a
+repeatable terminal command is clearer than another bespoke parser.
+
+## How it is used
+
+Read one value from a human-edited config file:
+
+```bash
+openclaw path resolve 'oc://config.jsonc/plugins/github/enabled'
+```
+
+Preview a write without touching disk:
+
+```bash
+openclaw path set 'oc://config.jsonc/plugins/github/enabled' 'true' --dry-run
+```
+
+Find matching records in an append-only JSONL log:
+
+```bash
+openclaw path find 'oc://session.jsonl/[event=tool_call]/name'
+```
+
+Address an instruction in markdown by section and item instead of by line
+number:
+
+```bash
+openclaw path resolve 'oc://AGENTS.md/runtime-safety/openclaw-gateway'
+```
+
+Validate a path in CI or a preflight script before the script reads or writes:
+
+```bash
+openclaw path validate 'oc://AGENTS.md/tools/$last/risk'
+```
+
+Those commands are meant to be copyable into shell scripts. Use `--json` when a
+caller needs structured output and `--human` when a person is inspecting the
+result.
+
+## How it works
+
+`openclaw path` does four things:
+
+1. Parses the `oc://` address into slots: file, section, item, field, and
+   optional session.
+2. Chooses the file-kind adapter from the target extension (`.md`, `.jsonc`,
+   `.jsonl`, and related aliases).
+3. Resolves the slots against that file kind's AST: markdown headings/items,
+   JSONC object keys/array indexes, or JSONL line records.
+4. For `set`, emits edited bytes through the same adapter so the untouched
+   parts of the file keep their comments, line endings, and nearby formatting
+   where the kind supports it.
+
+`resolve` and `set` require one concrete target. `find` is the exploratory
+verb: it expands wildcards, unions, predicates, and ordinals into the concrete
+matches you can inspect before choosing one to write.
+
 ## Subcommands
 
 | Subcommand              | Purpose                                                                      |

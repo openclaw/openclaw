@@ -38,6 +38,38 @@ nearby formatting alone. Keeping this as an opt-in plugin gives power users the
 addressing substrate without putting parser dependencies or CLI surface into
 core for installs that never need it.
 
+Common reasons to enable it:
+
+- **Local automation**: shell scripts can resolve or update one workspace value
+  with `openclaw path … --json` instead of carrying separate markdown, JSONC,
+  and JSONL parsing code.
+- **Agent-visible edits**: an agent can show a dry-run diff for one addressed
+  leaf before writing, which is easier to review than a free-form file rewrite.
+- **Editor integrations**: an editor can map `oc://AGENTS.md/tools/gh` to the
+  exact markdown node and line number without guessing from heading text.
+- **Diagnostics**: `emit` round-trips a file through the parser and emitter, so
+  you can check whether a file kind is byte-stable before relying on automated
+  edits.
+
+Concrete examples:
+
+```bash
+# Is the GitHub plugin enabled in this config?
+openclaw path resolve 'oc://config.jsonc/plugins/github/enabled' --json
+
+# Which tool-call names appear in this session log?
+openclaw path find 'oc://session.jsonl/[event=tool_call]/name' --json
+
+# What bytes would this tiny config edit write?
+openclaw path set 'oc://config.jsonc/plugins/github/enabled' 'true' --dry-run
+```
+
+The plugin is intentionally not the owner of higher-level semantics. Memory
+plugins still own memory writes, config commands still own full config
+management, and LKG logic still owns restore/promotion. `oc-path` is the narrow
+addressing and byte-preserving file operation layer those higher-level tools
+can build around.
+
 ## Where it runs
 
 The plugin runs **in-process inside the `openclaw` CLI** on the host where you
