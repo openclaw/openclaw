@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
 import { DEFAULT_DDG_SAFE_SEARCH, resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
 
@@ -13,6 +13,11 @@ vi.mock("./ddg-client.js", () => ({
 describe("duckduckgo web search provider", () => {
   let createDuckDuckGoWebSearchProvider: typeof import("./ddg-search-provider.js").createDuckDuckGoWebSearchProvider;
   let ddgClientTesting: typeof import("./ddg-client.js").__testing;
+
+  afterAll(() => {
+    vi.doUnmock("./ddg-client.js");
+    vi.resetModules();
+  });
 
   beforeAll(async () => {
     ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
@@ -41,7 +46,11 @@ describe("duckduckgo web search provider", () => {
     ]);
     expect(provider.requiresCredential).toBe(false);
     expect(provider.credentialPath).toBe("");
-    expect(applied.plugins?.entries?.duckduckgo?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.duckduckgo;
+    if (!pluginEntry) {
+      throw new Error("expected DuckDuckGo plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("maps generic tool arguments into DuckDuckGo search params", async () => {
@@ -199,7 +208,7 @@ describe("duckduckgo web search provider", () => {
     `;
 
     expect(ddgClientTesting.isBotChallenge(challengeHtml)).toBe(true);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toEqual([]);
+    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toStrictEqual([]);
     expect(ddgClientTesting.isBotChallenge(normalHtml)).toBe(false);
     expect(ddgClientTesting.parseDuckDuckGoHtml(normalHtml)).toEqual([
       {

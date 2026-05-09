@@ -364,6 +364,25 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("propagates request SSRF policy to JSON image requests", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "test",
+      cfg: {},
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    );
+  });
+
   it("forwards generation count and custom size overrides", async () => {
     mockGeneratedPngResponse();
 
@@ -647,7 +666,6 @@ describe("openai image generation provider", () => {
         {
           buffer: Buffer.from("jpeg-bytes"),
           mimeType: "image/jpeg",
-          fileName: "style.jpg",
         },
       ],
     });
@@ -675,7 +693,7 @@ describe("openai image generation provider", () => {
     expect(images).toHaveLength(2);
     expect(images[0]?.name).toBe("reference.png");
     expect(images[0]?.type).toBe("image/png");
-    expect(images[1]?.name).toBe("style.jpg");
+    expect(images[1]?.name).toBe("image-2.jpg");
     expect(images[1]?.type).toBe("image/jpeg");
     expect(postJsonRequestMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ url: "https://api.openai.com/v1/images/edits" }),
@@ -1069,6 +1087,7 @@ describe("openai image generation provider", () => {
         },
       },
       authStore,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
     expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith({
@@ -1084,6 +1103,7 @@ describe("openai image generation provider", () => {
       expect.objectContaining({
         url: "http://127.0.0.1:44220/backend-api/codex/responses",
         allowPrivateNetwork: true,
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       }),
     );
     expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));

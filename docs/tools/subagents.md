@@ -82,9 +82,10 @@ requester chat when the run finishes.
 
   </Accordion>
   <Accordion title="Manual-spawn delivery resilience">
-    - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
-    - If the requester-agent completion turn fails, produces no visible output, or returns an obviously incomplete prefix of the captured child result, OpenClaw falls back to direct completion delivery from the captured child result.
-    - If direct delivery cannot be used, it falls back to queue routing.
+    - OpenClaw hands completions back to the requester session through an `agent` turn with a stable idempotency key.
+    - If the requester run is still active, OpenClaw first tries to wake/steer that run instead of starting a second visible reply path.
+    - If the requester-agent completion handoff fails or produces no visible output, OpenClaw treats delivery as failed and falls back to queue routing/retry. It does not raw-send the child result directly to the external chat.
+    - If direct handoff cannot be used, it falls back to queue routing.
     - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
     - Completion delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available; if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
 
@@ -141,6 +142,34 @@ session to confirm the effective tool list.
 - **Model:** inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
 - **Thinking:** inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
+
+### Delegation prompt mode
+
+`agents.defaults.subagents.delegationMode` controls prompt guidance only; it does not change tool policy or enforce delegation.
+
+- `suggest` (default): keep the standard prompt nudge to use sub-agents for larger or slower work.
+- `prefer`: tell the main agent to stay responsive and delegate anything more involved than a direct reply through `sessions_spawn`.
+
+Per-agent overrides use `agents.list[].subagents.delegationMode`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      subagents: {
+        delegationMode: "prefer",
+        maxConcurrent: 4,
+      },
+    },
+    list: [
+      {
+        id: "coordinator",
+        subagents: { delegationMode: "prefer" },
+      },
+    ],
+  },
+}
+```
 
 ### Tool parameters
 
@@ -546,7 +575,7 @@ still need normal device approval for scope upgrades.
 - Sub-agent announce is **best-effort**. If the gateway restarts, pending "announce back" work is lost.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
 - `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
-- Sub-agent context only injects `AGENTS.md` + `TOOLS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`).
+- Sub-agent context only injects `AGENTS.md`, `TOOLS.md`, `SOUL.md`, `IDENTITY.md` and `USER.md` (no `MEMORY.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`).
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1–5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1–20`).
 

@@ -31,7 +31,7 @@ describe("install.sh", () => {
     const rawAptInstalls = script
       .split("\n")
       .filter((line) => /\b(?:sudo\s+)?apt-get\s+install\b/.test(line));
-    expect(rawAptInstalls).toEqual([]);
+    expect(rawAptInstalls).toStrictEqual([]);
   });
 
   it("exports noninteractive apt env during Linux startup", () => {
@@ -160,6 +160,35 @@ describe("install.sh", () => {
     expect(result?.stdout).toContain("npm i -g openclaw@latest");
     expect(result?.stdout).toContain("using this user prefix");
     expect(result?.stdout).not.toContain("has been saved");
+  });
+
+  it("uses a quoted absolute openclaw path in follow-up commands when npm bin is not on the original PATH", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-command-"));
+    const npmBin = join(tmp, "npm bin");
+    const visibleBin = join(tmp, "visible-bin");
+    mkdirSync(npmBin, { recursive: true });
+    mkdirSync(visibleBin, { recursive: true });
+    const openclawBin = join(npmBin, "openclaw");
+    writeFileSync(openclawBin, "#!/bin/sh\nexit 0\n");
+    chmodSync(openclawBin, 0o755);
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        ORIGINAL_PATH=${JSON.stringify(`${visibleBin}:/usr/bin:/bin`)}
+        printf 'missing=%s\\n' "$(openclaw_command_for_user "${openclawBin}")"
+        ORIGINAL_PATH=${JSON.stringify(`${npmBin}:${visibleBin}:/usr/bin:/bin`)}
+        printf 'present=%s\\n' "$(openclaw_command_for_user "${openclawBin}")"
+      `);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(result?.stdout).toContain(`missing=${openclawBin.replace(/ /g, "\\ ")}`);
+    expect(result?.stdout).toContain("present=openclaw");
   });
 });
 

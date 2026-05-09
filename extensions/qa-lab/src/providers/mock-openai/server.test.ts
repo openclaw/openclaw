@@ -221,6 +221,26 @@ describe("qa mock openai server", () => {
     expect(partialBody).toContain('"type":"response.output_text.delta"');
     expect(partialBody).toContain("QA_PARTIAL_OK");
 
+    const telegramStreamResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput(
+            "Telegram reply-chain marker QA. Reply exactly: QA-TELEGRAM-REPLY-CHAIN-OK",
+          ),
+          makeUserInput("Quiet streaming QA check. Reply exactly: QA-TELEGRAM-STREAM-SINGLE-OK"),
+        ],
+      }),
+    });
+    expect(telegramStreamResponse.status).toBe(200);
+    const telegramStreamBody = await telegramStreamResponse.text();
+    expect(telegramStreamBody).toContain("QA-TELEGRAM-STREAM-SINGLE-OK");
+    expect(telegramStreamBody).not.toContain("QA-TELEGRAM-REPLY-CHAIN-OK");
+
     const telegramLongResponse = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
@@ -692,6 +712,178 @@ describe("qa mock openai server", () => {
     expect(payload.output?.[0]?.content?.[0]?.text).toContain("Read: AGENT.md, SOUL.md");
     expect(payload.output?.[0]?.content?.[0]?.text).toContain("Wrote: repo-contract-summary.txt");
     expect(payload.output?.[0]?.content?.[0]?.text).toContain("Status: complete");
+  });
+
+  it("uses argument-scoped tool call ids for repeated tool names", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
+
+    const first = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "gpt-5.5",
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    });
+    const firstPayload = (await first.json()) as {
+      output?: Array<{ call_id?: string }>;
+    };
+
+    const second = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
+          },
+        ],
+      }),
+    });
+    const secondPayload = (await second.json()) as {
+      output?: Array<{ call_id?: string }>;
+    };
+
+    expect(firstPayload.output?.[0]?.call_id).toMatch(/^call_mock_read_/);
+    expect(secondPayload.output?.[0]?.call_id).toMatch(/^call_mock_read_/);
+    expect(firstPayload.output?.[0]?.call_id).not.toBe(secondPayload.output?.[0]?.call_id);
+  });
+
+  it("continues repo-contract followthrough when a retry user item follows tool output", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
+          },
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "Continue after compaction." }],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('"arguments":"{\\"path\\":\\"SOUL.md\\"}"');
+  });
+
+  it("continues repo-contract followthrough from structured tool output", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output: [
+              {
+                type: "output_text",
+                text: "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "Continue after compaction." }],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('"arguments":"{\\"path\\":\\"SOUL.md\\"}"');
+  });
+
+  it("advances repo-contract followthrough when transcript text is newer than extracted tool output", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "# Execution style\n\nStay brief, honest, and action-first.\n",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain(
+      '"arguments":"{\\"path\\":\\"FOLLOWTHROUGH_INPUT.md\\"}"',
+    );
   });
 
   it("drives the compaction retry mutating tool parity flow", async () => {
@@ -1221,6 +1413,66 @@ describe("qa mock openai server", () => {
     });
     expect(threadMemorySummary.status).toBe(200);
     expect(JSON.stringify(await threadMemorySummary.json())).toContain("ORBIT-22");
+
+    const structuredThreadMemorySummary = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        instructions:
+          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        input: [
+          {
+            type: "function_call_output",
+            output: {
+              text: "Thread-hidden codename: ORBIT-22.",
+            },
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(structuredThreadMemorySummary.status).toBe(200);
+    expect(JSON.stringify(await structuredThreadMemorySummary.json())).toContain("ORBIT-22");
+
+    const systemFallbackThreadMemorySummary = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          {
+            role: "system",
+            content: "## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+          },
+          makeUserInput(
+            "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+          ),
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              results: [],
+              unavailable: true,
+              error: "database is not open",
+            }),
+          },
+        ],
+      }),
+    });
+    expect(systemFallbackThreadMemorySummary.status).toBe(200);
+    expect(JSON.stringify(await systemFallbackThreadMemorySummary.json())).toContain("ORBIT-22");
 
     const memoryFollowup = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
@@ -1851,6 +2103,99 @@ describe("qa mock openai server", () => {
         },
       ],
     });
+  });
+
+  it("lets the latest exact marker prompt beat stale Telegram session_status history", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Telegram current session_status QA check. Call session_status with sessionKey set to current.",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Telegram reply-chain marker QA. Reply exactly: QA-TELEGRAM-REPLY-CHAIN-OK",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      output: [
+        {
+          content: [{ text: "QA-TELEGRAM-REPLY-CHAIN-OK" }],
+        },
+      ],
+    });
+  });
+
+  it("does not repeat stale Telegram session_status for later ordinary prompts", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Telegram current session_status QA check. Call session_status with sessionKey set to current.",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "@sut Telegram QA mention routing check. Reply with a short acknowledgement.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(JSON.stringify(payload)).not.toContain("QA-TELEGRAM-CURRENT-SESSION");
   });
 
   it("uses exact marker directives from request context when the latest user text is generic", async () => {

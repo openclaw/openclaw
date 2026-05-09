@@ -34,42 +34,105 @@ function deriveReportEnvelope(report: Parameters<typeof filterRecordsForReport>[
 const singleOwnerEnvelope = deriveReportEnvelope("single-owner-shared");
 const unusedEnvelope = deriveReportEnvelope("unused-public-surface");
 
+function requireRecordByExport(exportName: string) {
+  const record = publicSurfaceEnvelope.records.find((entry) =>
+    entry.exportNames.includes(exportName),
+  );
+  if (!record) {
+    throw new Error(`Expected topology record for ${exportName}`);
+  }
+  return record;
+}
+
 describe("ts-topology", () => {
   it("collapses canonical symbols exported by multiple public subpaths", () => {
-    const sharedThing = publicSurfaceEnvelope.records.find((record) =>
-      record.exportNames.includes("sharedThing"),
-    );
+    const sharedThing = requireRecordByExport("sharedThing");
 
-    expect(sharedThing).toMatchObject({
+    expect(sharedThing).toEqual({
+      aliasName: undefined,
+      canonicalKey: "src/lib/shared.ts:1:sharedThing",
       declarationPath: "src/lib/shared.ts",
       declarationLine: 1,
+      entrypoints: ["extra", "index"],
+      exportNames: ["aliasedSharedThing", "sharedThing"],
+      internalConsumers: [],
+      internalImportCount: 0,
+      internalRefCount: 0,
+      isTypeOnlyCandidate: false,
+      kind: "function",
+      moveBackToOwnerScore: 0,
+      productionConsumers: [
+        "extensions/alpha/src/use.ts",
+        "extensions/beta/src/use.ts",
+        "src/internal/use.ts",
+      ],
       productionExtensions: ["alpha", "beta"],
+      productionImportCount: 4,
       productionPackages: ["src"],
+      productionRefCount: 4,
       productionOwners: ["extension:alpha", "extension:beta", "src"],
+      publicSpecifiers: ["fixture-sdk", "fixture-sdk/extra"],
+      sharednessScore: 90,
+      testConsumers: [],
+      testImportCount: 0,
+      testRefCount: 0,
     });
-    expect(sharedThing?.publicSpecifiers).toEqual(["fixture-sdk", "fixture-sdk/extra"]);
   });
 
   it("counts renamed imports, namespace imports, type-only imports, and test-only consumers", () => {
-    const aliasedThing = publicSurfaceEnvelope.records.find((record) =>
-      record.exportNames.includes("aliasedThing"),
-    );
-    const sharedType = publicSurfaceEnvelope.records.find((record) =>
-      record.exportNames.includes("SharedType"),
-    );
-    const testOnlyThing = publicSurfaceEnvelope.records.find((record) =>
-      record.exportNames.includes("testOnlyThing"),
-    );
+    const aliasedThing = requireRecordByExport("aliasedThing");
+    const sharedType = requireRecordByExport("SharedType");
+    const testOnlyThing = requireRecordByExport("testOnlyThing");
 
-    expect(aliasedThing?.productionRefCount).toBe(1);
-    expect(sharedType).toMatchObject({
+    expect(aliasedThing.productionRefCount).toBe(1);
+    expect(sharedType).toEqual({
+      aliasName: undefined,
+      canonicalKey: "src/lib/shared.ts:21:SharedType",
+      declarationLine: 21,
+      declarationPath: "src/lib/shared.ts",
+      entrypoints: ["index"],
+      exportNames: ["SharedType"],
+      internalConsumers: [],
+      internalImportCount: 0,
+      internalRefCount: 0,
       isTypeOnlyCandidate: true,
+      kind: "type",
+      moveBackToOwnerScore: 0,
+      productionConsumers: ["extensions/alpha/src/use.ts", "extensions/beta/src/use.ts"],
       productionExtensions: ["alpha", "beta"],
+      productionImportCount: 2,
+      productionOwners: ["extension:alpha", "extension:beta"],
+      productionPackages: [],
       productionRefCount: 2,
+      publicSpecifiers: ["fixture-sdk"],
+      sharednessScore: 75,
+      testConsumers: [],
+      testImportCount: 0,
+      testRefCount: 0,
     });
-    expect(testOnlyThing).toMatchObject({
+    expect(testOnlyThing).toEqual({
+      aliasName: undefined,
+      canonicalKey: "src/lib/shared.ts:13:testOnlyThing",
+      declarationLine: 13,
+      declarationPath: "src/lib/shared.ts",
+      entrypoints: ["index"],
+      exportNames: ["testOnlyThing"],
+      internalConsumers: [],
+      internalImportCount: 0,
+      internalRefCount: 0,
+      isTypeOnlyCandidate: false,
+      kind: "function",
+      moveBackToOwnerScore: 30,
+      productionConsumers: [],
+      productionExtensions: [],
+      productionImportCount: 0,
+      productionOwners: [],
+      productionPackages: [],
       productionRefCount: 0,
+      publicSpecifiers: ["fixture-sdk"],
+      sharednessScore: 0,
       testRefCount: 1,
+      testImportCount: 1,
       testConsumers: ["tests/public.test.ts"],
     });
   });

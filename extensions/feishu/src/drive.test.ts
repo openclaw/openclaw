@@ -1,5 +1,5 @@
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
 
 const createFeishuToolClientMock = vi.hoisted(() => vi.fn());
@@ -19,6 +19,22 @@ let registerFeishuDriveTools: typeof import("./drive.js").registerFeishuDriveToo
 
 function createFeishuToolRuntime(): PluginRuntime {
   return {} as PluginRuntime;
+}
+
+async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), 0);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 function createDriveToolApi(params: {
@@ -41,6 +57,16 @@ describe("registerFeishuDriveTools", () => {
 
   beforeAll(async () => {
     ({ registerFeishuDriveTools } = await import("./drive.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./tool-account.js");
+    vi.doUnmock("./comment-reaction.js");
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   beforeEach(() => {
@@ -549,10 +575,7 @@ describe("registerFeishuDriveTools", () => {
       action: "reply_comment",
       content: "ambient success",
     });
-    const status = await Promise.race([
-      replyCommentPromise.then(() => "done"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const status = await raceWithNextMacrotask(replyCommentPromise.then(() => "done"));
 
     expect(status).toBe("done");
     expect(requestMock).toHaveBeenNthCalledWith(
@@ -646,10 +669,7 @@ describe("registerFeishuDriveTools", () => {
       action: "add_comment",
       content: "ambient top-level comment",
     });
-    const status = await Promise.race([
-      addCommentPromise.then(() => "done"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const status = await raceWithNextMacrotask(addCommentPromise.then(() => "done"));
 
     expect(status).toBe("done");
     expect(requestMock).toHaveBeenCalledWith(

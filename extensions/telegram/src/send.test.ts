@@ -18,6 +18,7 @@ installTelegramSendTestHooks();
 
 const {
   botApi,
+  botConfigUseSpy,
   botCtorSpy,
   imageMetadata,
   loadConfig,
@@ -100,6 +101,13 @@ function mockLoadedMedia({
     ...(contentType ? { contentType } : {}),
     ...(fileName ? { fileName } : {}),
   });
+}
+
+function requireMockCall<T extends unknown[]>(call: T | undefined, label: string): T {
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
 }
 
 describe("sent-message-cache", () => {
@@ -516,6 +524,14 @@ describe("sendMessageTelegram", () => {
         client: expect.objectContaining({ apiRoot: "https://api.telegram.org" }),
       }),
     );
+  });
+
+  it("installs the shared grammY throttler on send clients", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "hi", { cfg: TELEGRAM_TEST_CFG, token: "tok" });
+
+    expect(botConfigUseSpy).toHaveBeenCalledWith(expect.any(Function));
   });
 
   it("falls back to plain text when Telegram rejects HTML and preserves send params", async () => {
@@ -1635,7 +1651,6 @@ describe("sendMessageTelegram", () => {
   it("retries sends without message_thread_id on thread-not-found", async () => {
     const cases = [
       { name: "forum", chatId: "-100123", text: "hello forum", messageId: 58 },
-      { name: "private", chatId: "123456789", text: "hello private", messageId: 59 },
     ] as const;
     const threadErr = new Error("400: Bad Request: message thread not found");
 
@@ -1677,6 +1692,29 @@ describe("sendMessageTelegram", () => {
       );
       expect(res.messageId, testCase.name).toBe(String(testCase.messageId));
     }
+  });
+
+  it("does not retry private DM topic sends without the topic id", async () => {
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram("123456789", "hello private", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        messageThreadId: 271,
+      }),
+    ).rejects.toThrow("message thread not found");
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith("123456789", "hello private", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
   });
 
   it("does not retry on non-retriable thread/chat errors", async () => {
@@ -1925,10 +1963,8 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = sendMessage.mock.calls[0];
-    const secondCall = sendMessage.mock.calls[1];
-    expect(firstCall).toBeDefined();
-    expect(secondCall).toBeDefined();
+    const firstCall = requireMockCall(sendMessage.mock.calls[0], "first sendMessage call");
+    const secondCall = requireMockCall(sendMessage.mock.calls[1], "second sendMessage call");
     expect((firstCall[1] as string).length).toBeLessThanOrEqual(4000);
     expect((secondCall[1] as string).length).toBeLessThanOrEqual(4000);
     expect(firstCall[2]?.reply_markup).toBeUndefined();
@@ -1956,10 +1992,8 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = sendMessage.mock.calls[0];
-    const secondCall = sendMessage.mock.calls[1];
-    expect(firstCall).toBeDefined();
-    expect(secondCall).toBeDefined();
+    const firstCall = requireMockCall(sendMessage.mock.calls[0], "first sendMessage call");
+    const secondCall = requireMockCall(sendMessage.mock.calls[1], "second sendMessage call");
     expect(String(firstCall[1] ?? "").length).toBeLessThanOrEqual(4000);
     expect(String(secondCall[1] ?? "").length).toBeLessThanOrEqual(4000);
     expect(firstCall[2]?.parse_mode).toBe("HTML");
@@ -1999,7 +2033,7 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledTimes(4);
     const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
     expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.every((call) => !String(call?.[1] ?? "").includes("<"))).toBe(true);
+    expect(plainFallbackCalls.some((call) => String(call?.[1] ?? "").includes("<"))).toBe(false);
     expect(res.messageId).toBe("91");
   });
 
@@ -2054,7 +2088,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(3);
-    expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === undefined)).toBe(true);
+    expect(sendMessage.mock.calls.some((call) => call[2]?.parse_mode !== undefined)).toBe(false);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toBe(plainText);
     expect(res.messageId).toBe("96");
   });

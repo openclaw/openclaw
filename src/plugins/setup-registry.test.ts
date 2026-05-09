@@ -25,6 +25,9 @@ let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePlug
 let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
+let setPluginSetupRegistryModuleLoaderFactoryForTest:
+  | typeof import("./setup-registry.js").setPluginSetupRegistryModuleLoaderFactoryForTest
+  | undefined;
 
 function forceNodeRuntimeVersionsForTest(): () => void {
   const originalVersions = process.versions;
@@ -163,10 +166,11 @@ async function expectNoUnhandledRejection(run: () => void | Promise<void>): Prom
   } finally {
     process.off("unhandledRejection", onUnhandledRejection);
   }
-  expect(unhandledRejections).toEqual([]);
+  expect(unhandledRejections).toStrictEqual([]);
 }
 
 afterEach(() => {
+  setPluginSetupRegistryModuleLoaderFactoryForTest?.(undefined);
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -180,7 +184,9 @@ describe("setup-registry module loader", () => {
       resolvePluginSetupProvider,
       resolvePluginSetupCliBackend,
       runPluginSetupConfigMigrations,
+      setPluginSetupRegistryModuleLoaderFactoryForTest,
     } = await import("./setup-registry.js"));
+    setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginSetupRegistryCache();
   });
 
@@ -273,7 +279,7 @@ describe("setup-registry module loader", () => {
       env: {},
     });
 
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
@@ -540,7 +546,7 @@ describe("setup-registry module loader", () => {
       requiresRuntime: true,
     });
 
-    expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toEqual([]);
+    expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toStrictEqual([]);
   });
 
   it("does not load setup-api modules from the current working directory", () => {

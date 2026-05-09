@@ -112,6 +112,8 @@ export type PluginHookMessageSendingEvent = {
 export type PluginHookMessageSendingResult = {
   content?: string;
   cancel?: boolean;
+  cancelReason?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type PluginHookMessageSentEvent = {

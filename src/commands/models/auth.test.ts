@@ -47,7 +47,7 @@ vi.mock("../../plugins/provider-auth-helpers.js", () => ({
     params: {
       profileId: string;
       provider: string;
-      mode: "api_key" | "oauth" | "token";
+      mode: "api_key" | "aws-sdk" | "oauth" | "token";
       email?: string;
       displayName?: string;
     },
@@ -533,24 +533,25 @@ describe("modelsAuthLoginCommand", () => {
       },
     };
     const note = vi.fn(async () => {});
+    const select = vi.fn();
     mocks.createClackPrompter.mockReturnValue({
       note,
-      select: vi.fn(),
+      select,
     });
     const runApiKeyAuth = vi.fn();
     const runClaudeCliMigration = vi.fn().mockImplementation(async (ctx) => {
       expect(ctx.config).toEqual(currentConfig);
       expect(ctx.agentDir).toBe("/tmp/openclaw/agents/main");
       expect(ctx.workspaceDir).toBe("/tmp/openclaw/workspace");
-      expect(ctx.prompter).toMatchObject({ note, select: expect.any(Function) });
+      expect(ctx.prompter.note).toBe(note);
+      expect(ctx.prompter.select).toBe(select);
       expect(ctx.runtime).toBe(runtime);
       expect(ctx.env).toBe(process.env);
       expect(ctx.allowSecretRefPrompt).toBe(false);
       expect(ctx.isRemote).toBe(false);
-      expect(ctx.openUrl).toEqual(expect.any(Function));
-      expect(ctx.oauth).toMatchObject({
-        createVpsAwareHandlers: expect.any(Function),
-      });
+      await ctx.openUrl("https://example.com/auth");
+      expect(mocks.openUrl).toHaveBeenCalledWith("https://example.com/auth");
+      expect(ctx.oauth.createVpsAwareHandlers).toBeTypeOf("function");
       return {
         profiles: [],
         defaultModel: "claude-cli/claude-sonnet-4-6",

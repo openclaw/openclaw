@@ -20,6 +20,15 @@ function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoice
   };
 }
 
+function expectBridgeRequest(
+  request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined,
+): Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] {
+  if (!request) {
+    throw new Error("Expected realtime voice provider bridge request");
+  }
+  return request;
+}
+
 describe("realtime voice bridge session runtime", () => {
   it("routes provider output through an open audio sink", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
@@ -76,7 +85,9 @@ describe("realtime voice bridge session runtime", () => {
       audioSink: { sendAudio: vi.fn() },
     });
 
-    expect(request?.audioFormat).toEqual(REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ);
+    expect(expectBridgeRequest(request).audioFormat).toEqual(
+      REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+    );
   });
 
   it("passes the audio auto-response preference to the provider bridge", () => {
@@ -98,7 +109,29 @@ describe("realtime voice bridge session runtime", () => {
       audioSink: { sendAudio: vi.fn() },
     });
 
-    expect(request?.autoRespondToAudio).toBe(false);
+    expect(expectBridgeRequest(request).autoRespondToAudio).toBe(false);
+  });
+
+  it("passes the audio interrupt preference to the provider bridge", () => {
+    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (nextRequest) => {
+        request = nextRequest;
+        return makeBridge();
+      },
+    };
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      interruptResponseOnInputAudio: false,
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    expect(expectBridgeRequest(request).interruptResponseOnInputAudio).toBe(false);
   });
 
   it("can acknowledge provider marks without transport mark support", () => {

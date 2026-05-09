@@ -43,6 +43,7 @@ describe("telegramMessageActions", () => {
       cfg: {} as never,
       accountId: "default",
       mediaLocalRoots: [],
+      sessionKey: "telegram-session",
     } as never);
 
     expect(handleTelegramActionMock).toHaveBeenCalledWith(
@@ -62,6 +63,7 @@ describe("telegramMessageActions", () => {
       expect.anything(),
       expect.objectContaining({
         mediaLocalRoots: [],
+        sessionKey: "telegram-session",
       }),
     );
   });
@@ -299,15 +301,17 @@ describe("telegramMessageActions", () => {
       const call = handleTelegramActionMock.mock.calls[0]?.[0] as
         | Record<string, unknown>
         | undefined;
-      expect(call, testCase.name).toBeDefined();
-      expect(call?.action, testCase.name).toBe("react");
-      expect(String(call?.[testCase.expectedChannelField]), testCase.name).toBe(
+      if (!call) {
+        throw new Error(`expected Telegram action call for ${testCase.name}`);
+      }
+      expect(call.action, testCase.name).toBe("react");
+      expect(String(call[testCase.expectedChannelField]), testCase.name).toBe(
         testCase.expectedChannelValue,
       );
       if (testCase.expectedMessageId === undefined) {
-        expect(call?.messageId, testCase.name).toBeUndefined();
+        expect(call.messageId, testCase.name).toBeUndefined();
       } else {
-        expect(String(call?.messageId), testCase.name).toBe(testCase.expectedMessageId);
+        expect(String(call.messageId), testCase.name).toBe(testCase.expectedMessageId);
       }
     }
   });

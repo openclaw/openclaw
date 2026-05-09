@@ -21,6 +21,51 @@ import {
 } from "./provider-transport-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
+type OpenAICompletionsOutput = Parameters<typeof __testing.processOpenAICompletionsStream>[1];
+
+type CapturedStreamEvent = { type?: string; delta?: string };
+
+function createDeepSeekCompletionsModel(): Model<"openai-completions"> {
+  return {
+    id: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    api: "openai-completions",
+    provider: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+  };
+}
+
+function createAssistantOutput(model: Model<"openai-completions">): OpenAICompletionsOutput {
+  return {
+    role: "assistant" as const,
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> {
+  for (const chunk of chunks) {
+    yield chunk as never;
+  }
+}
+
 describe("openai transport stream", () => {
   it("adds OpenClaw attribution to native OpenAI transport headers and protects it from pi", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
@@ -781,6 +826,252 @@ describe("openai transport stream", () => {
     expect(output.stopReason).toBe("stop");
   });
 
+  it("filters DeepSeek DSML content without disturbing native tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "before <｜DSML｜tool_use_error>body</｜DSML｜tool_use_error> after",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "<|DSML|tool_calls>shadow</|DSML|tool_calls>",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: "before  after" },
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("preserves DeepSeek visible content before same-chunk native tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-native-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "I'll check",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: "I'll check" },
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+    ]);
+  });
+
+  it("filters DeepSeek DSML text queued after native tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-post-tool-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-post-tool-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "<|DSML|tool_calls>shadow</|DSML|tool_calls> visible",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+      { type: "text", text: " visible" },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("keeps DeepSeek DSML state across native tool-call chunks", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-split-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "before <|DSML|tool",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-split-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "_calls>shadow</|DSML|tool_calls> after",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: "before " },
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+      { type: "text", text: " after" },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
   it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", () => {
     const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
@@ -998,9 +1289,11 @@ describe("openai transport stream", () => {
     };
 
     expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
-    expect(params.input?.some((item) => item.role === "system" || item.role === "developer")).toBe(
-      false,
-    );
+    expect(Array.isArray(params.input)).toBe(true);
+    expect(params.input?.map((item) => item.role)).toEqual(["user"]);
+    expect(
+      params.input?.filter((item) => item.role === "system" || item.role === "developer"),
+    ).toStrictEqual([]);
     expect(params.prompt_cache_key).toBe("session-123");
     expect(params.store).toBe(false);
     expect(params).not.toHaveProperty("metadata");
@@ -1299,7 +1592,9 @@ describe("openai transport stream", () => {
       }>;
     };
 
-    expect(params.input?.some((item) => item.type === "reasoning")).toBe(true);
+    expect(
+      params.input?.reduce((count, item) => count + (item.type === "reasoning" ? 1 : 0), 0),
+    ).toBe(1);
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );
@@ -2223,7 +2518,14 @@ describe("openai transport stream", () => {
       } as never,
     ) as { reasoning_effort?: unknown; tools?: unknown };
 
-    expect(params.tools).toBeDefined();
+    expect(params.tools).toEqual([
+      expect.objectContaining({
+        type: "function",
+        function: expect.objectContaining({
+          name: "lookup_weather",
+        }),
+      }),
+    ]);
     expect(params).not.toHaveProperty("reasoning_effort");
   });
 
@@ -2251,7 +2553,7 @@ describe("openai transport stream", () => {
       } as never,
     ) as { reasoning_effort?: unknown; tools?: unknown };
 
-    expect(params.tools).toEqual([]);
+    expect(params.tools).toStrictEqual([]);
     expect(params.reasoning_effort).toBe("medium");
   });
 
@@ -2293,6 +2595,72 @@ describe("openai transport stream", () => {
 
     expect(enabled.reasoning_effort).toBe("default");
     expect(disabled.reasoning_effort).toBe("none");
+  });
+
+  it("maps qwen thinking format to top-level enable_thinking", () => {
+    const baseModel = {
+      id: "qwen3.5-32b",
+      name: "Qwen 3.5 32B",
+      api: "openai-completions",
+      provider: "llama-cpp",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: {
+        thinkingFormat: "qwen",
+      },
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const enabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "medium",
+    } as never) as { enable_thinking?: unknown; reasoning_effort?: unknown };
+    const disabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "off",
+    } as never) as { enable_thinking?: unknown; reasoning_effort?: unknown };
+
+    expect(enabled.enable_thinking).toBe(true);
+    expect(disabled.enable_thinking).toBe(false);
+    expect(enabled).not.toHaveProperty("reasoning_effort");
+    expect(disabled).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("maps qwen-chat-template thinking format to chat_template_kwargs", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen3.5-32b",
+        name: "Qwen 3.5 32B",
+        api: "openai-completions",
+        provider: "llama-cpp",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+        compat: {
+          thinkingFormat: "qwen-chat-template",
+        },
+      } as unknown as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "off",
+      } as never,
+    ) as { chat_template_kwargs?: Record<string, unknown>; reasoning_effort?: unknown };
+
+    expect(params.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(params).not.toHaveProperty("reasoning_effort");
   });
 
   it("omits unsupported disabled reasoning for completions providers", () => {
@@ -2752,6 +3120,47 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function?.strict).toBe(false);
   });
 
+  it("applies model compat unsupported schema keywords to completions tools", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+        name: "Kimi K2.5 Turbo",
+        api: "openai-completions",
+        provider: "fireworks",
+        baseUrl: "https://api.fireworks.ai/inference/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 256000,
+        compat: {
+          unsupportedToolSchemaKeywords: ["not"],
+        } as never,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {
+              type: "object",
+              properties: {
+                forbidden: { not: {} },
+              },
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
+    };
+
+    expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toStrictEqual({});
+  });
+
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
     const geminiModel = {
       id: "gemini-3-flash-preview",
@@ -2901,7 +3310,7 @@ describe("openai transport stream", () => {
       );
     });
 
-    it("does not replay thought_signature across a different API surface", () => {
+    it("uses the Gemini skip-validator signature across a different API surface", () => {
       const params = buildOpenAICompletionsParams(
         geminiModel,
         {
@@ -2938,12 +3347,14 @@ describe("openai transport stream", () => {
       ) as { messages: Array<Record<string, unknown>> };
 
       const assistant = params.messages.find((message) => message.role === "assistant") as
-        | { tool_calls?: Array<{ extra_content?: unknown }> }
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
         | undefined;
-      expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "skip_thought_signature_validator",
+      );
     });
 
-    it("does not emit extra_content when no thought_signature was captured", () => {
+    it("uses the Gemini skip-validator signature when no thought_signature was captured", () => {
       const params = buildOpenAICompletionsParams(
         geminiModel,
         {
@@ -2964,6 +3375,55 @@ describe("openai transport stream", () => {
               stopReason: "toolUse",
               timestamp: 1,
               content: [{ type: "toolCall", id: "call_abc", name: "echo_value", arguments: {} }],
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((message) => message.role === "assistant") as
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+        | undefined;
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "skip_thought_signature_validator",
+      );
+    });
+
+    it("does not trust cross-route thought_signature for non-Gemini-3 Google compat models", () => {
+      const nonGemini3Model = {
+        ...geminiModel,
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+      };
+      const params = buildOpenAICompletionsParams(
+        nonGemini3Model,
+        {
+          messages: [
+            {
+              role: "assistant",
+              api: "google-generative-ai",
+              provider: nonGemini3Model.provider,
+              model: nonGemini3Model.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_abc",
+                  name: "echo_value",
+                  arguments: { value: "repro" },
+                  thoughtSignature: "SIG-OPAQUE-ABC==",
+                },
+              ],
             },
           ],
           tools: [],
@@ -3093,8 +3553,10 @@ describe("openai transport stream", () => {
     };
 
     const functionCall = params.input?.find((item) => item.type === "function_call");
-    expect(functionCall).toBeDefined();
-    expect(functionCall?.arguments).toBe("not valid json");
+    expect(functionCall).toMatchObject({
+      type: "function_call",
+      arguments: "not valid json",
+    });
   });
 
   it("defaults tool_choice to auto for proxy-like openai-completions endpoints", () => {
@@ -3285,9 +3747,9 @@ describe("openai transport stream", () => {
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("stop");
-    expect(output.content.some((block) => (block as { type?: string }).type === "toolCall")).toBe(
-      false,
-    );
+    expect(
+      output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
+    ).toStrictEqual([]);
   });
 
   it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {
@@ -3386,6 +3848,85 @@ describe("openai transport stream", () => {
     expect(thinkingBlock.thinking).toBe("I need to think about this. Let me analyze.");
     expect(textBlock.type).toBe("text");
     expect(textBlock.text).toBe(" Hello! How can I help you?");
+  });
+
+  it("normalizes structured completions content blocks without stringifying objects (#78846)", async () => {
+    const model = {
+      id: "mistral-small-latest",
+      name: "Mistral Small",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+    const mockChunks = [
+      {
+        id: "chatcmpl-structured-content",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: [
+                { type: "thinking", thinking: [{ type: "text", text: "Need to think." }] },
+                { type: "text", content: "Visible answer." },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-structured-content",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toEqual([
+      { type: "thinking", thinking: "Need to think.", thinkingSignature: "content" },
+      { type: "text", text: "Visible answer." },
+    ]);
   });
 
   it("keeps tool calls when reasoning_details and tool_calls share a chunk", async () => {

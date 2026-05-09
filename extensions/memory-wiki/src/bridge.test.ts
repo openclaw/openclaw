@@ -128,7 +128,9 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(first.pagePaths).toHaveLength(3);
 
     const sourcePages = await fs.readdir(path.join(vaultDir, "sources"));
-    expect(sourcePages.filter((name) => name.startsWith("bridge-"))).toHaveLength(3);
+    expect(
+      sourcePages.reduce((count, name) => count + (name.startsWith("bridge-") ? 1 : 0), 0),
+    ).toBe(3);
 
     const memoryPage = await fs.readFile(path.join(vaultDir, first.pagePaths[0] ?? ""), "utf8");
     expect(memoryPage).toContain("sourceType: memory-bridge");
@@ -287,7 +289,9 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     const first = await syncMemoryWikiBridgeSources({ config, appConfig });
     const firstPagePath = first.pagePaths[0] ?? "";
-    await expect(fs.stat(path.join(vaultDir, firstPagePath))).resolves.toBeTruthy();
+    await expect(fs.readFile(path.join(vaultDir, firstPagePath), "utf8")).resolves.toContain(
+      "# Durable Memory",
+    );
 
     await fs.rm(path.join(workspaceDir, "MEMORY.md"));
     registerBridgeArtifacts([]);
@@ -431,6 +435,8 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     expect(result.importedCount).toBe(1);
     expect(Buffer.byteLength(path.basename(pagePath))).toBeLessThanOrEqual(255);
-    await expect(fs.stat(path.join(vaultDir, pagePath))).resolves.toBeTruthy();
+    await expect(fs.readFile(path.join(vaultDir, pagePath), "utf8")).resolves.toContain(
+      "# Deep Unicode Note",
+    );
   });
 });

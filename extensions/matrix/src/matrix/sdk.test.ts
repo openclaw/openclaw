@@ -292,17 +292,21 @@ describe("MatrixClient request hardening", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("injects a guarded fetchFn into matrix-js-sdk", () => {
-    const client = new MatrixClient("https://matrix.example.org", "token", {
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+  it("injects a guarded fetchFn into matrix-js-sdk", async () => {
+    const client = new MatrixClient("https://matrix.example.org", "token");
     expect(client).toBeInstanceOf(MatrixClient);
 
     expect(lastCreateClientOpts).toMatchObject({
       baseUrl: "https://matrix.example.org",
       accessToken: "token",
     });
-    expect(lastCreateClientOpts?.fetchFn).toEqual(expect.any(Function));
+    const fetchFn = lastCreateClientOpts?.fetchFn as typeof fetch | undefined;
+    if (!fetchFn) {
+      throw new Error("expected Matrix SDK guarded fetch");
+    }
+    await expect(fetchFn("http://127.0.0.1/_matrix/client/v3/account/whoami")).rejects.toThrow(
+      /private|blocked|not allowed/i,
+    );
   });
 
   it("prefers authenticated client media downloads", async () => {
@@ -600,8 +604,10 @@ describe("MatrixClient request hardening", () => {
       });
 
       const store = lastCreateClientOpts?.store as { flush: () => Promise<void> } | undefined;
-      expect(store).toBeTruthy();
-      const flushSpy = vi.spyOn(store!, "flush").mockResolvedValue();
+      if (!store) {
+        throw new Error("expected Matrix sync store");
+      }
+      const flushSpy = vi.spyOn(store, "flush").mockResolvedValue();
 
       await client.stopAndPersist();
 
@@ -1164,11 +1170,17 @@ describe("MatrixClient event bridge", () => {
     });
 
     await vi.waitFor(() => {
-      expect(releaseSyncReady).toEqual(expect.any(Function));
+      if (!releaseSyncReady) {
+        throw new Error("expected Matrix sync ready release callback");
+      }
     });
     expect(resolved).toBe(false);
 
-    releaseSyncReady?.();
+    const release = releaseSyncReady;
+    if (!release) {
+      throw new Error("expected Matrix sync ready release callback");
+    }
+    release();
     await startPromise;
 
     expect(resolved).toBe(true);
@@ -1561,8 +1573,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       }
     ).cryptoBootstrapper.bootstrap = bootstrapSpy;
 
-    // start() must NOT throw even when the repair bootstrap fails
-    await expect(client.start()).resolves.not.toThrow();
+    await expect(client.start()).resolves.toBeUndefined();
 
     // repair was attempted
     expect(bootstrapSpy).toHaveBeenCalledTimes(2);
@@ -1612,9 +1623,12 @@ describe("MatrixClient crypto bootstrapping", () => {
       debug?: (...args: unknown[]) => void;
       getChild?: (namespace: string) => unknown;
     } | null;
-    expect(logger).not.toBeNull();
-    expect(logger?.debug).toBeTypeOf("function");
-    expect(logger?.getChild).toBeTypeOf("function");
+    expect(logger).toEqual(
+      expect.objectContaining({
+        debug: expect.any(Function),
+        getChild: expect.any(Function),
+      }),
+    );
   });
 
   it("passes a custom sync filter to matrix-js-sdk startup", async () => {
@@ -1733,7 +1747,13 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     const status = await client.getOwnDeviceVerificationStatus();
     expect(status.verified).toBe(true);
-    expect(status.backup).toBeDefined();
+    expect(status.backup).toMatchObject({
+      serverVersion: null,
+      activeVersion: null,
+      trusted: null,
+      keyLoadAttempted: false,
+      keyLoadError: null,
+    });
     expect(status.serverDeviceKnown).toBeNull();
   });
 
@@ -3193,7 +3213,9 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(result.success).toBe(true);
     expect(result.verification.verified).toBe(true);
     expect(result.crossSigning.published).toBe(true);
-    expect(result.cryptoBootstrap).not.toBeNull();
+    if (!result.cryptoBootstrap) {
+      throw new Error("expected Matrix crypto bootstrap result");
+    }
   });
 
   it("reports bootstrap failure when the device is only locally trusted", async () => {

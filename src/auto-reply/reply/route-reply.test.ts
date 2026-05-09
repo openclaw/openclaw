@@ -18,6 +18,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
+}));
+
+vi.mock("../../infra/outbound/deliver.js", () => ({
+  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
 const { routeReply } = await import("./route-reply.js");
@@ -204,7 +210,7 @@ describe("routeReply", () => {
   });
 
   it("suppresses reasoning payloads", async () => {
-    await expectSlackNoDelivery({ text: "Reasoning:\n_step_", isReasoning: true });
+    await expectSlackNoDelivery({ text: "step", isReasoning: true });
   });
 
   it("drops silent token payloads", async () => {

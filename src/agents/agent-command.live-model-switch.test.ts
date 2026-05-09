@@ -265,10 +265,12 @@ vi.mock("../utils/message-channel.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
+  listAgentEntries: () => [],
   listAgentIds: () => ["default"],
   resolveAgentConfig: () => undefined,
   resolveAgentDir: () => "/tmp/agent",
   resolveEffectiveModelFallbacks: state.resolveEffectiveModelFallbacksMock,
+  resolveSessionAgentIds: () => ({ defaultAgentId: "default", sessionAgentId: "default" }),
   resolveSessionAgentId: () => "default",
   resolveAgentSkillsFilter: () => undefined,
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
@@ -782,8 +784,16 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       };
     });
     state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
+      const firstAttempt = attemptCalls.length === 0;
       attemptCalls.push(attemptParams);
-      attemptParams.onUserMessagePersisted?.();
+      if (firstAttempt) {
+        if (!attemptParams.onUserMessagePersisted) {
+          throw new Error("expected retry persistence callback on first attempt");
+        }
+        attemptParams.onUserMessagePersisted();
+      } else {
+        attemptParams.onUserMessagePersisted?.();
+      }
       return makeSuccessResult("openai", "gpt-5.4");
     });
 
@@ -791,7 +801,38 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(attemptCalls).toHaveLength(2);
     expect(attemptCalls[0]?.suppressPromptPersistenceOnRetry).not.toBe(true);
-    expect(typeof attemptCalls[0]?.onUserMessagePersisted).toBe("function");
+    expect(attemptCalls[1]?.suppressPromptPersistenceOnRetry).toBe(true);
+  });
+
+  it("suppresses prompt persistence for internal handoffs on every fallback attempt", async () => {
+    type AttemptCall = {
+      suppressPromptPersistenceOnRetry?: boolean;
+    };
+    const attemptCalls: AttemptCall[] = [];
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const first = await params.run(params.provider, params.model);
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [first],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
+      attemptCalls.push(attemptParams);
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await agentCommand({
+      message: "internal handoff",
+      to: "+1234567890",
+      senderIsOwner: true,
+      suppressPromptPersistence: true,
+    });
+
+    expect(attemptCalls).toHaveLength(2);
+    expect(attemptCalls[0]?.suppressPromptPersistenceOnRetry).toBe(true);
     expect(attemptCalls[1]?.suppressPromptPersistenceOnRetry).toBe(true);
   });
 

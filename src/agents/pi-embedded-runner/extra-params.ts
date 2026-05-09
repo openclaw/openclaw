@@ -6,6 +6,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
+  type ProviderRuntimePluginHandle,
   resolveProviderExtraParamsForTransport as resolveProviderExtraParamsForTransportRuntime,
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
@@ -21,6 +22,7 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOpenAICompletionsToolsCompatWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "./openai-stream-wrappers.js";
@@ -128,7 +130,6 @@ export function resolveExtraParams(params: {
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
-  openaiWsWarmup?: boolean;
 };
 export type SupportedTransport = "sse" | "websocket" | "auto";
 
@@ -206,6 +207,7 @@ export function resolvePreparedExtraParams(params: {
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
   resolvedTransport?: SupportedTransport;
+  providerRuntimeHandle?: ProviderRuntimePluginHandle;
 }): Record<string, unknown> {
   const resolvedExtraParams =
     params.resolvedExtraParams ??
@@ -252,6 +254,7 @@ export function resolvePreparedExtraParams(params: {
       provider: params.provider,
       config: params.cfg,
       workspaceDir: params.workspaceDir,
+      runtimeHandle: params.providerRuntimeHandle,
       context: {
         config: params.cfg,
         agentDir: params.agentDir,
@@ -266,6 +269,7 @@ export function resolvePreparedExtraParams(params: {
     provider: params.provider,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    runtimeHandle: params.providerRuntimeHandle,
     context: {
       config: params.cfg,
       agentDir: params.agentDir,
@@ -329,9 +333,6 @@ function applyDefaultOpenAIGptRuntimeParams(
   if (!Object.hasOwn(merged, "text_verbosity") && !Object.hasOwn(merged, "textVerbosity")) {
     merged.text_verbosity = "low";
   }
-  if (!Object.hasOwn(merged, "openaiWsWarmup")) {
-    merged.openaiWsWarmup = false;
-  }
 }
 
 export function resolveAgentTransportOverride(params: {
@@ -387,9 +388,6 @@ function createStreamFnWithExtraParams(
         ? extraParams.transport
         : typeof extraParams.transport;
     log.warn(`ignoring invalid transport param: ${transportSummary}`);
-  }
-  if (typeof extraParams.openaiWsWarmup === "boolean") {
-    streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
   }
   const cachedContent =
     typeof extraParams.cachedContent === "string"
@@ -687,6 +685,7 @@ function applyPostPluginStreamWrappers(
 ): void {
   ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
+  ctx.agent.streamFn = createOpenAICompletionsToolsCompatWrapper(ctx.agent.streamFn);
 
   if (!ctx.providerWrapperHandled) {
     // Guard Google-family payloads against invalid negative thinking budgets
@@ -830,8 +829,8 @@ export function applyExtraParamsToAgent(
     },
   });
   agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
-  // Apply caller/config extra params outside provider defaults so explicit values
-  // like `openaiWsWarmup=false` can override provider-added defaults.
+  // Apply caller/config extra params outside provider defaults so explicit runtime
+  // transport values can override provider-added defaults.
   applyPrePluginStreamWrappers(wrapperContext);
   const providerWrapperHandled =
     pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;

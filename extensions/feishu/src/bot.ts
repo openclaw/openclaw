@@ -1,3 +1,4 @@
+import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   ensureConfiguredBindingRouteReady,
@@ -28,7 +29,6 @@ import {
   parseMessageContent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
-  toMessageResourceType,
 } from "./bot-content.js";
 import {
   buildAgentMediaPayload,
@@ -291,6 +291,21 @@ export function parseFeishuMessageEvent(
   return ctx;
 }
 
+const MAX_MENTION_CONTEXT_NAME_LENGTH = 80;
+
+function formatMentionNameForAgentContext(name: string): string {
+  const stripped = Array.from(name, (char) => {
+    const code = char.charCodeAt(0);
+    return code < 0x20 || char === "[" || char === "]" ? " " : char;
+  }).join("");
+  const normalized = stripped.replace(/\s+/g, " ").trim();
+  const bounded =
+    normalized.length > MAX_MENTION_CONTEXT_NAME_LENGTH
+      ? `${normalized.slice(0, MAX_MENTION_CONTEXT_NAME_LENGTH - 3)}...`
+      : normalized;
+  return JSON.stringify(bounded || "unknown");
+}
+
 export function buildFeishuAgentBody(params: {
   ctx: Pick<
     FeishuMessageContext,
@@ -321,8 +336,10 @@ export function buildFeishuAgentBody(params: {
   }
 
   if (ctx.mentionTargets && ctx.mentionTargets.length > 0) {
-    const targetNames = ctx.mentionTargets.map((t) => t.name).join(", ");
-    messageBody += `\n\n[System: Your reply will automatically @mention: ${targetNames}. Do not write @xxx yourself.]`;
+    const targetNames = ctx.mentionTargets
+      .map((t) => formatMentionNameForAgentContext(t.name))
+      .join(", ");
+    messageBody += `\n\n[System: Feishu users mentioned in the incoming message, for context only: ${targetNames}. Do not notify or mention these users solely because they are listed here.]`;
   }
 
   // Keep message_id on its own line so shared message-id hint stripping can parse it reliably.
@@ -806,6 +823,11 @@ export async function handleFeishuMessage(params: {
           runtime,
           senderOpenId: ctx.senderOpenId,
           dynamicCfg,
+          configWritesAllowed: resolveChannelConfigWrites({
+            cfg,
+            channelId: "feishu",
+            accountId: account.accountId,
+          }),
           log: (msg) => log(msg),
         });
         if (result.created) {
@@ -1351,6 +1373,8 @@ export async function handleFeishuMessage(params: {
           },
         };
         const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+          cfg,
+          agentId,
           storePath: agentStorePath,
           sessionKey: agentSessionKey,
         });
@@ -1375,7 +1399,6 @@ export async function handleFeishuMessage(params: {
             replyInThread,
             rootId: ctx.rootId,
             threadReply,
-            mentionTargets: ctx.mentionTargets,
             accountId: account.accountId,
             identity,
             messageCreateTimeMs,
@@ -1526,6 +1549,8 @@ export async function handleFeishuMessage(params: {
         agentId: route.agentId,
       });
       const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+        cfg,
+        agentId: route.agentId,
         storePath,
         sessionKey: route.sessionKey,
       });
@@ -1540,7 +1565,6 @@ export async function handleFeishuMessage(params: {
         replyInThread,
         rootId: ctx.rootId,
         threadReply,
-        mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
         identity,
         messageCreateTimeMs,

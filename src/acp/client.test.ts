@@ -10,7 +10,13 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
     baseEnv: NodeJS.ProcessEnv,
     keys: Iterable<string>,
   ): NodeJS.ProcessEnv => {
-    const denied = new Set([...keys].map((key) => key.trim().toUpperCase()).filter(Boolean));
+    const denied = new Set<string>();
+    for (const key of keys) {
+      const normalized = key.trim().toUpperCase();
+      if (normalized) {
+        denied.add(normalized);
+      }
+    }
     const env = { ...baseEnv };
     for (const key of Object.keys(env)) {
       if (denied.has(key.toUpperCase())) {
@@ -172,7 +178,7 @@ describe("resolveAcpClientSpawnEnv", () => {
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
   });
 
-  it("preserves provider auth env vars for explicit custom ACP servers", () => {
+  it("preserves provider auth env vars when no strip keys are provided", () => {
     const env = resolveAcpClientSpawnEnv({
       OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
       GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret

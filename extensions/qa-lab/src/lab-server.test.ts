@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
+import { readQaJsonBody } from "./bus-server.js";
+import {
+  startQaLabServer,
+  writeQaLabServerError,
+  type QaLabServerStartParams,
+} from "./lab-server.js";
 
 vi.mock("@openclaw/qa-channel/api.js", async () => await import("../../qa-channel/api.js"));
 
@@ -30,6 +35,15 @@ const captureMock = vi.hoisted(() => {
         return acc;
       }, {}),
     ).map(([value, count]) => ({ value, count }));
+  const countMatching = <T>(values: T[], predicate: (value: T) => boolean) => {
+    let count = 0;
+    for (const value of values) {
+      if (predicate(value)) {
+        count += 1;
+      }
+    }
+    return count;
+  };
 
   const store = {
     upsertSession(session: Record<string, unknown>) {
@@ -41,7 +55,7 @@ const captureMock = vi.hoisted(() => {
     listSessions(limit: number) {
       return sessions.slice(0, limit).map((session) =>
         Object.assign({}, session, {
-          eventCount: events.filter((event) => event.sessionId === session.id).length,
+          eventCount: countMatching(events, (event) => event.sessionId === session.id),
         }),
       );
     },
@@ -54,7 +68,7 @@ const captureMock = vi.hoisted(() => {
       return {
         sessionId,
         totalEvents: selected.length,
-        unlabeledEventCount: metas.filter((meta) => !meta.provider && !meta.model).length,
+        unlabeledEventCount: countMatching(metas, (meta) => !meta.provider && !meta.model),
         providers: countValues(metas.map((meta) => meta.provider as string | undefined)),
         apis: countValues(metas.map((meta) => meta.api as string | undefined)),
         models: countValues(metas.map((meta) => meta.model as string | undefined)),
@@ -175,39 +189,59 @@ async function fetchWithRetry(input: string, init?: RequestInit, attempts = 3) {
 }
 
 async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const response = await fetchWithRetry(`${baseUrl}/api/bootstrap`);
-    const bootstrap = (await response.json()) as {
-      runnerCatalog: {
+  let catalog:
+    | {
         status: "loading" | "ready" | "failed";
         real: Array<{ key: string; name: string }>;
+      }
+    | undefined;
+  await vi.waitFor(
+    async () => {
+      const response = await fetchWithRetry(`${baseUrl}/api/bootstrap`);
+      const bootstrap = (await response.json()) as {
+        runnerCatalog: {
+          status: "loading" | "ready" | "failed";
+          real: Array<{ key: string; name: string }>;
+        };
       };
-    };
-    if (bootstrap.runnerCatalog.status !== "loading") {
-      return bootstrap.runnerCatalog;
-    }
-    await sleep(10);
+      if (bootstrap.runnerCatalog.status === "loading") {
+        throw new Error("runner catalog still loading");
+      }
+      catalog = bootstrap.runnerCatalog;
+    },
+    { interval: 1, timeout: timeoutMs },
+  );
+  if (!catalog) {
+    throw new Error("runner catalog stayed loading");
   }
-  throw new Error("runner catalog stayed loading");
+  return catalog;
 }
 
 async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const content = await readFile(filePath, "utf8");
-      if (content === expected) {
-        return content;
+  let content: string | undefined;
+  await vi.waitFor(
+    async () => {
+      try {
+        content = await readFile(filePath, "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
+      if (content !== expected) {
+        throw new Error(`file did not reach expected content: ${filePath}`);
       }
-    }
-    await sleep(10);
+    },
+    { interval: 1, timeout: timeoutMs },
+  );
+  if (content === undefined) {
+    throw new Error(`file did not reach expected content: ${filePath}`);
   }
-  throw new Error(`file did not reach expected content: ${filePath}`);
+  return content;
+}
+
+async function expectFileMissing(filePath: string): Promise<void> {
+  await expect(readFile(filePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 async function createQaLabRepoRootFixture(params?: {
@@ -285,7 +319,7 @@ describe("qa-lab server", () => {
     expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/#token=qa-token");
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
-    expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
+    expect(bootstrap.scenarios.map((scenario) => scenario.id)).toContain("dm-chat-baseline");
     expect(bootstrap.runner.status).toBe("idle");
     expect(bootstrap.runner.selection.providerMode).toBe("live-frontier");
     expect(bootstrap.runner.selection.scenarioIds).toHaveLength(bootstrap.scenarios.length);
@@ -309,9 +343,41 @@ describe("qa-lab server", () => {
     const snapshot = (await stateResponse.json()) as {
       messages: Array<{ direction: string; text: string }>;
     };
-    expect(snapshot.messages.some((message) => message.text === "hello from test")).toBe(true);
+    expect(snapshot.messages.map((message) => message.text)).toContain("hello from test");
 
-    await expect(readFile(outputPath, "utf8")).rejects.toThrow();
+    await expectFileMissing(outputPath);
+  });
+
+  it("returns controlled errors for oversized JSON body reads", async () => {
+    const req = {
+      headers: { "content-length": String(1024 * 1024 + 1) },
+      destroyed: false,
+      destroy() {
+        this.destroyed = true;
+      },
+    };
+    const res = {
+      statusCode: 0,
+      body: "",
+      writeHead(statusCode: number) {
+        this.statusCode = statusCode;
+      },
+      end(payload: string) {
+        this.body = payload;
+      },
+    };
+
+    let error: unknown;
+    try {
+      await readQaJsonBody(req as never);
+    } catch (caught) {
+      error = caught;
+    }
+
+    writeQaLabServerError(res as never, error);
+
+    expect(res.statusCode).toBe(413);
+    expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
   });
 
   it("anchors direct self-check runs under the explicit repo root by default", async () => {
@@ -352,8 +418,8 @@ describe("qa-lab server", () => {
     ).json()) as {
       messages: Array<{ text: string }>;
     };
-    expect(autoSnapshot.messages.some((message) => message.text.includes("QA mission:"))).toBe(
-      true,
+    expect(autoSnapshot.messages.map((message) => message.text)).toEqual(
+      expect.arrayContaining([expect.stringContaining("QA mission:")]),
     );
 
     const manualLab = await startQaLabServerForTest({
@@ -375,9 +441,9 @@ describe("qa-lab server", () => {
     ).json()) as {
       messages: Array<{ text: string }>;
     };
-    expect(
-      manualSnapshot.messages.some((message) => message.text.includes("Lobster Invaders")),
-    ).toBe(true);
+    expect(manualSnapshot.messages.map((message) => message.text)).toEqual(
+      expect.arrayContaining([expect.stringContaining("Lobster Invaders")]),
+    );
   });
 
   it("proxies control-ui paths through /control-ui", async () => {
@@ -548,7 +614,7 @@ describe("qa-lab server", () => {
     });
 
     await sleep(25);
-    await expect(readFile(markerPath, "utf8")).rejects.toThrow();
+    await expectFileMissing(markerPath);
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
@@ -636,7 +702,7 @@ describe("qa-lab server", () => {
     const snapshot = (await (await fetchWithRetry(`${lab.baseUrl}/api/state`)).json()) as {
       messages: Array<{ direction: string }>;
     };
-    expect(snapshot.messages.filter((message) => message.direction === "outbound")).toHaveLength(0);
+    expect(snapshot.messages.some((message) => message.direction === "outbound")).toBe(false);
   });
 
   it("exposes structured outcomes and can attach control-ui after startup", async () => {
@@ -799,14 +865,14 @@ describe("qa-lab server", () => {
     const sessions = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/sessions`)
     ).json()) as { sessions: Array<{ id: string }> };
-    expect(sessions.sessions.some((session) => session.id === "qa-capture-session")).toBe(true);
+    expect(sessions.sessions.map((session) => session.id)).toContain("qa-capture-session");
 
     const events = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/events?sessionId=qa-capture-session`)
     ).json()) as {
       events: Array<{ flowId: string; provider?: string; model?: string; captureOrigin?: string }>;
     };
-    expect(events.events.some((event) => event.flowId === "flow-1")).toBe(true);
+    expect(events.events.map((event) => event.flowId)).toContain("flow-1");
     expect(events.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
