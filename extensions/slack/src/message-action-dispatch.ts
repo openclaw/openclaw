@@ -17,6 +17,16 @@ type SlackActionInvoke = (
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
 
+function readMessageContentParam(params: Record<string, unknown>, label: string): string {
+  const content =
+    readStringParam(params, "message", { allowEmpty: true }) ??
+    readStringParam(params, "content", { allowEmpty: true });
+  if (content == null) {
+    throw new Error(`${label} requires message or content.`);
+  }
+  return content;
+}
+
 /** Translate generic channel action requests into Slack-specific tool invocations and payload shapes. */
 export async function handleSlackMessageAction(params: {
   providerId: string;
@@ -68,6 +78,14 @@ export async function handleSlackMessageAction(params: {
         mediaUrl: mediaUrl ?? undefined,
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,
+        replyBroadcast:
+          typeof actionParams.replyBroadcast === "boolean"
+            ? actionParams.replyBroadcast
+            : undefined,
+        unfurlLinks:
+          typeof actionParams.unfurlLinks === "boolean" ? actionParams.unfurlLinks : undefined,
+        unfurlMedia:
+          typeof actionParams.unfurlMedia === "boolean" ? actionParams.unfurlMedia : undefined,
         ...(blocks ? { blocks } : {}),
       },
       cfg,
@@ -237,6 +255,258 @@ export async function handleSlackMessageAction(params: {
       },
       cfg,
       ctx.toolContext,
+    );
+  }
+
+  if (action === "search") {
+    return await invoke(
+      {
+        action: "searchMessages",
+        query: readStringParam(actionParams, "query", { required: true }),
+        limit: readNumberParam(actionParams, "limit", { integer: true }),
+        page: readNumberParam(actionParams, "page", { integer: true }),
+        sort: readStringParam(actionParams, "sort"),
+        sortDir: readStringParam(actionParams, "sortDir"),
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "channel-info") {
+    return await invoke(
+      {
+        action: "channelInfo",
+        channelId: resolveChannelId(),
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "channel-list") {
+    return await invoke(
+      {
+        action: "channelList",
+        limit: readNumberParam(actionParams, "limit", { integer: true }),
+        pageToken: readStringParam(actionParams, "pageToken"),
+        cursor: readStringParam(actionParams, "cursor"),
+        types: readStringParam(actionParams, "types") ?? readStringParam(actionParams, "kind"),
+        excludeArchived:
+          typeof actionParams.excludeArchived === "boolean"
+            ? actionParams.excludeArchived
+            : undefined,
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "get-permalink") {
+    return await invoke(
+      {
+        action: "getPermalink",
+        channelId: resolveChannelId(),
+        messageId: readStringParam(actionParams, "messageId", { required: true }),
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "post-ephemeral") {
+    return await invoke(
+      {
+        action: "postEphemeral",
+        channelId: resolveChannelId(),
+        userId: readStringParam(actionParams, "userId", { required: true }),
+        content: readMessageContentParam(actionParams, "post-ephemeral"),
+        threadTs:
+          readStringParam(actionParams, "threadId") ?? readStringParam(actionParams, "replyTo"),
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "schedule-message") {
+    return await invoke(
+      {
+        action: "scheduleMessage",
+        channelId: resolveChannelId(),
+        content: readMessageContentParam(actionParams, "schedule-message"),
+        postAt: actionParams.postAt ?? actionParams.time ?? actionParams.startTime,
+        threadTs:
+          readStringParam(actionParams, "threadId") ?? readStringParam(actionParams, "replyTo"),
+        replyBroadcast:
+          typeof actionParams.replyBroadcast === "boolean"
+            ? actionParams.replyBroadcast
+            : undefined,
+        unfurlLinks:
+          typeof actionParams.unfurlLinks === "boolean" ? actionParams.unfurlLinks : undefined,
+        unfurlMedia:
+          typeof actionParams.unfurlMedia === "boolean" ? actionParams.unfurlMedia : undefined,
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "scheduled-list") {
+    return await invoke(
+      {
+        action: "listScheduledMessages",
+        channelId:
+          readStringParam(actionParams, "channelId") ?? readStringParam(actionParams, "to"),
+        limit: readNumberParam(actionParams, "limit", { integer: true }),
+        pageToken: readStringParam(actionParams, "pageToken"),
+        before: readStringParam(actionParams, "before"),
+        after: readStringParam(actionParams, "after"),
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "delete-scheduled") {
+    return await invoke(
+      {
+        action: "deleteScheduledMessage",
+        channelId: resolveChannelId(),
+        scheduledMessageId: readStringParam(actionParams, "scheduledMessageId", {
+          required: true,
+        }),
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "file-list") {
+    return await invoke(
+      {
+        action: "listFiles",
+        channelId:
+          readStringParam(actionParams, "channelId") ?? readStringParam(actionParams, "to"),
+        limit: readNumberParam(actionParams, "limit", { integer: true }),
+        page: readNumberParam(actionParams, "page", { integer: true }),
+        after: readStringParam(actionParams, "after"),
+        before: readStringParam(actionParams, "before"),
+        types: readStringParam(actionParams, "types"),
+        userId: readStringParam(actionParams, "userId"),
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "file-delete") {
+    return await invoke(
+      {
+        action: "deleteFile",
+        fileId: readStringParam(actionParams, "fileId", { required: true }),
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (
+    action === "bookmark-add" ||
+    action === "bookmark-edit" ||
+    action === "bookmark-list" ||
+    action === "bookmark-remove"
+  ) {
+    return await invoke(
+      {
+        action:
+          action === "bookmark-add"
+            ? "bookmarkAdd"
+            : action === "bookmark-edit"
+              ? "bookmarkEdit"
+              : action === "bookmark-remove"
+                ? "bookmarkRemove"
+                : "bookmarkList",
+        channelId: resolveChannelId(),
+        bookmarkId:
+          readStringParam(actionParams, "bookmarkId") ?? readStringParam(actionParams, "id"),
+        title: readStringParam(actionParams, "title"),
+        url: readStringParam(actionParams, "url"),
+        link: readStringParam(actionParams, "link"),
+        type: readStringParam(actionParams, "type"),
+        emoji: readStringParam(actionParams, "emoji"),
+        entityId: readStringParam(actionParams, "entityId"),
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (
+    action === "reminder-add" ||
+    action === "reminder-list" ||
+    action === "reminder-info" ||
+    action === "reminder-complete" ||
+    action === "reminder-delete"
+  ) {
+    return await invoke(
+      {
+        action:
+          action === "reminder-add"
+            ? "reminderAdd"
+            : action === "reminder-info"
+              ? "reminderInfo"
+              : action === "reminder-complete"
+                ? "reminderComplete"
+                : action === "reminder-delete"
+                  ? "reminderDelete"
+                  : "reminderList",
+        reminderId:
+          readStringParam(actionParams, "reminderId") ?? readStringParam(actionParams, "id"),
+        content:
+          readStringParam(actionParams, "message", { allowEmpty: true }) ??
+          readStringParam(actionParams, "content", { allowEmpty: true }),
+        time: readStringParam(actionParams, "time") ?? readStringParam(actionParams, "startTime"),
+        userId: readStringParam(actionParams, "userId"),
+        accountId,
+      },
+      cfg,
+    );
+  }
+
+  if (
+    action === "canvas-create" ||
+    action === "canvas-edit" ||
+    action === "canvas-delete" ||
+    action === "canvas-section-lookup" ||
+    action === "channel-canvas-create"
+  ) {
+    return await invoke(
+      {
+        action:
+          action === "canvas-create"
+            ? "canvasCreate"
+            : action === "canvas-edit"
+              ? "canvasEdit"
+              : action === "canvas-delete"
+                ? "canvasDelete"
+                : action === "canvas-section-lookup"
+                  ? "canvasSectionLookup"
+                  : "channelCanvasCreate",
+        channelId:
+          action === "channel-canvas-create"
+            ? (readStringParam(actionParams, "channelId") ?? readStringParam(actionParams, "to"))
+            : undefined,
+        canvasId: readStringParam(actionParams, "canvasId") ?? readStringParam(actionParams, "id"),
+        title: readStringParam(actionParams, "title"),
+        content:
+          readStringParam(actionParams, "message", { allowEmpty: true }) ??
+          readStringParam(actionParams, "content", { allowEmpty: true }),
+        changes: actionParams.changes,
+        criteria: actionParams.criteria,
+        accountId,
+      },
+      cfg,
     );
   }
 

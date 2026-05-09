@@ -193,6 +193,11 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
       Type.String({ description: "Quote text for Telegram reply_parameters" }),
     ),
     bestEffort: Type.Optional(Type.Boolean()),
+    replyBroadcast: Type.Optional(
+      Type.Boolean({ description: "For Slack thread replies, also broadcast to the channel." }),
+    ),
+    unfurlLinks: Type.Optional(Type.Boolean({ description: "Slack link unfurl preference." })),
+    unfurlMedia: Type.Optional(Type.Boolean({ description: "Slack media unfurl preference." })),
     gifPlayback: Type.Optional(Type.Boolean()),
     forceDocument: Type.Optional(
       Type.Boolean({
@@ -278,6 +283,23 @@ function buildFetchSchema() {
     around: Type.Optional(Type.String()),
     fromMe: Type.Optional(Type.Boolean()),
     includeArchived: Type.Optional(Type.Boolean()),
+    count: Type.Optional(Type.Number()),
+    page: Type.Optional(Type.Number()),
+    cursor: Type.Optional(Type.String()),
+    sort: Type.Optional(Type.String()),
+    sortDir: Type.Optional(Type.String()),
+    types: Type.Optional(Type.String()),
+    postAt: Type.Optional(Type.Union([Type.Number(), Type.String()])),
+    time: Type.Optional(Type.String()),
+    url: Type.Optional(Type.String()),
+    link: Type.Optional(Type.String()),
+    bookmarkId: Type.Optional(Type.String()),
+    reminderId: Type.Optional(Type.String()),
+    canvasId: Type.Optional(Type.String()),
+    entityId: Type.Optional(Type.String()),
+    scheduledMessageId: Type.Optional(Type.String()),
+    changes: Type.Optional(Type.Any()),
+    criteria: Type.Optional(Type.Any()),
   };
 }
 

@@ -79,6 +79,9 @@ type SlackSendOpts = {
   threadTs?: string;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
+  replyBroadcast?: boolean;
+  unfurlLinks?: boolean;
+  unfurlMedia?: boolean;
 };
 
 type SlackWebApiErrorData = {
@@ -242,48 +245,64 @@ async function postSlackMessageBestEffort(params: {
   threadTs?: string;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
+  replyBroadcast?: boolean;
+  unfurlLinks?: boolean;
+  unfurlMedia?: boolean;
 }) {
   const basePayload = {
     channel: params.channelId,
     text: params.text,
-    thread_ts: params.threadTs,
+    ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
+    ...(params.replyBroadcast !== undefined ? { reply_broadcast: params.replyBroadcast } : {}),
+    ...(params.unfurlLinks !== undefined ? { unfurl_links: params.unfurlLinks } : {}),
+    ...(params.unfurlMedia !== undefined ? { unfurl_media: params.unfurlMedia } : {}),
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
   };
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
+  const asPostPayload = (payload: Record<string, unknown>) =>
+    payload as unknown as Parameters<typeof postChatMessage>[0];
   try {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
     // Build payloads in explicit branches so TS and runtime stay aligned.
     const identity = params.identity;
     if (identity?.iconUrl) {
       return await withSlackDnsRequestRetry("chat.postMessage", () =>
-        postChatMessage({
-          ...basePayload,
-          ...(identity.username ? { username: identity.username } : {}),
-          icon_url: identity.iconUrl,
-        }),
+        postChatMessage(
+          asPostPayload({
+            ...basePayload,
+            ...(identity.username ? { username: identity.username } : {}),
+            icon_url: identity.iconUrl,
+          }),
+        ),
       );
     }
     if (identity?.iconEmoji) {
       return await withSlackDnsRequestRetry("chat.postMessage", () =>
-        postChatMessage({
-          ...basePayload,
-          ...(identity.username ? { username: identity.username } : {}),
-          icon_emoji: identity.iconEmoji,
-        }),
+        postChatMessage(
+          asPostPayload({
+            ...basePayload,
+            ...(identity.username ? { username: identity.username } : {}),
+            icon_emoji: identity.iconEmoji,
+          }),
+        ),
       );
     }
     return await withSlackDnsRequestRetry("chat.postMessage", () =>
-      postChatMessage({
-        ...basePayload,
-        ...(identity?.username ? { username: identity.username } : {}),
-      }),
+      postChatMessage(
+        asPostPayload({
+          ...basePayload,
+          ...(identity?.username ? { username: identity.username } : {}),
+        }),
+      ),
     );
   } catch (err) {
     if (!hasCustomIdentity(params.identity) || !isSlackCustomizeScopeError(err)) {
       throw err;
     }
     logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
-    return withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(basePayload));
+    return withSlackDnsRequestRetry("chat.postMessage", () =>
+      postChatMessage(asPostPayload(basePayload)),
+    );
   }
 }
 
@@ -644,6 +663,9 @@ async function sendMessageSlackQueuedInner(params: {
       threadTs: opts.threadTs,
       identity: opts.identity,
       blocks,
+      replyBroadcast: opts.replyBroadcast,
+      unfurlLinks: opts.unfurlLinks,
+      unfurlMedia: opts.unfurlMedia,
     });
     const messageId = response.ts ?? "unknown";
     return {
@@ -705,6 +727,9 @@ async function sendMessageSlackQueuedInner(params: {
         text: chunk,
         threadTs: opts.threadTs,
         identity: opts.identity,
+        replyBroadcast: opts.replyBroadcast,
+        unfurlLinks: opts.unfurlLinks,
+        unfurlMedia: opts.unfurlMedia,
       });
       lastMessageId = response.ts ?? lastMessageId;
       if (response.ts) {
@@ -719,6 +744,9 @@ async function sendMessageSlackQueuedInner(params: {
         text: chunk,
         threadTs: opts.threadTs,
         identity: opts.identity,
+        replyBroadcast: opts.replyBroadcast,
+        unfurlLinks: opts.unfurlLinks,
+        unfurlMedia: opts.unfurlMedia,
       });
       lastMessageId = response.ts ?? lastMessageId;
       if (response.ts) {

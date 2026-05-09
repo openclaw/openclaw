@@ -1,4 +1,4 @@
-import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import type { Block, KnownBlock, WebAPICallResult, WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -41,6 +41,13 @@ export type SlackPin = {
   type?: string;
   message?: { ts?: string; text?: string };
   file?: { id?: string; name?: string };
+};
+
+export type SlackApiResult = WebAPICallResult & Record<string, unknown>;
+
+type SlackCanvasDocumentContent = {
+  type: "markdown";
+  markdown: string;
 };
 
 function resolveToken(explicit?: string, accountId?: string, cfg?: OpenClawConfig): string {
@@ -94,6 +101,31 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
   }
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   return mode === "write" ? getSlackWriteClient(token) : createSlackWebClient(token);
+}
+
+async function callSlackApi(
+  opts: SlackActionClientOpts,
+  mode: "read" | "write",
+  method: string,
+  payload: Record<string, unknown> = {},
+): Promise<SlackApiResult> {
+  const client = await getClient(opts, mode);
+  return (await client.apiCall(method, payload)) as SlackApiResult;
+}
+
+function addDefined<T extends Record<string, unknown>>(target: T, values: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== undefined && value !== null && value !== "") {
+      target[key as keyof T] = value as T[keyof T];
+    }
+  }
+  return target;
+}
+
+function buildSlackCanvasDocumentContent(
+  markdown: string | undefined,
+): SlackCanvasDocumentContent | undefined {
+  return markdown == null ? undefined : { type: "markdown", markdown };
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -210,6 +242,9 @@ export async function sendSlackMessage(
     uploadFileName?: string;
     uploadTitle?: string;
     blocks?: (Block | KnownBlock)[];
+    replyBroadcast?: boolean;
+    unfurlLinks?: boolean;
+    unfurlMedia?: boolean;
   },
 ) {
   return await sendMessageSlack(to, content, {
@@ -225,6 +260,9 @@ export async function sendSlackMessage(
     ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
     ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
     blocks: opts.blocks,
+    replyBroadcast: opts.replyBroadcast,
+    unfurlLinks: opts.unfurlLinks,
+    unfurlMedia: opts.unfurlMedia,
   });
 }
 
@@ -350,6 +388,397 @@ export async function listSlackPins(
   const client = await getClient(opts);
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
+}
+
+export async function getSlackPermalink(
+  channelId: string,
+  messageId: string,
+  opts: SlackActionClientOpts = {},
+) {
+  return await callSlackApi(opts, "read", "chat.getPermalink", {
+    channel: channelId,
+    message_ts: messageId,
+  });
+}
+
+export async function searchSlackMessages(
+  query: string,
+  opts: SlackActionClientOpts & {
+    count?: number;
+    page?: number;
+    sort?: string;
+    sortDir?: string;
+  } = {},
+) {
+  return await callSlackApi(
+    opts,
+    "read",
+    "search.messages",
+    addDefined(
+      {
+        query,
+      },
+      {
+        count: opts.count,
+        page: opts.page,
+        sort: opts.sort,
+        sort_dir: opts.sortDir,
+      },
+    ),
+  );
+}
+
+export async function getSlackChannelInfo(
+  channelId: string,
+  opts: SlackActionClientOpts & { includeLocale?: boolean; includeNumMembers?: boolean } = {},
+) {
+  return await callSlackApi(
+    opts,
+    "read",
+    "conversations.info",
+    addDefined(
+      {
+        channel: channelId,
+      },
+      {
+        include_locale: opts.includeLocale,
+        include_num_members: opts.includeNumMembers,
+      },
+    ),
+  );
+}
+
+export async function listSlackChannels(
+  opts: SlackActionClientOpts & {
+    limit?: number;
+    cursor?: string;
+    types?: string;
+    excludeArchived?: boolean;
+  } = {},
+) {
+  return await callSlackApi(
+    opts,
+    "read",
+    "conversations.list",
+    addDefined(
+      {},
+      {
+        limit: opts.limit,
+        cursor: opts.cursor,
+        types: opts.types,
+        exclude_archived: opts.excludeArchived,
+      },
+    ),
+  );
+}
+
+export async function postSlackEphemeral(
+  channelId: string,
+  userId: string,
+  content: string,
+  opts: SlackActionClientOpts & {
+    threadTs?: string;
+    blocks?: (Block | KnownBlock)[];
+  } = {},
+) {
+  const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
+  return await callSlackApi(
+    opts,
+    "write",
+    "chat.postEphemeral",
+    addDefined(
+      {
+        channel: channelId,
+        user: userId,
+        text: buildSlackEditTextPayload(content, blocks),
+      },
+      {
+        thread_ts: opts.threadTs,
+        blocks,
+      },
+    ),
+  );
+}
+
+export async function scheduleSlackMessage(
+  channelId: string,
+  content: string,
+  postAt: number,
+  opts: SlackActionClientOpts & {
+    threadTs?: string;
+    blocks?: (Block | KnownBlock)[];
+    replyBroadcast?: boolean;
+    unfurlLinks?: boolean;
+    unfurlMedia?: boolean;
+  } = {},
+) {
+  const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
+  return await callSlackApi(
+    opts,
+    "write",
+    "chat.scheduleMessage",
+    addDefined(
+      {
+        channel: channelId,
+        text: buildSlackEditTextPayload(content, blocks),
+        post_at: postAt,
+      },
+      {
+        thread_ts: opts.threadTs,
+        blocks,
+        reply_broadcast: opts.replyBroadcast,
+        unfurl_links: opts.unfurlLinks,
+        unfurl_media: opts.unfurlMedia,
+      },
+    ),
+  );
+}
+
+export async function listSlackScheduledMessages(
+  opts: SlackActionClientOpts & {
+    channelId?: string;
+    cursor?: string;
+    latest?: string;
+    limit?: number;
+    oldest?: string;
+  } = {},
+) {
+  return await callSlackApi(
+    opts,
+    "read",
+    "chat.scheduledMessages.list",
+    addDefined(
+      {},
+      {
+        channel: opts.channelId,
+        cursor: opts.cursor,
+        latest: opts.latest,
+        limit: opts.limit,
+        oldest: opts.oldest,
+      },
+    ),
+  );
+}
+
+export async function deleteSlackScheduledMessage(
+  channelId: string,
+  scheduledMessageId: string,
+  opts: SlackActionClientOpts = {},
+) {
+  return await callSlackApi(opts, "write", "chat.deleteScheduledMessage", {
+    channel: channelId,
+    scheduled_message_id: scheduledMessageId,
+  });
+}
+
+export async function listSlackFiles(
+  opts: SlackActionClientOpts & {
+    channelId?: string;
+    count?: number;
+    page?: number;
+    tsFrom?: string;
+    tsTo?: string;
+    types?: string;
+    userId?: string;
+  } = {},
+) {
+  return await callSlackApi(
+    opts,
+    "read",
+    "files.list",
+    addDefined(
+      {},
+      {
+        channel: opts.channelId,
+        count: opts.count,
+        page: opts.page,
+        ts_from: opts.tsFrom,
+        ts_to: opts.tsTo,
+        types: opts.types,
+        user: opts.userId,
+      },
+    ),
+  );
+}
+
+export async function deleteSlackFile(fileId: string, opts: SlackActionClientOpts = {}) {
+  return await callSlackApi(opts, "write", "files.delete", { file: fileId });
+}
+
+export async function addSlackBookmark(
+  channelId: string,
+  opts: SlackActionClientOpts & {
+    title: string;
+    type?: string;
+    link?: string;
+    emoji?: string;
+    entityId?: string;
+  },
+) {
+  return await callSlackApi(
+    opts,
+    "write",
+    "bookmarks.add",
+    addDefined(
+      {
+        channel_id: channelId,
+        title: opts.title,
+      },
+      {
+        type: opts.type,
+        link: opts.link,
+        emoji: opts.emoji,
+        entity_id: opts.entityId,
+      },
+    ),
+  );
+}
+
+export async function editSlackBookmark(
+  channelId: string,
+  bookmarkId: string,
+  opts: SlackActionClientOpts & {
+    title?: string;
+    link?: string;
+    emoji?: string;
+    entityId?: string;
+  },
+) {
+  return await callSlackApi(
+    opts,
+    "write",
+    "bookmarks.edit",
+    addDefined(
+      {
+        channel_id: channelId,
+        bookmark_id: bookmarkId,
+      },
+      {
+        title: opts.title,
+        link: opts.link,
+        emoji: opts.emoji,
+        entity_id: opts.entityId,
+      },
+    ),
+  );
+}
+
+export async function listSlackBookmarks(channelId: string, opts: SlackActionClientOpts = {}) {
+  return await callSlackApi(opts, "read", "bookmarks.list", { channel_id: channelId });
+}
+
+export async function removeSlackBookmark(
+  channelId: string,
+  bookmarkId: string,
+  opts: SlackActionClientOpts = {},
+) {
+  return await callSlackApi(opts, "write", "bookmarks.remove", {
+    channel_id: channelId,
+    bookmark_id: bookmarkId,
+  });
+}
+
+export async function addSlackReminder(
+  text: string,
+  time: string,
+  opts: SlackActionClientOpts & { userId?: string } = {},
+) {
+  return await callSlackApi(
+    opts,
+    "write",
+    "reminders.add",
+    addDefined(
+      {
+        text,
+        time,
+      },
+      {
+        user: opts.userId,
+      },
+    ),
+  );
+}
+
+export async function listSlackReminders(opts: SlackActionClientOpts = {}) {
+  return await callSlackApi(opts, "read", "reminders.list");
+}
+
+export async function getSlackReminderInfo(reminderId: string, opts: SlackActionClientOpts = {}) {
+  return await callSlackApi(opts, "read", "reminders.info", { reminder: reminderId });
+}
+
+export async function completeSlackReminder(reminderId: string, opts: SlackActionClientOpts = {}) {
+  return await callSlackApi(opts, "write", "reminders.complete", { reminder: reminderId });
+}
+
+export async function deleteSlackReminder(reminderId: string, opts: SlackActionClientOpts = {}) {
+  return await callSlackApi(opts, "write", "reminders.delete", { reminder: reminderId });
+}
+
+export async function createSlackCanvas(
+  opts: SlackActionClientOpts & {
+    title?: string;
+    documentContent?: string;
+  } = {},
+) {
+  return await callSlackApi(
+    opts,
+    "write",
+    "canvases.create",
+    addDefined(
+      {},
+      {
+        title: opts.title,
+        document_content: buildSlackCanvasDocumentContent(opts.documentContent),
+      },
+    ),
+  );
+}
+
+export async function deleteSlackCanvas(canvasId: string, opts: SlackActionClientOpts = {}) {
+  return await callSlackApi(opts, "write", "canvases.delete", { canvas_id: canvasId });
+}
+
+export async function editSlackCanvas(
+  canvasId: string,
+  changes: unknown,
+  opts: SlackActionClientOpts = {},
+) {
+  return await callSlackApi(opts, "write", "canvases.edit", { canvas_id: canvasId, changes });
+}
+
+export async function lookupSlackCanvasSection(
+  canvasId: string,
+  criteria: unknown,
+  opts: SlackActionClientOpts = {},
+) {
+  return await callSlackApi(opts, "read", "canvases.sections.lookup", {
+    canvas_id: canvasId,
+    criteria,
+  });
+}
+
+export async function createSlackConversationCanvas(
+  channelId: string,
+  opts: SlackActionClientOpts & {
+    title?: string;
+    documentContent?: string;
+  } = {},
+) {
+  return await callSlackApi(
+    opts,
+    "write",
+    "conversations.canvases.create",
+    addDefined(
+      {
+        channel_id: channelId,
+      },
+      {
+        title: opts.title,
+        document_content: buildSlackCanvasDocumentContent(opts.documentContent),
+      },
+    ),
+  );
 }
 
 type SlackFileInfoSummary = {

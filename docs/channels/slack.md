@@ -77,6 +77,10 @@ Both transports are production-ready and reach feature parity for messaging, sla
       "bot": [
         "app_mentions:read",
         "assistant:write",
+        "bookmarks:read",
+        "bookmarks:write",
+        "canvases:read",
+        "canvases:write",
         "channels:history",
         "channels:read",
         "chat:write",
@@ -96,6 +100,8 @@ Both transports are production-ready and reach feature parity for messaging, sla
         "pins:write",
         "reactions:read",
         "reactions:write",
+        "reminders:read",
+        "reminders:write",
         "usergroups:read",
         "users:read"
       ]
@@ -268,6 +274,10 @@ openclaw gateway
       "bot": [
         "app_mentions:read",
         "assistant:write",
+        "bookmarks:read",
+        "bookmarks:write",
+        "canvases:read",
+        "canvases:write",
         "channels:history",
         "channels:read",
         "chat:write",
@@ -287,6 +297,8 @@ openclaw gateway
         "pins:write",
         "reactions:read",
         "reactions:write",
+        "reminders:read",
+        "reminders:write",
         "usergroups:read",
         "users:read"
       ]
@@ -494,6 +506,10 @@ Base manifest (Socket Mode default):
       "bot": [
         "app_mentions:read",
         "assistant:write",
+        "bookmarks:read",
+        "bookmarks:write",
+        "canvases:read",
+        "canvases:write",
         "channels:history",
         "channels:read",
         "chat:write",
@@ -513,6 +529,8 @@ Base manifest (Socket Mode default):
         "pins:write",
         "reactions:read",
         "reactions:write",
+        "reminders:read",
+        "reminders:write",
         "usergroups:read",
         "users:read"
       ]
@@ -801,15 +819,17 @@ Slack actions are controlled by `channels.slack.actions.*`.
 
 Available action groups in current Slack tooling:
 
-| Group      | Default |
-| ---------- | ------- |
-| messages   | enabled |
-| reactions  | enabled |
-| pins       | enabled |
-| memberInfo | enabled |
-| emojiList  | enabled |
+- Default-enabled groups: `messages`, `reactions`, `pins`, `memberInfo`, `emojiList`.
+- Opt-in advanced groups: `search`, `channelInfo`, `channels`, `files`, `scheduledMessages`, `ephemeralMessages`, `bookmarks`, `reminders`, `canvases`.
 
-Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `get-permalink`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+
+Advanced opt-in actions:
+
+- Search and discovery: `search`, `channel-info`, `channel-list`. `search` uses Slack `search.messages` and requires `channels.slack.userToken` with the user-token `search:read` scope.
+- Files: `file-list`, `file-delete`.
+- Delivery controls: `post-ephemeral`, `schedule-message`, `scheduled-list`, `delete-scheduled`; `send` and scheduled sends also accept Slack `replyBroadcast`, `unfurlLinks`, and `unfurlMedia`.
+- Workspace objects: `bookmark-add`, `bookmark-edit`, `bookmark-list`, `bookmark-remove`, `reminder-add`, `reminder-list`, `reminder-info`, `reminder-complete`, `reminder-delete`, `canvas-create`, `canvas-edit`, `canvas-delete`, `canvas-section-lookup`, `channel-canvas-create`.
 
 ## Access control and routing
 

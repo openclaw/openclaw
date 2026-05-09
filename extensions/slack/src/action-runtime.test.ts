@@ -7,6 +7,9 @@ const originalSlackActionRuntime = { ...slackActionRuntime };
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const downloadSlackFile = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
 const editSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const createSlackCanvas = vi.fn(async (..._args: unknown[]) => ({}));
+const createSlackConversationCanvas = vi.fn(async (..._args: unknown[]) => ({}));
+const editSlackCanvas = vi.fn(async (..._args: unknown[]) => ({}));
 const getSlackMemberInfo = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackEmojis = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackPins = vi.fn(async (..._args: unknown[]) => ({}));
@@ -16,6 +19,7 @@ const reactSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const readSlackMessages = vi.fn(async (..._args: unknown[]) => ({}));
 const removeOwnSlackReactions = vi.fn(async (..._args: unknown[]) => ["thumbsup"]);
 const removeSlackReaction = vi.fn(async (..._args: unknown[]) => ({}));
+const searchSlackMessages = vi.fn(async (..._args: unknown[]) => ({ matches: [] }));
 const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({ channelId: "C123" }));
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 
@@ -94,6 +98,9 @@ describe("handleSlackAction", () => {
       deleteSlackMessage,
       downloadSlackFile,
       editSlackMessage,
+      createSlackCanvas,
+      createSlackConversationCanvas,
+      editSlackCanvas,
       getSlackMemberInfo,
       listSlackEmojis,
       listSlackPins,
@@ -104,6 +111,7 @@ describe("handleSlackAction", () => {
       readSlackMessages,
       removeOwnSlackReactions,
       removeSlackReaction,
+      searchSlackMessages,
       sendSlackMessage,
       unpinSlackMessage,
     });
@@ -686,6 +694,54 @@ describe("handleSlackAction", () => {
         ],
       },
     });
+  });
+
+  it("requires a user token for Slack search", async () => {
+    await expect(
+      handleSlackAction(
+        { action: "searchMessages", query: "deploy" },
+        slackConfig({ actions: { search: true } }),
+      ),
+    ).rejects.toThrow(/userToken.*search:read/i);
+
+    await handleSlackAction(
+      { action: "searchMessages", query: "deploy", limit: 3 },
+      slackConfig({ userToken: "xoxp-user", actions: { search: true } }),
+    );
+
+    expect(searchSlackMessages).toHaveBeenCalledWith(
+      "deploy",
+      expect.objectContaining({
+        token: "xoxp-user",
+        count: 3,
+      }),
+    );
+  });
+
+  it("accepts non-empty Slack canvas edit changes arrays", async () => {
+    const changes = [
+      { operation: "insert_at_end", document_content: { type: "markdown", markdown: "Hi" } },
+    ];
+
+    await handleSlackAction(
+      { action: "canvasEdit", canvasId: "CAN1", changes },
+      slackConfig({ actions: { canvases: true } }),
+    );
+
+    expect(editSlackCanvas).toHaveBeenCalledWith(
+      "CAN1",
+      changes,
+      expect.objectContaining({ cfg: expect.any(Object) }),
+    );
+  });
+
+  it("rejects empty Slack canvas edit changes arrays", async () => {
+    await expect(
+      handleSlackAction(
+        { action: "canvasEdit", canvasId: "CAN1", changes: [] },
+        slackConfig({ actions: { canvases: true } }),
+      ),
+    ).rejects.toThrow(/changes must be a non-empty array/i);
   });
 
   it("passes threadId through to readSlackMessages", async () => {

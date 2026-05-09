@@ -61,6 +61,88 @@ describe("Slack message tools", () => {
     );
   });
 
+  it("advertises advanced Slack actions only when opted in", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          userToken: "xoxp-test",
+          actions: {
+            search: true,
+            channelInfo: true,
+            channels: true,
+            files: true,
+            scheduledMessages: true,
+            ephemeralMessages: true,
+            bookmarks: true,
+            reminders: true,
+            canvases: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg)).toEqual(
+      expect.arrayContaining([
+        "search",
+        "channel-info",
+        "channel-list",
+        "file-list",
+        "file-delete",
+        "schedule-message",
+        "scheduled-list",
+        "delete-scheduled",
+        "post-ephemeral",
+        "bookmark-add",
+        "reminder-add",
+        "canvas-create",
+        "channel-canvas-create",
+      ]),
+    );
+  });
+
+  it("does not advertise Slack search without a user token", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          actions: {
+            search: true,
+            channelInfo: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg)).not.toContain("search");
+    expect(listSlackMessageActions(cfg)).toContain("channel-info");
+  });
+
+  it("advertises Slack search for account-scoped user tokens", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-root",
+          actions: { search: true },
+          accounts: {
+            botOnly: {
+              botToken: "xoxb-bot",
+              actions: { search: true },
+            },
+            work: {
+              botToken: "xoxb-work",
+              userToken: "xoxp-work",
+              actions: { search: true },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg, "botOnly")).not.toContain("search");
+    expect(listSlackMessageActions(cfg, "work")).toContain("search");
+  });
+
   it("honors the selected Slack account during discovery", () => {
     const cfg = {
       channels: {
@@ -107,6 +189,7 @@ describe("Slack message tools", () => {
       "read",
       "edit",
       "delete",
+      "get-permalink",
       "download-file",
       "upload-file",
     ]);

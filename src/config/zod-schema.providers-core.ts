@@ -1035,7 +1035,14 @@ export const SlackAccountSchema = z
         permissions: z.boolean().optional(),
         memberInfo: z.boolean().optional(),
         channelInfo: z.boolean().optional(),
+        channels: z.boolean().optional(),
         emojiList: z.boolean().optional(),
+        files: z.boolean().optional(),
+        scheduledMessages: z.boolean().optional(),
+        ephemeralMessages: z.boolean().optional(),
+        bookmarks: z.boolean().optional(),
+        reminders: z.boolean().optional(),
+        canvases: z.boolean().optional(),
       })
       .strict()
       .optional(),

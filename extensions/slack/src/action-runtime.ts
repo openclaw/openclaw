@@ -25,6 +25,30 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+const searchActions = new Set(["searchMessages"]);
+const channelInfoActions = new Set(["channelInfo", "channelList"]);
+const scheduledMessageActions = new Set([
+  "scheduleMessage",
+  "listScheduledMessages",
+  "deleteScheduledMessage",
+]);
+const ephemeralMessageActions = new Set(["postEphemeral"]);
+const fileActions = new Set(["listFiles", "deleteFile"]);
+const bookmarkActions = new Set(["bookmarkAdd", "bookmarkEdit", "bookmarkList", "bookmarkRemove"]);
+const reminderActions = new Set([
+  "reminderAdd",
+  "reminderList",
+  "reminderInfo",
+  "reminderComplete",
+  "reminderDelete",
+]);
+const canvasActions = new Set([
+  "canvasCreate",
+  "canvasEdit",
+  "canvasDelete",
+  "canvasSectionLookup",
+  "channelCanvasCreate",
+]);
 
 function sameSlackChannelTarget(targetChannel: string, currentChannelId: string): boolean {
   const parsedTarget = parseSlackTarget(targetChannel, {
@@ -66,19 +90,43 @@ function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
 }
 
 export const slackActionRuntime = {
+  addSlackBookmark: createLazySlackAction("addSlackBookmark"),
+  addSlackReminder: createLazySlackAction("addSlackReminder"),
+  completeSlackReminder: createLazySlackAction("completeSlackReminder"),
+  createSlackCanvas: createLazySlackAction("createSlackCanvas"),
+  createSlackConversationCanvas: createLazySlackAction("createSlackConversationCanvas"),
   deleteSlackMessage: createLazySlackAction("deleteSlackMessage"),
+  deleteSlackCanvas: createLazySlackAction("deleteSlackCanvas"),
+  deleteSlackFile: createLazySlackAction("deleteSlackFile"),
+  deleteSlackReminder: createLazySlackAction("deleteSlackReminder"),
+  deleteSlackScheduledMessage: createLazySlackAction("deleteSlackScheduledMessage"),
   downloadSlackFile: createLazySlackAction("downloadSlackFile"),
+  editSlackBookmark: createLazySlackAction("editSlackBookmark"),
+  editSlackCanvas: createLazySlackAction("editSlackCanvas"),
   editSlackMessage: createLazySlackAction("editSlackMessage"),
+  getSlackChannelInfo: createLazySlackAction("getSlackChannelInfo"),
   getSlackMemberInfo: createLazySlackAction("getSlackMemberInfo"),
+  getSlackPermalink: createLazySlackAction("getSlackPermalink"),
+  getSlackReminderInfo: createLazySlackAction("getSlackReminderInfo"),
+  listSlackBookmarks: createLazySlackAction("listSlackBookmarks"),
+  listSlackChannels: createLazySlackAction("listSlackChannels"),
   listSlackEmojis: createLazySlackAction("listSlackEmojis"),
+  listSlackFiles: createLazySlackAction("listSlackFiles"),
   listSlackPins: createLazySlackAction("listSlackPins"),
   listSlackReactions: createLazySlackAction("listSlackReactions"),
+  listSlackReminders: createLazySlackAction("listSlackReminders"),
+  listSlackScheduledMessages: createLazySlackAction("listSlackScheduledMessages"),
+  lookupSlackCanvasSection: createLazySlackAction("lookupSlackCanvasSection"),
   parseSlackBlocksInput,
   pinSlackMessage: createLazySlackAction("pinSlackMessage"),
+  postSlackEphemeral: createLazySlackAction("postSlackEphemeral"),
   reactSlackMessage: createLazySlackAction("reactSlackMessage"),
   readSlackMessages: createLazySlackAction("readSlackMessages"),
   removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
+  removeSlackBookmark: createLazySlackAction("removeSlackBookmark"),
   removeSlackReaction: createLazySlackAction("removeSlackReaction"),
+  scheduleSlackMessage: createLazySlackAction("scheduleSlackMessage"),
+  searchSlackMessages: createLazySlackAction("searchSlackMessages"),
   sendSlackMessage: createLazySlackAction("sendSlackMessage"),
   unpinSlackMessage: createLazySlackAction("unpinSlackMessage"),
 };
@@ -143,6 +191,51 @@ function readSlackBlocksParam(params: Record<string, unknown>) {
 
 function isImageContentType(value: string | undefined): boolean {
   return value?.trim().toLowerCase().startsWith("image/") === true;
+}
+
+function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
+  const value = params[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readPositiveIntegerParam(
+  params: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = readNumberParam(params, key, { integer: true });
+  return value != null && value > 0 ? value : undefined;
+}
+
+function readEpochSecondsParam(params: Record<string, unknown>, key: string): number {
+  const numberValue = readNumberParam(params, key, { integer: true });
+  if (numberValue != null) {
+    return numberValue;
+  }
+  const raw = readStringParam(params, key, { required: true });
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${key} must be a Unix timestamp in seconds or a parseable date string.`);
+  }
+  return Math.floor(parsed / 1000);
+}
+
+function readObjectParam(params: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = params[key];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${key} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function readNonEmptyArrayParam(
+  params: Record<string, unknown>,
+  key: string,
+): [unknown, ...unknown[]] {
+  const value = params[key];
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${key} must be a non-empty array.`);
+  }
+  return value as [unknown, ...unknown[]];
 }
 
 export async function handleSlackAction(
@@ -252,6 +345,9 @@ export async function handleSlackAction(
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
+          replyBroadcast: readBooleanParam(params, "replyBroadcast"),
+          unfurlLinks: readBooleanParam(params, "unfurlLinks"),
+          unfurlMedia: readBooleanParam(params, "unfurlMedia"),
         };
         const result =
           mediaUrl && blocks
@@ -468,6 +564,268 @@ export async function handleSlackAction(
       return message ? Object.assign({}, pin, { message }) : pin;
     });
     return jsonResult({ ok: true, pins: normalizedPins });
+  }
+
+  if (searchActions.has(action)) {
+    if (!isActionEnabled("search", false)) {
+      throw new Error("Slack search is disabled.");
+    }
+    if (!userToken && !readOpts.token) {
+      throw new Error("Slack search requires channels.slack.userToken with search:read.");
+    }
+    const query = readStringParam(params, "query", { required: true });
+    const result = await slackActionRuntime.searchSlackMessages(query, {
+      ...readOpts,
+      count: readPositiveIntegerParam(params, "limit") ?? readPositiveIntegerParam(params, "count"),
+      page: readPositiveIntegerParam(params, "page"),
+      sort: readStringParam(params, "sort"),
+      sortDir: readStringParam(params, "sortDir"),
+    });
+    return jsonResult({ ok: true, result });
+  }
+
+  if (channelInfoActions.has(action)) {
+    if (!isActionEnabled(action === "channelList" ? "channels" : "channelInfo", false)) {
+      throw new Error("Slack channel info is disabled.");
+    }
+    if (action === "channelInfo") {
+      const channelId = resolveChannelId();
+      const result = await slackActionRuntime.getSlackChannelInfo(channelId, {
+        ...readOpts,
+        includeLocale: readBooleanParam(params, "includeLocale"),
+        includeNumMembers: readBooleanParam(params, "includeNumMembers"),
+      });
+      return jsonResult({ ok: true, result });
+    }
+    const result = await slackActionRuntime.listSlackChannels({
+      ...readOpts,
+      limit: readPositiveIntegerParam(params, "limit"),
+      cursor: readStringParam(params, "pageToken") ?? readStringParam(params, "cursor"),
+      types: readStringParam(params, "types") ?? readStringParam(params, "kind"),
+      excludeArchived: readBooleanParam(params, "excludeArchived"),
+    });
+    return jsonResult({ ok: true, result });
+  }
+
+  if (action === "getPermalink") {
+    if (!isActionEnabled("messages")) {
+      throw new Error("Slack messages are disabled.");
+    }
+    const result = await slackActionRuntime.getSlackPermalink(
+      resolveChannelId(),
+      readStringParam(params, "messageId", { required: true }),
+      readOpts,
+    );
+    return jsonResult({ ok: true, result });
+  }
+
+  if (scheduledMessageActions.has(action)) {
+    if (!isActionEnabled("scheduledMessages", false)) {
+      throw new Error("Slack scheduled messages are disabled.");
+    }
+    if (action === "scheduleMessage") {
+      const channelId = resolveChannelId();
+      const content = readStringParam(params, "content", { required: true, allowEmpty: true });
+      const result = await slackActionRuntime.scheduleSlackMessage(
+        channelId,
+        content,
+        readEpochSecondsParam(params, "postAt"),
+        {
+          ...writeOpts,
+          threadTs: readStringParam(params, "threadTs") ?? readStringParam(params, "replyTo"),
+          blocks: readSlackBlocksParam(params),
+          replyBroadcast: readBooleanParam(params, "replyBroadcast"),
+          unfurlLinks: readBooleanParam(params, "unfurlLinks"),
+          unfurlMedia: readBooleanParam(params, "unfurlMedia"),
+        },
+      );
+      return jsonResult({ ok: true, result });
+    }
+    if (action === "deleteScheduledMessage") {
+      const result = await slackActionRuntime.deleteSlackScheduledMessage(
+        resolveChannelId(),
+        readStringParam(params, "scheduledMessageId", { required: true }),
+        writeOpts,
+      );
+      return jsonResult({ ok: true, result });
+    }
+    const channelTarget = readStringParam(params, "channelId") ?? readStringParam(params, "to");
+    const result = await slackActionRuntime.listSlackScheduledMessages({
+      ...readOpts,
+      channelId: channelTarget ? resolveSlackChannelId(channelTarget) : undefined,
+      cursor: readStringParam(params, "pageToken") ?? readStringParam(params, "cursor"),
+      latest: readStringParam(params, "before") ?? readStringParam(params, "latest"),
+      limit: readPositiveIntegerParam(params, "limit"),
+      oldest: readStringParam(params, "after") ?? readStringParam(params, "oldest"),
+    });
+    return jsonResult({ ok: true, result });
+  }
+
+  if (ephemeralMessageActions.has(action)) {
+    if (!isActionEnabled("ephemeralMessages", false)) {
+      throw new Error("Slack ephemeral messages are disabled.");
+    }
+    const result = await slackActionRuntime.postSlackEphemeral(
+      resolveChannelId(),
+      readStringParam(params, "userId", { required: true }),
+      readStringParam(params, "content", { required: true, allowEmpty: true }),
+      {
+        ...writeOpts,
+        threadTs: readStringParam(params, "threadTs") ?? readStringParam(params, "replyTo"),
+        blocks: readSlackBlocksParam(params),
+      },
+    );
+    return jsonResult({ ok: true, result });
+  }
+
+  if (fileActions.has(action)) {
+    if (!isActionEnabled("files", false)) {
+      throw new Error("Slack files are disabled.");
+    }
+    if (action === "deleteFile") {
+      const result = await slackActionRuntime.deleteSlackFile(
+        readStringParam(params, "fileId", { required: true }),
+        writeOpts,
+      );
+      return jsonResult({ ok: true, result });
+    }
+    const channelTarget = readStringParam(params, "channelId") ?? readStringParam(params, "to");
+    const result = await slackActionRuntime.listSlackFiles({
+      ...readOpts,
+      channelId: channelTarget ? resolveSlackChannelId(channelTarget) : undefined,
+      count:
+        readPositiveIntegerParam(params, "limit") ??
+        readPositiveIntegerParam(params, "count") ??
+        readPositiveIntegerParam(params, "pageSize"),
+      page: readPositiveIntegerParam(params, "page"),
+      tsFrom: readStringParam(params, "after") ?? readStringParam(params, "tsFrom"),
+      tsTo: readStringParam(params, "before") ?? readStringParam(params, "tsTo"),
+      types: readStringParam(params, "types"),
+      userId: readStringParam(params, "userId"),
+    });
+    return jsonResult({ ok: true, result });
+  }
+
+  if (bookmarkActions.has(action)) {
+    if (!isActionEnabled("bookmarks", false)) {
+      throw new Error("Slack bookmarks are disabled.");
+    }
+    const channelId = resolveChannelId();
+    if (action === "bookmarkList") {
+      const result = await slackActionRuntime.listSlackBookmarks(channelId, readOpts);
+      return jsonResult({ ok: true, result });
+    }
+    const bookmarkId = readStringParam(params, "bookmarkId");
+    if (action === "bookmarkRemove") {
+      const result = await slackActionRuntime.removeSlackBookmark(
+        channelId,
+        bookmarkId ?? readStringParam(params, "id", { required: true }),
+        writeOpts,
+      );
+      return jsonResult({ ok: true, result });
+    }
+    if (action === "bookmarkEdit") {
+      const result = await slackActionRuntime.editSlackBookmark(
+        channelId,
+        bookmarkId ?? readStringParam(params, "id", { required: true }),
+        {
+          ...writeOpts,
+          title: readStringParam(params, "title"),
+          link: readStringParam(params, "url") ?? readStringParam(params, "link"),
+          emoji: readStringParam(params, "emoji"),
+          entityId: readStringParam(params, "entityId"),
+        },
+      );
+      return jsonResult({ ok: true, result });
+    }
+    const result = await slackActionRuntime.addSlackBookmark(channelId, {
+      ...writeOpts,
+      title: readStringParam(params, "title", { required: true }),
+      type: readStringParam(params, "type") ?? "link",
+      link: readStringParam(params, "url") ?? readStringParam(params, "link"),
+      emoji: readStringParam(params, "emoji"),
+      entityId: readStringParam(params, "entityId"),
+    });
+    return jsonResult({ ok: true, result });
+  }
+
+  if (reminderActions.has(action)) {
+    if (!isActionEnabled("reminders", false)) {
+      throw new Error("Slack reminders are disabled.");
+    }
+    if (action === "reminderList") {
+      const result = await slackActionRuntime.listSlackReminders(readOpts);
+      return jsonResult({ ok: true, result });
+    }
+    const reminderId = readStringParam(params, "reminderId") ?? readStringParam(params, "id");
+    if (action === "reminderInfo") {
+      const result = await slackActionRuntime.getSlackReminderInfo(
+        reminderId ?? readStringParam(params, "id", { required: true }),
+        readOpts,
+      );
+      return jsonResult({ ok: true, result });
+    }
+    if (action === "reminderComplete") {
+      const result = await slackActionRuntime.completeSlackReminder(
+        reminderId ?? readStringParam(params, "id", { required: true }),
+        writeOpts,
+      );
+      return jsonResult({ ok: true, result });
+    }
+    if (action === "reminderDelete") {
+      const result = await slackActionRuntime.deleteSlackReminder(
+        reminderId ?? readStringParam(params, "id", { required: true }),
+        writeOpts,
+      );
+      return jsonResult({ ok: true, result });
+    }
+    const result = await slackActionRuntime.addSlackReminder(
+      readStringParam(params, "content", { required: true }),
+      readStringParam(params, "time", { required: true }),
+      { ...writeOpts, userId: readStringParam(params, "userId") },
+    );
+    return jsonResult({ ok: true, result });
+  }
+
+  if (canvasActions.has(action)) {
+    if (!isActionEnabled("canvases", false)) {
+      throw new Error("Slack canvases are disabled.");
+    }
+    if (action === "canvasCreate") {
+      const result = await slackActionRuntime.createSlackCanvas({
+        ...writeOpts,
+        title: readStringParam(params, "title"),
+        documentContent: readStringParam(params, "content", { allowEmpty: true }),
+      });
+      return jsonResult({ ok: true, result });
+    }
+    if (action === "channelCanvasCreate") {
+      const result = await slackActionRuntime.createSlackConversationCanvas(resolveChannelId(), {
+        ...writeOpts,
+        title: readStringParam(params, "title"),
+        documentContent: readStringParam(params, "content", { allowEmpty: true }),
+      });
+      return jsonResult({ ok: true, result });
+    }
+    const canvasId = readStringParam(params, "canvasId", { required: true });
+    if (action === "canvasDelete") {
+      const result = await slackActionRuntime.deleteSlackCanvas(canvasId, writeOpts);
+      return jsonResult({ ok: true, result });
+    }
+    if (action === "canvasSectionLookup") {
+      const result = await slackActionRuntime.lookupSlackCanvasSection(
+        canvasId,
+        readObjectParam(params, "criteria"),
+        readOpts,
+      );
+      return jsonResult({ ok: true, result });
+    }
+    const result = await slackActionRuntime.editSlackCanvas(
+      canvasId,
+      readNonEmptyArrayParam(params, "changes"),
+      writeOpts,
+    );
+    return jsonResult({ ok: true, result });
   }
 
   if (action === "memberInfo") {

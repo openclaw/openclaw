@@ -63,6 +63,22 @@ describe("slack config schema", () => {
     });
   });
 
+  it("accepts advanced Slack action gates", () => {
+    expectSlackConfigValid({
+      actions: {
+        search: true,
+        channelInfo: true,
+        channels: true,
+        files: true,
+        scheduledMessages: true,
+        ephemeralMessages: true,
+        bookmarks: true,
+        reminders: true,
+        canvases: true,
+      },
+    });
+  });
+
   it("accepts Socket Mode ping/pong transport tuning", () => {
     expectSlackConfigValid({
       mode: "socket",

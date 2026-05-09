@@ -355,4 +355,153 @@ describe("handleSlackMessageAction", () => {
     );
     expectForwardedCfg(invoke, cfg);
   });
+
+  it("maps Slack search and channel discovery actions", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "search",
+        cfg,
+        params: { query: "from:U1 deploy", limit: 5 },
+      } as never,
+      invoke: invoke as never,
+    });
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "channel-list",
+        cfg,
+        params: { types: "public_channel,private_channel", excludeArchived: true },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        action: "searchMessages",
+        query: "from:U1 deploy",
+        limit: 5,
+      }),
+    );
+    expect(invoke.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        action: "channelList",
+        types: "public_channel,private_channel",
+        excludeArchived: true,
+      }),
+    );
+  });
+
+  it("maps Slack scheduled and ephemeral message actions", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "schedule-message",
+        cfg,
+        params: {
+          to: "channel:C1",
+          message: "later",
+          postAt: 1_725_000_000,
+          replyBroadcast: true,
+          unfurlLinks: false,
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "post-ephemeral",
+        cfg,
+        params: {
+          channelId: "C1",
+          userId: "U1",
+          message: "private note",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        action: "scheduleMessage",
+        channelId: "channel:C1",
+        content: "later",
+        postAt: 1_725_000_000,
+        replyBroadcast: true,
+        unfurlLinks: false,
+      }),
+    );
+    expect(invoke.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        action: "postEphemeral",
+        channelId: "C1",
+        userId: "U1",
+        content: "private note",
+      }),
+    );
+  });
+
+  it("maps Slack bookmarks, reminders, and canvases", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "bookmark-add",
+        cfg,
+        params: { channelId: "C1", title: "Runbook", url: "https://example.com/runbook" },
+      } as never,
+      invoke: invoke as never,
+    });
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "reminder-add",
+        cfg,
+        params: { content: "follow up", time: "tomorrow", userId: "U1" },
+      } as never,
+      invoke: invoke as never,
+    });
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "canvas-edit",
+        cfg,
+        params: { canvasId: "CAN1", changes: [{ operation: "insert" }] },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        action: "bookmarkAdd",
+        channelId: "C1",
+        title: "Runbook",
+        url: "https://example.com/runbook",
+      }),
+    );
+    expect(invoke.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        action: "reminderAdd",
+        content: "follow up",
+        time: "tomorrow",
+        userId: "U1",
+      }),
+    );
+    expect(invoke.mock.calls[2]?.[0]).toEqual(
+      expect.objectContaining({
+        action: "canvasEdit",
+        canvasId: "CAN1",
+        changes: [{ operation: "insert" }],
+      }),
+    );
+  });
 });

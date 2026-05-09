@@ -75,7 +75,14 @@ export type SlackActionConfig = {
   permissions?: boolean;
   memberInfo?: boolean;
   channelInfo?: boolean;
+  channels?: boolean;
   emojiList?: boolean;
+  files?: boolean;
+  scheduledMessages?: boolean;
+  ephemeralMessages?: boolean;
+  bookmarks?: boolean;
+  reminders?: boolean;
+  canvases?: boolean;
 };
 
 export type SlackSlashCommandConfig = {
