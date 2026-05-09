@@ -4839,11 +4839,10 @@ describe("google-meet plugin", () => {
       expect(sendAudio).toHaveBeenCalledWith(Buffer.from([5, 4, 3]));
     });
     expect(bridge.close).not.toHaveBeenCalled();
-    expect(handle.getHealth()).toMatchObject({
-      audioInputActive: true,
-      lastInputBytes: 3,
-      consecutiveInputErrors: 0,
-    });
+    const health = handle.getHealth();
+    expect(health.audioInputActive).toBe(true);
+    expect(health.lastInputBytes).toBe(3);
+    expect(health.consecutiveInputErrors).toBe(0);
 
     await handle.stop();
   });
@@ -4899,19 +4898,18 @@ describe("google-meet plugin", () => {
         },
         { timeout: 3_000 },
       );
-      expect(handle.getHealth()).toMatchObject({
-        bridgeClosed: true,
-        consecutiveInputErrors: 5,
-        lastInputError: "node invoke timeout",
-      });
-      expect(runtime.nodes.invoke).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nodeId: "node-1",
-          command: "googlemeet.chrome",
-          params: { action: "stop", bridgeId: "bridge-1" },
-          timeoutMs: 5_000,
-        }),
-      );
+      const health = handle.getHealth();
+      expect(health.bridgeClosed).toBe(true);
+      expect(health.consecutiveInputErrors).toBe(5);
+      expect(health.lastInputError).toBe("node invoke timeout");
+      const stopCall = runtime.nodes.invoke.mock.calls
+        .map(([call]) => call)
+        .find((call) => isRecord(call.params) && call.params.action === "stop");
+      const stop = requireRecord(stopCall, "failed pull stop call");
+      expect(stop.nodeId).toBe("node-1");
+      expect(stop.command).toBe("googlemeet.chrome");
+      expect(stop.params).toStrictEqual({ action: "stop", bridgeId: "bridge-1" });
+      expect(stop.timeoutMs).toBe(5_000);
     } finally {
       vi.useRealTimers();
     }
