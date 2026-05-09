@@ -1,12 +1,12 @@
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import {
   ACP_EVENT_LEDGER_VERSION,
   normalizeAcpEventLedgerStoreForMigration,
   writeAcpEventLedgerStoreToSqliteForMigration,
-} from "./event-ledger.js";
+} from "../../../acp/event-ledger.js";
+import { resolveStateDir } from "../../../config/paths.js";
 
 export function resolveLegacyAcpEventLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "acp", "event-ledger.json");

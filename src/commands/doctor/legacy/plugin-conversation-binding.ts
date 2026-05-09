@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
+import { resolveStateDir } from "../../../config/paths.js";
+import { expandHomePrefix } from "../../../infra/home-dir.js";
 import {
   normalizePluginBindingApprovalsForMigration,
   writePluginBindingApprovalsForMigration,
-} from "./conversation-binding.js";
+} from "../../../plugins/conversation-binding.js";
 
 const LEGACY_APPROVALS_PATH = "~/.openclaw/plugin-binding-approvals.json";
 

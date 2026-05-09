@@ -1,25 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  importLegacyAcpEventLedgerFileToSqlite,
-  legacyAcpEventLedgerFileExists,
-} from "../acp/event-ledger-legacy.js";
-import {
   discoverLegacyAuthProfileStateAgentDirs,
   importLegacyAuthProfileStateFileToSqlite,
 } from "../agents/auth-profiles/state.js";
-import {
-  importLegacyOpenRouterModelCapabilitiesCacheToSqlite,
-  legacyOpenRouterModelCapabilitiesCacheExists,
-} from "../agents/pi-embedded-runner/openrouter-model-capabilities-legacy.js";
-import {
-  importLegacySubagentRegistryFileToSqlite,
-  legacySubagentRegistryFileExists,
-} from "../agents/subagent-registry.store-legacy.js";
-import {
-  importLegacyCommitmentStoreFileToSqlite,
-  legacyCommitmentStoreFileExists,
-} from "../commitments/store.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { writeConfigHealthStateToSqlite, type ConfigHealthState } from "../config/health-state.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -32,24 +16,20 @@ import {
   importLegacyMemoryCoreDreamingStateFilesToSqlite,
   legacyMemoryCoreDreamingStateFilesExist,
 } from "../memory-host-sdk/dreaming-state-migration.js";
+import { note } from "../terminal/note.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
-  importLegacyNodeHostConfigFileToSqlite,
-  legacyNodeHostConfigFileExists,
-} from "../node-host/config.js";
+  importLegacyAcpEventLedgerFileToSqlite,
+  legacyAcpEventLedgerFileExists,
+} from "./doctor/legacy/acp-event-ledger.js";
 import {
   importLegacyChannelPairingFilesToSqlite,
   legacyChannelPairingFilesExist,
-} from "../pairing/pairing-store.js";
+} from "./doctor/legacy/channel-pairing.js";
 import {
-  importLegacyPluginBindingApprovalFileToSqlite,
-  legacyPluginBindingApprovalFileExists,
-} from "../plugins/conversation-binding-legacy.js";
-import {
-  importLegacyInstalledPluginIndexFileToSqlite,
-  legacyInstalledPluginIndexFileExists,
-} from "../plugins/installed-plugin-index-legacy-migration.js";
-import { note } from "../terminal/note.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
+  importLegacyCommitmentStoreFileToSqlite,
+  legacyCommitmentStoreFileExists,
+} from "./doctor/legacy/commitments.js";
 import {
   importLegacyDeviceAuthFileToSqlite,
   legacyDeviceAuthFileExists,
@@ -67,9 +47,25 @@ import {
   legacyExecApprovalsFileExists,
 } from "./doctor/legacy/exec-approvals.js";
 import {
+  importLegacyInstalledPluginIndexFileToSqlite,
+  legacyInstalledPluginIndexFileExists,
+} from "./doctor/legacy/installed-plugin-index.js";
+import {
+  importLegacyNodeHostConfigFileToSqlite,
+  legacyNodeHostConfigFileExists,
+} from "./doctor/legacy/node-host-config.js";
+import {
+  importLegacyOpenRouterModelCapabilitiesCacheToSqlite,
+  legacyOpenRouterModelCapabilitiesCacheExists,
+} from "./doctor/legacy/openrouter-model-capabilities.js";
+import {
   importLegacyPairingStateFilesToSqlite,
   legacyPairingStateFilesExist,
 } from "./doctor/legacy/pairing-files.js";
+import {
+  importLegacyPluginBindingApprovalFileToSqlite,
+  legacyPluginBindingApprovalFileExists,
+} from "./doctor/legacy/plugin-conversation-binding.js";
 import {
   importLegacyApnsRegistrationFileToSqlite,
   legacyApnsRegistrationFileExists,
@@ -78,6 +74,10 @@ import {
   importLegacyWebPushFilesToSqlite,
   legacyWebPushFilesExist,
 } from "./doctor/legacy/push-web.js";
+import {
+  importLegacySubagentRegistryFileToSqlite,
+  legacySubagentRegistryFileExists,
+} from "./doctor/legacy/subagent-registry.js";
 import {
   importLegacyTuiLastSessionStoreToSqlite,
   legacyTuiLastSessionFileExists,

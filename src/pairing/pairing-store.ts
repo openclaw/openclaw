@@ -1,7 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { CHANNEL_IDS } from "../channels/ids.js";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
 import {
@@ -29,10 +26,8 @@ import {
 } from "../state/openclaw-state-kv.js";
 import {
   dedupePreserveOrder,
-  readAllowFromFileWithExists,
   resolveAllowFromAccountId,
   resolveAllowFromFilePath,
-  resolvePairingCredentialsDir,
   safeChannelKey,
   type AllowFromStore,
 } from "./allow-from-store-file.js";
@@ -51,8 +46,6 @@ const PAIRING_CODE_MAX_ATTEMPTS = 500;
 const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 const PAIRING_PENDING_MAX = 3;
 const CHANNEL_PAIRING_SCOPE = "pairing.channel";
-const LEGACY_PAIRING_SUFFIX = "-pairing.json";
-const LEGACY_ALLOW_FROM_SUFFIX = "-allowFrom.json";
 
 export type PairingRequest = {
   id: string;
@@ -212,24 +205,6 @@ function normalizeAllowFromList(channel: PairingChannel, store: AllowFromStore):
 
 function normalizeAllowFromInput(channel: PairingChannel, entry: string | number): string {
   return normalizeAllowEntry(channel, normalizeId(entry));
-}
-
-async function readAllowFromStateForPath(
-  channel: PairingChannel,
-  filePath: string,
-): Promise<string[]> {
-  return (await readAllowFromStateForPathWithExists(channel, filePath)).entries;
-}
-
-async function readAllowFromStateForPathWithExists(
-  channel: PairingChannel,
-  filePath: string,
-): Promise<{ entries: string[]; exists: boolean }> {
-  return await readAllowFromFileWithExists({
-    cacheNamespace: "pairing-store-legacy-import",
-    filePath,
-    normalizeStore: (store) => normalizeAllowFromList(channel, store),
-  });
 }
 
 function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
@@ -661,94 +636,4 @@ export async function approveChannelPairingCode(params: {
     writeChannelPairingStateToDatabase(database, params.channel, state);
     return { id: entry.id, entry };
   }, sqliteOptionsForEnv(env));
-}
-
-export async function legacyChannelPairingFilesExist(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<boolean> {
-  const dir = resolvePairingCredentialsDir(env);
-  const entries = await fs.promises.readdir(dir).catch(() => []);
-  return entries.some(
-    (entry) => entry.endsWith(LEGACY_PAIRING_SUFFIX) || entry.endsWith(LEGACY_ALLOW_FROM_SUFFIX),
-  );
-}
-
-function parseAllowFromFilename(filename: string): { channel: string; accountId: string } | null {
-  if (!filename.endsWith(LEGACY_ALLOW_FROM_SUFFIX)) {
-    return null;
-  }
-  const stem = filename.slice(0, -LEGACY_ALLOW_FROM_SUFFIX.length);
-  const knownChannel = [...CHANNEL_IDS]
-    .toSorted((left, right) => right.length - left.length)
-    .find((channel) => stem === channel || stem.startsWith(`${channel}-`));
-  if (!knownChannel) {
-    return { channel: stem, accountId: DEFAULT_ACCOUNT_ID };
-  }
-  if (stem === knownChannel) {
-    return { channel: knownChannel, accountId: DEFAULT_ACCOUNT_ID };
-  }
-  const accountId = stem.slice(knownChannel.length + 1);
-  return {
-    channel: knownChannel,
-    accountId: accountId || DEFAULT_ACCOUNT_ID,
-  };
-}
-
-function parsePairingFilename(filename: string): string | null {
-  if (!filename.endsWith(LEGACY_PAIRING_SUFFIX)) {
-    return null;
-  }
-  return filename.slice(0, -LEGACY_PAIRING_SUFFIX.length);
-}
-
-async function readLegacyPairingStore(filePath: string): Promise<PairingStore | null> {
-  try {
-    const raw = await fs.promises.readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as PairingStore;
-    return {
-      version: 1,
-      requests: Array.isArray(parsed.requests) ? parsed.requests : [],
-    };
-  } catch {
-    return null;
-  }
-}
-
-export async function importLegacyChannelPairingFilesToSqlite(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<{ files: number; requests: number; allowFrom: number }> {
-  const dir = resolvePairingCredentialsDir(env);
-  const entries = await fs.promises.readdir(dir).catch(() => []);
-  let files = 0;
-  let requests = 0;
-  let allowFrom = 0;
-  for (const filename of entries) {
-    const filePath = path.join(dir, filename);
-    const pairingChannel = parsePairingFilename(filename);
-    if (pairingChannel) {
-      const legacy = await readLegacyPairingStore(filePath);
-      if (legacy) {
-        const state = readChannelPairingState(pairingChannel, env);
-        state.requests = legacy.requests;
-        writeChannelPairingState(pairingChannel, state, env);
-        requests += legacy.requests.length;
-      }
-      await fs.promises.rm(filePath, { force: true }).catch(() => undefined);
-      files += 1;
-      continue;
-    }
-
-    const allowFromTarget = parseAllowFromFilename(filename);
-    if (allowFromTarget) {
-      const entries = await readAllowFromStateForPath(allowFromTarget.channel, filePath);
-      const state = readChannelPairingState(allowFromTarget.channel, env);
-      state.allowFrom ??= {};
-      state.allowFrom[resolveAllowFromAccountId(allowFromTarget.accountId)] = entries;
-      writeChannelPairingState(allowFromTarget.channel, state, env);
-      allowFrom += entries.length;
-      await fs.promises.rm(filePath, { force: true }).catch(() => undefined);
-      files += 1;
-    }
-  }
-  return { files, requests, allowFrom };
 }

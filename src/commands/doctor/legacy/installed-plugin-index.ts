@@ -1,24 +1,24 @@
 import fs from "node:fs";
-import { tryReadJsonSync } from "../infra/json-files.js";
-import {
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
-import { clearCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
+import { tryReadJsonSync } from "../../../infra/json-files.js";
+import { clearCurrentPluginMetadataSnapshotState } from "../../../plugins/current-plugin-metadata-state.js";
 import {
   INSTALLED_PLUGIN_INDEX_KV_KEY,
   INSTALLED_PLUGIN_INDEX_KV_SCOPE,
   parseInstalledPluginIndex,
   resolveInstalledPluginIndexStateDbOptions,
-} from "./installed-plugin-index-persisted-read.js";
+} from "../../../plugins/installed-plugin-index-persisted-read.js";
 import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
-} from "./installed-plugin-index-store-path.js";
+} from "../../../plugins/installed-plugin-index-store-path.js";
 import {
   INSTALLED_PLUGIN_INDEX_WARNING,
   type InstalledPluginIndex,
-} from "./installed-plugin-index-types.js";
+} from "../../../plugins/installed-plugin-index-types.js";
+import {
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../../../state/openclaw-state-kv.js";
 
 function withInstalledPluginIndexWarning(index: InstalledPluginIndex): InstalledPluginIndex & {
   warning: string;
