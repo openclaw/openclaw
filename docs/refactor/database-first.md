@@ -147,6 +147,10 @@ The branch already has a real shared SQLite base:
 - Web push, APNs, Voice Wake, and Voice Wake routing runtime modules now keep
   their SQLite readers/writers separate from doctor-only legacy JSON import
   helpers.
+- Pairing state, plugin binding approvals, and cron job state now follow the
+  same split: runtime modules expose SQLite-backed operations and narrow
+  migration writers, while doctor imports/removes the old JSON files through
+  `*-legacy` modules.
 - `src/commands/doctor-sqlite-state.ts` already imports several legacy JSON
   state files, including node host config, into SQLite from doctor.
 - `src/infra/state-migrations.ts` already imports legacy `sessions.json` and

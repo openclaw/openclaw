@@ -46,7 +46,7 @@ import {
 import {
   importLegacyPairingStateFilesToSqlite,
   legacyPairingStateFilesExist,
-} from "../infra/pairing-files.js";
+} from "../infra/pairing-files-legacy.js";
 import {
   importLegacyApnsRegistrationFileToSqlite,
   legacyApnsRegistrationFileExists,
@@ -83,7 +83,7 @@ import {
 import {
   importLegacyPluginBindingApprovalFileToSqlite,
   legacyPluginBindingApprovalFileExists,
-} from "../plugins/conversation-binding.js";
+} from "../plugins/conversation-binding-legacy.js";
 import {
   importLegacyInstalledPluginIndexFileToSqlite,
   legacyInstalledPluginIndexFileExists,

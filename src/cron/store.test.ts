@@ -6,9 +6,11 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import {
   importLegacyCronStateFileToSqlite,
   importLegacyCronStoreToSqlite,
+  loadLegacyCronStoreForMigration,
+} from "./store-legacy.js";
+import {
   loadCronStore,
   loadCronStoreSync,
-  loadLegacyCronStoreForMigration,
   resolveCronStoreKey,
   saveCronStore,
   updateCronStoreJobs,

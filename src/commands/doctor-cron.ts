@@ -13,10 +13,8 @@ import {
   legacyCronStoreFileExists,
   legacyCronStateFileExists,
   loadLegacyCronStoreForMigration,
-  resolveCronStorePath,
-  loadCronStore,
-  saveCronStore,
-} from "../cron/store.js";
+} from "../cron/store-legacy.js";
+import { resolveCronStorePath, loadCronStore, saveCronStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import {
   normalizeOptionalLowercaseString,
