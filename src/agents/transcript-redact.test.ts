@@ -114,6 +114,34 @@ describe("redactTranscriptMessage", () => {
     expect(serializedArguments).toContain("visible");
   });
 
+  it("redacts structured secret fields in tool-result details", () => {
+    const msg = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "send_request",
+      content: [{ type: "text", text: "result sk-abcdef1234567890xyz" }],
+      details: {
+        apiKey: "plainsecretvalue123",
+        password: "hunter2",
+        nested: { accessToken: ["nestedplainsecret123"] },
+        safe: "visible",
+      },
+      isError: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      content: Array<{ text: string }>;
+      details: unknown;
+    };
+    const serializedDetails = JSON.stringify(result.details);
+    expect(result.content[0].text).not.toContain("sk-abcdef1234567890xyz");
+    expect(serializedDetails).not.toContain("plainsecretvalue123");
+    expect(serializedDetails).not.toContain("hunter2");
+    expect(serializedDetails).not.toContain("nestedplainsecret123");
+    expect(serializedDetails).toContain("visible");
+  });
+
   it("redacts string-form content", () => {
     const msg = {
       role: "user",
@@ -195,6 +223,22 @@ describe("redactTranscriptMessage", () => {
     expect(result).toBe(msg);
     expect(JSON.stringify(msgContent(result))).toContain("plainsecretvalue123");
     expect(JSON.stringify(msgContent(result))).toContain("hunter2");
+  });
+
+  it("leaves structured tool-result details unchanged when redactSensitive is off", () => {
+    const msg = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "send_request",
+      content: [{ type: "text", text: "result" }],
+      details: { apiKey: "plainsecretvalue123", password: "hunter2" },
+      isError: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+    const result = redactTranscriptMessage(msg, cfg("off")) as unknown as { details: unknown };
+    expect(result).toBe(msg);
+    expect(JSON.stringify(result.details)).toContain("plainsecretvalue123");
+    expect(JSON.stringify(result.details)).toContain("hunter2");
   });
 
   it("returns same object reference when nothing matches", () => {

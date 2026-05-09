@@ -134,6 +134,13 @@ export function redactTranscriptMessage(message: AgentMessage, cfg?: OpenClawCon
     next ??= { ...source };
     next.content = redactedContent;
   }
+  if ("details" in source) {
+    const redactedDetails = redactTranscriptStructuredValue(source.details, cfg);
+    if (redactedDetails !== source.details) {
+      next ??= { ...source };
+      next.details = redactedDetails;
+    }
+  }
   assignStringField("command");
   assignStringField("output");
   assignStringField("summary");

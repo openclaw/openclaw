@@ -116,6 +116,47 @@ describe("appendSessionTranscriptMessage - redaction", () => {
     }>;
     expect(JSON.stringify(msg.content[0].arguments)).not.toContain("sk-abcdef1234567890xyz");
   });
+
+  it("masks secrets in tool-result details before writing to disk", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "redact-tool-result-details",
+      fixture.sessionsDir(),
+    );
+    const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "send_request",
+        content: [{ type: "text", text: "result sk-abcdef1234567890xyz" }],
+        details: {
+          apiKey: "plainsecretvalue123",
+          password: "hunter2",
+          nested: { accessToken: ["nestedplainsecret123"] },
+          safe: "visible",
+        },
+        isError: false,
+        timestamp: Date.now(),
+      },
+      config,
+    });
+
+    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(raw).not.toContain("sk-abcdef1234567890xyz");
+    expect(raw).not.toContain("plainsecretvalue123");
+    expect(raw).not.toContain("hunter2");
+    expect(raw).not.toContain("nestedplainsecret123");
+    expect(raw).toContain("visible");
+
+    const [msg] = readMessages(sessionFile) as Array<{
+      content: Array<{ text: string }>;
+      details: unknown;
+    }>;
+    expect(msg.content[0].text).not.toContain("sk-abcdef1234567890xyz");
+    expect(JSON.stringify(msg.details)).not.toContain("plainsecretvalue123");
+  });
 });
 
 describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
