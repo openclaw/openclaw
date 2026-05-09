@@ -62,4 +62,5 @@ function renderValue(value: JsoncValue, guardPath: string, walked: readonly stri
     case "null":
       return "null";
   }
+  return "";
 }
