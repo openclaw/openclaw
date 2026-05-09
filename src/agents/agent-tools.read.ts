@@ -1131,7 +1131,6 @@ export function wrapToolWriteWithAppend(
       if (!filePath || !filePath.trim() || content === undefined || !content.trim()) {
         return tool.execute(toolCallId, args, signal, onUpdate);
       }
-      throwIfAborted(signal);
       // Strip @ workspace-alias prefix and expand ~ before resolving; mirrors resolveToCwd semantics.
       const normalized = filePath.startsWith("@") ? filePath.slice(1) : filePath;
       const expanded = expandTildeToOsHome(normalized);
