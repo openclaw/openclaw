@@ -102,6 +102,37 @@ describe("buildAttemptSystemPrompt", () => {
     expect(result.systemPrompt).toContain("RUN_MODE_TASK_77950");
   });
 
+  it("uses Group Chat Context header for non-minimal promptMode under systemPromptOverride", () => {
+    const result = buildAttemptSystemPrompt({
+      isRawModelRun: false,
+      systemPromptOverrideText: "Custom override prompt.",
+      transformProviderSystemPrompt,
+      embeddedSystemPrompt: {
+        workspaceDir: "/tmp/openclaw",
+        reasoningTagHint: false,
+        runtimeInfo: {
+          host: "test-host",
+          os: "Darwin",
+          arch: "arm64",
+          node: "v22.0.0",
+          model: "openai/gpt-5.5",
+        },
+        tools: [],
+        modelAliasLines: [],
+        userTimezone: "UTC",
+        promptMode: "full",
+        extraSystemPrompt: "Group chat hint: be concise.",
+        bootstrapMode: "full",
+        contextFiles: [],
+      },
+      providerTransform: baseProviderTransform,
+    });
+
+    expect(result.systemPrompt).toContain("Custom override prompt.");
+    expect(result.systemPrompt).toContain("## Group Chat Context");
+    expect(result.systemPrompt).toContain("Group chat hint: be concise.");
+  });
+
   it("omits system prompts for raw model probes", () => {
     const result = buildAttemptSystemPrompt({
       isRawModelRun: true,
