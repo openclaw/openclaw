@@ -7,17 +7,18 @@ import { runMissedJobs } from "./service/timer.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
-const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
+const { logger: noopLogger, makeStoreKey } = setupCronServiceSuite({
   prefix: "openclaw-cron-",
   baseTimeIso: "2025-12-13T17:00:00.000Z",
 });
 
 describe("CronService restart catch-up", () => {
-  async function writeStoreJobs(storePath: string, jobs: unknown[]) {
-    await saveCronStore(storePath, { version: 1, jobs: jobs as CronJob[] });
+  async function writeStoreJobs(storeKey: string, jobs: unknown[]) {
+    await saveCronStore(storeKey, { version: 1, jobs: jobs as CronJob[] });
   }
 
   function createRestartCronService(params: {
+    storeKey: string;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
     requestHeartbeat: ReturnType<typeof vi.fn>;
     onEvent?: ReturnType<typeof vi.fn>;
@@ -26,6 +27,7 @@ describe("CronService restart catch-up", () => {
     startupDeferredMissedAgentJobDelayMs?: number;
   }) {
     return new CronService({
+      storeKey: params.storeKey,
       cronEnabled: true,
       log: noopLogger,
       ...(params.nowMs ? { nowMs: params.nowMs } : {}),
@@ -102,14 +104,15 @@ describe("CronService restart catch-up", () => {
       onEvent: ReturnType<typeof vi.fn>;
     }) => Promise<void>,
   ) {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const onEvent = vi.fn();
 
-    await writeStoreJobs(store.storePath, jobs);
+    await writeStoreJobs(store.storeKey, jobs);
 
     const cron = createRestartCronService({
+      storeKey: store.storeKey,
       enqueueSystemEvent,
       requestHeartbeat,
       onEvent,
@@ -161,13 +164,13 @@ describe("CronService restart catch-up", () => {
   });
 
   it("defers overdue isolated agent-turn jobs during gateway startup", async () => {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
 
-    await writeStoreJobs(store.storePath, [
+    await writeStoreJobs(store.storeKey, [
       {
         id: "startup-isolated-agent",
         name: "startup isolated agent",
@@ -183,6 +186,7 @@ describe("CronService restart catch-up", () => {
     ]);
 
     const cron = createRestartCronService({
+      storeKey: store.storeKey,
       enqueueSystemEvent,
       requestHeartbeat,
       runIsolatedAgentJob,
@@ -425,17 +429,18 @@ describe("CronService restart catch-up", () => {
   });
 
   it("reschedules deferred missed jobs from the post-catchup clock so they stay in the future", async () => {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");
     let now = startNow;
 
-    await writeStoreJobs(store.storePath, [
+    await writeStoreJobs(store.storeKey, [
       createOverdueEveryJob("stagger-0", startNow - 60_000),
       createOverdueEveryJob("stagger-1", startNow - 50_000),
       createOverdueEveryJob("stagger-2", startNow - 40_000),
     ]);
 
     const state = createCronServiceState({
+      storeKey: store.storeKey,
       cronEnabled: true,
       log: noopLogger,
       nowMs: () => now,
@@ -468,17 +473,18 @@ describe("CronService restart catch-up", () => {
   });
 
   it("keeps startup overflow cron deferrals before the next natural cron slot", async () => {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");
     let now = startNow;
 
-    await writeStoreJobs(store.storePath, [
+    await writeStoreJobs(store.storeKey, [
       createOverdueCronJob("cron-stagger-0", Date.parse("2025-12-13T16:00:00.000Z")),
       createOverdueCronJob("cron-stagger-1", Date.parse("2025-12-13T16:05:00.000Z")),
       createOverdueCronJob("cron-stagger-2", Date.parse("2025-12-13T16:10:00.000Z")),
     ]);
 
     const state = createCronServiceState({
+      storeKey: store.storeKey,
       cronEnabled: true,
       log: noopLogger,
       nowMs: () => now,
