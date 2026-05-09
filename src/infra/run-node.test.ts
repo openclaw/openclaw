@@ -59,16 +59,10 @@ const DIST_RUNTIME_EXTENSION_SKILL = "dist-runtime/extensions/demo/skills/SKILL.
 const DIST_OPENCLAW_ALIAS_PACKAGE = "dist/extensions/node_modules/openclaw/package.json";
 const DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX =
   "dist/extensions/node_modules/openclaw/plugin-sdk/index.js";
-const ACPX_PACKAGE = "extensions/acpx/package.json";
-const ACPX_MCP_PROXY_SOURCE = "extensions/acpx/src/runtime-internals/mcp-proxy.mjs";
-const DIST_ACPX_MCP_PROXY = "dist/extensions/acpx/mcp-proxy.mjs";
-const ACPX_ERROR_FORMAT_SOURCE = "extensions/acpx/src/runtime-internals/error-format.mjs";
-const DIST_ACPX_ERROR_FORMAT = "dist/extensions/acpx/error-format.mjs";
-const ACPX_MCP_COMMAND_LINE_SOURCE = "extensions/acpx/src/runtime-internals/mcp-command-line.mjs";
-const DIST_ACPX_MCP_COMMAND_LINE = "dist/extensions/acpx/mcp-command-line.mjs";
 const DIFFS_PACKAGE = "extensions/diffs/package.json";
 const DIFFS_VIEWER_RUNTIME_SOURCE = "extensions/diffs/assets/viewer-runtime.js";
 const DIST_DIFFS_VIEWER_RUNTIME = "dist/extensions/diffs/assets/viewer-runtime.js";
+const DIST_RUNTIME_DIFFS_VIEWER_RUNTIME = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
 const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
 const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
 
@@ -1904,38 +1898,25 @@ describe("run-node script", () => {
       await setupTrackedProject(tmp, {
         files: {
           [ROOT_SRC]: "export const value = 1;\n",
-          [ACPX_PACKAGE]:
-            '{"openclaw":{"build":{"staticAssets":[{"source":"./src/runtime-internals/mcp-proxy.mjs","output":"mcp-proxy.mjs"},{"source":"./src/runtime-internals/error-format.mjs","output":"error-format.mjs"},{"source":"./src/runtime-internals/mcp-command-line.mjs","output":"mcp-command-line.mjs"}]}}}\n',
-          [ACPX_MCP_PROXY_SOURCE]: "export {};\n",
-          [DIST_ACPX_MCP_PROXY]: "export {};\n",
-          [ACPX_ERROR_FORMAT_SOURCE]: "export {};\n",
-          [DIST_ACPX_ERROR_FORMAT]: "export {};\n",
-          [ACPX_MCP_COMMAND_LINE_SOURCE]: "export {};\n",
-          [DIST_ACPX_MCP_COMMAND_LINE]: "export {};\n",
           [DIFFS_PACKAGE]:
             '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
           [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
           [DIST_DIFFS_VIEWER_RUNTIME]: "export {};\n",
+          [DIST_RUNTIME_DIFFS_VIEWER_RUNTIME]: "export {};\n",
           [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
         },
         buildPaths: [
           ROOT_SRC,
-          ACPX_PACKAGE,
-          ACPX_MCP_PROXY_SOURCE,
-          DIST_ACPX_MCP_PROXY,
-          ACPX_ERROR_FORMAT_SOURCE,
-          DIST_ACPX_ERROR_FORMAT,
-          ACPX_MCP_COMMAND_LINE_SOURCE,
-          DIST_ACPX_MCP_COMMAND_LINE,
           DIFFS_PACKAGE,
           DIFFS_VIEWER_RUNTIME_SOURCE,
           DIST_DIFFS_VIEWER_RUNTIME,
+          DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
           DIST_ENTRY,
           BUILD_STAMP,
           RUNTIME_POSTBUILD_STAMP,
         ],
       });
-      await fs.rm(resolvePath(tmp, DIST_ACPX_MCP_COMMAND_LINE));
+      await fs.rm(resolvePath(tmp, DIST_DIFFS_VIEWER_RUNTIME));
 
       const requirement = resolveRuntimePostBuildRequirement(
         createBuildRequirementDeps(tmp, {
@@ -1947,6 +1928,32 @@ describe("run-node script", () => {
       expect(requirement).toEqual({
         shouldSync: true,
         reason: "missing_runtime_postbuild_output",
+      });
+    });
+  });
+
+  it("does not require static asset outputs when the declared source is absent", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIFFS_PACKAGE]:
+            '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [ROOT_SRC, DIFFS_PACKAGE, DIST_ENTRY, BUILD_STAMP, RUNTIME_POSTBUILD_STAMP],
+      });
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: false,
+        reason: "clean",
       });
     });
   });
