@@ -182,7 +182,6 @@ const allowedExactPaths = new Set([
   "extensions/matrix/src/state-migrations.ts",
   "extensions/matrix/src/legacy-state.ts",
   "extensions/memory-wiki/src/digest-state-migration.ts",
-  "extensions/memory-wiki/src/source-sync-state.ts",
   "extensions/memory-wiki/src/source-sync-state-migration.ts",
   "extensions/memory-wiki/src/source-sync-migration.ts",
   "extensions/msteams/src/state-migrations.ts",
