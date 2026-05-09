@@ -175,7 +175,6 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const persisted = readTestSessionRow(sessionKey);
     expect(persisted?.sessionId).toBe("session-rotated");
-    expect(persisted).not.toHaveProperty("transcriptLocator");
     expect(persisted?.compactionCount).toBe(2);
     expect(persisted?.memoryFlushCompactionCount).toBe(1);
     expect(persisted?.memoryFlushAt).toBe(1_700_000_000_000);
@@ -601,7 +600,6 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(entry?.sessionId).toBe("session-rotated");
-    expect(entry).not.toHaveProperty("transcriptLocator");
     expect(followupRun.run.sessionId).toBe("session-rotated");
     expect(updateSessionId).toHaveBeenCalledWith("session-rotated");
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({

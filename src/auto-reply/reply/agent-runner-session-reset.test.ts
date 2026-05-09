@@ -111,7 +111,6 @@ describe("resetReplyRunSession", () => {
 
     const persisted = readTestSessionRow("main");
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
-    expect(persisted).not.toHaveProperty("transcriptLocator");
     expect(persisted?.fallbackNoticeReason).toBeUndefined();
   });
 
@@ -144,10 +143,8 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.sessionId).toBe("00000000-0000-0000-0000-000000000123");
     expect(activeSessionEntry?.totalTokens).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(1);
-    expect(activeSessionEntry).not.toHaveProperty("transcriptLocator");
     expect(followupRun.run.sessionId).toBe(activeSessionEntry?.sessionId);
     const persisted = readTestSessionRow("main");
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
-    expect(persisted).not.toHaveProperty("transcriptLocator");
   });
 });

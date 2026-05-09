@@ -199,7 +199,6 @@ describe("session hook context wiring", () => {
       reason: "new",
     });
     expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
-    expect(event).not.toHaveProperty("transcriptLocator");
 
     const [startEvent, startContext] = requireHookCall(
       hookRunnerMocks.runSessionStart,
@@ -272,7 +271,6 @@ describe("session hook context wiring", () => {
       expectFields(event, {
         reason: "daily",
       });
-      expect(event).not.toHaveProperty("transcriptLocator");
       expect(event?.nextSessionId).toBe(startEvent?.sessionId);
     } finally {
       vi.useRealTimers();

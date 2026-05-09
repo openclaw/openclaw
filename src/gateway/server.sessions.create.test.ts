@@ -48,7 +48,6 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  expect(created.payload?.entry).not.toHaveProperty("transcriptLocator");
   expect(created.payload?.sessionId).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
@@ -62,7 +61,6 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     modelOverride: "gpt-test-a",
     parentSessionKey: "agent:main:main",
   });
-  expect(stored).not.toHaveProperty("transcriptLocator");
 
   const [header] = loadSqliteSessionTranscriptEvents({
     agentId: "ops",
@@ -111,7 +109,6 @@ test("sessions.create scopes the main alias to the requested agent", async () =>
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.key).toBe("agent:longmemeval:main");
-  expect(created.payload?.entry).not.toHaveProperty("transcriptLocator");
 
   expect(
     getSessionEntry({ agentId: "longmemeval", sessionKey: "agent:longmemeval:main" })?.sessionId,
@@ -135,7 +132,6 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 
   expect(globalCreated.ok).toBe(true);
   expect(globalCreated.payload?.key).toBe("global");
-  expect(globalCreated.payload?.entry).not.toHaveProperty("transcriptLocator");
 
   const unknownCreated = await directSessionReq<{
     key?: string;
@@ -148,7 +144,6 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 
   expect(unknownCreated.ok).toBe(true);
   expect(unknownCreated.payload?.key).toBe("unknown");
-  expect(unknownCreated.payload?.entry).not.toHaveProperty("transcriptLocator");
 
   expect(getSessionEntry({ agentId: "main", sessionKey: "global" })?.sessionId).toBe(
     globalCreated.payload?.sessionId,

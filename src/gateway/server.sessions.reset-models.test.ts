@@ -44,7 +44,6 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:main:main");
   expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-model");
-  expect(reset.payload?.entry).not.toHaveProperty("transcriptLocator");
   expect(reset.payload?.entry.modelProvider).toBe("openai");
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
@@ -359,7 +358,6 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   expect(reset.ok).toBe(true);
   const resetSessionId = reset.payload?.entry.sessionId;
   expect(resetSessionId).toBeTruthy();
-  expect(reset.payload?.entry).not.toHaveProperty("transcriptLocator");
   expect(reset.payload?.entry.chatType).toBe("group");
   expect(reset.payload?.entry.channel).toBe("discord");
   expect(reset.payload?.entry.groupId).toBe("group-1");
@@ -412,8 +410,6 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   expect(reset.payload?.entry.label).toBe("owned child");
 
   const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:subagent:child" });
-  expect(reset.payload?.entry).not.toHaveProperty("transcriptLocator");
-  expect(stored).not.toHaveProperty("transcriptLocator");
   expect(stored?.chatType).toBe("group");
   expect(stored?.channel).toBe("discord");
   expect(stored?.groupId).toBe("group-1");

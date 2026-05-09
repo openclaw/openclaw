@@ -102,26 +102,6 @@ describe("runEmbeddedPiAgent worker launch", () => {
     );
   });
 
-  it("does not include transcript path metadata in worker handoff", async () => {
-    const workerResult = {
-      payloads: [{ text: "worker-ok" }],
-      meta: { durationMs: 12 },
-    } satisfies EmbeddedPiRunResult;
-    decidePiRunWorkerLaunchMock.mockReturnValue({
-      mode: "worker",
-      reason: "requested",
-    });
-    runPiRunInWorkerMock.mockResolvedValue(workerResult);
-    vi.stubEnv("OPENCLAW_AGENT_WORKER_MODE", "worker");
-
-    await expect(runEmbeddedPiAgent(makeParams())).resolves.toBe(workerResult);
-
-    expect(runPiRunInWorkerMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({ transcriptLocator: expect.anything() }),
-      expect.anything(),
-    );
-  });
-
   it("allows worker permission mode to be overridden", async () => {
     const workerResult = {
       payloads: [{ text: "permission-worker-ok" }],

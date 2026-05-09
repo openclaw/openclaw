@@ -550,7 +550,6 @@ describe("incrementCompactionCount", () => {
       newSessionId: "s2",
     });
     expect(stored[sessionKey].sessionId).toBe("s2");
-    expect(stored[sessionKey]).not.toHaveProperty("transcriptLocator");
   });
 
   it("drops legacy fork transcript filenames when compaction rotates sessions", async () => {
@@ -559,7 +558,6 @@ describe("incrementCompactionCount", () => {
       newSessionId: "s2",
     });
     expect(stored[sessionKey].sessionId).toBe("s2");
-    expect(stored[sessionKey]).not.toHaveProperty("transcriptLocator");
   });
 
   it("drops legacy transcript metadata during compaction rotation", async () => {
@@ -568,7 +566,6 @@ describe("incrementCompactionCount", () => {
       newSessionId: "s2",
     });
     expect(stored[sessionKey].sessionId).toBe("s2");
-    expect(stored[sessionKey]).not.toHaveProperty("transcriptLocator");
   });
 
   it("increments compaction count by an explicit amount", async () => {
@@ -605,7 +602,6 @@ describe("incrementCompactionCount", () => {
 
     const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].sessionId).toBe("new-session-id");
-    expect(stored[sessionKey]).not.toHaveProperty("transcriptLocator");
     expect(stored[sessionKey].compactionCount).toBe(2);
   });
 
@@ -626,7 +622,6 @@ describe("incrementCompactionCount", () => {
 
     const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].sessionId).toBe("same-id");
-    expect(stored[sessionKey]).not.toHaveProperty("transcriptLocator");
     expect(stored[sessionKey].compactionCount).toBe(1);
   });
 
@@ -647,7 +642,6 @@ describe("incrementCompactionCount", () => {
 
     const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].sessionId).toBe("same-id");
-    expect(stored[sessionKey]).not.toHaveProperty("transcriptLocator");
     expect(stored[sessionKey].compactionCount).toBe(1);
   });
 

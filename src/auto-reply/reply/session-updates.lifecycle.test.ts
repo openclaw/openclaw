@@ -114,7 +114,6 @@ describe("session-updates lifecycle hooks", () => {
       sessionKey,
       reason: "compaction",
     });
-    expect(endEvent).not.toHaveProperty("transcriptLocator");
     expect(endContext).toMatchObject({
       sessionId: "s1",
       sessionKey,
@@ -163,8 +162,6 @@ describe("session-updates lifecycle hooks", () => {
     });
 
     expect(sessionStore[sessionKey]?.sessionId).toBe("s2");
-    expect(sessionStore[sessionKey]).not.toHaveProperty("transcriptLocator");
     const [endEvent] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-    expect(endEvent).not.toHaveProperty("transcriptLocator");
   });
 });

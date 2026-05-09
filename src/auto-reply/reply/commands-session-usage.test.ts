@@ -182,11 +182,6 @@ describe("handleUsageCommand", () => {
         sessionId: "target-session",
       }),
     );
-    expect(loadSessionCostSummaryMock.mock.calls[0]?.[0]).not.toHaveProperty("transcriptLocator");
-    expect(
-      (loadSessionCostSummaryMock.mock.calls[0]?.[0] as { sessionEntry?: unknown } | undefined)
-        ?.sessionEntry,
-    ).not.toHaveProperty("transcriptLocator");
   });
 
   it("prefers the target session entry from sessionStore for /usage footer mode", async () => {

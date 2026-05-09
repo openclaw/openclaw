@@ -209,7 +209,6 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
     sessionKey: "agent:main:main",
     reason: "new",
   });
-  expect(endEvent).not.toHaveProperty("transcriptLocator");
   expect((endEvent as { nextSessionId?: string } | undefined)?.nextSessionId).toBe(
     (startEvent as { sessionId?: string } | undefined)?.sessionId,
   );

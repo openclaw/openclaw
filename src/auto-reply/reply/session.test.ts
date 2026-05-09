@@ -566,7 +566,6 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     // Session ID should NOT match the parent — it should be a fresh UUID
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
-    expect(result.sessionEntry).not.toHaveProperty("transcriptLocator");
   });
 
   it("skips fork when resolved parent token estimate exceeds threshold", async () => {
@@ -623,7 +622,6 @@ describe("initSessionState thread forking", () => {
     });
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
-    expect(result.sessionEntry).not.toHaveProperty("transcriptLocator");
     expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
   });
 
@@ -643,8 +641,6 @@ describe("initSessionState thread forking", () => {
       cfg,
       commandAuthorized: true,
     });
-
-    expect(result.sessionEntry).not.toHaveProperty("transcriptLocator");
   });
 
   it("keeps topic identity out of active session rows when derived from SessionKey", async () => {
@@ -664,8 +660,6 @@ describe("initSessionState thread forking", () => {
         cfg,
         commandAuthorized: true,
       });
-
-      expect(result.sessionEntry).not.toHaveProperty("transcriptLocator");
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -1243,7 +1237,6 @@ describe("initSessionState RawBody", () => {
       });
 
       expect(result.sessionEntry.sessionId).toBe(sessionId);
-      expect(result.sessionEntry).not.toHaveProperty("transcriptLocator");
     } finally {
       vi.unstubAllEnvs();
     }

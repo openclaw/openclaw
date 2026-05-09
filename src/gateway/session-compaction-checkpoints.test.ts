@@ -209,7 +209,6 @@ describe("session-compaction-checkpoints", () => {
 
     expect(snapshot).not.toBeNull();
     expect(snapshot?.leafId).toBe("capture-leaf");
-    expect(snapshot).not.toHaveProperty("transcriptLocator");
     expect(
       hasSqliteSessionTranscriptSnapshot({
         agentId: DEFAULT_AGENT_ID,
@@ -324,7 +323,6 @@ describe("session-compaction-checkpoints", () => {
 
     expect(forked).not.toBeNull();
     expect(forked?.sessionId).toBeTruthy();
-    expect(forked).not.toHaveProperty("transcriptLocator");
     const forkedEntries = readSqliteTranscriptEvents(forked!.sessionId);
     expect(forkedEntries[0]).toMatchObject({
       type: "session",

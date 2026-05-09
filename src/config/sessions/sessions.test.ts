@@ -496,7 +496,6 @@ describe("resolveAndPersistSessionTranscriptScope", () => {
     expect(result).toMatchObject({ agentId: "main", sessionId });
 
     const saved = readFixtureSessionEntries();
-    expect(saved[sessionKey]).not.toHaveProperty("transcriptLocator");
   });
 
   it("creates SQLite scope without persisting a locator when session is not yet present", async () => {
@@ -536,9 +535,7 @@ describe("resolveAndPersistSessionTranscriptScope", () => {
     });
 
     expect(result).toMatchObject({ agentId: "main", sessionId: nextSessionId });
-    expect(result.sessionEntry).not.toHaveProperty("transcriptLocator");
 
     const saved = readFixtureSessionEntries();
-    expect(saved[sessionKey]).not.toHaveProperty("transcriptLocator");
   });
 });

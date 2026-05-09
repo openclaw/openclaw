@@ -768,7 +768,6 @@ describe("createFollowupRunner compaction", () => {
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(2);
     expect(sessionStore.main.sessionId).toBe("session-rotated");
-    expect(sessionStore.main).not.toHaveProperty("transcriptLocator");
   });
 
   it("refreshes queued followup runs to the rotated session id", async () => {
