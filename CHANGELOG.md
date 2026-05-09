@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/usage-cache: align `writeUsageCostCache` with the project-standard `writeTextAtomic` helper; removes bespoke temp-path construction and enables the `copyFile` fallback for Windows deployments where the process has Write on the existing cache file but not on the sessions directory (fully-restricted `(I)(RX)` deployments still require the `icacls` ops fix).
 - Agents/bootstrap: keep pending `BOOTSTRAP.md` and bootstrap truncation notices in system-prompt Project Context instead of copying setup text or raw warning diagnostics into WebChat user/runtime context. Fixes #76946.
 - Channels/WhatsApp: allow `@whiskeysockets/libsignal-node` in `onlyBuiltDependencies` so pnpm v9+ `blockExoticSubdeps` no longer rejects the baileys git-tarball subdep and silences all inbound agent replies. Fixes #76539. Thanks @ottodeng and @vincentkoc.
 - Gateway/install: keep `.env`-managed values in the macOS LaunchAgent env file while still tracking `OPENCLAW_SERVICE_MANAGED_ENV_KEYS`, so regenerated services do not boot without managed auth/provider keys. Fixes #75374.

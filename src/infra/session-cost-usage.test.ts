@@ -10,6 +10,7 @@ import {
 } from "../gateway/model-pricing-cache-state.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import * as jsonFiles from "./json-files.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
@@ -1945,5 +1946,24 @@ example
     expect(totalCost).toBeCloseTo(0.055, 8);
     expect(lastPoint?.cumulativeTokens).toBe(165);
     expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8);
+  });
+
+  // Regression for CAL-54: writeUsageCostCache must delegate to writeTextAtomic so the
+  // Windows EPERM fallback (copyFile instead of rename) is available when the process
+  // lacks Write on the sessions directory.
+  it("writeUsageCostCache delegates to writeTextAtomic", async () => {
+    const root = await makeSessionCostRoot("writeTextAtomic-mock");
+    const spy = vi.spyOn(jsonFiles, "writeTextAtomic").mockResolvedValue(undefined);
+    try {
+      await withStateDir(root, async () => {
+        await refreshCostUsageCache({ agentId: "main" });
+      });
+      expect(spy).toHaveBeenCalled();
+      const [calledPath, calledContent] = spy.mock.calls[0]!;
+      expect(calledPath).toContain(".usage-cost-cache.json");
+      expect(calledContent).toMatch(/^\{.*\}\n$/s);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
