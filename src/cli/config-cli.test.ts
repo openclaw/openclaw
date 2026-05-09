@@ -482,6 +482,35 @@ describe("config cli", () => {
         ),
       );
     });
+
+    it("forwards removed credential paths as unsetPaths so preservation does not restore them (catalog #5/#17 regression)", async () => {
+      // Regression guard: pruneInactiveGatewayAuthCredentials mutates the cloned
+      // config and returns removed dot-paths. Under the merge-patch preservation
+      // semantics introduced by catalog #5/#17, absent-in-target keys are
+      // preserved from the source snapshot unless they appear in unsetPaths.
+      // This test asserts that the CLI correctly forwards each removed credential
+      // path as an explicit unsetPath so the write layer can drop it from disk.
+      const resolved: OpenClawConfig = {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            token: "stale-token",
+            password: "stale-password", // pragma: allowlist secret
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.auth.mode", "trusted-proxy"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const writeOptions = mockWriteConfigFile.mock.calls[0]?.[1];
+      const unsetPaths: string[][] = writeOptions?.unsetPaths ?? [];
+
+      // Both stale credential paths must appear as explicit unsetPaths.
+      expect(unsetPaths).toContainEqual(["gateway", "auth", "token"]);
+      expect(unsetPaths).toContainEqual(["gateway", "auth", "password"]);
+    });
   });
 
   describe("config get", () => {

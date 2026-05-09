@@ -1418,6 +1418,12 @@ async function runConfigOperations(params: {
     root: next,
     operations,
   });
+  // Implicit credential deletions from pruneInactiveGatewayAuthCredentials must
+  // be forwarded as unsetPaths so the merge-patch preservation semantics
+  // (catalog #5/#17 fix) don't restore them from the source snapshot.
+  for (const dotPath of removedGatewayAuthPaths) {
+    unsetPaths.push(dotPath.split(".") as PathSegment[]);
+  }
   const nextConfig = next as OpenClawConfig;
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
   const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
