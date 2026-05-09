@@ -174,6 +174,7 @@ export function createChangedCheckPlan(result, options = {}) {
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     addTypecheck("typecheck all", ["tsgo:all"]);
     addLint("lint", ["lint"]);
+    addLint("Kysely/SQLite guardrails", ["lint:kysely"]);
     add("runtime import cycles", ["check:import-cycles"]);
     return {
       commands,
@@ -196,6 +197,7 @@ export function createChangedCheckPlan(result, options = {}) {
 
   if (lanes.core || lanes.coreTests) {
     addLint("lint core", ["lint:core"]);
+    addLint("Kysely/SQLite guardrails", ["lint:kysely"]);
   }
   if (
     lanes.liveDockerTooling &&
@@ -209,6 +211,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (lanes.tooling || lanes.liveDockerTooling) {
     addLint("lint scripts", ["lint:scripts"]);
+    addLint("Kysely/SQLite guardrails", ["lint:kysely"]);
   }
   if (lanes.apps) {
     addLint("lint apps", ["lint:apps"]);

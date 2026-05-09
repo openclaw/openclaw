@@ -1,5 +1,6 @@
 import { cancel, isCancel } from "@clack/prompts";
 import { formatCliCommand } from "../cli/command-format.js";
+import { promptYesNo } from "../cli/prompt.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { redactMigrationPlan } from "../plugin-sdk/migration.js";
 import {

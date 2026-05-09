@@ -1,98 +1,278 @@
 #!/usr/bin/env node
 
 import { promises as fs } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import {
   collectTypeScriptFilesFromRoots,
+  getPropertyNameText,
   resolveRepoRoot,
   runAsScript,
+  toLine,
+  unwrapExpression,
 } from "./lib/ts-guard-utils.mjs";
+
+const require = createRequire(import.meta.url);
+const ts = require("typescript");
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = [path.join(repoRoot, "src")];
 
-const allowedCompiledRawPaths = new Set([
+const kyselyRawAllowPaths = new Set([
+  "src/infra/kysely-node-sqlite.test.ts",
+  "src/infra/kysely-sync.ts",
+]);
+
+const compiledRawAllowPaths = new Set([
   "src/infra/kysely-node-sqlite.ts",
   "src/infra/kysely-node-sqlite.test.ts",
 ]);
 
-function lineNumberAt(content, index) {
-  return content.slice(0, index).split("\n").length;
+const rawSqliteAllowPaths = new Set([
+  "src/acp/event-ledger.ts",
+  "src/agents/subagent-registry.store.ts",
+  "src/commands/backup-verify.ts",
+  "src/config/sessions/transcript-store.sqlite.ts",
+  "src/cron/run-log.ts",
+  "src/cron/store.ts",
+  "src/infra/backup-create.ts",
+  "src/infra/kysely-node-sqlite.ts",
+  "src/infra/kysely-sync.ts",
+  "src/infra/node-sqlite.ts",
+  "src/infra/outbound/current-conversation-bindings.ts",
+  "src/infra/sqlite-pragma.test-support.ts",
+  "src/infra/sqlite-transaction.ts",
+  "src/infra/sqlite-wal.ts",
+  "src/media/store.ts",
+  "src/plugin-sdk/memory-core-host-engine-storage.ts",
+  "src/plugin-state/plugin-blob-store.ts",
+  "src/plugin-state/plugin-state-store.sqlite.ts",
+  "src/proxy-capture/store.sqlite.ts",
+  "src/state/openclaw-agent-db.ts",
+  "src/state/openclaw-state-db.ts",
+  "src/state/sqlite-schema-shape.test-support.ts",
+  "src/tasks/task-flow-registry.store.sqlite.ts",
+  "src/tasks/task-registry.store.sqlite.ts",
+  "src/tui/tui-last-session.ts",
+]);
+
+function lineText(sourceFile, node) {
+  const line = toLine(sourceFile, node);
+  return sourceFile.text.split("\n")[line - 1] ?? "";
 }
 
-function collectPatternViolations(content, pattern, message, allow = () => false) {
-  const violations = [];
-  for (const match of content.matchAll(pattern)) {
-    if (allow(match)) {
+function hasAllowComment(sourceFile, node, token) {
+  const line = lineText(sourceFile, node);
+  if (line.includes(token)) {
+    return true;
+  }
+  const leading = ts.getLeadingCommentRanges(sourceFile.text, node.pos) ?? [];
+  return leading.some((range) => sourceFile.text.slice(range.pos, range.end).includes(token));
+}
+
+function importSource(node) {
+  const moduleSpecifier = node.moduleSpecifier;
+  return ts.isStringLiteral(moduleSpecifier) ? moduleSpecifier.text : "";
+}
+
+function collectImports(sourceFile) {
+  const kyselySqlNames = new Set();
+  const compiledQueryNames = new Set();
+  const syncHelperNames = new Set();
+  let hasKyselyContext = false;
+  let hasSqliteContext = false;
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) {
       continue;
     }
-    violations.push({
-      line: lineNumberAt(content, match.index ?? 0),
-      message,
-    });
+    const source = importSource(statement);
+    const clause = statement.importClause;
+    const namedBindings = clause?.namedBindings;
+
+    if (source === "kysely") {
+      hasKyselyContext = true;
+      if (namedBindings && ts.isNamedImports(namedBindings)) {
+        for (const element of namedBindings.elements) {
+          const importedName = element.propertyName?.text ?? element.name.text;
+          if (importedName === "sql") {
+            kyselySqlNames.add(element.name.text);
+          }
+          if (importedName === "CompiledQuery") {
+            compiledQueryNames.add(element.name.text);
+          }
+        }
+      }
+    }
+
+    if (source.endsWith("kysely-sync.js") || source.endsWith("kysely-node-sqlite.js")) {
+      hasKyselyContext = true;
+      if (namedBindings && ts.isNamedImports(namedBindings)) {
+        for (const element of namedBindings.elements) {
+          const importedName = element.propertyName?.text ?? element.name.text;
+          if (
+            importedName === "executeSqliteQuerySync" ||
+            importedName === "executeSqliteQueryTakeFirstSync" ||
+            importedName === "executeSqliteQueryTakeFirstOrThrowSync"
+          ) {
+            syncHelperNames.add(element.name.text);
+          }
+          if (importedName === "getNodeSqliteKysely") {
+            hasKyselyContext = true;
+            hasSqliteContext = true;
+          }
+        }
+      }
+    }
+
+    if (
+      source === "node:sqlite" ||
+      source.endsWith("node-sqlite.js") ||
+      source.endsWith("sqlite-transaction.js") ||
+      source.endsWith("sqlite-wal.js") ||
+      source.endsWith("openclaw-state-db.js") ||
+      source.endsWith("openclaw-agent-db.js")
+    ) {
+      hasSqliteContext = true;
+    }
   }
-  return violations;
+
+  return {
+    compiledQueryNames,
+    hasKyselyContext,
+    hasSqliteContext,
+    kyselySqlNames,
+    syncHelperNames,
+  };
+}
+
+function addViolation(violations, sourceFile, node, message) {
+  violations.push({
+    line: toLine(sourceFile, node),
+    message,
+  });
+}
+
+function isIdentifierNamed(node, names) {
+  const unwrapped = unwrapExpression(node);
+  return ts.isIdentifier(unwrapped) && names.has(unwrapped.text);
+}
+
+function isTestPath(relativePath) {
+  return /\.(?:test|spec|e2e)\.ts$/u.test(relativePath) || relativePath.includes(".test-helpers.");
+}
+
+function isLikelySqliteReceiver(expression) {
+  const unwrapped = unwrapExpression(expression);
+  if (ts.isIdentifier(unwrapped)) {
+    return /^(?:db|database|legacyDb|stateDb|agentDb)$/u.test(unwrapped.text);
+  }
+  return ts.isPropertyAccessExpression(unwrapped) && getPropertyNameText(unwrapped.name) === "db";
 }
 
 function collectKyselyGuardrailViolations(content, relativePath) {
+  const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
+  const imports = collectImports(sourceFile);
   const violations = [];
-  const hasKyselyContext =
-    /from\s+["']kysely["']/u.test(content) ||
-    /from\s+["'][^"']*kysely-sync\.js["']/u.test(content) ||
-    /\bgetNodeSqliteKysely\b/u.test(content);
 
-  if (relativePath !== "src/infra/kysely-sync.ts") {
-    violations.push(
-      ...collectPatternViolations(
-        content,
-        /\bexecuteSqliteQuery(?:Sync|TakeFirstSync|TakeFirstOrThrowSync)\s*</gu,
+  function visit(node) {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      imports.syncHelperNames.has(node.expression.text) &&
+      node.typeArguments?.length &&
+      !hasAllowComment(sourceFile, node, "kysely-allow-raw")
+    ) {
+      addViolation(
+        violations,
+        sourceFile,
+        node,
         "sync helper row generic at call site; let Kysely infer builder result rows",
-      ),
-    );
-  }
+      );
+    }
 
-  violations.push(
-    ...collectPatternViolations(
-      content,
-      /\bsql\s*</gu,
-      "typed raw sql snippet needs a small helper or allowlist",
-      (match) => {
-        const fromMatch = content.slice(match.index ?? 0, (match.index ?? 0) + 160);
-        return (
-          relativePath === "src/infra/kysely-node-sqlite.test.ts" &&
-          fromMatch.includes("pragma user_version")
-        );
-      },
-    ),
-  );
+    if (
+      ts.isTaggedTemplateExpression(node) &&
+      node.typeArguments?.length &&
+      isIdentifierNamed(node.tag, imports.kyselySqlNames) &&
+      !kyselyRawAllowPaths.has(relativePath) &&
+      !hasAllowComment(sourceFile, node, "kysely-allow-raw")
+    ) {
+      addViolation(
+        violations,
+        sourceFile,
+        node,
+        "typed raw sql snippet needs a small helper or allowlisted boundary",
+      );
+    }
 
-  violations.push(
-    ...collectPatternViolations(
-      content,
-      /\bsql\.(?:ref|table|id|raw)\s*\(/gu,
-      "raw identifier helper requires a closed-set validator and a local allowlist",
-    ),
-  );
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      isIdentifierNamed(node.expression.expression, imports.kyselySqlNames) &&
+      ["ref", "table", "id", "raw"].includes(getPropertyNameText(node.expression.name) ?? "") &&
+      !hasAllowComment(sourceFile, node, "kysely-allow-raw")
+    ) {
+      addViolation(
+        violations,
+        sourceFile,
+        node,
+        "raw Kysely identifier helper requires a closed-set validator and local allow comment",
+      );
+    }
 
-  if (hasKyselyContext) {
-    violations.push(
-      ...collectPatternViolations(
-        content,
-        /\.\s*dynamic\b/gu,
+    if (
+      imports.hasKyselyContext &&
+      ts.isPropertyAccessExpression(node) &&
+      getPropertyNameText(node.name) === "dynamic" &&
+      !hasAllowComment(sourceFile, node, "kysely-allow-raw")
+    ) {
+      addViolation(
+        violations,
+        sourceFile,
+        node,
         "Kysely dynamic refs bypass literal reference checking; use only behind closed unions",
-      ),
-    );
+      );
+    }
+
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      isIdentifierNamed(node.expression.expression, imports.compiledQueryNames) &&
+      getPropertyNameText(node.expression.name) === "raw" &&
+      !compiledRawAllowPaths.has(relativePath) &&
+      !hasAllowComment(sourceFile, node, "kysely-allow-raw")
+    ) {
+      addViolation(
+        violations,
+        sourceFile,
+        node,
+        "CompiledQuery.raw is only allowed in the native SQLite dialect/test boundary",
+      );
+    }
+
+    if (
+      imports.hasSqliteContext &&
+      !isTestPath(relativePath) &&
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ["prepare", "exec"].includes(getPropertyNameText(node.expression.name) ?? "") &&
+      isLikelySqliteReceiver(node.expression.expression) &&
+      !rawSqliteAllowPaths.has(relativePath) &&
+      !hasAllowComment(sourceFile, node, "sqlite-allow-raw")
+    ) {
+      addViolation(
+        violations,
+        sourceFile,
+        node,
+        "new raw node:sqlite access requires Kysely or an explicit raw SQLite allowlist entry",
+      );
+    }
+
+    ts.forEachChild(node, visit);
   }
 
-  violations.push(
-    ...collectPatternViolations(
-      content,
-      /\bCompiledQuery\.raw\s*\(/gu,
-      "CompiledQuery.raw is only allowed in the native SQLite dialect/test boundary",
-      () => allowedCompiledRawPaths.has(relativePath),
-    ),
-  );
-
+  visit(sourceFile);
   return violations;
 }
 
