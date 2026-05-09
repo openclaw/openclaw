@@ -1,4 +1,5 @@
 import { cancel, isCancel } from "@clack/prompts";
+import { formatCliCommand } from "../cli/command-format.js";
 import { promptYesNo } from "../cli/prompt.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { redactMigrationPlan } from "../plugin-sdk/migration.js";
@@ -119,7 +120,9 @@ export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boo
     return;
   }
   if (providers.length === 0) {
-    runtime.log("No migration providers found.");
+    runtime.log(
+      `No migration providers found. Run ${formatCliCommand("openclaw plugins list")} to verify provider plugins are installed and enabled.`,
+    );
     return;
   }
   runtime.log(
@@ -139,7 +142,9 @@ export async function migratePlanCommand(
 ): Promise<MigrationPlan> {
   const providerId = opts.provider?.trim();
   if (!providerId) {
-    throw new Error("Migration provider is required.");
+    throw new Error(
+      `Migration provider is required. Run ${formatCliCommand("openclaw migrate list")} to choose one.`,
+    );
   }
   const plan = selectMigrationItems(
     await createMigrationPlan(runtime, { ...opts, provider: providerId }),
@@ -167,13 +172,17 @@ export async function migrateApplyCommand(
 ): Promise<MigrationApplyResult | MigrationPlan> {
   const providerId = opts.provider?.trim();
   if (!providerId) {
-    throw new Error("Migration provider is required.");
+    throw new Error(
+      `Migration provider is required. Run ${formatCliCommand("openclaw migrate list")} to choose one.`,
+    );
   }
   if (opts.noBackup && !opts.force) {
-    throw new Error("--no-backup requires --force.");
+    throw new Error("--no-backup requires --force because it skips the automatic rollback copy.");
   }
   if (!opts.yes && !process.stdin.isTTY) {
-    throw new Error("openclaw migrate apply requires --yes in non-interactive mode.");
+    throw new Error(
+      `openclaw migrate apply requires --yes in non-interactive mode. Preview first with ${formatCliCommand("openclaw migrate plan --provider <provider>")}.`,
+    );
   }
   const provider = resolveMigrationProvider(providerId);
   if (!opts.yes) {
