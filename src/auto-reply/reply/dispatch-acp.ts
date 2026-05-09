@@ -425,7 +425,7 @@ export async function tryDispatchAcpReply(params: {
     deliver: delivery.deliver,
     onProgress: markAcpProgress,
     onTokenUsage: (usage) => {
-      void persistSessionUsageUpdate({
+      return persistSessionUsageUpdate({
         storePath: acpSessionStorePath,
         sessionKey: canonicalSessionKey,
         cfg: params.cfg,
