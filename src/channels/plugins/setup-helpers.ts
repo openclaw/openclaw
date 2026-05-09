@@ -1,18 +1,112 @@
 import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import {
-  resolveSingleAccountKeysToMove,
-  resolveSingleAccountPromotionTarget,
-} from "./setup-promotion-helpers.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { getLoadedChannelPluginById } from "./registry-loaded.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
+import type { ChannelPlugin } from "./types.plugin.js";
 
 type ChannelSectionBase = {
   name?: string;
   defaultAccount?: string;
   accounts?: Record<string, Record<string, unknown>>;
 };
+
+type ChannelSetupPromotionSurface = {
+  singleAccountKeysToMove?: readonly string[];
+  namedAccountPromotionKeys?: readonly string[];
+  resolveSingleAccountPromotionTarget?: (params: {
+    channel: ChannelSectionBase;
+  }) => string | undefined;
+};
+
+const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
+  "name",
+  "token",
+  "tokenFile",
+  "botToken",
+  "appToken",
+  "account",
+  "signalNumber",
+  "authDir",
+  "cliPath",
+  "dbPath",
+  "httpUrl",
+  "httpHost",
+  "httpPort",
+  "webhookPath",
+  "webhookUrl",
+  "webhookSecret",
+  "service",
+  "region",
+  "homeserver",
+  "userId",
+  "accessToken",
+  "password",
+  "deviceName",
+  "url",
+  "code",
+  "dmPolicy",
+  "allowFrom",
+  "groupPolicy",
+  "groupAllowFrom",
+  "defaultTo",
+  "streaming",
+  "deviceId",
+  "avatarUrl",
+  "initialSyncLimit",
+  "encryption",
+  "allowlistOnly",
+  "allowBots",
+  "blockStreaming",
+  "replyToMode",
+  "threadReplies",
+  "textChunkLimit",
+  "chunkMode",
+  "responsePrefix",
+  "ackReaction",
+  "ackReactionScope",
+  "reactionNotifications",
+  "threadBindings",
+  "startupVerification",
+  "startupVerificationCooldownHours",
+  "mediaMaxMb",
+  "autoJoin",
+  "autoJoinAllowlist",
+  "dm",
+  "groups",
+  "rooms",
+  "actions",
+]);
+
+const NAMED_ACCOUNT_PROMOTION_KEYS_BY_CHANNEL: Record<string, readonly string[]> = {
+  matrix: [
+    "name",
+    "homeserver",
+    "userId",
+    "accessToken",
+    "password",
+    "deviceId",
+    "deviceName",
+    "avatarUrl",
+    "initialSyncLimit",
+    "encryption",
+  ],
+  telegram: ["botToken", "tokenFile"],
+};
+
+function asPromotionSurface(setup: unknown): ChannelSetupPromotionSurface | null {
+  return setup && typeof setup === "object" ? (setup as ChannelSetupPromotionSurface) : null;
+}
+
+function getLoadedChannelSetupPromotionSurface(
+  channelKey: string,
+): ChannelSetupPromotionSurface | null {
+  return asPromotionSurface(
+    (getLoadedChannelPluginById(channelKey) as ChannelPlugin | undefined)?.setup,
+  );
+}
 
 function channelHasAccounts(cfg: OpenClawConfig, channelKey: string): boolean {
   const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -439,6 +533,83 @@ function resolveExistingAccountKey(
     }
   }
   return targetAccountId;
+}
+
+function resolveSingleAccountKeysToMove(params: {
+  channelKey: string;
+  channel: Record<string, unknown>;
+}): string[] {
+  const hasNamedAccounts = Object.keys(
+    (params.channel.accounts as Record<string, unknown>) ?? {},
+  ).some(Boolean);
+  const entries = Object.entries(params.channel)
+    .filter(
+      ([key, value]) =>
+        key !== "accounts" && key !== "defaultAccount" && key !== "enabled" && value !== undefined,
+    )
+    .map(([key]) => key);
+  if (entries.length === 0) {
+    return [];
+  }
+
+  let loadedSetupSurface: ChannelSetupPromotionSurface | null | undefined;
+  const resolveLoadedSetupSurface = () => {
+    loadedSetupSurface ??= getLoadedChannelSetupPromotionSurface(params.channelKey);
+    return loadedSetupSurface;
+  };
+
+  const keysToMove = entries.filter((key) => {
+    if (COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(key)) {
+      return true;
+    }
+    return Boolean(resolveLoadedSetupSurface()?.singleAccountKeysToMove?.includes(key));
+  });
+  if (!hasNamedAccounts || keysToMove.length === 0) {
+    return keysToMove;
+  }
+
+  const namedAccountPromotionKeys =
+    resolveLoadedSetupSurface()?.namedAccountPromotionKeys ??
+    NAMED_ACCOUNT_PROMOTION_KEYS_BY_CHANNEL[params.channelKey];
+  if (!namedAccountPromotionKeys) {
+    return keysToMove;
+  }
+  return keysToMove.filter((key) => namedAccountPromotionKeys.includes(key));
+}
+
+function resolveSingleAccountPromotionTarget(params: {
+  channelKey: string;
+  channel: ChannelSectionBase;
+}): string {
+  const accounts = params.channel.accounts ?? {};
+  const resolveExistingAccountId = (targetAccountId: string): string => {
+    const normalizedTargetAccountId = normalizeAccountId(targetAccountId);
+    const matchedAccountId = Object.keys(accounts).find(
+      (accountId) => normalizeAccountId(accountId) === normalizedTargetAccountId,
+    );
+    return matchedAccountId ?? normalizedTargetAccountId;
+  };
+
+  const resolvePromotionTarget = getLoadedChannelSetupPromotionSurface(
+    params.channelKey,
+  )?.resolveSingleAccountPromotionTarget;
+  const resolved = resolvePromotionTarget?.({
+    channel: params.channel,
+  });
+  const normalizedResolved = normalizeOptionalString(resolved);
+  if (normalizedResolved) {
+    return resolveExistingAccountId(normalizedResolved);
+  }
+
+  const normalizedDefaultAccount =
+    typeof params.channel.defaultAccount === "string" && params.channel.defaultAccount.trim()
+      ? normalizeAccountId(params.channel.defaultAccount)
+      : undefined;
+  if (normalizedDefaultAccount) {
+    return resolveExistingAccountId(normalizedDefaultAccount);
+  }
+  const namedAccounts = Object.keys(accounts).filter(Boolean);
+  return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
 }
 
 // When promoting a single-account channel config to multi-account,
