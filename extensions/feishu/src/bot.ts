@@ -1253,6 +1253,9 @@ export async function handleFeishuMessage(params: {
       return threadContext;
     };
 
+    // Determine if this message is a text command (starts with /)
+    const isTextCommand = effectiveCommandProbeBody.trim().startsWith("/");
+
     // --- Shared context builder for dispatch ---
     const buildCtxPayloadForAgent = async (
       agentId: string,
@@ -1293,8 +1296,10 @@ export async function handleFeishuMessage(params: {
         Timestamp: messageCreateTimeMs,
         WasMentioned: wasMentioned,
         CommandAuthorized: commandAuthorized,
+        ...(isTextCommand ? { CommandSource: "text" as const } : {}),
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
+        GroupId: isGroup ? ctx.chatId : undefined,
         GroupSystemPrompt: isGroup ? normalizeOptionalString(groupConfig?.systemPrompt) : undefined,
         ...mediaPayload,
         ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
