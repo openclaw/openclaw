@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/test-helpers/transcript-locator.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
@@ -121,14 +120,10 @@ function compactionEntry(params: {
   };
 }
 
-async function seedSession(entries: SessionEntry[]): Promise<{
-  transcriptLocator: string;
-  sessionId: string;
-}> {
+async function seedSession(entries: SessionEntry[]): Promise<{ sessionId: string }> {
   const dir = await makeTmpDir();
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   const sessionId = `manual-compaction-${++sessionCounter}`;
-  const transcriptLocator = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
   const header: SessionHeader = {
     type: "session",
     id: sessionId,
@@ -141,7 +136,7 @@ async function seedSession(entries: SessionEntry[]): Promise<{
     sessionId,
     events: [header, ...entries],
   });
-  return { transcriptLocator, sessionId };
+  return { sessionId };
 }
 
 function loadState(sessionId: string): TranscriptState {

@@ -3318,7 +3318,6 @@ describe("dispatchReplyFromConfig", () => {
         data: {
           kind: "codex-app-server-session",
           version: 1,
-          sessionFile: "/tmp/session.jsonl",
           workspaceDir: "/workspace/openclaw",
         },
       },
@@ -3348,29 +3347,25 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-1");
-    const inboundClaimCall = hookMocks.runner.runInboundClaimForPluginOutcome.mock
-      .calls[0] as unknown as
-      | [
-          unknown,
-          { accountId?: unknown; channel?: unknown; content?: unknown; conversationId?: unknown },
-          {
-            accountId?: unknown;
-            channelId?: unknown;
-            conversationId?: unknown;
-            pluginBinding?: { data?: Record<string, unknown> };
-          },
-        ]
-      | undefined;
-    expect(inboundClaimCall?.[0]).toBe("openclaw-codex-app-server");
-    expect(inboundClaimCall?.[1]?.channel).toBe("discord");
-    expect(inboundClaimCall?.[1]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[1]?.conversationId).toBe("channel:1481858418548412579");
-    expect(inboundClaimCall?.[1]?.content).toBe("who are you");
-    expect(inboundClaimCall?.[2]?.channelId).toBe("discord");
-    expect(inboundClaimCall?.[2]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[2]?.conversationId).toBe("channel:1481858418548412579");
-    expect(inboundClaimCall?.[2]?.pluginBinding?.data?.kind).toBe("codex-app-server-session");
-    expect(inboundClaimCall?.[2]?.pluginBinding?.data?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "openclaw-codex-app-server",
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1481858418548412579",
+        content: "who are you",
+      }),
+      expect.objectContaining({
+        channelId: "discord",
+        accountId: "default",
+        conversationId: "channel:1481858418548412579",
+        pluginBinding: expect.objectContaining({
+          data: expect.objectContaining({
+            kind: "codex-app-server-session",
+          }),
+        }),
+      }),
+    );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
   });

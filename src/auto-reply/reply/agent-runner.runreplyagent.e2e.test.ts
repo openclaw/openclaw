@@ -168,7 +168,6 @@ function createMinimalRun(params?: {
       sessionId: "session",
       sessionKey,
       messageProvider: "whatsapp",
-      sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       config: {},
       skillsSnapshot: {},

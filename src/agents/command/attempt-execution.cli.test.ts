@@ -4,10 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { listSessionEntries, upsertSessionEntry } from "../../config/sessions/store.js";
-import {
-  createSqliteSessionTranscriptLocator,
-  parseSqliteSessionTranscriptLocator,
-} from "../../config/sessions/test-helpers/transcript-locator.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { loadSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -68,12 +64,8 @@ function makeCliResult(text: string): EmbeddedPiRunResult {
   };
 }
 
-function sessionTranscriptLocator(sessionId: string): string {
-  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
-}
-
-async function readSessionMessages(transcriptLocator: string) {
-  return (await readTranscriptLocatorEntries(transcriptLocator))
+async function readSessionMessages(sessionId: string) {
+  return (await readSessionTranscriptEntries(sessionId))
     .filter((entry) => entry.type === "message")
     .map(
       (entry) =>
@@ -81,10 +73,7 @@ async function readSessionMessages(transcriptLocator: string) {
     );
 }
 
-async function readTranscriptLocatorEntries(transcriptLocator: string) {
-  const sessionId =
-    parseSqliteSessionTranscriptLocator(transcriptLocator)?.sessionId ??
-    path.basename(transcriptLocator).replace(/\.jsonl$/, "");
+async function readSessionTranscriptEntries(sessionId: string) {
   return loadSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
@@ -425,7 +414,7 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeStore(sessionStore);
 
-    const updatedEntry = await persistCliTurnTranscript({
+    await persistCliTurnTranscript({
       body: "persist this",
       result: makeCliResult("hello from cli"),
       sessionId: sessionEntry.sessionId,
@@ -437,8 +426,7 @@ describe("CLI attempt execution", () => {
       config: {},
     });
 
-    const transcriptLocator = sessionTranscriptLocator(sessionEntry.sessionId);
-    const entries = await readTranscriptLocatorEntries(transcriptLocator);
+    const entries = await readSessionTranscriptEntries(sessionEntry.sessionId);
     expectRecordFields(requireRecord(entries[0], "session entry"), {
       type: "session",
       id: sessionEntry.sessionId,
@@ -452,7 +440,7 @@ describe("CLI attempt execution", () => {
       type: "message",
       parentId: entries[1]?.id,
     });
-    const messages = await readSessionMessages(transcriptLocator);
+    const messages = await readSessionMessages(sessionEntry.sessionId);
     expect(messages).toHaveLength(2);
     expectRecordFields(requireRecord(messages[0], "user message"), {
       role: "user",
@@ -498,7 +486,7 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    let messages = await readSessionMessages(sessionTranscriptLocator(sessionEntry.sessionId));
+    let messages = await readSessionMessages(sessionEntry.sessionId);
     expect(messages).toHaveLength(1);
     expectRecordFields(requireRecord(messages[0], "assistant message"), {
       role: "assistant",
@@ -518,7 +506,7 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    messages = await readSessionMessages(sessionTranscriptLocator(sessionEntry.sessionId));
+    messages = await readSessionMessages(sessionEntry.sessionId);
     expect(messages).toHaveLength(1);
   });
 
@@ -551,7 +539,6 @@ describe("CLI attempt execution", () => {
       config: {},
       embeddedAssistantGapFill: true,
     });
-    const transcriptLocator = sessionTranscriptLocator(sessionEntry.sessionId);
 
     await appendSessionTranscriptMessage({
       agentId: "main",
@@ -578,7 +565,7 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
 
-    const messages = await readSessionMessages(transcriptLocator);
+    const messages = await readSessionMessages(sessionEntry.sessionId);
     expect(messages).toHaveLength(3);
     expect(messages.map((message) => message.role)).toEqual(["assistant", "user", "assistant"]);
     expectRecordFields(requireRecord(messages[2], "deduped assistant message"), {
@@ -595,7 +582,7 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeStore(sessionStore);
 
-    const updatedEntry = await persistCliTurnTranscript({
+    await persistCliTurnTranscript({
       body: [
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
         "secret runtime context",
@@ -614,7 +601,7 @@ describe("CLI attempt execution", () => {
       config: {},
     });
 
-    const messages = await readSessionMessages(sessionTranscriptLocator(sessionEntry.sessionId));
+    const messages = await readSessionMessages(sessionEntry.sessionId);
     expectRecordFields(requireRecord(messages[0], "transcript user message"), {
       role: "user",
       content: "visible ask",

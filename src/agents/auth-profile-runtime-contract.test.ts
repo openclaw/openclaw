@@ -9,7 +9,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntry } from "../config/sessions/store.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type * as ManifestRegistryModule from "../plugins/manifest-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -28,10 +27,6 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
 );
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
-const AUTH_PROFILE_RUNTIME_CONTRACT_SESSION_FILE = createSqliteSessionTranscriptLocator({
-  agentId: "main",
-  sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
-});
 
 vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();

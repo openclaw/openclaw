@@ -4,7 +4,6 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/test-helpers/transcript-locator.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { listOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
@@ -108,7 +107,6 @@ function buildRunnerSessionPaths(sessionId: string) {
   }
   return {
     agentDir: liveRunnerRootDir,
-    transcriptLocator: createSqliteSessionTranscriptLocator({ agentId: "main", sessionId }),
     workspaceDir: path.join(liveRunnerRootDir, `${sessionId}-workspace`),
   };
 }

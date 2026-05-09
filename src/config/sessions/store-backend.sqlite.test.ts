@@ -12,7 +12,6 @@ import {
   patchSessionEntry,
   upsertSessionEntry,
 } from "./store.js";
-import { createSqliteSessionTranscriptLocator } from "./test-helpers/transcript-locator.js";
 import type { SessionEntry } from "./types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
@@ -26,10 +25,6 @@ function resolveRetiredSessionJsonFixturePath(params: {
   env: NodeJS.ProcessEnv;
 }): string {
   return path.join(params.env.OPENCLAW_STATE_DIR ?? "", "agents", params.agentId, "sessions.json");
-}
-
-function sqliteTranscript(agentId: string, sessionId: string): string {
-  return createSqliteSessionTranscriptLocator({ agentId, sessionId });
 }
 
 afterEach(() => {
