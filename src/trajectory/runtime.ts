@@ -23,7 +23,6 @@ type TrajectoryRuntimeInit = {
   runId?: string;
   sessionId: string;
   sessionKey?: string;
-  transcriptLocator?: string;
   provider?: string;
   modelId?: string;
   modelApi?: string | null;

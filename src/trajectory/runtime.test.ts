@@ -89,7 +89,6 @@ describe("trajectory runtime", () => {
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      transcriptLocator: "/tmp/session.jsonl",
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "responses",
@@ -133,7 +132,6 @@ describe("trajectory runtime", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
-      transcriptLocator: "/tmp/session.jsonl",
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "responses",
@@ -174,7 +172,6 @@ describe("trajectory runtime", () => {
     useTempStateDir();
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
-      transcriptLocator: "/tmp/session.jsonl",
     });
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
@@ -198,7 +195,6 @@ describe("trajectory runtime", () => {
     useTempStateDir();
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
-      transcriptLocator: "/tmp/session.jsonl",
       maxRuntimeFileBytes: 900,
     });
 
@@ -234,7 +230,6 @@ describe("trajectory runtime", () => {
       },
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      transcriptLocator: "/tmp/session.jsonl",
     });
 
     expect(recorder).toBeNull();
