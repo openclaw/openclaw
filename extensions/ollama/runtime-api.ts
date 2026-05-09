@@ -9,6 +9,7 @@ export {
   isOllamaCompatProvider,
   OLLAMA_NATIVE_BASE_URL,
   parseNdjsonStream,
+  resolveConfiguredOllamaProviderConfig,
   resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
@@ -20,3 +21,4 @@ export {
   type OllamaEmbeddingClient,
   type OllamaEmbeddingProvider,
 } from "./src/embedding-provider.js";
+export { readProviderBaseUrl } from "./src/provider-base-url.js";

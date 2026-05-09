@@ -1,0 +1,63 @@
+{
+  "id": "lemonade",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["lemonade"],
+  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerRequest": {
+    "providers": {
+      "lemonade": {
+        "family": "ollama"
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "lemonade": {
+        "external": false
+      }
+    }
+  },
+  "syntheticAuthRefs": ["lemonade"],
+  "nonSecretAuthMarkers": ["lemonade-local"],
+  "providerAuthEnvVars": {
+    "lemonade": ["LEMONADE_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "lemonade",
+      "method": "local",
+      "choiceId": "lemonade",
+      "choiceLabel": "Lemonade",
+      "choiceHint": "Local Lemonade models",
+      "groupId": "lemonade",
+      "groupLabel": "Lemonade",
+      "groupHint": "Local Lemonade models"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "discovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "discovery": {
+      "label": "Model Discovery",
+      "help": "Plugin-owned controls for Lemonade model auto-discovery."
+    },
+    "discovery.enabled": {
+      "label": "Enable Discovery",
+      "help": "When false, OpenClaw keeps the Lemonade plugin available but skips implicit startup discovery of ambient local or remote Lemonade models."
+    }
+  }
+}

@@ -450,3 +450,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/gradium/**"
+"extensions: lemonade":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/lemonade/**"

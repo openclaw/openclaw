@@ -4,6 +4,12 @@
   "private": true,
   "description": "OpenClaw Ollama provider plugin",
   "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./api": "./api.js",
+    "./runtime-api": "./runtime-api.js",
+    "./provider-policy-api": "./provider-policy-api.js"
+  },
   "dependencies": {
     "@mariozechner/pi-ai": "0.73.0",
     "typebox": "1.1.37"
