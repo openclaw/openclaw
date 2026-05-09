@@ -480,6 +480,7 @@ const releasePathPluginRuntimeLanes = [
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
     { stateScenario: "empty", timeoutMs: 8 * 60 * 1000 },
   ),
+  livePluginToolLane(),
 ];
 
 const releasePathPluginRuntimePluginLanes = [
