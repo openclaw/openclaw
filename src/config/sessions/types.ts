@@ -487,11 +487,6 @@ function normalizeMergedUpdatedAt(value: number | undefined, now: number): numbe
   return Math.min(value, now);
 }
 
-function stripDerivedSessionEntryFields<T extends SessionEntry>(entry: T): T {
-  delete (entry as T & { transcriptLocator?: unknown }).transcriptLocator;
-  return entry;
-}
-
 export function mergeSessionEntryWithPolicy(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
@@ -500,14 +495,12 @@ export function mergeSessionEntryWithPolicy(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
   if (!existing) {
-    return stripDerivedSessionEntryFields(
-      normalizeSessionRuntimeModelFields({
-        ...patch,
-        sessionId,
-        updatedAt,
-        sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
-      }),
-    );
+    return normalizeSessionRuntimeModelFields({
+      ...patch,
+      sessionId,
+      updatedAt,
+      sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
+    });
   }
   const next = {
     ...existing,
@@ -528,7 +521,7 @@ export function mergeSessionEntryWithPolicy(
       delete next.modelProvider;
     }
   }
-  return stripDerivedSessionEntryFields(normalizeSessionRuntimeModelFields(next));
+  return normalizeSessionRuntimeModelFields(next);
 }
 
 export function mergeSessionEntry(

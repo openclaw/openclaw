@@ -141,8 +141,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        transcriptLocator: expect.stringMatching(/^sqlite-transcript:\/\/main\/test-session-id$/),
         sessionKey,
+        agentId: "main",
+        sessionId: "test-session-id",
         messageId: expect.any(String),
         message: expect.objectContaining({
           role: "assistant",
@@ -419,8 +420,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     if (result.ok) {
       expect(emitSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          transcriptLocator: expect.stringMatching(/^sqlite-transcript:\/\/main\/test-session-id$/),
           sessionKey,
+          agentId: "main",
+          sessionId: "test-session-id",
         }),
       );
     }

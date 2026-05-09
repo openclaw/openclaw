@@ -27,18 +27,13 @@ export async function resolveAndPersistSessionTranscriptScope(params: {
     updatedAt: now,
     sessionStartedAt: baseEntry.sessionId === sessionId ? (baseEntry.sessionStartedAt ?? now) : now,
   };
-  const { transcriptLocator: _derivedTranscriptLocator, ...entryWithoutDerivedLocator } =
-    persistedEntry as SessionEntry & { transcriptLocator?: unknown };
-  if (
-    baseEntry.sessionId !== sessionId ||
-    "transcriptLocator" in (baseEntry as SessionEntry & { transcriptLocator?: unknown })
-  ) {
+  if (baseEntry.sessionId !== sessionId) {
     upsertSessionEntry({
       agentId,
       sessionKey,
-      entry: entryWithoutDerivedLocator,
+      entry: persistedEntry,
     });
-    return { agentId, sessionId, sessionEntry: entryWithoutDerivedLocator };
+    return { agentId, sessionId, sessionEntry: persistedEntry };
   }
-  return { agentId, sessionId, sessionEntry: entryWithoutDerivedLocator };
+  return { agentId, sessionId, sessionEntry: persistedEntry };
 }

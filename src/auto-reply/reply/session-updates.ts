@@ -279,12 +279,8 @@ export async function incrementCompactionCount(params: {
     updates.cacheRead = undefined;
     updates.cacheWrite = undefined;
   }
-  const { transcriptLocator: _derivedTranscriptLocator, ...entryWithoutLocator } =
-    entry as SessionEntry & {
-      transcriptLocator?: unknown;
-    };
   sessionStore[sessionKey] = {
-    ...entryWithoutLocator,
+    ...entry,
     ...updates,
   };
   const agentId =
