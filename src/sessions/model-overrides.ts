@@ -1,6 +1,67 @@
 import type { SessionEntry } from "../config/sessions.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
+export const AUTO_MODEL_OVERRIDE_FAILBACK_MS = 30_000;
+
+export function resolveAutoModelOverrideExpiresAt(now = Date.now()): number {
+  return now + AUTO_MODEL_OVERRIDE_FAILBACK_MS;
+}
+
+export function isAutoModelOverrideExpired(
+  entry:
+    | Pick<SessionEntry, "modelOverride" | "modelOverrideSource" | "modelOverrideExpiresAt">
+    | undefined,
+  now = Date.now(),
+): boolean {
+  if (!entry?.modelOverride || entry.modelOverrideSource !== "auto") {
+    return false;
+  }
+  const expiresAt = entry.modelOverrideExpiresAt;
+  // Older auto overrides predate the expiry field and may include non-fallback
+  // selections (for example spawned sub-agent defaults). Preserve them until a
+  // new fallback pin records an explicit expiry.
+  if (expiresAt === undefined) {
+    return false;
+  }
+  return typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= now;
+}
+
+export function clearExpiredAutoModelOverrideFromSessionEntry(params: {
+  entry: SessionEntry | undefined;
+  now?: number;
+}): { updated: boolean } {
+  const { entry } = params;
+  const now = params.now ?? Date.now();
+  if (!isAutoModelOverrideExpired(entry, now)) {
+    return { updated: false };
+  }
+
+  let updated = false;
+  const clear = (key: keyof SessionEntry) => {
+    if (Object.hasOwn(entry!, key)) {
+      delete entry![key];
+      updated = true;
+    }
+  };
+
+  clear("providerOverride");
+  clear("modelOverride");
+  clear("modelOverrideSource");
+  clear("modelOverrideExpiresAt");
+  clear("fallbackNoticeSelectedModel");
+  clear("fallbackNoticeActiveModel");
+  clear("fallbackNoticeReason");
+  if (entry!.authProfileOverrideSource !== "user") {
+    clear("authProfileOverride");
+    clear("authProfileOverrideSource");
+    clear("authProfileOverrideCompactionCount");
+  }
+  if (updated) {
+    entry!.updatedAt = now;
+  }
+  return { updated };
+}
+
 export type ModelOverrideSelection = {
   provider: string;
   model: string;
@@ -36,6 +97,10 @@ export function applyModelOverrideToSessionEntry(params: {
       delete entry.modelOverrideSource;
       updated = true;
     }
+    if (entry.modelOverrideExpiresAt !== undefined) {
+      delete entry.modelOverrideExpiresAt;
+      updated = true;
+    }
   } else {
     if (entry.providerOverride !== selection.provider) {
       entry.providerOverride = selection.provider;
@@ -49,6 +114,17 @@ export function applyModelOverrideToSessionEntry(params: {
     }
     if (entry.modelOverrideSource !== selectionSource) {
       entry.modelOverrideSource = selectionSource;
+      updated = true;
+    }
+    const nextExpiresAt =
+      selectionSource === "auto" ? resolveAutoModelOverrideExpiresAt() : undefined;
+    if (nextExpiresAt === undefined) {
+      if (entry.modelOverrideExpiresAt !== undefined) {
+        delete entry.modelOverrideExpiresAt;
+        updated = true;
+      }
+    } else if (entry.modelOverrideExpiresAt !== nextExpiresAt) {
+      entry.modelOverrideExpiresAt = nextExpiresAt;
       updated = true;
     }
   }

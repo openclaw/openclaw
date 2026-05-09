@@ -741,6 +741,45 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(state.resetModelOverride).toBe(false);
   });
 
+  it("clears expired auto-failover overrides and returns to the default model", async () => {
+    const now = Date.now();
+    const cfg = {} as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+      modelOverrideExpiresAt: now - 1,
+      fallbackNoticeSelectedModel: `${defaultProvider}/${defaultModel}`,
+      fallbackNoticeActiveModel: "openrouter/minimax/minimax-m2.7",
+      fallbackNoticeReason: "rate limit",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideExpiresAt).toBeUndefined();
+    expect(sessionStore[sessionKey]?.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(sessionStore[sessionKey]?.fallbackNoticeActiveModel).toBeUndefined();
+    expect(sessionStore[sessionKey]?.fallbackNoticeReason).toBeUndefined();
+    expect(state.resetModelOverride).toBe(false);
+  });
+
   it("still clears disallowed auto-failover overrides through allowlist validation", async () => {
     const cfg = {
       agents: {

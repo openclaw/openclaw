@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
+import {
+  AUTO_MODEL_OVERRIDE_FAILBACK_MS,
+  applyModelOverrideToSessionEntry,
+  clearExpiredAutoModelOverrideFromSessionEntry,
+  isAutoModelOverrideExpired,
+} from "./model-overrides.js";
 
 function applyOpenAiSelection(entry: SessionEntry) {
   return applyModelOverrideToSessionEntry({
@@ -140,6 +145,103 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.providerOverride).toBe("anthropic");
     expect(entry.modelOverride).toBe("claude-sonnet-4-6");
     expect(entry.modelOverrideSource).toBe("auto");
+    expect(entry.modelOverrideExpiresAt).toBeGreaterThan(Date.now());
+  });
+
+  it("clears model override expiry for user and default selections", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-5b",
+      updatedAt: Date.now() - 5_000,
+      providerOverride: "anthropic",
+      modelOverride: "claude-haiku-4-5",
+      modelOverrideSource: "auto",
+      modelOverrideExpiresAt: Date.now() + 10_000,
+    };
+
+    applyModelOverrideToSessionEntry({
+      entry,
+      selection: { provider: "openai", model: "gpt-5.4" },
+    });
+
+    expect(entry.modelOverrideSource).toBe("user");
+    expect(entry.modelOverrideExpiresAt).toBeUndefined();
+
+    applyModelOverrideToSessionEntry({
+      entry,
+      selection: { provider: "openai", model: "gpt-5.4", isDefault: true },
+    });
+
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.modelOverrideExpiresAt).toBeUndefined();
+  });
+
+  it("expires auto fallback overrides after the failback TTL", () => {
+    const now = 1_000_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-5c",
+      updatedAt: now - 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-haiku-4-5",
+      modelOverrideSource: "auto",
+      modelOverrideExpiresAt: now + AUTO_MODEL_OVERRIDE_FAILBACK_MS,
+      fallbackNoticeSelectedModel: "openai/gpt-5.4",
+      fallbackNoticeActiveModel: "anthropic/claude-haiku-4-5",
+      fallbackNoticeReason: "rate limit",
+      authProfileOverride: "anthropic:fallback",
+      authProfileOverrideSource: "auto",
+    };
+
+    expect(isAutoModelOverrideExpired(entry, now + AUTO_MODEL_OVERRIDE_FAILBACK_MS - 1)).toBe(
+      false,
+    );
+    expect(isAutoModelOverrideExpired(entry, now + AUTO_MODEL_OVERRIDE_FAILBACK_MS)).toBe(true);
+
+    const result = clearExpiredAutoModelOverrideFromSessionEntry({
+      entry,
+      now: now + AUTO_MODEL_OVERRIDE_FAILBACK_MS,
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.modelOverrideExpiresAt).toBeUndefined();
+    expect(entry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(entry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(entry.fallbackNoticeReason).toBeUndefined();
+    expect(entry.authProfileOverride).toBeUndefined();
+    expect(entry.authProfileOverrideSource).toBeUndefined();
+    expect(entry.updatedAt).toBe(now + AUTO_MODEL_OVERRIDE_FAILBACK_MS);
+  });
+
+  it("does not expire user overrides or legacy auto overrides without an expiry", () => {
+    const now = 1_000_000;
+    const userEntry: SessionEntry = {
+      sessionId: "sess-5d",
+      updatedAt: now - 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "user",
+      modelOverrideExpiresAt: now - 1,
+    };
+    const legacyAutoEntry: SessionEntry = {
+      sessionId: "sess-5e",
+      updatedAt: now - 1,
+      providerOverride: "minimax",
+      modelOverride: "MiniMax-M2.7",
+      modelOverrideSource: "auto",
+    };
+
+    expect(clearExpiredAutoModelOverrideFromSessionEntry({ entry: userEntry, now }).updated).toBe(
+      false,
+    );
+    expect(
+      clearExpiredAutoModelOverrideFromSessionEntry({ entry: legacyAutoEntry, now }).updated,
+    ).toBe(false);
+    expect(userEntry.modelOverride).toBe("claude-opus-4-6");
+    expect(legacyAutoEntry.modelOverride).toBe("MiniMax-M2.7");
   });
 
   it("sets liveModelSwitchPending only when explicitly requested", () => {

@@ -261,6 +261,8 @@ export type SessionEntry = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
+  /** Epoch ms when an auto-created fallback model override expires and should fail back to the default model. */
+  modelOverrideExpiresAt?: number;
   /** Session-scoped agent runtime/harness override selected with the model picker. */
   agentRuntimeOverride?: string;
   /**

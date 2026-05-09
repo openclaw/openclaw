@@ -45,6 +45,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveAutoModelOverrideExpiresAt } from "../../sessions/model-overrides.js";
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
@@ -130,6 +131,7 @@ type FallbackSelectionState = Pick<
   | "providerOverride"
   | "modelOverride"
   | "modelOverrideSource"
+  | "modelOverrideExpiresAt"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -139,6 +141,7 @@ const FALLBACK_SELECTION_STATE_KEYS = [
   "providerOverride",
   "modelOverride",
   "modelOverrideSource",
+  "modelOverrideExpiresAt",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -165,6 +168,12 @@ function setFallbackSelectionStateField(
     case "modelOverrideSource":
       if (entry.modelOverrideSource !== value) {
         entry.modelOverrideSource = value as SessionEntry["modelOverrideSource"];
+        return true;
+      }
+      return false;
+    case "modelOverrideExpiresAt":
+      if (entry.modelOverrideExpiresAt !== value) {
+        entry.modelOverrideExpiresAt = value as SessionEntry["modelOverrideExpiresAt"];
         return true;
       }
       return false;
@@ -196,6 +205,7 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
     providerOverride: entry.providerOverride,
     modelOverride: entry.modelOverride,
     modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideExpiresAt: entry.modelOverrideExpiresAt,
     authProfileOverride: entry.authProfileOverride,
     authProfileOverrideSource: entry.authProfileOverrideSource,
     authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
@@ -212,6 +222,7 @@ function buildFallbackSelectionState(params: {
     providerOverride: params.provider,
     modelOverride: params.model,
     modelOverrideSource: "auto",
+    modelOverrideExpiresAt: resolveAutoModelOverrideExpiresAt(),
     authProfileOverride: params.authProfileId,
     authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
     authProfileOverrideCompactionCount: undefined,

@@ -17,7 +17,10 @@ import {
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  clearExpiredAutoModelOverrideFromSessionEntry,
+} from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ThinkLevel } from "./directives.js";
 export {
@@ -134,6 +137,21 @@ export async function createModelSelectionState(params: {
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
+  if (sessionEntry && sessionStore && sessionKey) {
+    const expiredAutoOverride = clearExpiredAutoModelOverrideFromSessionEntry({
+      entry: sessionEntry,
+    });
+    if (expiredAutoOverride.updated) {
+      sessionStore[sessionKey] = sessionEntry;
+      if (params.storePath) {
+        await (
+          await loadSessionStoreRuntime()
+        ).updateSessionStore(params.storePath, (store) => {
+          store[sessionKey] = sessionEntry;
+        });
+      }
+    }
+  }
   const directStoredOverride = resolvePersistedOverrideModelRef({
     defaultProvider,
     overrideProvider: sessionEntry?.providerOverride,
