@@ -1,9 +1,8 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSqliteSessionTranscriptLocator, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -57,7 +56,12 @@ describe("createPersistCronSessionEntry", () => {
     );
     const persistSessionRow = vi.fn(async (sessionKey: string, entry: SessionEntry) => {
       expect(sessionKey).toBe("agent:main:cron:job");
-      expect(entry).toBe(cronSession.sessionEntry);
+      expect(entry).toMatchObject({
+        status: "running",
+        startedAt: 900,
+        updatedAt: 1000,
+      });
+      expect(entry.sessionId).toBeUndefined();
     });
 
     const persist = createPersistCronSessionEntry({
@@ -69,15 +73,11 @@ describe("createPersistCronSessionEntry", () => {
 
     await persist();
 
-    expect(cronSession.store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
+    expect(cronSession.store["agent:main:cron:job"]?.sessionId).toBeUndefined();
     expect(cronSession.store["agent:main:cron:job:run:run-session-id"]).toBeUndefined();
   });
 
   it("does not register cron sessions as resumable until the transcript exists", async () => {
-    const missingTranscriptPath = path.join(
-      os.tmpdir(),
-      `openclaw-missing-cron-${crypto.randomUUID()}.jsonl`,
-    );
     const cronSession = makeCronSession(
       makeSessionEntry({
         label: "Cron: shell-only",
@@ -94,7 +94,6 @@ describe("createPersistCronSessionEntry", () => {
         }),
       );
       expect(entry.sessionId).toBeUndefined();
-      expect(entry).not.toHaveProperty("transcriptLocator");
     });
 
     const persist = createPersistCronSessionEntry({
@@ -107,11 +106,10 @@ describe("createPersistCronSessionEntry", () => {
     await persist();
 
     expect(cronSession.store["agent:main:cron:shell-only"]?.sessionId).toBeUndefined();
-    expect(cronSession.store["agent:main:cron:shell-only"]).not.toHaveProperty("transcriptLocator");
   });
 
   it("restores resumable cron fields once the transcript exists", async () => {
-    const transcriptPath = seedCronTranscript();
+    seedCronTranscript();
     const cronSession = makeCronSession(
       makeSessionEntry({
         label: "Cron: completed",
@@ -158,11 +156,7 @@ describe("createPersistCronSessionEntry", () => {
   });
 });
 
-function seedCronTranscript(): string {
-  const transcriptLocator = createSqliteSessionTranscriptLocator({
-    agentId: "main",
-    sessionId: "run-session-id",
-  });
+function seedCronTranscript(): void {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "run-session-id",
@@ -175,5 +169,4 @@ function seedCronTranscript(): string {
       },
     ],
   });
-  return transcriptLocator;
 }

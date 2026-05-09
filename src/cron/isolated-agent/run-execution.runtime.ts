@@ -5,7 +5,6 @@ export { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 export { runWithModelFallback } from "../../agents/model-fallback.js";
 export { isCliProvider } from "../../agents/model-selection-cli.js";
 export { normalizeVerboseLevel } from "../../auto-reply/thinking.shared.js";
-export { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 export { registerAgentRunContext } from "../../infra/agent-events.js";
 export { logWarn } from "../../logger.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
