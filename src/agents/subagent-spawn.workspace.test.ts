@@ -203,6 +203,17 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     expect(agentParams).not.toHaveProperty("bootstrapContextRunKind");
   });
 
+  it("keeps inherited workspace metadata out of Gateway agent params", async () => {
+    const agentParams = await spawnAndReadAgentParams({
+      task: "inspect workspace",
+    });
+
+    expect(agentParams).not.toHaveProperty("workspaceDir");
+    expect(getRegisteredRun()).toMatchObject({
+      workspaceDir: "/tmp/requester-workspace",
+    });
+  });
+
   it("deletes the provisional child session when a non-thread subagent start fails", async () => {
     hoisted.callGatewayMock.mockImplementation(
       async (request: {
