@@ -573,7 +573,7 @@ export async function modelsStatusCommand(
       if (
         usage.allowCodexRuntimeFallback &&
         openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }) &&
-        providerAuthMap.has(OPENAI_CODEX_PROVIDER_ID)
+        hasUsableProviderAuth(OPENAI_CODEX_PROVIDER_ID)
       ) {
         providersInUse.add(OPENAI_CODEX_PROVIDER_ID);
       }
