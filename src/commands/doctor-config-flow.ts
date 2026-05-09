@@ -68,7 +68,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const preflight = await runDoctorConfigPreflight({ repairPrefixedConfig: shouldRepair });
+  const dryRun = params.options.dryRun === true;
+  const preflight = await runDoctorConfigPreflight({ repairPrefixedConfig: shouldRepair || dryRun });
   let snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
   let cfg: OpenClawConfig = baseCfg;
@@ -276,6 +277,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     candidate,
     pendingChanges,
     shouldRepair,
+    dryRun,
     fixHints,
     confirm: params.confirm,
     note,

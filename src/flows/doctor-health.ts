@@ -8,7 +8,10 @@ const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? messa
 
 export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
-  if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
+  if (
+    (options.repair === true || options.yes === true || options.generateGatewayToken === true) &&
+    options.dryRun !== true
+  ) {
     const { assertConfigWriteAllowedInCurrentMode } = await import("../config/config.js");
     assertConfigWriteAllowedInCurrentMode();
   }

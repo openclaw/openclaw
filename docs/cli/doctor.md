@@ -40,6 +40,7 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--yes`: accept defaults without prompting
 - `--repair`: apply recommended non-service repairs without prompting; gateway service installs and rewrites still require interactive confirmation or explicit gateway commands
 - `--fix`: alias for `--repair`
+- `--dry-run`: preview what `--fix` would change without applying; outputs a diff of proposed config changes and exits
 - `--force`: apply aggressive repairs, including overwriting custom service config when needed
 - `--non-interactive`: run without prompts; safe migrations and non-service repairs only
 - `--generate-gateway-token`: generate and configure a gateway token
