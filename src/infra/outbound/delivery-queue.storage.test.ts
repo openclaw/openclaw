@@ -14,7 +14,6 @@ import {
   readFailedQueuedEntry,
   readPendingQueuedEntries,
   readQueuedEntry,
-  setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
 describe("delivery-queue storage", () => {
@@ -261,22 +260,6 @@ describe("delivery-queue storage", () => {
         requesterSenderUsername: "sender.one",
         requesterSenderE164: "+15551234567",
       });
-    });
-
-    it("backfills lastAttemptAt for legacy retry entries during load", async () => {
-      const id = await enqueueTextDelivery({
-        channel: "directchat",
-        to: "+1",
-        payloads: [{ text: "legacy" }],
-      });
-      setQueuedEntryState(tmpDir(), id, { retryCount: 2 });
-
-      const entries = await loadPendingDeliveries(tmpDir());
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.lastAttemptAt).toBe(entries[0]?.enqueuedAt);
-
-      const persisted = readQueuedEntry(tmpDir(), id);
-      expect(persisted.lastAttemptAt).toBe(persisted.enqueuedAt);
     });
   });
 });

@@ -81,33 +81,6 @@ function databaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
   return stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {};
 }
 
-function normalizeLegacyQueuedDeliveryEntry(entry: QueuedDelivery): {
-  entry: QueuedDelivery;
-  migrated: boolean;
-} {
-  const hasAttemptTimestamp =
-    typeof entry.lastAttemptAt === "number" &&
-    Number.isFinite(entry.lastAttemptAt) &&
-    entry.lastAttemptAt > 0;
-  if (hasAttemptTimestamp || entry.retryCount <= 0) {
-    return { entry, migrated: false };
-  }
-  const hasEnqueuedTimestamp =
-    typeof entry.enqueuedAt === "number" &&
-    Number.isFinite(entry.enqueuedAt) &&
-    entry.enqueuedAt > 0;
-  if (!hasEnqueuedTimestamp) {
-    return { entry, migrated: false };
-  }
-  return {
-    entry: {
-      ...entry,
-      lastAttemptAt: entry.enqueuedAt,
-    },
-    migrated: true,
-  };
-}
-
 function createMissingQueueEntryError(id: string): NodeJS.ErrnoException {
   const error = new Error(`delivery queue entry not found: ${id}`) as NodeJS.ErrnoException;
   error.code = "ENOENT";
@@ -276,15 +249,7 @@ export async function loadPendingDelivery(
   id: string,
   stateDir?: string,
 ): Promise<QueuedDelivery | null> {
-  const entry = loadQueueEntryByStatus(id, "pending", stateDir);
-  if (!entry) {
-    return null;
-  }
-  const normalized = normalizeLegacyQueuedDeliveryEntry(entry);
-  if (normalized.migrated) {
-    persistQueueEntry(normalized.entry, stateDir);
-  }
-  return normalized.entry;
+  return loadQueueEntryByStatus(id, "pending", stateDir);
 }
 
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
@@ -300,16 +265,7 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
   ).rows;
-  return rows
-    .map(parseQueueEntry)
-    .filter((entry): entry is QueuedDelivery => entry !== null)
-    .map((entry) => {
-      const normalized = normalizeLegacyQueuedDeliveryEntry(entry);
-      if (normalized.migrated) {
-        persistQueueEntry(normalized.entry, stateDir);
-      }
-      return normalized.entry;
-    });
+  return rows.map(parseQueueEntry).filter((entry): entry is QueuedDelivery => entry !== null);
 }
 
 /** Move a queue entry to failed status. */
