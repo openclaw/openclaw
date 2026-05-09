@@ -4,7 +4,12 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["qwen", "qwencloud", "modelstudio", "dashscope"],
+  "providers": [
+    "qwen",
+    "qwencloud",
+    "modelstudio",
+    "dashscope"
+  ],
   "providerEndpoints": [
     {
       "endpointClass": "modelstudio-native",
@@ -33,34 +38,22 @@
     }
   },
   "modelCatalog": {
-    "suppressions": [
-      {
-        "provider": "qwen",
-        "model": "qwen3.6-plus",
-        "reason": "qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
-        "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
-        }
-      },
-      {
-        "provider": "modelstudio",
-        "model": "qwen3.6-plus",
-        "reason": "qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
-        "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
-        }
-      }
-    ]
+    "suppressions": []
   },
   "contracts": {
-    "mediaUnderstandingProviders": ["qwen"],
-    "videoGenerationProviders": ["qwen"]
+    "mediaUnderstandingProviders": [
+      "qwen"
+    ],
+    "videoGenerationProviders": [
+      "qwen"
+    ]
   },
   "mediaUnderstandingProviderMetadata": {
     "qwen": {
-      "capabilities": ["image", "video"],
+      "capabilities": [
+        "image",
+        "video"
+      ],
       "defaultModels": {
         "image": "qwen-vl-max-latest",
         "video": "qwen-vl-max-latest"
@@ -71,14 +64,20 @@
     }
   },
   "providerAuthEnvVars": {
-    "qwen": ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
+    "qwen": [
+      "QWEN_API_KEY",
+      "MODELSTUDIO_API_KEY",
+      "DASHSCOPE_API_KEY"
+    ]
   },
   "providerAuthChoices": [
     {
       "provider": "qwen",
       "method": "standard-api-key-cn",
       "choiceId": "qwen-standard-api-key-cn",
-      "deprecatedChoiceIds": ["modelstudio-standard-api-key-cn"],
+      "deprecatedChoiceIds": [
+        "modelstudio-standard-api-key-cn"
+      ],
       "choiceLabel": "Standard API Key for China (pay-as-you-go)",
       "choiceHint": "Endpoint: dashscope.aliyuncs.com",
       "groupId": "qwen",
@@ -93,7 +92,9 @@
       "provider": "qwen",
       "method": "standard-api-key",
       "choiceId": "qwen-standard-api-key",
-      "deprecatedChoiceIds": ["modelstudio-standard-api-key"],
+      "deprecatedChoiceIds": [
+        "modelstudio-standard-api-key"
+      ],
       "choiceLabel": "Standard API Key for Global/Intl (pay-as-you-go)",
       "choiceHint": "Endpoint: dashscope-intl.aliyuncs.com",
       "groupId": "qwen",
@@ -108,7 +109,9 @@
       "provider": "qwen",
       "method": "api-key-cn",
       "choiceId": "qwen-api-key-cn",
-      "deprecatedChoiceIds": ["modelstudio-api-key-cn"],
+      "deprecatedChoiceIds": [
+        "modelstudio-api-key-cn"
+      ],
       "choiceLabel": "Coding Plan API Key for China (subscription)",
       "choiceHint": "Endpoint: coding.dashscope.aliyuncs.com",
       "groupId": "qwen",
@@ -123,7 +126,9 @@
       "provider": "qwen",
       "method": "api-key",
       "choiceId": "qwen-api-key",
-      "deprecatedChoiceIds": ["modelstudio-api-key"],
+      "deprecatedChoiceIds": [
+        "modelstudio-api-key"
+      ],
       "choiceLabel": "Coding Plan API Key for Global/Intl (subscription)",
       "choiceHint": "Endpoint: coding-intl.dashscope.aliyuncs.com",
       "groupId": "qwen",
