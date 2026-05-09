@@ -28,7 +28,7 @@ Body.
     expect(r).toEqual({ ok: false, reason: "unresolved" });
   });
 
-  it("quotes values that need YAML-escaping", () => {
+  it("quotes frontmatter values containing structural chars", () => {
     const { ast } = parseMd("---\nx: a\n---\n");
     const r = setOcPath(ast, parseOcPath("oc://AGENTS.md/[frontmatter]/x"), "has: colon");
     expect(r.ok).toBe(true);

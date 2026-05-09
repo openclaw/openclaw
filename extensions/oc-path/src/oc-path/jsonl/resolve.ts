@@ -84,7 +84,6 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
     if (seg.length === 0) {
       return null;
     }
-    // See openclaw#59934 — positional `-N` falls through on keyed containers.
     if (isPositionalSeg(seg)) {
       const concrete = positionalForJsonc(current, seg);
       if (concrete !== null) {

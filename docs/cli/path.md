@@ -11,7 +11,7 @@ title: "Path"
 
 Plugin-provided shell access to the `oc://` addressing substrate — one universal,
 kind-dispatched path scheme for inspecting and surgically editing workspace
-files (markdown, jsonc, jsonl, yaml). Self-hosters and editor extensions use
+files (markdown, jsonc, jsonl). Self-hosters and editor extensions use
 it to read or write a single leaf inside a workspace file without scripting
 against the SDK directly.
 
@@ -45,17 +45,17 @@ Slot rules — `field` requires `item`, `item` requires `section`. Across all
 four slots:
 
 - **Quoted segments** — `"a/b.c"` survives `/` and `.` separators.
-  `"\\"` and `"\""` are the only escapes inside quotes.
-  The file slot is also quote-aware: `oc://"skills/email-drafter"/Tools/-1`
+  Content is byte-literal; `"` and `\` are not allowed inside quotes.
+  The file slot is also quote-aware: `oc://"skills/email-drafter"/Tools/$last`
   treats `skills/email-drafter` as a single file path.
-- **Predicates** — `[k=v]`, `[k!=v]`, `[k*=v]`, `[k^=v]`, `[k$=v]`,
-  `[k<v]`, `[k<=v]`, `[k>v]`, `[k>=v]`.
+- **Predicates** — `[k=v]`, `[k!=v]`, `[k<v]`, `[k<=v]`, `[k>v]`,
+  `[k>=v]`. Numeric ops require both sides to coerce to finite numbers.
 - **Unions** — `{a,b,c}` matches any of the alternatives.
 - **Wildcards** — `*` (single sub-segment) and `**` (zero-or-more,
   recursive). `find` accepts these; `resolve` and `set` reject them as
   ambiguous.
-- **Positional** — `$first`, `$last`, `-N` (Nth from end).
-- **Ordinal** — `#N` for Nth match.
+- **Positional** — `$last` resolves to the last index / last-declared key.
+- **Ordinal** — `#N` for Nth match by document order.
 - **Insertion markers** — `+`, `+key`, `+nnn` for keyed / indexed
   insertion (use with `set`).
 - **Session scope** — `?session=cron:daily` etc. Orthogonal to slot
@@ -69,7 +69,7 @@ rejected anywhere.
 
 ```bash
 # Validate a path (no filesystem access)
-openclaw path validate 'oc://AGENTS.md/Tools/-1/risk'
+openclaw path validate 'oc://AGENTS.md/Tools/$last/risk'
 
 # Read a leaf
 openclaw path resolve 'oc://gateway.jsonc/version'

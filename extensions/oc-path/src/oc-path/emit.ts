@@ -115,8 +115,7 @@ export function emitMd(ast: MdAst, opts: EmitOptions = {}): string {
 }
 
 function formatFrontmatterValue(value: string): string {
-  // Quote values containing characters that would confuse a YAML
-  // parser; otherwise emit bare.
+  // Frontmatter is yaml-ish; quote values with structural chars.
   if (value.length === 0) {
     return '""';
   }

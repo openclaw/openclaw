@@ -125,7 +125,7 @@ describe("frontmatter-edges", () => {
     expect(ast.frontmatter).toEqual([]);
   });
 
-  it("hash-prefixed lines skipped (not yaml comments — just don't match kv regex)", () => {
+  it("hash-prefixed lines skipped (don't match kv regex)", () => {
     const { ast } = parseMd("---\n# comment\nk: v\n---\n");
     expect(ast.frontmatter.map((e) => e.key)).toEqual(["k"]);
   });

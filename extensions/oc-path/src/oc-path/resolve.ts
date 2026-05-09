@@ -47,7 +47,7 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
   if (block === undefined) {return null;}
   if (path.item === undefined) {return { kind: "block", node: block };}
 
-  // Item dispatch: ordinal (#N) > positional ($first/$last/-N) > slug.
+  // Item dispatch: ordinal (#N) > positional ($last) > slug.
   // Ordinal uses document order so duplicate-slug items stay distinct.
   let item: AstItem | undefined;
   if (isOrdinalSeg(path.item)) {
