@@ -2042,13 +2042,15 @@ export async function runEmbeddedPiAgent(
               (await advanceAuthProfile())
             ) {
               if (failedPromptProfileId && promptProfileFailureReason) {
-                maybeMarkAuthProfileFailure({
-                  profileId: failedPromptProfileId,
-                  reason: promptProfileFailureReason,
-                  modelId,
-                }).catch((err) =>
-                  log.warn(`deferred prompt profile failure mark failed: ${String(err)}`),
-                );
+                try {
+                  await maybeMarkAuthProfileFailure({
+                    profileId: failedPromptProfileId,
+                    reason: promptProfileFailureReason,
+                    modelId,
+                  });
+                } catch (err) {
+                  log.warn(`prompt profile failure mark failed: ${String(err)}`);
+                }
               }
               traceAttempts.push({
                 provider,
@@ -2077,13 +2079,15 @@ export async function runEmbeddedPiAgent(
               });
             }
             if (failedPromptProfileId && promptProfileFailureReason) {
-              maybeMarkAuthProfileFailure({
-                profileId: failedPromptProfileId,
-                reason: promptProfileFailureReason,
-                modelId,
-              }).catch((err) =>
-                log.warn(`deferred prompt profile failure mark failed: ${String(err)}`),
-              );
+              try {
+                await maybeMarkAuthProfileFailure({
+                  profileId: failedPromptProfileId,
+                  reason: promptProfileFailureReason,
+                  modelId,
+                });
+              } catch (err) {
+                log.warn(`prompt profile failure mark failed: ${String(err)}`);
+              }
             }
             const fallbackThinking = pickFallbackThinkingLevel({
               message: errorText,

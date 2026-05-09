@@ -89,7 +89,7 @@ describe("resolveSandboxFsPathWithMounts", () => {
     expect(resolved.writable).toBe(true);
   });
 
-  it("preserves legacy sandbox-root error for outside paths", () => {
+  it("includes the container workspace root in outside-path errors", () => {
     const sandbox = createSandbox();
     const mounts = buildSandboxFsMounts(sandbox);
     expect(() =>
@@ -100,7 +100,7 @@ describe("resolveSandboxFsPathWithMounts", () => {
         defaultContainerRoot: sandbox.containerWorkdir,
         mounts,
       }),
-    ).toThrow(/Path escapes sandbox root/);
+    ).toThrow(/Path escapes sandbox root \(.*container root \/workspace\): \/etc\/passwd/);
   });
 
   it("prefers custom bind mounts over default workspace mount at /workspace", () => {
