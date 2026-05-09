@@ -1388,6 +1388,7 @@ async function appendAssistantTranscriptMessage(params: {
     runId: string;
   };
   cfg?: OpenClawConfig;
+  originAgent?: string;
 }): Promise<TranscriptAppendResult> {
   const transcriptPath = resolveTranscriptPath({
     sessionId: params.sessionId,
@@ -1427,6 +1428,7 @@ async function appendAssistantTranscriptMessage(params: {
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
     config: params.cfg,
+    originAgent: params.originAgent,
   });
 }
 
@@ -2836,6 +2838,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       message: string;
       label?: string;
+      originAgent?: string;
     };
 
     // Load session to find transcript file
@@ -2850,6 +2853,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const appended = await appendAssistantTranscriptMessage({
       message: p.message,
       label: p.label,
+      originAgent: p.originAgent,
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,

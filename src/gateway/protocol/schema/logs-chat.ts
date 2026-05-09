@@ -66,6 +66,8 @@ export const ChatInjectParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     message: NonEmptyString,
     label: Type.Optional(Type.String({ maxLength: 100 })),
+    /** Override the provider attribution for the injected assistant entry. */
+    originAgent: Type.Optional(Type.String({ maxLength: 100 })),
   },
   { additionalProperties: false },
 );

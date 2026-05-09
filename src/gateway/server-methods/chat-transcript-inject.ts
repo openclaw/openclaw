@@ -53,6 +53,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
   config?: SessionWriteLockAcquireTimeoutConfig;
+  /** Override provider attribution for the injected assistant entry. */
+  originAgent?: string;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
   const usage = {
@@ -88,7 +90,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     usage,
     // Make these explicit so downstream tooling never treats this as model output.
     api: "openai-responses",
-    provider: "openclaw",
+    provider: params.originAgent ?? "openclaw",
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.abortMeta
