@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { importLegacyDeviceIdentityFileToSqlite } from "./device-identity-legacy.js";
 import {
-  importLegacyDeviceIdentityFileToSqlite,
   loadDeviceIdentityIfPresent,
   loadDeviceIdentityIfPresentForEnv,
   loadOrCreateDeviceIdentity,

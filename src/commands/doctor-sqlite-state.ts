@@ -30,15 +30,15 @@ import {
 import {
   importLegacyDeviceAuthFileToSqlite,
   legacyDeviceAuthFileExists,
-} from "../infra/device-auth-store.js";
+} from "../infra/device-auth-store-legacy.js";
 import {
   importLegacyDeviceBootstrapFileToSqlite,
   legacyDeviceBootstrapFileExists,
-} from "../infra/device-bootstrap.js";
+} from "../infra/device-bootstrap-legacy.js";
 import {
   importLegacyDeviceIdentityFileToSqlite,
   legacyDeviceIdentityFileExists,
-} from "../infra/device-identity.js";
+} from "../infra/device-identity-legacy.js";
 import {
   importLegacyExecApprovalsFileToSqlite,
   legacyExecApprovalsFileExists,

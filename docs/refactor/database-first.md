@@ -139,6 +139,8 @@ The branch already has a real shared SQLite base:
 - Exec approvals now live in shared SQLite KV (`exec.approvals/current`).
   Doctor imports legacy `~/.openclaw/exec-approvals.json`; runtime writes no
   longer create or rewrite that file.
+- Device identity, device auth, and bootstrap runtime modules now keep their
+  SQLite readers/writers separate from doctor-only legacy JSON import helpers.
 - `src/commands/doctor-sqlite-state.ts` already imports several legacy JSON
   state files, including node host config, into SQLite from doctor.
 - `src/infra/state-migrations.ts` already imports legacy `sessions.json` and

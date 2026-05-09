@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { importLegacyDeviceIdentityFileToSqlite } from "./device-identity-legacy.js";
 import {
   deriveDeviceIdFromPublicKey,
-  importLegacyDeviceIdentityFileToSqlite,
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
   normalizeDevicePublicKeyBase64Url,

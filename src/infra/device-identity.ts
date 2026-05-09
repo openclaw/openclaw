@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
-  readOpenClawStateKvJson,
+  readOpenClawStateKvJsonResult,
   writeOpenClawStateKvJson,
   type OpenClawStateJsonValue,
 } from "../state/openclaw-state-kv.js";
@@ -14,7 +14,7 @@ export type DeviceIdentity = {
   privateKeyPem: string;
 };
 
-type StoredIdentity = {
+export type StoredDeviceIdentity = {
   version: 1;
   deviceId: string;
   publicKeyPem: string;
@@ -22,23 +22,28 @@ type StoredIdentity = {
   createdAtMs: number;
 };
 
-type StoredSwiftIdentity = {
-  deviceId: string;
-  publicKey: string;
-  privateKey: string;
-  createdAtMs: number;
-};
-
 const DEVICE_IDENTITY_SCOPE = "identity.device";
 const DEVICE_IDENTITY_KEY = "default";
 const DEVICE_IDENTITY_PATH_KEY_PREFIX = "path:";
 
-function resolveDefaultIdentityPath(): string {
-  return path.join(resolveStateDir(), "identity", "device.json");
+export class DeviceIdentityMigrationRequiredError extends Error {
+  constructor(filePath: string) {
+    super(
+      `Legacy device identity exists at ${filePath} but has not been imported into SQLite. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
+    );
+    this.name = "DeviceIdentityMigrationRequiredError";
+  }
 }
 
-function resolveIdentityPathForEnv(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "identity", "device.json");
+export class DeviceIdentityStorageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DeviceIdentityStorageError";
+  }
+}
+
+function resolveDefaultIdentityPath(): string {
+  return path.join(resolveStateDir(), "identity", "device.json");
 }
 
 function stateDbOptionsForIdentityPath(filePath: string): { env: NodeJS.ProcessEnv } {
@@ -77,7 +82,6 @@ function identityKeyForPath(filePath: string): string {
 }
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
-const ED25519_PKCS8_PRIVATE_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
 function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
@@ -87,23 +91,6 @@ function base64UrlDecode(input: string): Buffer {
   const normalized = input.replaceAll("-", "+").replaceAll("_", "/");
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
   return Buffer.from(padded, "base64");
-}
-
-function pemEncode(label: "PUBLIC KEY" | "PRIVATE KEY", der: Buffer): string {
-  const body =
-    der
-      .toString("base64")
-      .match(/.{1,64}/g)
-      ?.join("\n") ?? "";
-  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
-}
-
-function publicKeyPemFromRaw(publicKeyRaw: Buffer): string {
-  return pemEncode("PUBLIC KEY", Buffer.concat([ED25519_SPKI_PREFIX, publicKeyRaw]));
-}
-
-function privateKeyPemFromRaw(privateKeyRaw: Buffer): string {
-  return pemEncode("PRIVATE KEY", Buffer.concat([ED25519_PKCS8_PRIVATE_PREFIX, privateKeyRaw]));
 }
 
 function derivePublicKeyRaw(publicKeyPem: string): Buffer {
@@ -123,16 +110,6 @@ function fingerprintPublicKey(publicKeyPem: string): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
-function keyPairMatches(publicKeyPem: string, privateKeyPem: string): boolean {
-  try {
-    const payload = Buffer.from("openclaw-device-identity-self-check", "utf8");
-    const signature = crypto.sign(null, payload, crypto.createPrivateKey(privateKeyPem));
-    return crypto.verify(null, payload, crypto.createPublicKey(publicKeyPem), signature);
-  } catch {
-    return false;
-  }
-}
-
 function generateIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
@@ -141,71 +118,64 @@ function generateIdentity(): DeviceIdentity {
   return { deviceId, publicKeyPem, privateKeyPem };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object";
-}
-
-function parseStoredIdentity(value: unknown): StoredIdentity | null {
+function parseStoredIdentity(value: unknown): StoredDeviceIdentity | null {
   if (
-    isRecord(value) &&
-    value.version === 1 &&
-    typeof value.deviceId === "string" &&
-    typeof value.publicKeyPem === "string" &&
-    typeof value.privateKeyPem === "string"
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    (value as { version?: unknown }).version !== 1 ||
+    typeof (value as { deviceId?: unknown }).deviceId !== "string" ||
+    typeof (value as { publicKeyPem?: unknown }).publicKeyPem !== "string" ||
+    typeof (value as { privateKeyPem?: unknown }).privateKeyPem !== "string"
   ) {
-    return value as StoredIdentity;
+    return null;
   }
+  return value as StoredDeviceIdentity;
+}
 
-  if (
-    isRecord(value) &&
-    !("version" in value) &&
-    typeof value.deviceId === "string" &&
-    typeof value.publicKey === "string" &&
-    typeof value.privateKey === "string"
-  ) {
-    const stored = value as StoredSwiftIdentity;
-    const publicKeyRaw = base64UrlDecode(stored.publicKey);
-    const privateKeyRaw = base64UrlDecode(stored.privateKey);
-    if (publicKeyRaw.length !== 32 || privateKeyRaw.length !== 32) {
-      return null;
-    }
-    const publicKeyPem = publicKeyPemFromRaw(publicKeyRaw);
-    const privateKeyPem = privateKeyPemFromRaw(privateKeyRaw);
-    if (!keyPairMatches(publicKeyPem, privateKeyPem)) {
-      return null;
-    }
-    return {
-      version: 1,
-      deviceId: fingerprintPublicKey(publicKeyPem),
-      publicKeyPem,
-      privateKeyPem,
-      createdAtMs:
-        typeof stored.createdAtMs === "number" && Number.isFinite(stored.createdAtMs)
-          ? stored.createdAtMs
-          : Date.now(),
-    };
+function readStoredIdentity(filePath: string): StoredDeviceIdentity | null {
+  const result = readOpenClawStateKvJsonResult(
+    DEVICE_IDENTITY_SCOPE,
+    identityKeyForPath(filePath),
+    stateDbOptionsForIdentityPath(filePath),
+  );
+  if (!result.exists) {
+    return null;
   }
-
-  return null;
+  const parsed = parseStoredIdentity(result.value);
+  if (!parsed) {
+    throw new DeviceIdentityStorageError(
+      'Stored device identity is invalid. Run "openclaw doctor --fix" before starting the gateway or connecting this client.',
+    );
+  }
+  return parsed;
 }
 
-function readStoredIdentity(filePath: string): StoredIdentity | null {
-  return parseStoredIdentity(
-    readOpenClawStateKvJson(
-      DEVICE_IDENTITY_SCOPE,
-      identityKeyForPath(filePath),
-      stateDbOptionsForIdentityPath(filePath),
-    ),
-  );
+function readStoredIdentityForEnv(env: NodeJS.ProcessEnv): StoredDeviceIdentity | null {
+  const result = readOpenClawStateKvJsonResult(DEVICE_IDENTITY_SCOPE, DEVICE_IDENTITY_KEY, {
+    env,
+  });
+  if (!result.exists) {
+    return null;
+  }
+  return parseStoredIdentity(result.value);
 }
 
-function readStoredIdentityForEnv(env: NodeJS.ProcessEnv): StoredIdentity | null {
-  return parseStoredIdentity(
-    readOpenClawStateKvJson(DEVICE_IDENTITY_SCOPE, DEVICE_IDENTITY_KEY, { env }),
-  );
+function legacyIdentityFileExists(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
 }
 
-function writeStoredIdentity(filePath: string, stored: StoredIdentity): void {
+function assertNoUnimportedLegacyIdentity(filePath: string): void {
+  if (legacyIdentityFileExists(filePath)) {
+    throw new DeviceIdentityMigrationRequiredError(filePath);
+  }
+}
+
+function writeStoredIdentity(filePath: string, stored: StoredDeviceIdentity): void {
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     DEVICE_IDENTITY_SCOPE,
     identityKeyForPath(filePath),
@@ -217,34 +187,32 @@ function writeStoredIdentity(filePath: string, stored: StoredIdentity): void {
 export function loadOrCreateDeviceIdentity(
   filePath: string = resolveDefaultIdentityPath(),
 ): DeviceIdentity {
-  try {
-    const parsed = readStoredIdentity(filePath);
-    if (parsed) {
-      const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
-      if (derivedId && derivedId !== parsed.deviceId) {
-        const updated: StoredIdentity = {
-          ...parsed,
-          deviceId: derivedId,
-        };
-        writeStoredIdentity(filePath, updated);
-        return {
-          deviceId: derivedId,
-          publicKeyPem: parsed.publicKeyPem,
-          privateKeyPem: parsed.privateKeyPem,
-        };
-      }
+  const parsed = readStoredIdentity(filePath);
+  if (parsed) {
+    const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
+    if (derivedId && derivedId !== parsed.deviceId) {
+      const updated: StoredDeviceIdentity = {
+        ...parsed,
+        deviceId: derivedId,
+      };
+      writeStoredIdentity(filePath, updated);
       return {
-        deviceId: parsed.deviceId,
+        deviceId: derivedId,
         publicKeyPem: parsed.publicKeyPem,
         privateKeyPem: parsed.privateKeyPem,
       };
     }
-  } catch {
-    // fall through to regenerate
+    return {
+      deviceId: parsed.deviceId,
+      publicKeyPem: parsed.publicKeyPem,
+      privateKeyPem: parsed.privateKeyPem,
+    };
   }
 
+  assertNoUnimportedLegacyIdentity(filePath);
+
   const identity = generateIdentity();
-  const stored: StoredIdentity = {
+  const stored: StoredDeviceIdentity = {
     version: 1,
     deviceId: identity.deviceId,
     publicKeyPem: identity.publicKeyPem,
@@ -299,38 +267,15 @@ export function loadDeviceIdentityIfPresentForEnv(
   }
 }
 
-export function legacyDeviceIdentityFileExists(env: NodeJS.ProcessEnv = process.env): boolean {
-  try {
-    return fs.existsSync(resolveIdentityPathForEnv(env));
-  } catch {
-    return false;
-  }
+export function parseStoredDeviceIdentitySnapshot(value: unknown): StoredDeviceIdentity | null {
+  return parseStoredIdentity(value);
 }
 
-export function importLegacyDeviceIdentityFileToSqlite(env: NodeJS.ProcessEnv = process.env): {
-  imported: boolean;
-} {
-  const filePath = resolveIdentityPathForEnv(env);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch (error) {
-    if ((error as { code?: unknown })?.code === "ENOENT") {
-      return { imported: false };
-    }
-    throw error;
-  }
-  const stored = parseStoredIdentity(parsed);
-  if (!stored) {
-    return { imported: false };
-  }
+export function writeStoredDeviceIdentitySnapshot(
+  filePath: string,
+  stored: StoredDeviceIdentity,
+): void {
   writeStoredIdentity(filePath, stored);
-  try {
-    fs.rmSync(filePath, { force: true });
-  } catch {
-    // Import succeeded; a later doctor pass can remove the stale file.
-  }
-  return { imported: true };
 }
 
 export function signDevicePayload(privateKeyPem: string, payload: string): string {
