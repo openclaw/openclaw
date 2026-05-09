@@ -30,10 +30,10 @@ afterEach(() => {
 function expectTrajectoryRuntimeRecorder(
   recorder: ReturnType<typeof createTrajectoryRuntimeRecorder>,
 ): TrajectoryRuntimeRecorder {
-  expect(recorder).toEqual(expect.objectContaining({ recordEvent: expect.any(Function) }));
   if (recorder === null) {
     throw new Error("Expected trajectory runtime recorder");
   }
+  expect(typeof recorder.recordEvent).toBe("function");
   return recorder;
 }
 
