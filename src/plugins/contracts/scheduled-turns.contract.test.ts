@@ -54,6 +54,7 @@ async function invokePluginGatewayHandler(params: {
       }
       reject(new Error(error?.message ?? `gateway handler failed: ${params.method}`));
     };
+    // Keep this helper pinned to the live request-frame contract so gateway typing drift breaks here first.
     const handlerOptions: GatewayRequestHandlerOptions = {
       req: {
         type: "req",
