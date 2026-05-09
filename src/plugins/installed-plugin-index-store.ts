@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import { tryReadJsonSync } from "../infra/json-files.js";
 import {
   deleteOpenClawStateKvJson,
   writeOpenClawStateKvJson,
@@ -16,7 +14,6 @@ import { diffInstalledPluginIndexInvalidationReasons } from "./installed-plugin-
 import {
   INSTALLED_PLUGIN_INDEX_KV_KEY,
   INSTALLED_PLUGIN_INDEX_KV_SCOPE,
-  parseInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
   resolveInstalledPluginIndexStateDbOptions,
@@ -25,10 +22,7 @@ import {
   resolveCompatRegistryVersion,
   resolveInstalledPluginIndexPolicyHash,
 } from "./installed-plugin-index-policy.js";
-import {
-  resolveInstalledPluginIndexStorePath,
-  type InstalledPluginIndexStoreOptions,
-} from "./installed-plugin-index-store-path.js";
+import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,
@@ -100,53 +94,6 @@ export function deletePersistedInstalledPluginIndexSync(
     clearCurrentPluginMetadataSnapshotState();
   }
   return removed;
-}
-
-export function legacyInstalledPluginIndexFileExists(
-  options: InstalledPluginIndexStoreOptions = {},
-): boolean {
-  try {
-    return fs.existsSync(resolveInstalledPluginIndexStorePath(options));
-  } catch {
-    return false;
-  }
-}
-
-export type ImportLegacyInstalledPluginIndexResult = {
-  imported: boolean;
-  plugins: number;
-  installRecords: number;
-  removedSource: boolean;
-};
-
-export function importLegacyInstalledPluginIndexFileToSqlite(
-  options: InstalledPluginIndexStoreOptions = {},
-): ImportLegacyInstalledPluginIndexResult {
-  const filePath = resolveInstalledPluginIndexStorePath(options);
-  const parsed = parseInstalledPluginIndex(tryReadJsonSync(filePath));
-  if (!parsed) {
-    return { imported: false, plugins: 0, installRecords: 0, removedSource: false };
-  }
-  writeOpenClawStateKvJson(
-    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
-    INSTALLED_PLUGIN_INDEX_KV_KEY,
-    withInstalledPluginIndexWarning(parsed) as unknown as OpenClawStateJsonValue,
-    resolveInstalledPluginIndexStateDbOptions({ env: options.env, stateDir: options.stateDir }),
-  );
-  let removedSource = false;
-  try {
-    fs.unlinkSync(filePath);
-    removedSource = true;
-  } catch {
-    removedSource = false;
-  }
-  clearCurrentPluginMetadataSnapshotState();
-  return {
-    imported: true,
-    plugins: parsed.plugins.length,
-    installRecords: Object.keys(parsed.installRecords ?? {}).length,
-    removedSource,
-  };
 }
 
 function hasPolicyRefreshTargets(

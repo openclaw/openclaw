@@ -84,7 +84,7 @@ import {
 import {
   importLegacyInstalledPluginIndexFileToSqlite,
   legacyInstalledPluginIndexFileExists,
-} from "../plugins/installed-plugin-index-store.js";
+} from "../plugins/installed-plugin-index-legacy-migration.js";
 import { note } from "../terminal/note.js";
 import {
   importLegacyTuiLastSessionStoreToSqlite,
