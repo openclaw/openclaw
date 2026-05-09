@@ -5,6 +5,7 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { writeOpenClawStateKvJson } from "../../state/openclaw-state-kv.js";
+import { importLegacyOpenRouterModelCapabilitiesCacheToSqlite } from "./openrouter-model-capabilities-legacy.js";
 
 async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) {
   const stateDir = mkdtempSync(join(tmpdir(), "openclaw-openrouter-capabilities-"));
@@ -116,7 +117,7 @@ describe("openrouter-model-capabilities", () => {
       await module.loadOpenRouterModelCapabilities("acme/legacy-json");
       expect(fetchSpy).toHaveBeenCalledTimes(1);
 
-      expect(module.importLegacyOpenRouterModelCapabilitiesCacheToSqlite()).toEqual({
+      expect(importLegacyOpenRouterModelCapabilitiesCacheToSqlite()).toEqual({
         imported: true,
         models: 1,
       });

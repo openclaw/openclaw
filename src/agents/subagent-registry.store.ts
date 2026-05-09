@@ -1,10 +1,8 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { resolveStateDir } from "../config/paths.js";
-import { loadJsonFile } from "../infra/json-file.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -22,18 +20,6 @@ type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
 type SubagentRunRow = Selectable<SubagentRunsTable>;
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 
-type PersistedSubagentRegistryV1 = {
-  version: 1;
-  runs: Record<string, LegacySubagentRunRecord>;
-};
-
-type PersistedSubagentRegistryV2 = {
-  version: 2;
-  runs: Record<string, PersistedSubagentRunRecord>;
-};
-
-type PersistedSubagentRegistry = PersistedSubagentRegistryV1 | PersistedSubagentRegistryV2;
-
 type PersistedSubagentRunRecord = SubagentRunRecord;
 
 type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
@@ -43,7 +29,7 @@ type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
   requesterAccountId?: unknown;
 };
 
-function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env.OPENCLAW_STATE_DIR?.trim();
   if (explicit) {
     return resolveStateDir(env);
@@ -52,14 +38,6 @@ function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): string {
     return path.join(os.tmpdir(), "openclaw-test-state", String(process.pid));
   }
   return resolveStateDir(env);
-}
-
-export function resolveLegacySubagentRegistryPath(): string {
-  return path.join(resolveSubagentStateDir(process.env), "subagents", "runs.json");
-}
-
-function resolveLegacySubagentRegistryPathForEnv(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveSubagentStateDir(env), "subagents", "runs.json");
 }
 
 function subagentRegistryDbOptions(
@@ -130,6 +108,13 @@ function normalizePersistedRunRecords(params: {
     });
   }
   return out;
+}
+
+export function normalizeSubagentRunRecordsForMigration(params: {
+  runsRaw: Record<string, unknown>;
+  isLegacy: boolean;
+}): Map<string, SubagentRunRecord> {
+  return normalizePersistedRunRecords(params);
 }
 
 function getSubagentRegistryKysely(db: DatabaseSync) {
@@ -387,52 +372,11 @@ function writeSubagentRegistryRunsToSqlite(
   }, subagentRegistryDbOptions(env));
 }
 
-function loadLegacySubagentRegistryFile(pathname: string): Map<string, SubagentRunRecord> {
-  const raw = loadJsonFile(pathname);
-  if (!raw || typeof raw !== "object") {
-    return new Map();
-  }
-  const record = raw as Partial<PersistedSubagentRegistry>;
-  if (record.version !== 1 && record.version !== 2) {
-    return new Map();
-  }
-  const runsRaw = record.runs;
-  if (!runsRaw || typeof runsRaw !== "object") {
-    return new Map();
-  }
-  return normalizePersistedRunRecords({
-    runsRaw: runsRaw as Record<string, unknown>,
-    isLegacy: record.version === 1,
-  });
-}
-
-export function legacySubagentRegistryFileExists(env: NodeJS.ProcessEnv = process.env): boolean {
-  try {
-    return fs.statSync(resolveLegacySubagentRegistryPathForEnv(env)).isFile();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-}
-
-export function importLegacySubagentRegistryFileToSqlite(env: NodeJS.ProcessEnv = process.env): {
-  imported: boolean;
-  runs: number;
-} {
-  const pathname = resolveLegacySubagentRegistryPathForEnv(env);
-  if (!legacySubagentRegistryFileExists(env)) {
-    return { imported: false, runs: 0 };
-  }
-  const runs = loadLegacySubagentRegistryFile(pathname);
+export function writeSubagentRegistryRunsForMigration(
+  runs: Map<string, SubagentRunRecord>,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
   writeSubagentRegistryRunsToSqlite(runs, env);
-  try {
-    fs.unlinkSync(pathname);
-  } catch {
-    // Import succeeded; a later doctor pass can remove the stale file.
-  }
-  return { imported: true, runs: runs.size };
 }
 
 export function saveSubagentRegistryToState(runs: Map<string, SubagentRunRecord>) {
