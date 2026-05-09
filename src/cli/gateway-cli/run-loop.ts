@@ -488,6 +488,8 @@ export async function runGatewayLoop(params: {
       const authorized = consumeGatewaySigusr1RestartAuthorization();
       if (!authorized) {
         if (!isGatewaySigusr1RestartExternallyAllowed()) {
+          // Rejected SIGUSR1 will never restart; clear the in-flight token so later restart requests aren't permanently coalesced.
+          markGatewaySigusr1RestartHandled();
           gatewayLog.warn(
             "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
           );
