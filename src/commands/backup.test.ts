@@ -331,9 +331,12 @@ describe("backup commands", () => {
           const stateRoot = entryPaths[1];
           expect(manifestPath).toBeDefined();
           expect(stateRoot).toBeDefined();
-          expect(options.filter?.(manifestPath!)).toBe(true);
+          if (!manifestPath || !stateRoot) {
+            throw new Error("backup test expected manifest and state entries");
+          }
+          expect(options.filter?.(manifestPath)).toBe(true);
           expect(
-            options.filter?.(path.join(stateRoot!, "agents", "main", "sessions", "s.jsonl")),
+            options.filter?.(path.join(stateRoot, "agents", "main", "sessions", "s.jsonl")),
           ).toBe(false);
           await fs.writeFile(options.file, "archive-bytes", "utf8");
         },
@@ -346,7 +349,8 @@ describe("backup commands", () => {
 
       expect(result.skippedVolatileCount).toBe(1);
       expect(runtime.log).toHaveBeenCalledTimes(1);
-      const payload = String(vi.mocked(runtime.log).mock.calls[0]?.[0] ?? "");
+      const payload = vi.mocked(runtime.log).mock.calls[0]?.[0];
+      expect(typeof payload).toBe("string");
       expect(payload).not.toContain("Backup skipped");
       expect(JSON.parse(payload)).toMatchObject({ skippedVolatileCount: 1 });
     } finally {
