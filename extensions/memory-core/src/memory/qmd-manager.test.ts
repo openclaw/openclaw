@@ -3655,23 +3655,38 @@ describe("QmdMemoryManager", () => {
     const firstSync = first.manager.sync({ reason: "manual", force: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(embedChildren).toHaveLength(1);
-    expect(withFileLockMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        retries: expect.objectContaining({
-          retries: expect.any(Number),
-          maxTimeout: 10_000,
-        }),
-        stale: expect.any(Number),
-      }),
-      expect.any(Function),
-    );
-    const lockOptions = withFileLockMock.mock.calls[0]?.[1] as {
-      retries: { retries: number };
-      stale: number;
-    };
-    expect(lockOptions.retries.retries).toBeGreaterThanOrEqual(90);
-    expect(lockOptions.stale).toBeGreaterThanOrEqual(15 * 60 * 1000);
+    const lockCall = withFileLockMock.mock.calls[0] as
+      | [
+          string,
+          {
+            retries: {
+              retries: number;
+              factor: number;
+              minTimeout: number;
+              maxTimeout: number;
+              randomize: boolean;
+            };
+            stale: number;
+          },
+          () => Promise<unknown>,
+        ]
+      | undefined;
+    if (!lockCall) {
+      throw new Error("Expected qmd embed lock call");
+    }
+    const [lockPath, lockOptions, lockTask] = lockCall;
+    expect(lockPath.endsWith(path.join("qmd", "embed.lock"))).toBe(true);
+    expect(lockOptions).toEqual({
+      retries: {
+        retries: 90,
+        factor: 1.2,
+        minTimeout: 250,
+        maxTimeout: 10_000,
+        randomize: true,
+      },
+      stale: 15 * 60 * 1000,
+    });
+    expect(typeof lockTask).toBe("function");
 
     const secondSync = second.manager.sync({ reason: "manual", force: true });
     await vi.advanceTimersByTimeAsync(0);
