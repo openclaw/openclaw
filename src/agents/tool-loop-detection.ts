@@ -40,7 +40,7 @@ function shouldEmitDiagnostic(warningKey: string): boolean {
   }
   diagEmittedKeys.add(warningKey);
   if (diagEmittedKeys.size > DIAG_DEDUPE_CACHE_SIZE) {
-    // Drop the oldest entry (rough LRU; Set iteration is insertion order).
+    // Drop the oldest-inserted entry (FIFO; Set iteration is insertion order).
     const oldest = diagEmittedKeys.values().next().value;
     if (oldest !== undefined) {
       diagEmittedKeys.delete(oldest);
