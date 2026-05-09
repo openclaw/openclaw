@@ -66,6 +66,7 @@ import {
   retireSessionMcpRuntimeForSessionKey,
 } from "../pi-bundle-mcp-tools.js";
 import {
+  classifyFailoverAssistantReason,
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
   type FailoverReason,
@@ -73,7 +74,6 @@ import {
   isAuthAssistantError,
   isBillingAssistantError,
   isCompactionFailureError,
-  isFailoverAssistantError,
   isFailoverErrorMessage,
   isLikelyContextOverflowError,
   isRateLimitAssistantError,
@@ -2207,16 +2207,15 @@ export async function runEmbeddedPiAgent(
             continue;
           }
 
-          const authFailure = isAuthAssistantError(assistantForFailover);
-          const rateLimitFailure = isRateLimitAssistantError(assistantForFailover);
-          const billingFailure = isBillingAssistantError(assistantForFailover);
-          const failoverFailure = isFailoverAssistantError(assistantForFailover);
-          const assistantFailoverReason = classifyFailoverReason(
-            assistantForFailover?.errorMessage ?? "",
-            {
-              provider: assistantForFailover?.provider,
-            },
-          );
+          const assistantFailoverReason = classifyFailoverAssistantReason(assistantForFailover);
+          const authFailure =
+            isAuthAssistantError(assistantForFailover) || assistantFailoverReason === "auth";
+          const rateLimitFailure =
+            isRateLimitAssistantError(assistantForFailover) ||
+            assistantFailoverReason === "rate_limit";
+          const billingFailure =
+            isBillingAssistantError(assistantForFailover) || assistantFailoverReason === "billing";
+          const failoverFailure = assistantFailoverReason !== null;
           const assistantProfileFailureReason =
             resolveRunAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;

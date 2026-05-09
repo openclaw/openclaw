@@ -1369,6 +1369,16 @@ describe("classifyFailoverReason provider messages", () => {
     expect(classifyFailoverReason("系统异常")).toBe("timeout");
 
     // Rate limit errors
+    expect(
+      classifyFailoverReason(
+        "当前请求量较高，标准套餐的速率限制可能会临时收紧。请稍后重试，或升级至 High-Speed 套餐以获得优先容量支持。 (2062)",
+      ),
+    ).toBe("rate_limit");
+    expect(classifyFailoverReason('{"code":2062,"message":"请求量较高，触发速率限制"}')).toBe(
+      "rate_limit",
+    );
+    expect(classifyFailoverReason("当前请求量较高")).toBe("rate_limit");
+    expect(classifyFailoverReason("速率限制")).toBe("rate_limit");
     expect(classifyFailoverReason("请求过于频繁，请稍后重试")).toBe("rate_limit");
     expect(classifyFailoverReason("调用频率超限")).toBe("rate_limit");
     expect(classifyFailoverReason("频率限制")).toBe("rate_limit");
@@ -1388,10 +1398,14 @@ describe("classifyFailoverReason provider messages", () => {
     expect(classifyFailoverReason("认证失败")).toBe("auth");
     expect(classifyFailoverReason("鉴权失败，请检查API Key")).toBe("auth");
     expect(classifyFailoverReason("密钥无效")).toBe("auth");
+    expect(classifyFailoverReason("鉴权失败，请稍后重试")).toBe("auth");
 
     // Overloaded errors
     expect(classifyFailoverReason("服务过载，请稍后重试")).toBe("overloaded");
     expect(classifyFailoverReason("当前负载过高")).toBe("overloaded");
+
+    // Generic retry copy is not a rate-limit signal by itself.
+    expect(classifyFailoverReason("请稍后重试")).toBeNull();
   });
 });
 

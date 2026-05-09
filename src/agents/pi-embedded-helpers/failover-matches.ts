@@ -79,6 +79,10 @@ const ERROR_PATTERNS = {
     "tokens per minute",
     "tokens per day",
     // Chinese provider rate-limit messages
+    "速率限制",
+    "请求量较高",
+    /\bcode["']?\s*[:=]\s*["']?2062\b/i,
+    /\(2062\)/,
     "请求过于频繁",
     "调用频率",
     "频率限制",

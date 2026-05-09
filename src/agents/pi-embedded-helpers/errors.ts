@@ -1339,9 +1339,54 @@ export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }
   return classifyFailoverReason(raw, opts) !== null;
 }
 
-export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
-  if (!msg || msg.stopReason !== "error") {
-    return false;
+function isMiniMaxProvider(provider: string | undefined): boolean {
+  return normalizeLowercaseStringOrEmpty(provider).includes("minimax");
+}
+
+function extractAssistantTextContent(msg: AssistantMessage): string {
+  if (!Array.isArray(msg.content)) {
+    return "";
   }
-  return isFailoverErrorMessage(msg.errorMessage ?? "", { provider: msg.provider });
+  return msg.content
+    .map((block) =>
+      block && typeof block === "object" && "text" in block && typeof block.text === "string"
+        ? block.text
+        : "",
+    )
+    .join("")
+    .trim();
+}
+
+function classifyMiniMaxNonErrorText(raw: string): FailoverReason | null {
+  if (!raw || raw.length > 500) {
+    return null;
+  }
+  const hasMiniMaxRateLimitText = raw.includes("速率限制") && raw.includes("请求量较高");
+  const hasMiniMaxRateLimitCode = /(?:^|[^\d])2062(?:[^\d]|$)/.test(raw);
+  if (hasMiniMaxRateLimitText && hasMiniMaxRateLimitCode) {
+    return "rate_limit";
+  }
+  return null;
+}
+
+export function classifyFailoverAssistantReason(
+  msg: AssistantMessage | undefined,
+): FailoverReason | null {
+  if (!msg) {
+    return null;
+  }
+  const errorMessageReason = classifyFailoverReason(msg.errorMessage ?? "", {
+    provider: msg.provider,
+  });
+  if (errorMessageReason !== null) {
+    return errorMessageReason;
+  }
+  if (msg.stopReason === "error" || !isMiniMaxProvider(msg.provider)) {
+    return null;
+  }
+  return classifyMiniMaxNonErrorText(extractAssistantTextContent(msg));
+}
+
+export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
+  return classifyFailoverAssistantReason(msg) !== null;
 }
