@@ -37,7 +37,7 @@ export async function ensureLoaded(
   for (const job of state.store?.jobs ?? []) {
     previousJobsById.set(job.id, job);
   }
-  const loaded = await loadCronStore(state.deps.storePath);
+  const loaded = await loadCronStore(state.deps.storeKey);
   const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
   for (const [index, job] of jobs.entries()) {
     const raw = job as unknown as Record<string, unknown>;
@@ -51,7 +51,7 @@ export async function ensureLoaded(
       }
       normalized = null;
       state.deps.log.warn(
-        { storePath: state.deps.storePath, jobId: typeof raw.id === "string" ? raw.id : undefined },
+        { storeKey: state.deps.storeKey, jobId: typeof raw.id === "string" ? raw.id : undefined },
         "cron: job has invalid persisted sessionTarget; run openclaw doctor --fix to repair",
       );
     }
@@ -61,7 +61,7 @@ export async function ensureLoaded(
     if (legacyJobIdIssue) {
       const resolvedId = typeof hydrated.id === "string" ? hydrated.id : undefined;
       state.deps.log.warn(
-        { storePath: state.deps.storePath, jobId: resolvedId },
+        { storeKey: state.deps.storeKey, jobId: resolvedId },
         "cron: job used legacy jobId field; normalized id in memory (run openclaw doctor --fix to persist canonical shape)",
       );
     }
@@ -102,7 +102,7 @@ export async function ensureLoaded(
         if (!state.warnedMissingSessionTargetJobIds.has(dedupeKey)) {
           state.warnedMissingSessionTargetJobIds.add(dedupeKey);
           state.deps.log.warn(
-            { storePath: state.deps.storePath, jobId, defaulted },
+            { storeKey: state.deps.storeKey, jobId, defaulted },
             "cron: job missing sessionTarget; defaulted in memory (run openclaw doctor --fix to persist canonical shape)",
           );
         }
@@ -129,7 +129,7 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   }
   state.warnedDisabled = true;
   state.deps.log.warn(
-    { enabled: false, action, storePath: state.deps.storePath },
+    { enabled: false, action, storeKey: state.deps.storeKey },
     "cron: scheduler disabled; jobs will not run automatically",
   );
 }
@@ -141,5 +141,5 @@ export async function persist(
   if (!state.store) {
     return;
   }
-  await saveCronStore(state.deps.storePath, state.store, opts);
+  await saveCronStore(state.deps.storeKey, state.store, opts);
 }

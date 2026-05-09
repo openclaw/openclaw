@@ -32,7 +32,7 @@ function withStateDirForStorePath(storePath: string) {
 
 function createTimedOutIsolatedCronState(params: { storePath: string; now: number }) {
   return createCronServiceState({
-    storePath: params.storePath,
+    storeKey: params.storePath,
     cronEnabled: true,
     log: logger,
     nowMs: () => params.now,
@@ -46,7 +46,7 @@ function createTimedOutIsolatedCronState(params: { storePath: string; now: numbe
 
 function createOkIsolatedCronState(params: { storePath: string; now: number; summary?: string }) {
   return createCronServiceState({
-    storePath: params.storePath,
+    storeKey: params.storePath,
     cronEnabled: true,
     log: logger,
     nowMs: () => params.now,
@@ -165,7 +165,7 @@ describe("cron service ops seam coverage", () => {
     });
 
     const state = createCronServiceState({
-      storePath,
+      storeKey: storePath,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
@@ -263,7 +263,7 @@ describe("cron service ops seam coverage", () => {
     await importLegacyCronStoreToSqlite({ legacyStorePath: storePath, storeKey: storePath });
 
     const state = createCronServiceState({
-      storePath,
+      storeKey: storePath,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,

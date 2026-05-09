@@ -38,8 +38,7 @@ import {
 
 export type GatewayCronState = {
   cron: CronServiceContract;
-  /** SQLite cron partition key. Kept as `storePath` for older RPC/status shapes. */
-  storePath: string;
+  storeKey: string;
   cronEnabled: boolean;
 };
 
@@ -107,7 +106,7 @@ export function buildGatewayCronService(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const storePath = resolveCronStoreKey();
+  const storeKey = resolveCronStoreKey();
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
@@ -271,7 +270,7 @@ export function buildGatewayCronService(params: {
   };
 
   const cron = new CronService({
-    storePath,
+    storeKey,
     cronEnabled,
     cronConfig: params.cfg.cron,
     defaultAgentId,
@@ -382,7 +381,7 @@ export function buildGatewayCronService(params: {
         mode,
         accountId,
       }),
-    log: getChildLogger({ module: "cron", storeKey: storePath }),
+    log: getChildLogger({ module: "cron", storeKey }),
     onEvent: (evt) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
       // Build hook event from CronEvent. The job snapshot is carried on the
@@ -435,7 +434,7 @@ export function buildGatewayCronService(params: {
         });
 
         void appendCronRunLogToSqlite(
-          storePath,
+          storeKey,
           {
             ts: Date.now(),
             jobId: evt.jobId,
@@ -460,11 +459,11 @@ export function buildGatewayCronService(params: {
           },
           runLogPrune,
         ).catch((err) => {
-          cronLogger.warn({ err: String(err), storeKey: storePath }, "cron: run log append failed");
+          cronLogger.warn({ err: String(err), storeKey }, "cron: run log append failed");
         });
       }
     },
   });
 
-  return { cron, storePath, cronEnabled };
+  return { cron, storeKey, cronEnabled };
 }

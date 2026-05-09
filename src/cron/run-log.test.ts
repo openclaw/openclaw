@@ -89,7 +89,7 @@ describe("cron run log", () => {
       });
       expect(page.entries).toEqual([expect.objectContaining({ ts: 2, status: "error" })]);
       const all = await readCronRunLogEntriesPageAllFromSqlite({
-        storePath,
+        storeKey: storePath,
         query: "Nightly Backup",
         status: "error",
         jobNameById: { "job-1": "Nightly Backup" },

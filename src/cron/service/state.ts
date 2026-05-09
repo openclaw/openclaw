@@ -47,7 +47,7 @@ export type Logger = {
 export type CronServiceDeps = {
   nowMs?: () => number;
   log: Logger;
-  storePath: string;
+  storeKey: string;
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
@@ -172,6 +172,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 
 export type CronStatusSummary = {
   enabled: boolean;
+  /** Kept as `storePath` for the older RPC/status response contract. */
   storePath: string;
   jobs: number;
   nextWakeAtMs: number | null;
