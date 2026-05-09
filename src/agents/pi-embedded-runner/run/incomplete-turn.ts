@@ -109,6 +109,8 @@ const CJK_PLANNING_ONLY_COMPLETION_RE =
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
 const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
 const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
+const TERMINAL_CONTINUATION_MAX_VISIBLE_TEXT = 900;
+const TERMINAL_UNFINISHED_HANDOFF_MAX_VISIBLE_TEXT = 4000;
 const PLANNING_ONLY_ACTION_VERB_RE =
   /\b(?:inspect|investigate|check|look(?:\s+into|\s+at)?|read|search|find|debug|fix|patch|update|change|edit|write|implement|run|test|verify|review|analy(?:s|z)e|summari(?:s|z)e|explain|answer|show|share|report|prepare|capture|take|refactor|restart|deploy|ship)\b/i;
 const CJK_PLANNING_ONLY_ACTION_VERB_RE =
@@ -203,6 +205,10 @@ const ACTIONABLE_PROMPT_REQUEST_RE =
   /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through)\b/i;
 const CJK_ACTIONABLE_PROMPT_RE =
   /(?:请|帮我|麻烦|能否|能不能|可以|你可以|你能|给我|需要你|确认|检查|查看|分析|修复|解决|执行|继续|测试|验证|实现|更新|写|改|跑|搜索|查找|总结|解释|告诉我|给出|连|看一下|跑一遍)/u;
+const CJK_UNFINISHED_WORK_RE =
+  /(?:没有完成|没完成|未完成|还没(?:有)?(?:完成|做完|达标|落地|闭环)|不算(?:闭环)?完成|不能算(?:闭环)?完成|无法判定(?:为)?完成|仍(?:未|没)[^。！？\n]{0,80}(?:完成|做完|达标|核(?:实|死)|落地)|连产物都(?:还)?没(?:有)?落地)/u;
+const CJK_NEXT_ACTION_HANDOFF_RE =
+  /(?:下一步(?:正确)?动作|现在不该[^。！？\n]{0,120}而是|二选一|选一|我的建议是|建议是|继续把[^。！？\n]{0,120}(?:做完|补完|完成|跑完|推进|验证|落地)|把[^。！？\n]{0,120}(?:整理成|写成|补成|做成))/u;
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
@@ -768,15 +774,35 @@ function hasPlanningOnlyCompletionCue(text: string): boolean {
   return PLANNING_ONLY_COMPLETION_RE.test(text) || CJK_PLANNING_ONLY_COMPLETION_RE.test(text);
 }
 
+function stripMarkdownCodeFences(text: string): string {
+  return text.replace(/```[\s\S]*?```/g, " ");
+}
+
 function isTerminalContinuationCommitmentText(text: string): boolean {
   const trimmed = text.trim();
-  if (!trimmed || trimmed.length > 900 || trimmed.includes("```")) {
+  if (
+    !trimmed ||
+    trimmed.length > TERMINAL_CONTINUATION_MAX_VISIBLE_TEXT ||
+    trimmed.includes("```")
+  ) {
     return false;
   }
   if (hasPlanningOnlyCompletionCue(trimmed)) {
     return false;
   }
   return hasPlanningOnlyPromiseCue(trimmed) && hasPlanningOnlyActionVerb(trimmed);
+}
+
+function isTerminalUnfinishedWorkHandoffText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > TERMINAL_UNFINISHED_HANDOFF_MAX_VISIBLE_TEXT) {
+    return false;
+  }
+  const prose = stripMarkdownCodeFences(trimmed).trim();
+  if (!prose) {
+    return false;
+  }
+  return CJK_UNFINISHED_WORK_RE.test(prose) && CJK_NEXT_ACTION_HANDOFF_RE.test(prose);
 }
 
 export function extractPlanningOnlyPlanDetails(text: string): PlanningOnlyPlanDetails | null {
@@ -950,7 +976,10 @@ export function resolveUnsafeTerminalContinuationText(params: {
   }
 
   const text = (params.attempt.assistantTexts ?? []).join("\n\n").trim();
-  if (!isTerminalContinuationCommitmentText(text)) {
+  if (
+    !isTerminalContinuationCommitmentText(text) &&
+    !isTerminalUnfinishedWorkHandoffText(text)
+  ) {
     return null;
   }
 

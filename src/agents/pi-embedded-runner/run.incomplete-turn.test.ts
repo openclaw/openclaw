@@ -2304,4 +2304,45 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
       }),
     ).toBe(STRICT_AGENTIC_UNSAFE_CONTINUATION_TEXT);
   });
+
+  it("blocks a long Chinese unfinished test report that hands off obvious next work", () => {
+    const attempt = makeAttemptWithTools(
+      ["edit"],
+      [
+        "结果：**A 和 B 这次重测都没有完成。**",
+        "",
+        "证据，不是感觉：",
+        "",
+        "```json",
+        "{",
+        '  "task_id": "east-asia-visa-test",',
+        '  "all_exist": true,',
+        '  "all_delivered": false,',
+        '  "should_continue": false',
+        "}",
+        "```",
+        "",
+        "所以 A 不只是控制流没闭环，**内容本身也还是半成品**。",
+        "",
+        "## 下一步正确动作",
+        "现在不该再空聊“能不能完成”，而是二选一：",
+        "",
+        "1. **继续把 A 和 B 真正做完**",
+        "2. **把这次测试结果整理成验证报告，明确 CodeX 做到了什么、没做到什么**",
+        "",
+        "我的建议是 **1**，因为你要的是结果，不是再多一份评价文档。",
+      ].join("\n"),
+    );
+
+    expect(
+      resolveUnsafeTerminalContinuationText({
+        ...openaiParams,
+        prompt:
+          "请给我完整可行的方案，并给出测试的用例。最后执行完成过后，再跑一遍测试用例，看一下效果是否符合预期。",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(STRICT_AGENTIC_UNSAFE_CONTINUATION_TEXT);
+  });
 });
