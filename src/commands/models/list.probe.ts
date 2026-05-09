@@ -24,7 +24,6 @@ import {
   parseModelRef,
 } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
@@ -457,7 +456,6 @@ async function probeTarget(params: {
   const model = target.model;
 
   const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
-  const sessionFile = createSqliteSessionTranscriptLocator({ sessionId, agentId });
 
   const start = Date.now();
   const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
@@ -475,7 +473,6 @@ async function probeTarget(params: {
     const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
     await runEmbeddedPiAgent({
       sessionId,
-      sessionFile,
       agentId,
       workspaceDir,
       agentDir,

@@ -28,7 +28,6 @@ function makeParams(): RunEmbeddedPiAgentParams {
     model: "gpt-5.5",
     prompt: "hello",
     runId: "run-1",
-    transcriptLocator: "/tmp/stale-session.jsonl",
     sessionId: "session-1",
     sessionKey: "session-key-1",
     timeoutMs: 1_000,
@@ -86,7 +85,6 @@ describe("runEmbeddedPiAgent worker launch", () => {
       runParams: expect.objectContaining({
         sessionId: "session-1",
         sessionKey: "session-key-1",
-        transcriptLocator: "sqlite-transcript://agent-1/session-1",
       }),
       mode: "worker",
       workerChild: false,
@@ -95,7 +93,6 @@ describe("runEmbeddedPiAgent worker launch", () => {
       expect.objectContaining({
         runId: "run-1",
         sessionId: "session-1",
-        transcriptLocator: "sqlite-transcript://agent-1/session-1",
       }),
       {
         runtimeId: "pi",
@@ -105,7 +102,7 @@ describe("runEmbeddedPiAgent worker launch", () => {
     );
   });
 
-  it("does not forward caller-provided filesystem transcript locators", async () => {
+  it("does not include transcript locators in worker handoff", async () => {
     const workerResult = {
       payloads: [{ text: "worker-ok" }],
       meta: { durationMs: 12 },
@@ -117,17 +114,10 @@ describe("runEmbeddedPiAgent worker launch", () => {
     runPiRunInWorkerMock.mockResolvedValue(workerResult);
     vi.stubEnv("OPENCLAW_AGENT_WORKER_MODE", "worker");
 
-    await expect(
-      runEmbeddedPiAgent({
-        ...makeParams(),
-        transcriptLocator: "/tmp/old-runtime-session.jsonl",
-      }),
-    ).resolves.toBe(workerResult);
+    await expect(runEmbeddedPiAgent(makeParams())).resolves.toBe(workerResult);
 
     expect(runPiRunInWorkerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        transcriptLocator: "sqlite-transcript://agent-1/session-1",
-      }),
+      expect.not.objectContaining({ transcriptLocator: expect.anything() }),
       expect.anything(),
     );
   });

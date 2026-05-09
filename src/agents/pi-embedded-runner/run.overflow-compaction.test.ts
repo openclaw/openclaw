@@ -166,7 +166,6 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     await runEmbeddedPiAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
-      sessionFile: "sqlite-transcript://main/test-session.jsonl",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -583,7 +582,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedCompactDirect).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "test-session",
-        sessionFile: "sqlite-transcript://main/test-session.jsonl",
+        transcriptLocator: "sqlite-transcript://main/test-session",
         runtimeContext: expect.objectContaining({
           trigger: "overflow",
           authProfileId: "test-profile",
@@ -736,7 +735,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     await runEmbeddedPiAgent(overflowBaseRunParams);
 
     expect(mockedGlobalHookRunner.runBeforeCompaction).toHaveBeenCalledWith(
-      { messageCount: -1, sessionFile: "sqlite-transcript://main/test-session.jsonl" },
+      { messageCount: -1, transcriptLocator: "sqlite-transcript://main/test-session" },
       expect.objectContaining({
         sessionKey: "test-key",
       }),
@@ -746,7 +745,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         messageCount: -1,
         compactedCount: -1,
         tokenCount: 50,
-        sessionFile: "sqlite-transcript://main/test-session.jsonl",
+        transcriptLocator: "sqlite-transcript://main/test-session",
       },
       expect.objectContaining({
         sessionKey: "test-key",
@@ -775,7 +774,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         contextEngine: mockedContextEngine,
         sessionId: "test-session",
         sessionKey: "test-key",
-        sessionFile: "sqlite-transcript://main/test-session.jsonl",
+        transcriptLocator: "sqlite-transcript://main/test-session",
         reason: "compaction",
         runtimeContext: expect.objectContaining({
           trigger: "overflow",
@@ -792,7 +791,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         makeAttemptResult({
           promptError: null,
           sessionIdUsed: "rotated-session",
-          sessionFileUsed: "/tmp/rotated-session.json",
+          transcriptLocatorUsed: "sqlite-transcript://main/rotated-session",
         }),
       );
     mockedCompactDirect.mockResolvedValueOnce(
@@ -800,7 +799,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         summary: "rotated overflow compaction",
         tokensAfter: 50,
         sessionId: "rotated-session",
-        sessionFile: "/tmp/rotated-session.json",
+        transcriptLocator: "sqlite-transcript://main/rotated-session",
       }),
     );
 
@@ -810,13 +809,12 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       2,
       expect.objectContaining({
         sessionId: "rotated-session",
-        sessionFile: "/tmp/rotated-session.json",
       }),
     );
     expect(mockedRunContextEngineMaintenance).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "rotated-session",
-        sessionFile: "/tmp/rotated-session.json",
+        transcriptLocator: "sqlite-transcript://main/rotated-session",
       }),
     );
   });

@@ -108,7 +108,6 @@ export function createRunParamsFromPreparedAgentRun(
     runId: preparedRun.runId,
     sessionId: preparedRun.sessionId,
     ...(preparedRun.sessionKey ? { sessionKey: preparedRun.sessionKey } : {}),
-    sessionFile: preparedRun.sessionFile,
     workspaceDir: preparedRun.workspaceDir,
     ...(preparedRun.agentDir ? { agentDir: preparedRun.agentDir } : {}),
     ...(preparedRun.config ? { config: preparedRun.config } : {}),

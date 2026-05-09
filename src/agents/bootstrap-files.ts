@@ -66,7 +66,19 @@ export async function hasCompletedBootstrapTranscriptTurn(
   if (!scope) {
     return false;
   }
-  const records = loadSqliteSessionTranscriptEvents(scope)
+  return hasCompletedBootstrapSessionTurn(scope);
+}
+
+export async function hasCompletedBootstrapSessionTurn(params: {
+  agentId: string;
+  sessionId: string;
+}): Promise<boolean> {
+  const agentId = params.agentId.trim();
+  const sessionId = params.sessionId.trim();
+  if (!agentId || !sessionId) {
+    return false;
+  }
+  const records = loadSqliteSessionTranscriptEvents({ agentId, sessionId })
     .map((entry) => entry.event)
     .slice(-CONTINUATION_SCAN_MAX_RECORDS);
   let compactedAfterLatestAssistant = false;

@@ -63,6 +63,27 @@ function normalizeTranscriptLocator(transcriptLocator: string): string {
   );
 }
 
+function normalizeTranscriptScopeId(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`SQLite transcript ${label} is required`);
+  }
+  return trimmed;
+}
+
+function createTranscriptScope(params: {
+  agentId: string;
+  sessionId: string;
+}): TranscriptSqliteScope {
+  const agentId = normalizeTranscriptScopeId(params.agentId, "agent id");
+  const sessionId = normalizeTranscriptScopeId(params.sessionId, "session id");
+  return {
+    agentId,
+    sessionId,
+    transcriptLocator: createSqliteSessionTranscriptLocator({ agentId, sessionId }),
+  };
+}
+
 function createTranscriptLocator(header: SessionHeader, agentId = DEFAULT_AGENT_ID): string {
   return createSqliteSessionTranscriptLocator({
     agentId,
@@ -139,6 +160,32 @@ function loadTranscriptState(params: {
   const headerScope = { ...scope, sessionId: header.id };
   persistFullTranscriptStateToSqlite(headerScope, state);
   return { state, scope: headerScope };
+}
+
+function loadTranscriptStateForSession(params: {
+  agentId: string;
+  sessionId: string;
+  cwd?: string;
+}): {
+  state: TranscriptState;
+  scope: TranscriptSqliteScope;
+} {
+  const scope = createTranscriptScope({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+  });
+  const sqliteEvents = loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
+  if (sqliteEvents.length > 0) {
+    return { state: createTranscriptStateFromEvents(sqliteEvents), scope };
+  }
+
+  const header = createSessionHeader({
+    id: scope.sessionId,
+    cwd: params.cwd ?? process.cwd(),
+  });
+  const state = new TranscriptState({ header, entries: [] });
+  persistFullTranscriptStateToSqlite(scope, state);
+  return { state, scope };
 }
 
 function isMessageWithContent(
@@ -309,6 +356,20 @@ export class TranscriptSessionManager implements SessionManager {
     });
     return new TranscriptSessionManager({
       transcriptLocator,
+      persist: true,
+      state: loaded.state,
+      sqliteScope: loaded.scope,
+    });
+  }
+
+  static openForSession(params: {
+    agentId: string;
+    sessionId: string;
+    cwd?: string;
+  }): TranscriptSessionManager {
+    const loaded = loadTranscriptStateForSession(params);
+    return new TranscriptSessionManager({
+      transcriptLocator: loaded.scope.transcriptLocator,
       persist: true,
       state: loaded.state,
       sqliteScope: loaded.scope,
@@ -618,6 +679,14 @@ export function openTranscriptSessionManager(params: {
   cwd?: string;
 }): SessionManager {
   return TranscriptSessionManager.open(params);
+}
+
+export function openTranscriptSessionManagerForSession(params: {
+  agentId: string;
+  sessionId: string;
+  cwd?: string;
+}): SessionManager {
+  return TranscriptSessionManager.openForSession(params);
 }
 
 export const SessionManagerValue = {

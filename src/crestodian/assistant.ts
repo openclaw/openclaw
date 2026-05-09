@@ -183,7 +183,7 @@ async function runLocalRuntimePlanner(
   try {
     const runId = `crestodian-planner-${randomUUID()}`;
     const sessionId = `${runId}-session`;
-    const sessionFile = createSqliteSessionTranscriptLocator({
+    const transcriptLocator = createSqliteSessionTranscriptLocator({
       agentId: "crestodian",
       sessionId,
     });
@@ -196,7 +196,7 @@ async function runLocalRuntimePlanner(
           sessionKey,
           agentId: "crestodian",
           trigger: "manual",
-          sessionFile,
+          transcriptLocator,
           workspaceDir: tempDir,
           config: backend.buildConfig(tempDir),
           prompt: params.prompt,
@@ -220,7 +220,6 @@ async function runLocalRuntimePlanner(
           sessionKey,
           agentId: "crestodian",
           trigger: "manual",
-          sessionFile,
           workspaceDir: tempDir,
           config: backend.buildConfig(tempDir),
           prompt: params.prompt,

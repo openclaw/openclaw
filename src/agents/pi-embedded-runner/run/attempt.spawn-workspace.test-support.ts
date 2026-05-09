@@ -68,6 +68,7 @@ type AttemptSpawnWorkspaceHoisted = {
   installToolResultContextGuardMock: UnknownMock;
   installContextEngineLoopHookMock: UnknownMock;
   flushPendingToolResultsAfterIdleMock: AsyncUnknownMock;
+  releaseWsSessionMock: UnknownMock;
   resolveBootstrapFilesForRunMock: Mock<(...args: unknown[]) => Promise<WorkspaceBootstrapFile[]>>;
   resolveBootstrapContextForRunMock: Mock<() => Promise<BootstrapContext>>;
   isWorkspaceBootstrapPendingMock: Mock<(workspaceDir: string) => Promise<boolean>>;
@@ -131,6 +132,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const installContextEngineLoopHookMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
+  const releaseWsSessionMock = vi.fn(() => {});
   const subscribeEmbeddedPiSessionMock = vi.fn<SubscribeEmbeddedPiSessionFn>(() =>
     createSubscriptionMock(),
   );
@@ -197,6 +199,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     installToolResultContextGuardMock,
     installContextEngineLoopHookMock,
     flushPendingToolResultsAfterIdleMock,
+    releaseWsSessionMock,
     resolveBootstrapFilesForRunMock,
     resolveBootstrapContextForRunMock,
     isWorkspaceBootstrapPendingMock,
@@ -488,6 +491,12 @@ vi.mock("../extra-params.js", async () => {
     resolveAgentTransportOverride: () => undefined,
   };
 });
+
+vi.mock("../../openai-ws-stream.js", () => ({
+  createOpenAIWebSocketStreamFn: vi.fn(),
+  releaseWsSession: (...args: unknown[]) =>
+    (hoisted.releaseWsSessionMock as (...args: unknown[]) => unknown)(...args),
+}));
 
 vi.mock("../../anthropic-payload-log.js", () => ({
   createAnthropicPayloadLogger: () => undefined,
@@ -858,6 +867,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.installToolResultContextGuardMock.mockReset().mockReturnValue(() => {});
   hoisted.installContextEngineLoopHookMock.mockReset().mockReturnValue(() => {});
   hoisted.flushPendingToolResultsAfterIdleMock.mockReset().mockResolvedValue(undefined);
+  hoisted.releaseWsSessionMock.mockReset().mockReturnValue(undefined);
   hoisted.resolveBootstrapContextForRunMock.mockReset().mockResolvedValue({
     bootstrapFiles: [],
     contextFiles: [],
@@ -995,14 +1005,14 @@ export async function createContextEngineAttemptRunner(params: {
     bootstrap?: (params: {
       sessionId: string;
       sessionKey?: string;
-      sessionFile: string;
+      transcriptLocator: string;
     }) => Promise<BootstrapResult>;
     maintain?:
       | boolean
       | ((params: {
           sessionId: string;
           sessionKey?: string;
-          sessionFile: string;
+          transcriptLocator: string;
           runtimeContext?: Record<string, unknown>;
         }) => Promise<{
           changed: boolean;
@@ -1020,7 +1030,7 @@ export async function createContextEngineAttemptRunner(params: {
     afterTurn?: (params: {
       sessionId: string;
       sessionKey?: string;
-      sessionFile: string;
+      transcriptLocator: string;
       messages: AgentMessage[];
       prePromptMessageCount: number;
       tokenBudget?: number;
@@ -1039,7 +1049,7 @@ export async function createContextEngineAttemptRunner(params: {
     compact?: (params: {
       sessionId: string;
       sessionKey?: string;
-      sessionFile: string;
+      transcriptLocator: string;
       tokenBudget?: number;
     }) => Promise<CompactResult>;
     info?: Partial<ContextEngineInfo>;
@@ -1056,7 +1066,7 @@ export async function createContextEngineAttemptRunner(params: {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-agent-"));
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-state-"));
   const sessionId = "embedded-session";
-  const sessionFile = createSqliteSessionTranscriptLocator({
+  const transcriptLocator = createSqliteSessionTranscriptLocator({
     agentId: resolveAgentIdFromSessionKey(params.sessionKey) ?? DEFAULT_AGENT_ID,
     sessionId,
   });
@@ -1101,7 +1111,6 @@ export async function createContextEngineAttemptRunner(params: {
     )({
       sessionId,
       sessionKey: params.sessionKey,
-      sessionFile,
       workspaceDir,
       agentDir,
       config: {},

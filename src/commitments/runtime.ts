@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCommitmentTimezone, resolveCommitmentsConfig } from "./config.js";
@@ -180,10 +179,6 @@ function openTerminalFailureCooldown(agentId: string, error: unknown): void {
   });
 }
 
-function resolveExtractionSessionFile(agentId: string, runId: string): string {
-  return createSqliteSessionTranscriptLocator({ agentId, sessionId: runId });
-}
-
 function joinPayloadText(result: EmbeddedPiRunResult): string {
   return (
     result.payloads
@@ -222,7 +217,6 @@ async function defaultExtractBatch(params: {
     sessionKey: `agent:${first.agentId}:commitments:${runId}`,
     agentId: first.agentId,
     trigger: "manual",
-    sessionFile: resolveExtractionSessionFile(first.agentId, runId),
     workspaceDir: resolveAgentWorkspaceDir(cfg, first.agentId),
     config: cfg,
     provider: modelRef.provider,

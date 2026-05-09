@@ -21,18 +21,10 @@ import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedPiAgentParams,
-  | "provider"
-  | "model"
-  | "authProfileId"
-  | "authProfileIdSource"
-  | "thinkLevel"
-  | "lane"
-  | "enqueue"
-  | "transcriptLocator"
+  "provider" | "model" | "authProfileId" | "authProfileIdSource" | "thinkLevel" | "lane" | "enqueue"
 >;
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
-  transcriptLocator: string;
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
