@@ -6,10 +6,10 @@ type DiscordPresenceUpdate = NonNullable<ReturnType<typeof resolveDiscordPresenc
 function expectPresenceUpdate(
   result: ReturnType<typeof resolveDiscordPresenceUpdate>,
 ): DiscordPresenceUpdate {
-  expect(result).toEqual(expect.objectContaining({ activities: expect.any(Array) }));
   if (result === null) {
     throw new Error("Expected Discord presence update");
   }
+  expect(Array.isArray(result.activities)).toBe(true);
   return result;
 }
 
