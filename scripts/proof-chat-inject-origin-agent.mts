@@ -34,7 +34,7 @@ function readLastMessageBody(transcriptPath: string): Record<string, unknown> | 
 async function runCase(
   caseLabel: string,
   originAgent: string | undefined,
-  expectedOriginAgentField: string | "absent",
+  expectedOriginAgentField: string,
 ): Promise<void> {
   const { dir, transcriptPath } = createTranscriptFixtureSync({
     prefix: "proof-chat-inject-",
