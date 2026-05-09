@@ -183,6 +183,12 @@ The branch already has a real shared SQLite base:
   `speech-core` plugin. The old `settings/tts.json` file is doctor migration
   input only; runtime no longer reads or writes TTS prefs JSON files, and the
   legacy path resolver lives in the doctor migration module.
+- Secret target metadata now talks about stores instead of pretending every
+  credential target is a config file. `openclaw.json` remains the config store;
+  auth-profile targets use the SQLite auth profile store.
+- Legacy auth profile path helpers now live in doctor legacy code. Core auth
+  profile path helpers expose SQLite KV store identity and display locations,
+  not `auth-profiles.json` or `auth-state.json` runtime paths.
 - Subagent run recovery and OpenRouter model capability cache runtime modules
   now keep SQLite snapshot readers/writers separate from doctor-only legacy JSON
   import helpers.
@@ -640,6 +646,9 @@ sessionId}` and session key context.
   canonical credential store is SQLite; `auth-profiles.json`, per-agent
   `auth.json`, and shared `credentials/oauth.json` are doctor migration inputs
   that are removed after import.
+- Auth profile save/state tests now assert SQLite KV rows directly and only use
+  legacy auth-profile filenames for doctor migration inputs or explicit
+  "file absent" assertions.
 - Hermes secret migration plans and applies imported API-key profiles directly
   into the SQLite auth-profile store. It no longer writes or verifies
   `auth-profiles.json` as an intermediate target.
