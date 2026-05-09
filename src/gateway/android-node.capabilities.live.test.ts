@@ -59,7 +59,7 @@ function readString(value: unknown): string | null {
 
 function expectNonEmptyString(value: unknown, label: string): string {
   const text = readString(value);
-  expect(text, label).toEqual(expect.any(String));
+  expect(text, label).not.toBeNull();
   return text as string;
 }
 
