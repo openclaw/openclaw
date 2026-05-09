@@ -107,10 +107,10 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
 }
 
 function expectGlobalHookRunner(runner: ReturnType<typeof getGlobalHookRunner>): GlobalHookRunner {
-  expect(runner).toEqual(expect.objectContaining({ hasHooks: expect.any(Function) }));
   if (runner === null) {
     throw new Error("Expected global hook runner");
   }
+  expect(typeof runner.hasHooks).toBe("function");
   return runner;
 }
 
