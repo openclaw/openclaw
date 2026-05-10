@@ -3,6 +3,7 @@ import { isToolAllowedByPolicies } from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
@@ -124,7 +125,7 @@ export function collectAgentChannelMessageToolWarnings(cfg: OpenClawConfig): str
   const agentById = new Map(
     agentList
       .filter((a): a is { id: string; tools?: AgentToolsConfig } => Boolean(a?.id))
-      .map((a) => [a.id, a.tools]),
+      .map((a) => [normalizeAgentId(a.id), a.tools]),
   );
   const warned = new Set<string>();
   const warnings: string[] = [];
@@ -133,16 +134,17 @@ export function collectAgentChannelMessageToolWarnings(cfg: OpenClawConfig): str
       continue;
     }
     const { agentId } = binding;
+    const normalizedId = normalizeAgentId(agentId);
     const channel = binding.match.channel;
-    if (warned.has(agentId)) {
+    if (warned.has(normalizedId)) {
       continue;
     }
-    const agentTools = agentById.get(agentId);
+    const agentTools = agentById.get(normalizedId);
     const available = resolveMessageToolAvailability({ globalTools: cfg.tools, agentTools });
     if (!available) {
-      warned.add(agentId);
+      warned.add(normalizedId);
       warnings.push(
-        `- agent "${agentId}" is bound to channel "${channel}" but the message tool is not in its resolved tool policy. Channel explicit actions (sendAttachment, reply, thread-reply) will fail. Add "message" to agents.list[].tools.allow or use a profile that includes it (e.g. tools.profile: "messaging").`,
+        `- agent "${normalizedId}" is bound to channel "${channel}" but the message tool is not in its resolved tool policy. Channel explicit actions (sendAttachment, reply, thread-reply) will fail. Add "message" to agents.list[].tools.allow or use a profile that includes it (e.g. tools.profile: "messaging").`,
       );
     }
   }

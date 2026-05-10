@@ -599,4 +599,38 @@ describe("collectAgentChannelMessageToolWarnings", () => {
 
     expect(warnings).toHaveLength(1);
   });
+
+  it("warns when binding agentId casing differs from agents.list id (mixed-case normalization)", () => {
+    const warnings = collectAgentChannelMessageToolWarnings({
+      bindings: [{ agentId: "commander", match: { channel: "discord" } }],
+      agents: {
+        list: [
+          {
+            id: "Commander",
+            tools: { allow: ["read", "write"] },
+          },
+        ],
+      },
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("commander");
+    expect(warnings[0]).toContain('"discord"');
+  });
+
+  it("does not warn when mixed-case agent id has message tool in its allow list", () => {
+    const warnings = collectAgentChannelMessageToolWarnings({
+      bindings: [{ agentId: "commander", match: { channel: "discord" } }],
+      agents: {
+        list: [
+          {
+            id: "Commander",
+            tools: { allow: ["read", "message"] },
+          },
+        ],
+      },
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
 });
