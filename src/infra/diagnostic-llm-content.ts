@@ -12,8 +12,17 @@ export type DiagnosticModelContentCapturePolicy = {
   systemPrompt: boolean;
   /** Capture tool schemas/definitions presented to a model. */
   toolDefinitions: boolean;
+  /** Capture OTEL log body payloads when the legacy shorthand is enabled. */
+  logBodies: boolean;
   /** Whether any model-visible prompt/response/schema content is enabled. */
   anyModelContent: boolean;
+};
+
+export type DiagnosticModelCallContent = {
+  inputMessages?: unknown;
+  outputMessages?: unknown;
+  systemPrompt?: string;
+  toolDefinitions?: unknown;
 };
 
 const NO_MODEL_CONTENT_CAPTURE: DiagnosticModelContentCapturePolicy = Object.freeze({
@@ -23,6 +32,7 @@ const NO_MODEL_CONTENT_CAPTURE: DiagnosticModelContentCapturePolicy = Object.fre
   toolOutputs: false,
   systemPrompt: false,
   toolDefinitions: false,
+  logBodies: false,
   anyModelContent: false,
 });
 
@@ -43,6 +53,34 @@ function withDerivedFields(
   };
 }
 
+export function resolveDiagnosticCaptureContentValue(
+  captureContent: unknown,
+): DiagnosticModelContentCapturePolicy {
+  if (captureContent === true) {
+    return withDerivedFields({
+      inputMessages: true,
+      outputMessages: true,
+      toolInputs: true,
+      toolOutputs: true,
+      systemPrompt: false,
+      toolDefinitions: true,
+      logBodies: true,
+    });
+  }
+  if (!isRecord(captureContent) || captureContent.enabled !== true) {
+    return NO_MODEL_CONTENT_CAPTURE;
+  }
+  return withDerivedFields({
+    inputMessages: captureContent.inputMessages === true,
+    outputMessages: captureContent.outputMessages === true,
+    toolInputs: captureContent.toolInputs === true,
+    toolOutputs: captureContent.toolOutputs === true,
+    systemPrompt: captureContent.systemPrompt === true,
+    toolDefinitions: captureContent.toolDefinitions === true,
+    logBodies: false,
+  });
+}
+
 /** Resolves model-content diagnostic capture from config, defaulting to no content capture. */
 export function resolveDiagnosticModelContentCapturePolicy(
   config: unknown,
@@ -58,27 +96,5 @@ export function resolveDiagnosticModelContentCapturePolicy(
   if (!isRecord(otel) || otel.enabled !== true || otel.traces === false) {
     return NO_MODEL_CONTENT_CAPTURE;
   }
-
-  const captureContent = otel.captureContent;
-  if (captureContent === true) {
-    return withDerivedFields({
-      inputMessages: true,
-      outputMessages: true,
-      toolInputs: true,
-      toolOutputs: true,
-      systemPrompt: false,
-      toolDefinitions: true,
-    });
-  }
-  if (!isRecord(captureContent) || captureContent.enabled !== true) {
-    return NO_MODEL_CONTENT_CAPTURE;
-  }
-  return withDerivedFields({
-    inputMessages: captureContent.inputMessages === true,
-    outputMessages: captureContent.outputMessages === true,
-    toolInputs: captureContent.toolInputs === true,
-    toolOutputs: captureContent.toolOutputs === true,
-    systemPrompt: captureContent.systemPrompt === true,
-    toolDefinitions: captureContent.toolDefinitions === true,
-  });
+  return resolveDiagnosticCaptureContentValue(otel.captureContent);
 }

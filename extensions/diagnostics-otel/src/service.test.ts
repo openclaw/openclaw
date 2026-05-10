@@ -4022,6 +4022,106 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("enables model and tool content capture for boolean captureContent", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      captureContent: true,
+    });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      inputMessages: ["user prompt"],
+      outputMessages: ["model reply"],
+      systemPrompt: "system prompt",
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitDiagnosticEvent({
+      type: "tool.execution.completed",
+      runId: "run-1",
+      toolName: "read",
+      toolCallId: "tool-1",
+      durationMs: 20,
+      toolInput: "tool input",
+      toolOutput: "tool output",
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const toolCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.tool.execution",
+    );
+    expect(modelCall?.[1]).toEqual({
+      attributes: expect.objectContaining({
+        "openclaw.content.input_messages": "user prompt",
+        "openclaw.content.output_messages": "model reply",
+      }),
+      startTime: expect.any(Number),
+    });
+    expect(modelCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.content.system_prompt": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    expect(toolCall?.[1]).toEqual({
+      attributes: expect.objectContaining({
+        "openclaw.content.tool_input": "tool input",
+        "openclaw.content.tool_output": "tool output",
+      }),
+      startTime: expect.any(Number),
+    });
+    await service.stop?.(ctx);
+  });
+
+  test("does not export content for disabled or invalid captureContent config", async () => {
+    for (const captureContent of [
+      { enabled: false, inputMessages: true },
+      { inputMessages: true },
+    ]) {
+      const service = createDiagnosticsOtelService();
+      const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+        traces: true,
+        metrics: true,
+        captureContent,
+      });
+      await service.start(ctx);
+
+      emitDiagnosticEvent({
+        type: "model.call.completed",
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+        inputMessages: ["private user prompt"],
+        outputMessages: ["private model reply"],
+      } as Parameters<typeof emitDiagnosticEvent>[0]);
+      await flushDiagnosticEvents();
+
+      const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+        (call) => call[0] === "openclaw.model.call",
+      );
+      expect(modelCall?.[1]).toEqual({
+        attributes: expect.not.objectContaining({
+          "openclaw.content.input_messages": expect.anything(),
+          "openclaw.content.output_messages": expect.anything(),
+        }),
+        startTime: expect.any(Number),
+      });
+      await service.stop?.(ctx);
+      telemetryState.tracer.startSpan.mockClear();
+    }
+  });
+
   test("exports bounded redacted content when capture fields are opted in", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
