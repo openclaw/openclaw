@@ -214,6 +214,34 @@ export const CreateResponseBodySchema = z
       })
       .optional(),
     truncation: z.enum(["auto", "disabled"]).optional(),
+    // Phase 1: accepted for OpenAI parity; only `format.type === "text"` is
+    // honored at runtime. The OpenAI Node SDK and @langchain/openai >= 1.x
+    // auto-populate `text: { format: { type: "text" } }` on every
+    // /v1/responses request, so rejecting unknown fields here breaks any
+    // current OpenAI-compatible client (e.g. n8n's AI Agent).
+    // `json_schema` and `json_object` formats are not yet enforced; see the
+    // schema test for the parse-time contract.
+    text: z
+      .object({
+        format: z
+          .discriminatedUnion("type", [
+            z.object({ type: z.literal("text") }).strict(),
+            z
+              .object({
+                type: z.literal("json_schema"),
+                name: z.string(),
+                schema: z.record(z.string(), z.unknown()),
+                description: z.string().optional(),
+                strict: z.boolean().optional(),
+              })
+              .strict(),
+            z.object({ type: z.literal("json_object") }).strict(),
+          ])
+          .optional(),
+        verbosity: z.enum(["low", "medium", "high"]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
