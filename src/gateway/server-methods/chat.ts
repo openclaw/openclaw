@@ -250,7 +250,7 @@ async function resolveAttachmentLooksLikeImage(
     (trustedFileNameMime && !isGenericAttachmentMime(trustedFileNameMime) && trustedFileNameMime) ||
     sniffedMime ||
     trustedProvidedMime ||
-    fileNameMime;
+    trustedFileNameMime;
   return finalMime?.startsWith("image/") ?? false;
 }
 
