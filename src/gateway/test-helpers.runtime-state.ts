@@ -37,6 +37,7 @@ type GatewayTestHoistedState = {
       provider: string;
       contextWindow?: number;
       reasoning?: boolean;
+      input?: string[];
     }>;
   };
   cronIsolatedRun: Mock<CronIsolatedRunFn>;
@@ -69,7 +70,6 @@ type GatewayTestHoistedState = {
     gatewayAuth: Record<string, unknown> | undefined;
     gatewayControlUi: Record<string, unknown> | undefined;
     hooksConfig: HooksConfig | undefined;
-    canvasHostPort: number | undefined;
     legacyIssues: Array<{ path: string; message: string }>;
     legacyParsed: Record<string, unknown>;
     migrationConfig: Record<string, unknown> | null;
@@ -129,7 +129,6 @@ const gatewayTestHoisted = vi.hoisted(() => {
       gatewayAuth: undefined,
       gatewayControlUi: undefined,
       hooksConfig: undefined,
-      canvasHostPort: undefined,
       legacyIssues: [],
       legacyParsed: {},
       migrationConfig: null,

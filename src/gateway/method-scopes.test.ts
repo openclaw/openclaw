@@ -29,16 +29,32 @@ afterEach(() => {
 describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
+    ["tasks.list", ["operator.read"]],
+    ["tasks.get", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
+    ["tasks.cancel", ["operator.write"]],
     ["tools.invoke", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
+    ["environments.list", ["operator.read"]],
+    ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
+    ["talk.client.create", ["operator.write"]],
+    ["talk.client.toolCall", ["operator.write"]],
+    ["talk.session.create", ["operator.write"]],
+    ["talk.session.join", ["operator.write"]],
+    ["talk.session.appendAudio", ["operator.write"]],
+    ["talk.session.startTurn", ["operator.write"]],
+    ["talk.session.endTurn", ["operator.write"]],
+    ["talk.session.cancelTurn", ["operator.write"]],
+    ["talk.session.cancelOutput", ["operator.write"]],
+    ["talk.session.submitToolResult", ["operator.write"]],
+    ["talk.session.close", ["operator.write"]],
     ["update.status", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
@@ -49,11 +65,13 @@ describe("method scope resolution", () => {
   });
 
   it("leaves node-only pending drain outside operator scopes", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toEqual([]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toStrictEqual([]);
   });
 
   it("returns empty scopes for unknown methods", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method")).toEqual([]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method")).toStrictEqual(
+      [],
+    );
   });
 
   it("reads plugin-registered gateway method scopes from the active plugin registry", () => {
@@ -92,6 +110,30 @@ describe("operator scope authorization", () => {
       allowed: false,
       missingScope: "operator.write",
     });
+  });
+
+  it("allows operator.write clients to use unified Talk sessions", () => {
+    for (const method of [
+      "talk.client.create",
+      "talk.client.toolCall",
+      "talk.session.create",
+      "talk.session.join",
+      "talk.session.appendAudio",
+      "talk.session.startTurn",
+      "talk.session.endTurn",
+      "talk.session.cancelTurn",
+      "talk.session.cancelOutput",
+      "talk.session.submitToolResult",
+      "talk.session.close",
+    ]) {
+      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+        allowed: true,
+      });
+      expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
+        allowed: false,
+        missingScope: "operator.write",
+      });
+    }
   });
 
   it("requires admin for browser.request", () => {
@@ -184,20 +226,21 @@ describe("core gateway method classification", () => {
   it("treats node-role methods as classified even without operator scopes", () => {
     expect(isGatewayMethodClassified("node.pending.drain")).toBe(true);
     expect(isGatewayMethodClassified("node.pending.pull")).toBe(true);
+    expect(isGatewayMethodClassified("node.pluginSurface.refresh")).toBe(true);
   });
 
   it("classifies every exposed core gateway handler method", () => {
     const unclassified = Object.keys(coreGatewayHandlers).filter(
       (method) => !isGatewayMethodClassified(method),
     );
-    expect(unclassified).toEqual([]);
+    expect(unclassified).toStrictEqual([]);
   });
 
   it("classifies every listed gateway method name", () => {
     const unclassified = listGatewayMethods().filter(
       (method) => !isGatewayMethodClassified(method),
     );
-    expect(unclassified).toEqual([]);
+    expect(unclassified).toStrictEqual([]);
   });
 });
 

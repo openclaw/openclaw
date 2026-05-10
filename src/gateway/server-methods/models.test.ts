@@ -10,12 +10,15 @@ type Deferred<T> = {
 };
 
 function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((error: unknown) => void) | undefined;
   const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
     reject = rejectPromise;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -23,6 +26,7 @@ describe("models.list", () => {
   it("does not block the configured view on slow model catalog discovery", async () => {
     const catalog = createDeferred<never>();
     const respond = vi.fn();
+    const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
 
     vi.useFakeTimers();
     try {
@@ -51,7 +55,7 @@ describe("models.list", () => {
             };
             return config as unknown as OpenClawConfig;
           },
-          loadGatewayModelCatalog: vi.fn(() => catalog.promise),
+          loadGatewayModelCatalog,
           logGateway: {
             debug: vi.fn(),
           },
@@ -74,6 +78,7 @@ describe("models.list", () => {
         },
         undefined,
       );
+      expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: true });
     } finally {
       vi.useRealTimers();
     }
@@ -82,6 +87,7 @@ describe("models.list", () => {
   it("keeps the all view exact instead of timing out to a partial catalog", async () => {
     const catalog = createDeferred<[{ id: string; name: string; provider: string }]>();
     const respond = vi.fn();
+    const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
 
     vi.useFakeTimers();
     try {
@@ -98,7 +104,7 @@ describe("models.list", () => {
         isWebchatConnect: () => false,
         context: {
           getRuntimeConfig: () => ({}) as OpenClawConfig,
-          loadGatewayModelCatalog: vi.fn(() => catalog.promise),
+          loadGatewayModelCatalog,
           logGateway: {
             debug: vi.fn(),
           },
@@ -116,6 +122,7 @@ describe("models.list", () => {
         { models: [{ id: "gpt-test", name: "GPT Test", provider: "openai" }] },
         undefined,
       );
+      expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
     } finally {
       vi.useRealTimers();
     }

@@ -68,9 +68,6 @@ import {
   isAdminOnlyMethod,
 } from "./subagent-spawn.runtime.js";
 import {
-  SUBAGENT_SPAWN_CONTEXT_MODES,
-  SUBAGENT_SPAWN_MODES,
-  SUBAGENT_SPAWN_SANDBOX_MODES,
   type SpawnSubagentContextMode,
   type SpawnSubagentMode,
   type SpawnSubagentSandboxMode,

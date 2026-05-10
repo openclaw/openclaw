@@ -1,6 +1,8 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
   applyProviderConfigDefaultsForConfig,
   normalizeProviderConfigForConfigDefaults,
@@ -10,6 +12,9 @@ import type { ModelDefinitionConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type WarnState = { warned: boolean };
+type ProviderPolicyDefaultsOptions = {
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+};
 
 let defaultWarnState: WarnState = { warned: false };
 
@@ -134,7 +139,10 @@ export function applyTalkConfigNormalization(config: OpenClawConfig): OpenClawCo
   return normalizeTalkConfig(config);
 }
 
-export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
+export function applyModelDefaults(
+  cfg: OpenClawConfig,
+  options: ProviderPolicyDefaultsOptions = {},
+): OpenClawConfig {
   let mutated = false;
   let nextCfg = cfg;
 
@@ -145,6 +153,7 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
       const normalizedProvider = normalizeProviderConfigForConfigDefaults({
         provider: providerId,
         providerConfig: provider,
+        manifestRegistry: options.manifestRegistry,
       });
       const models = normalizedProvider.models;
       if (!Array.isArray(models) || models.length === 0) {
@@ -247,9 +256,29 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
   if (!existingAgent) {
     return mutated ? nextCfg : cfg;
   }
-  const existingModels = existingAgent.models ?? {};
+
+  let nextAgent = existingAgent;
+  const normalizedModel = normalizeAgentModelConfigForDefaults(existingAgent.model);
+  if (normalizedModel !== existingAgent.model) {
+    nextAgent = { ...nextAgent, model: normalizedModel as typeof existingAgent.model };
+    mutated = true;
+  }
+
+  const rawExistingModels = existingAgent.models ?? {};
+  const existingModels = normalizeAgentModelMapForConfig(rawExistingModels);
+  if (existingModels !== rawExistingModels) {
+    mutated = true;
+  }
   if (Object.keys(existingModels).length === 0) {
-    return mutated ? nextCfg : cfg;
+    return mutated
+      ? {
+          ...nextCfg,
+          agents: {
+            ...nextCfg.agents,
+            defaults: nextAgent,
+          },
+        }
+      : cfg;
   }
 
   const nextModels: Record<string, { alias?: string }> = {
@@ -276,9 +305,41 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
     ...nextCfg,
     agents: {
       ...nextCfg.agents,
-      defaults: { ...existingAgent, models: nextModels },
+      defaults: { ...nextAgent, models: nextModels },
     },
   };
+}
+
+function normalizeAgentModelConfigForDefaults(value: unknown): unknown {
+  if (typeof value === "string") {
+    const normalized = normalizeAgentModelRefForConfig(value);
+    return normalized === value ? value : normalized;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+
+  const raw = value as Record<string, unknown>;
+  let mutated = false;
+  const next: Record<string, unknown> = { ...raw };
+  if (typeof raw.primary === "string") {
+    const primary = normalizeAgentModelRefForConfig(raw.primary);
+    if (primary !== raw.primary) {
+      next.primary = primary;
+      mutated = true;
+    }
+  }
+  if (Array.isArray(raw.fallbacks)) {
+    const rawFallbacks = raw.fallbacks;
+    const fallbacks = rawFallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+    if (fallbacks.some((fallback, index) => fallback !== rawFallbacks[index])) {
+      next.fallbacks = fallbacks;
+      mutated = true;
+    }
+  }
+  return mutated ? next : value;
 }
 
 export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
@@ -365,7 +426,10 @@ function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv):
   });
 }
 
-export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig {
+export function applyContextPruningDefaults(
+  cfg: OpenClawConfig,
+  options: ProviderPolicyDefaultsOptions = {},
+): OpenClawConfig {
   if (!cfg.agents?.defaults) {
     return cfg;
   }
@@ -377,6 +441,7 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
       provider: "anthropic",
       config: cfg,
       env: process.env,
+      manifestRegistry: options.manifestRegistry,
     }) ?? cfg
   );
 }

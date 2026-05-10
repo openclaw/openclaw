@@ -1,5 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { waitWhatsAppLogin, type ChannelsState } from "./channels.ts";
+import type { ChannelsStatusSnapshot } from "../types.ts";
+import { loadChannels, waitWhatsAppLogin, type ChannelsState } from "./channels.ts";
+
+function createDeferred<T>() {
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
 
 function createState(): ChannelsState {
   return {
@@ -18,6 +32,14 @@ function createState(): ChannelsState {
   };
 }
 
+function requireClientRequest(state: ChannelsState) {
+  const request = state.client?.request;
+  if (!request) {
+    throw new Error("Expected channels controller client request");
+  }
+  return vi.mocked(request);
+}
+
 describe("channels controller WhatsApp wait", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -25,7 +47,7 @@ describe("channels controller WhatsApp wait", () => {
 
   it("passes the currently displayed QR and replaces it when the login QR rotates", async () => {
     const state = createState();
-    const request = vi.mocked(state.client!.request);
+    const request = requireClientRequest(state);
     request.mockResolvedValueOnce({
       connected: false,
       message: "QR refreshed. Scan the latest code in WhatsApp → Linked Devices.",
@@ -44,5 +66,49 @@ describe("channels controller WhatsApp wait", () => {
     expect(state.whatsappLoginConnected).toBe(false);
     expect(state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,next-qr");
     expect(state.whatsappBusy).toBe(false);
+  });
+});
+
+describe("loadChannels", () => {
+  it("returns after a soft timeout while preserving the stale snapshot", async () => {
+    vi.useFakeTimers();
+    try {
+      const state = createState();
+      const previous: ChannelsStatusSnapshot = {
+        ts: 1,
+        channelOrder: ["nostr"],
+        channelLabels: { nostr: "Nostr" },
+        channels: {},
+        channelAccounts: {},
+        channelDefaultAccountId: {},
+      };
+      const next: ChannelsStatusSnapshot = {
+        ...previous,
+        ts: 2,
+      };
+      const deferred = createDeferred<ChannelsStatusSnapshot | null>();
+      const request = requireClientRequest(state);
+      request.mockReturnValueOnce(deferred.promise);
+      state.channelsSnapshot = previous;
+      state.channelsLastSuccess = 10;
+
+      const load = loadChannels(state, true, { softTimeoutMs: 100 });
+      await vi.advanceTimersByTimeAsync(100);
+      await load;
+
+      expect(state.channelsLoading).toBe(true);
+      expect(state.channelsSnapshot).toBe(previous);
+      expect(state.channelsLastSuccess).toBe(10);
+
+      deferred.resolve(next);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(state.channelsLoading).toBe(false);
+      expect(state.channelsSnapshot).toBe(next);
+      expect(state.channelsLastSuccess).toBeGreaterThan(10);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

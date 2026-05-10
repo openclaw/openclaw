@@ -25,6 +25,7 @@ export const DEFAULT_RESOURCE_LIMITS = {
   "live:droid": 4,
   "live:gemini": 4,
   "live:opencode": 4,
+  "live:openai": 1,
   npm: 10,
   service: 7,
 };
@@ -75,6 +76,7 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "bootstrap-persona",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
+  "stale-source-plugin-shadow",
   "tilde-log-path",
   "versioned-runtime-deps",
 ];
@@ -327,7 +329,12 @@ function laneCredentialRequirements(poolLane) {
   if (poolLane.name === "install-e2e-anthropic") {
     credentials.push("anthropic");
   }
-  if (poolLane.name === "openwebui" || poolLane.name === "openai-web-search-minimal") {
+  if (
+    poolLane.name === "openwebui" ||
+    poolLane.name === "openai-web-search-minimal" ||
+    poolLane.name === "live-codex-npm-plugin" ||
+    poolLane.name === "live-plugin-tool"
+  ) {
     credentials.push("openai");
   }
   return credentials;
@@ -365,7 +372,7 @@ function buildPlanJson(params) {
       bareImage: imageKinds.includes("bare"),
       e2eImage: imageKinds.length > 0,
       functionalImage: imageKinds.includes("functional"),
-      liveImage: scheduledLanes.some((poolLane) => poolLane.live),
+      liveImage: scheduledLanes.some((poolLane) => poolLane.needsLiveImage),
       package: lanesNeedOpenClawPackage(scheduledLanes),
     },
     profile: params.profile,

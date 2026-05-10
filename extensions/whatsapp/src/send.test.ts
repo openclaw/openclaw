@@ -28,7 +28,6 @@ function acceptedSendResult(kind: WhatsAppSendKind, id: string): WhatsAppSendRes
   return {
     kind,
     messageId: id,
-    messageIds: [id],
     keys: [{ id }],
     providerAccepted: true,
   };
@@ -142,6 +141,25 @@ describe("web outbound", () => {
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
+  });
+
+  it("sends newsletter messages via the active listener without composing presence", async () => {
+    const result = await sendMessageWhatsApp("120363401234567890@newsletter", "hi", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+    });
+
+    expect(result).toEqual({
+      messageId: "msg123",
+      toJid: "120363401234567890@newsletter",
+    });
+    expect(sendComposingTo).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "120363401234567890@newsletter",
+      "hi",
+      undefined,
+      undefined,
+    );
   });
 
   it("uses configured defaultAccount when outbound accountId is omitted", async () => {

@@ -50,6 +50,26 @@ async function waitForPluginEventHandlers(): Promise<void> {
   });
 }
 
+function requireFirstCommandRegistration(
+  registry: ReturnType<typeof createPluginRegistryFixture>["registry"]["registry"],
+) {
+  const registration = registry.commands[0];
+  if (!registration) {
+    throw new Error("expected first plugin command registration");
+  }
+  return registration;
+}
+
+function joinContextFragments(...fragments: Array<string | undefined>): string {
+  const present: string[] = [];
+  for (const fragment of fragments) {
+    if (fragment) {
+      present.push(fragment);
+    }
+  }
+  return present.join("\n\n");
+}
+
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -121,6 +141,144 @@ describe("host-hook fixture plugin contract", () => {
         }),
         expect.objectContaining({
           pluginId: "external-policy",
+          message: expect.stringContaining("only bundled plugins can claim reserved command"),
+        }),
+      ]),
+    );
+  });
+
+  it("allows the official npm Codex plugin to keep /codex command ownership", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const codexRoot = path.join("/tmp", ".openclaw", "npm", "node_modules", "@openclaw", "codex");
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "codex",
+        name: "Codex",
+        origin: "global",
+        rootDir: codexRoot,
+        source: path.join(codexRoot, "index.ts"),
+      }),
+      register(api) {
+        api.registerCommand({
+          name: "codex",
+          description: "Official npm Codex command",
+          ownership: "reserved",
+          handler: async () => ({ text: "ok" }),
+        });
+      },
+    });
+
+    expect(registry.registry.commands.map((entry) => entry.command.name)).toEqual(["codex"]);
+    expect(registry.registry.diagnostics).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "codex",
+          message: expect.stringContaining("only bundled plugins can claim reserved command"),
+        }),
+      ]),
+    );
+  });
+
+  it("allows the official ClawHub Codex plugin to keep /codex command ownership", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const codexRoot = path.join("/tmp", ".openclaw", "extensions", "codex");
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "codex",
+        name: "Codex",
+        packageName: "@openclaw/codex",
+        origin: "global",
+        rootDir: codexRoot,
+        source: path.join(codexRoot, "dist", "index.js"),
+      }),
+      register(api) {
+        api.registerCommand({
+          name: "codex",
+          description: "Official ClawHub Codex command",
+          ownership: "reserved",
+          handler: async () => ({ text: "ok" }),
+        });
+      },
+    });
+
+    expect(registry.registry.commands.map((entry) => entry.command.name)).toEqual(["codex"]);
+    expect(registry.registry.diagnostics).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "codex",
+          message: expect.stringContaining("only bundled plugins can claim reserved command"),
+        }),
+      ]),
+    );
+  });
+
+  it("rejects non-official global Codex plugins from /codex command ownership", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const codexRoot = path.join("/tmp", ".openclaw", "extensions", "codex");
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "codex",
+        name: "Codex",
+        origin: "global",
+        rootDir: codexRoot,
+        source: path.join(codexRoot, "dist", "index.js"),
+      }),
+      register(api) {
+        api.registerCommand({
+          name: "codex",
+          description: "Impostor Codex command",
+          ownership: "reserved",
+          handler: async () => ({ text: "no" }),
+        });
+      },
+    });
+
+    expect(registry.registry.commands).toHaveLength(0);
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "codex",
+          message: expect.stringContaining("only bundled plugins can claim reserved command"),
+        }),
+      ]),
+    );
+  });
+
+  it("rejects workspace Codex plugins that spoof the official package name", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const codexRoot = path.join("/tmp", "workspace", "codex");
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "codex",
+        name: "Codex",
+        packageName: "@openclaw/codex",
+        origin: "workspace",
+        rootDir: codexRoot,
+        source: path.join(codexRoot, "dist", "index.js"),
+      }),
+      register(api) {
+        api.registerCommand({
+          name: "codex",
+          description: "Workspace Codex command",
+          ownership: "reserved",
+          handler: async () => ({ text: "no" }),
+        });
+      },
+    });
+
+    expect(registry.registry.commands).toHaveLength(0);
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "codex",
           message: expect.stringContaining("only bundled plugins can claim reserved command"),
         }),
       ]),
@@ -259,6 +417,234 @@ describe("host-hook fixture plugin contract", () => {
       ),
     ).resolves.toEqual({ params: { command: "patched" } });
     expect(seenParams).toEqual([{ command: "patched" }]);
+  });
+
+  it("preserves trusted policy derived paths when params are unchanged", async () => {
+    const seenDerivedPaths: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-inspector",
+        pluginName: "Trusted Inspector",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenDerivedPaths.push(event.derivedPaths);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        {
+          toolName: "apply_patch",
+          params: { input: "*** Update File: old.ts" },
+          derivedPaths: ["old.ts"],
+        },
+        { toolName: "apply_patch" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(seenDerivedPaths).toEqual([["old.ts"]]);
+  });
+
+  it("ignores non-plain trusted policy params when re-deriving paths", async () => {
+    const seenParams: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-bad",
+        pluginName: "Trusted Bad",
+        source: "test",
+        policy: {
+          id: "bad",
+          description: "bad",
+          evaluate: () => ({ params: "not-a-plain-object" as never }),
+        },
+      },
+      {
+        pluginId: "trusted-inspector",
+        pluginName: "Trusted Inspector",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenParams.push(event.params);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        { toolName: "apply_patch", params: { input: "*** Add File: old.ts" } },
+        { toolName: "apply_patch" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(seenParams).toEqual([{ input: "*** Add File: old.ts" }]);
+  });
+
+  it("does not let trusted policies mutate derived paths for later policies", async () => {
+    const seenDerivedPaths: unknown[] = [];
+    let mutationRejected = false;
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-a",
+        pluginName: "Trusted A",
+        source: "test",
+        policy: {
+          id: "mutate",
+          description: "mutate",
+          evaluate: (event) => {
+            try {
+              (event.derivedPaths as string[] | undefined)?.push("mutated.ts");
+            } catch {
+              mutationRejected = true;
+            }
+            return undefined;
+          },
+        },
+      },
+      {
+        pluginId: "trusted-b",
+        pluginName: "Trusted B",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenDerivedPaths.push(event.derivedPaths);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        {
+          toolName: "apply_patch",
+          params: { input: "*** Update File: old.ts" },
+          derivedPaths: ["old.ts"],
+        },
+        { toolName: "apply_patch" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(mutationRejected).toBe(true);
+    expect(seenDerivedPaths).toEqual([["old.ts"]]);
+  });
+
+  it("clears stale derived paths when trusted policy rewrites remove targets", async () => {
+    const seenDerivedPaths: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-a",
+        pluginName: "Trusted A",
+        source: "test",
+        policy: {
+          id: "params",
+          description: "params",
+          evaluate: () => ({ params: { input: "not a patch" } }),
+        },
+      },
+      {
+        pluginId: "trusted-b",
+        pluginName: "Trusted B",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenDerivedPaths.push(event.derivedPaths);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        {
+          toolName: "apply_patch",
+          params: { patch: "*** Update File: old.ts" },
+          derivedPaths: ["old.ts"],
+        },
+        { toolName: "apply_patch" },
+        {
+          deriveEvent(params) {
+            return typeof params.patch === "string" ? { derivedPaths: ["old.ts"] } : {};
+          },
+        },
+      ),
+    ).resolves.toEqual({ params: { input: "not a patch" } });
+    expect(seenDerivedPaths).toEqual([undefined]);
+  });
+
+  it("does not let derived param callbacks override core trusted policy event fields", async () => {
+    const seenEvents: Array<{ params: unknown; derivedPaths: unknown }> = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-a",
+        pluginName: "Trusted A",
+        source: "test",
+        policy: {
+          id: "params",
+          description: "params",
+          evaluate: () => ({ params: { input: "*** Update File: new.ts" } }),
+        },
+      },
+      {
+        pluginId: "trusted-b",
+        pluginName: "Trusted B",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenEvents.push({ params: event.params, derivedPaths: event.derivedPaths });
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        {
+          toolName: "apply_patch",
+          params: { input: "*** Update File: old.ts" },
+          derivedPaths: ["old.ts"],
+        },
+        { toolName: "apply_patch" },
+        {
+          deriveEvent() {
+            return {
+              params: { input: "malicious override" },
+              derivedPaths: ["new.ts"],
+            } as never;
+          },
+        },
+      ),
+    ).resolves.toEqual({ params: { input: "*** Update File: new.ts" } });
+    expect(seenEvents).toEqual([
+      {
+        params: { input: "*** Update File: new.ts" },
+        derivedPaths: ["new.ts"],
+      },
+    ]);
   });
 
   it("validates plugin-owned JSON values as plain JSON-compatible data", () => {
@@ -582,7 +968,7 @@ describe("host-hook fixture plugin contract", () => {
     );
     await expect(
       projectPluginSessionExtensions({ sessionKey: "agent:main:main", entry }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 
   it("skips throwing session extension projectors without losing other projections", () => {
@@ -812,9 +1198,11 @@ describe("host-hook fixture plugin contract", () => {
     );
 
     expect(
-      [queuedContext.prependContext, queuedContext.appendContext, hookContext?.prependContext]
-        .filter(Boolean)
-        .join("\n\n"),
+      joinContextFragments(
+        queuedContext.prependContext,
+        queuedContext.appendContext,
+        hookContext?.prependContext,
+      ),
     ).toContain("approval workflow resumed");
     expect(hookContext?.prependContext).toBe("fixture turn context");
   });
@@ -1167,7 +1555,7 @@ describe("host-hook fixture plugin contract", () => {
     expect(validatePluginsUiDescriptorsParams({ pluginId: "host-hook-fixture" })).toBe(false);
   });
 
-  it("enforces command requiredScopes for gateway clients while preserving text command continuations", async () => {
+  it("enforces command requiredScopes for gateway clients and command owners", async () => {
     const handlerCalls: string[] = [];
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -1190,8 +1578,7 @@ describe("host-hook fixture plugin contract", () => {
         });
       },
     });
-    const registration = registry.registry.commands[0];
-    expect(registration).toBeTruthy();
+    const registration = requireFirstCommandRegistration(registry.registry);
     const command = {
       ...registration.command,
       pluginId: registration.pluginId,
@@ -1222,6 +1609,7 @@ describe("host-hook fixture plugin contract", () => {
         senderId: "owner",
         channel: "whatsapp",
         isAuthorizedSender: true,
+        senderIsOwner: true,
         sessionKey: "agent:main:main",
         commandBody: "/approval-fixture resume-text",
         config,
@@ -1567,8 +1955,8 @@ describe("host-hook fixture plugin contract", () => {
 
     expect(parityMap).toHaveLength(8);
     for (const [entryPoint, seam] of parityMap) {
-      expect(entryPoint).toBeTruthy();
-      expect(seam).toBeTruthy();
+      expect(entryPoint).not.toBe("");
+      expect(seam).not.toBe("");
       expect(seam).not.toContain("Plan Mode");
     }
   });
@@ -1694,7 +2082,7 @@ describe("host-hook fixture plugin contract", () => {
       "session:disable:",
       "runtime:disable:",
     ]);
-    expect(listPluginSessionSchedulerJobs("cleanup-fixture")).toEqual([]);
+    expect(listPluginSessionSchedulerJobs("cleanup-fixture")).toStrictEqual([]);
   });
 
   it("keeps scheduler job records when cleanup fails so cleanup can retry", async () => {
@@ -1815,7 +2203,7 @@ describe("host-hook fixture plugin contract", () => {
         nextRegistry: next,
       }),
     ).resolves.toMatchObject({ failures: [] });
-    expect(cleanupEvents).toEqual([]);
+    expect(cleanupEvents).toStrictEqual([]);
     expect(listPluginSessionSchedulerJobs("restart-fixture")).toEqual([
       {
         id: "shared-job",
@@ -1828,7 +2216,7 @@ describe("host-hook fixture plugin contract", () => {
 
   it("does not let stale scheduler cleanup delete a newer job generation", async () => {
     let releaseCleanup: (() => void) | undefined;
-    let markCleanupStarted!: () => void;
+    let markCleanupStarted: (() => void) | undefined;
     const cleanupStartedPromise = new Promise<void>((resolve) => {
       markCleanupStarted = resolve;
     });
@@ -1846,6 +2234,9 @@ describe("host-hook fixture plugin contract", () => {
           sessionKey: "agent:main:main",
           kind: "monitor",
           cleanup: async () => {
+            if (!markCleanupStarted) {
+              throw new Error("Expected scheduler cleanup start callback to be initialized");
+            }
             markCleanupStarted();
             await new Promise<void>((resolve) => {
               releaseCleanup = resolve;
@@ -1879,7 +2270,10 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    releaseCleanup?.();
+    if (!releaseCleanup) {
+      throw new Error("Expected scheduler cleanup release callback to be initialized");
+    }
+    releaseCleanup();
     await expect(cleanupPromise).resolves.toMatchObject({ failures: [] });
     expect(listPluginSessionSchedulerJobs("scheduler-race")).toEqual([
       {
@@ -1943,7 +2337,7 @@ describe("host-hook fixture plugin contract", () => {
         }),
       }),
     ]);
-    expect(listPluginSessionSchedulerJobs("snapshot-fixture")).toEqual([]);
+    expect(listPluginSessionSchedulerJobs("snapshot-fixture")).toStrictEqual([]);
   });
 
   it("removes persistent plugin-owned session state and pending injections during cleanup", async () => {

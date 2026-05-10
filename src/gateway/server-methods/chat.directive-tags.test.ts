@@ -47,7 +47,9 @@ const mockState = vi.hoisted(() => ({
     };
   }>,
   dispatchError: null as Error | null,
+  dispatchErrorAfterAgentRunStart: null as Error | null,
   triggerAgentRunStart: false,
+  onAfterAgentRunStart: null as (() => void) | null,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
   lastDispatchCtx: undefined as MsgContext | undefined,
@@ -69,6 +71,8 @@ const mockState = vi.hoisted(() => ({
   sandboxWorkspace: null as { workspaceDir: string; containerWorkdir?: string } | null,
   stageSandboxMediaError: null as Error | null,
   stagedRelativePaths: null as string[] | null,
+  hasBeforeAgentRunHooks: false,
+  dispatchBlockedByBeforeAgentRun: false,
   // `unstagedSources` lets tests simulate partial staging failure: absolute
   // source paths listed here are excluded from the returned `staged` map even
   // though ctx still carries their rewritten paths. This mirrors how the real
@@ -76,6 +80,16 @@ const mockState = vi.hoisted(() => ({
   unstagedSources: null as string[] | null,
   deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
 }));
+
+function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
+  const entries: Array<Record<string, unknown>> = [];
+  for (const line of fs.readFileSync(transcriptPath, "utf-8").split("\n")) {
+    if (line.length > 0) {
+      entries.push(JSON.parse(line) as Record<string, unknown>);
+    }
+  }
+  return entries;
+}
 
 const bindingMocks = vi.hoisted(() => ({
   resolveByConversation: vi.fn((_ref: unknown) => null as { targetSessionKey?: string } | null),
@@ -176,6 +190,10 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       }
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
+        mockState.onAfterAgentRunStart?.();
+      }
+      if (mockState.dispatchErrorAfterAgentRunStart) {
+        throw mockState.dispatchErrorAfterAgentRunStart;
       }
       if (mockState.dispatchedReplies.length > 0) {
         for (const reply of mockState.dispatchedReplies) {
@@ -194,7 +212,12 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       }
       params.dispatcher.markComplete();
       await params.dispatcher.waitForIdle();
-      return { ok: true };
+      return {
+        ok: true,
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+        ...(mockState.dispatchBlockedByBeforeAgentRun ? { beforeAgentRunBlocked: true } : {}),
+      };
     },
   ),
 }));
@@ -211,6 +234,13 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
     }),
   };
 });
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => ({
+    hasHooks: (hookName: string) =>
+      hookName === "before_agent_run" && mockState.hasBeforeAgentRunHooks,
+  }),
+}));
 
 vi.mock("../../sessions/transcript-events.js", () => ({
   emitSessionTranscriptUpdate: vi.fn(
@@ -417,6 +447,7 @@ function createChatContext(): Pick<
     logGateway: {
       warn: vi.fn(),
       debug: vi.fn(),
+      error: vi.fn(),
     } as unknown as GatewayRequestContext["logGateway"],
   };
 }
@@ -500,8 +531,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.finalPayload = null;
     mockState.dispatchedReplies = [];
     mockState.dispatchError = null;
+    mockState.dispatchErrorAfterAgentRunStart = null;
     mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
+    mockState.onAfterAgentRunStart = null;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
     mockState.lastDispatchCtx = undefined;
@@ -522,6 +555,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.stagedRelativePaths = null;
     mockState.unstagedSources = null;
     mockState.deleteMediaBufferCalls = [];
+    mockState.hasBeforeAgentRunHooks = false;
+    mockState.dispatchBlockedByBeforeAgentRun = false;
   });
 
   it("registers tool-event recipients for clients advertising tool-events capability", async () => {
@@ -715,7 +750,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("does not persist agent media supplements when no playable media resolves", async () => {
+  it("does not mirror agent-run stale media final text from live delivery", async () => {
     const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-stale-tts-");
     const staleAudioPath = path.join(transcriptDir, "stale.mp3");
     mockState.config = {
@@ -754,7 +789,63 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant",
     );
-    expect(assistantUpdates).toEqual([]);
+    // Agent-run delivery is a live projection; Pi message_end owns persisted
+    // assistant transcript entries, including stale media/text final payloads.
+    expect(assistantUpdates).toStrictEqual([]);
+    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
+    const assistantEntries = transcriptLines.filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    );
+    expect(assistantEntries).toStrictEqual([]);
+  });
+
+  it("does not mirror normal agent-run final text from live delivery", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-text-only-");
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "It's 11:52 AM EDT.",
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-text-only",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    // Normal agent-run final text must not be mirrored into JSONL by WebChat;
+    // Pi persists the model-visible assistant turn from message_end.
+    expect(assistantUpdates).toStrictEqual([]);
+    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
+    const assistantEntries = transcriptLines.filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    );
+    expect(assistantEntries).toStrictEqual([]);
   });
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
@@ -838,7 +929,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.dispatchedReplies = [
       {
         kind: "final",
-        payload: { text: "Reasoning:\n_step_", isReasoning: true },
+        payload: { text: "step", isReasoning: true },
       },
       {
         kind: "final",
@@ -1104,6 +1195,28 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ExplicitDeliverRoute: true,
         AccountId: "default",
         MessageThreadId: 42,
+      }),
+    );
+  });
+
+  it("chat.send marks user slash commands as text command sources", async () => {
+    createTranscriptFixture("openclaw-chat-send-text-command-source-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-text-command-source",
+      message: "/codex status",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        BodyForCommands: "/codex status",
+        CommandSource: "text",
       }),
     );
   });
@@ -1889,7 +2002,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.GatewayClientScopes).toEqual([]);
+    expect(mockState.lastDispatchCtx?.GatewayClientScopes).toStrictEqual([]);
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("/scopecheck");
   });
 
@@ -1971,6 +2084,92 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(finalBroadcast).toBeUndefined();
   });
 
+  it("does not emit pre-gate user transcript content when before_agent_run hooks are registered", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-before-run-gate-");
+    mockState.finalText = "ok";
+    mockState.triggerAgentRunStart = true;
+    mockState.hasBeforeAgentRunHooks = true;
+    let userUpdateCountAtAgentStart = 0;
+    mockState.onAfterAgentRunStart = () => {
+      userUpdateCountAtAgentStart = mockState.emittedTranscriptUpdates.filter(
+        (update) =>
+          typeof update.message === "object" &&
+          update.message !== null &&
+          (update.message as { role?: unknown }).role === "user",
+      ).length;
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-before-run-gate",
+      message: "secret prompt that may be blocked",
+      expectBroadcast: false,
+    });
+
+    expect(userUpdateCountAtAgentStart).toBe(0);
+    const userUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "user",
+    );
+    expect(userUpdates).toHaveLength(0);
+  });
+
+  it("does not emit raw user transcript content when before_agent_run blocks without a persisted marker", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-blocked-live-signal-");
+    mockState.finalText = "The agent cannot read this message.";
+    mockState.triggerAgentRunStart = true;
+    mockState.hasBeforeAgentRunHooks = true;
+    mockState.dispatchBlockedByBeforeAgentRun = true;
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-blocked-live-signal",
+      message: "secret prompt blocked before persistence",
+      expectBroadcast: false,
+    });
+
+    const userUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "user",
+    );
+    expect(userUpdates).toHaveLength(0);
+  });
+
+  it("does not emit live user transcript content when before_agent_run hooks are present and the agent fails", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-gate-pass-error-");
+    mockState.triggerAgentRunStart = true;
+    mockState.hasBeforeAgentRunHooks = true;
+    mockState.dispatchErrorAfterAgentRunStart = new Error("model unavailable");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-gate-pass-error",
+      message: "prompt allowed before model error",
+      expectBroadcast: false,
+    });
+
+    const userUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "user",
+    );
+    expect(userUpdates).toHaveLength(0);
+  });
+
   it("adds persisted media paths to the user transcript update", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-images-");
     mockState.finalText = "ok";
@@ -2033,15 +2232,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             MediaTypes?: string[];
           }
         | undefined;
-      expect(message).toBeDefined();
-      expect(message?.content).toBe("edit these");
-      expect(message?.MediaPath).toBe("/tmp/chat-send-image-a.png");
-      expect(message?.MediaPaths).toEqual([
+      if (!message) {
+        throw new Error("expected user transcript update with media metadata");
+      }
+      expect(message.content).toBe("edit these");
+      expect(message.MediaPath).toBe("/tmp/chat-send-image-a.png");
+      expect(message.MediaPaths).toEqual([
         "/tmp/chat-send-image-a.png",
         "/tmp/chat-send-image-b.jpg",
       ]);
-      expect(message?.MediaType).toBe("image/png");
-      expect(message?.MediaTypes).toEqual(["image/png", "image/jpeg"]);
+      expect(message.MediaType).toBe("image/png");
+      expect(message.MediaTypes).toEqual(["image/png", "image/jpeg"]);
       expect(mockState.lastDispatchCtx?.MediaPath).toBeUndefined();
       expect(mockState.lastDispatchCtx?.MediaPaths).toBeUndefined();
       expect(mockState.lastDispatchImages).toHaveLength(2);
@@ -2224,7 +2425,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           update.message !== null &&
           (update.message as { role?: unknown }).role === "user",
       );
-      expect(mockState.savedMediaCalls).toEqual([]);
+      expect(mockState.savedMediaCalls).toStrictEqual([]);
       expect(userUpdate).toMatchObject({
         message: {
           role: "user",
@@ -2270,9 +2471,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     await waitForAssertion(() => {
       expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
-      expect(
-        mockState.emittedTranscriptUpdates.find((update) => update.message !== undefined),
-      ).toBeDefined();
+      expect(mockState.emittedTranscriptUpdates).toEqual(
+        expect.arrayContaining([expect.objectContaining({ message: expect.any(Object) })]),
+      );
     });
   });
 
@@ -2772,9 +2973,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
     ];
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    mockState.stageSandboxMediaError = Object.assign(new Error("ENOSPC: no space left on device"), {
+    const stageError = Object.assign(new Error("ENOSPC: no space left on device"), {
       code: "ENOSPC",
     });
+    stageError.stack =
+      "Error: ENOSPC: no space left on device\n    at stageSandboxMedia (stage-sandbox-media.ts:1:1)";
+    mockState.stageSandboxMediaError = stageError;
     const respond = vi.fn();
     const context = createChatContext();
     const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
@@ -2808,8 +3012,66 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(payload).toBeUndefined();
     expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
     expect(error?.message ?? String(error)).toMatch(/ENOSPC|non-image attachments/i);
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      "chat.send attachment parse/stage failed",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining(
+          "chat.send attachment parse/stage failed: MediaOffloadError",
+        ),
+        error: expect.stringContaining(
+          "Caused by: Error: ENOSPC: no space left on device\n    at stageSandboxMedia",
+        ),
+      }),
+    );
     // Orphaned media-store files are cleaned up before the 5xx surfaces.
     expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
+  });
+
+  it("logs chat.send attachment parse failures with stack details", async () => {
+    createTranscriptFixture("openclaw-chat-send-attachment-parse-stack-");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-chat-send-attachment-parse-stack",
+      message: "inspect this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "broken.png",
+            content: "not-base64",
+          },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("attachment broken.png: invalid base64 content"),
+      }),
+    );
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      "chat.send attachment parse/stage failed",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining(
+          "chat.send attachment parse/stage failed: Error: attachment broken.png",
+        ),
+        error: expect.stringContaining("Error: attachment broken.png: invalid base64 content"),
+      }),
+    );
+    const logMeta = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[1] as { error?: string } | undefined;
+    expect(logMeta?.error).toContain("\n    at ");
   });
 
   it("surfaces partial non-image staging failures as 5xx UNAVAILABLE", async () => {
@@ -3099,7 +3361,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
-    expect(mockState.savedMediaCalls).toEqual([]);
+    expect(mockState.savedMediaCalls).toStrictEqual([]);
     expect(mockState.lastDispatchImages).toBeUndefined();
     expect(respond).toHaveBeenCalledWith(true, {
       ok: true,
@@ -3171,5 +3433,35 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       });
     });
+  });
+});
+
+describe("chat.send operator UI client sender context", () => {
+  it("does not inject sender identity fields for Control UI clients", async () => {
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-control-ui-sender",
+      message: "hello from control ui",
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            version: "dev",
+            platform: "web",
+          },
+          scopes: ["operator.write"],
+        },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.SenderId).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.SenderName).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.SenderUsername).toBeUndefined();
   });
 });

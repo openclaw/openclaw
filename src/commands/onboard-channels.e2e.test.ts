@@ -748,7 +748,8 @@ describe("setupChannels", () => {
         expect(entries.find((entry) => entry.value === "external-chat")?.label).toBe(
           "Healthy Chat",
         );
-        expect(entries.some((entry) => entry.value === "broken-channel")).toBe(false);
+        const entryValues = entries.map((entry) => entry.value);
+        expect(entryValues).not.toContain("broken-channel");
         return "__done__";
       }
       return "__done__";
@@ -780,9 +781,11 @@ describe("setupChannels", () => {
       if (message === "Select a channel") {
         const entries = options as Array<{ value: string; hint?: string }>;
         const msteams = entries.find((entry) => entry.value === "external-chat");
-        expect(msteams).toBeDefined();
-        expect(msteams?.hint ?? "").not.toContain("plugin");
-        expect(msteams?.hint ?? "").not.toContain("install");
+        if (msteams === undefined) {
+          throw new Error("expected Teams catalog entry");
+        }
+        expect(msteams.hint ?? "").not.toContain("plugin");
+        expect(msteams.hint ?? "").not.toContain("install");
         return "__done__";
       }
       return "__done__";

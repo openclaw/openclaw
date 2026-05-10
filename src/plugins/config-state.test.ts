@@ -71,11 +71,21 @@ describe("normalizePluginsConfig", () => {
         hooks: {
           allowPromptInjection: false,
           allowConversationAccess: true,
+          timeoutMs: 250,
+          timeouts: {
+            before_prompt_build: 90_000,
+            agent_end: 60_000,
+          },
         },
       },
       expectedHooks: {
         allowPromptInjection: false,
         allowConversationAccess: true,
+        timeoutMs: 250,
+        timeouts: {
+          before_prompt_build: 90_000,
+          agent_end: 60_000,
+        },
       },
     },
     {
@@ -84,6 +94,10 @@ describe("normalizePluginsConfig", () => {
         hooks: {
           allowPromptInjection: "nope",
           allowConversationAccess: "nope",
+          timeoutMs: 0,
+          timeouts: {
+            before_prompt_build: 900_000,
+          },
         } as unknown as { allowPromptInjection: boolean; allowConversationAccess: boolean },
       },
       expectedHooks: undefined,
@@ -129,6 +143,23 @@ describe("normalizePluginsConfig", () => {
     },
   ] as const)("$name", ({ subagent, expected }) => {
     expect(normalizeVoiceCallEntry({ subagent })?.subagent).toEqual(expected);
+  });
+
+  it("normalizes plugin llm override policy settings", () => {
+    expect(
+      normalizeVoiceCallEntry({
+        llm: {
+          allowModelOverride: true,
+          allowedModels: [" openai/gpt-5.4 ", "", "anthropic/claude-sonnet-4-6"],
+          allowAgentIdOverride: false,
+        },
+      })?.llm,
+    ).toEqual({
+      allowModelOverride: true,
+      hasAllowedModelsConfig: true,
+      allowedModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+      allowAgentIdOverride: false,
+    });
   });
 
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {

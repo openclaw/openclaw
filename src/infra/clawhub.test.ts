@@ -7,6 +7,9 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
+  fetchClawHubPackageArtifact,
+  fetchClawHubPackageReadiness,
+  fetchClawHubPackageSecurity,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
@@ -16,6 +19,10 @@ import {
   satisfiesPluginApiRange,
   searchClawHubSkills,
 } from "./clawhub.js";
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
 
 describe("clawhub helpers", () => {
   const originalHome = process.env.HOME;
@@ -95,6 +102,20 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("2026.3.22", ">=2026.3.22")).toBe(true);
     expect(satisfiesPluginApiRange("2026.3.21", ">=2026.3.22")).toBe(false);
     expect(satisfiesPluginApiRange("invalid", "^1.2.0")).toBe(false);
+  });
+
+  it("treats OpenClaw CalVer correction versions as stable plugin API hosts", () => {
+    expect(satisfiesPluginApiRange("2026.5.3-1", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.3-2", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.3-beta.1", ">=2026.5.3")).toBe(false);
+  });
+
+  it("accepts legacy bare major.minor plugin api ranges as lower bounds", () => {
+    expect(satisfiesPluginApiRange("2026.5.2", "2026.4")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.4.0", "2026.4")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.3.99", "2026.4")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.5.2", "=2026.4")).toBe(false);
+    expect(satisfiesPluginApiRange("invalid", "2026.4")).toBe(false);
   });
 
   it.each(["*", "x", "X", "=*", "=x", ">=*", ">=x", "<=*", "^*", "~*"] as const)(
@@ -220,8 +241,110 @@ describe("clawhub helpers", () => {
       });
     };
 
-    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
+    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toStrictEqual([]);
   });
+
+  it("fetches typed package readiness reports", async () => {
+    let requestedUrl = "";
+    await expect(
+      fetchClawHubPackageReadiness({
+        name: "@openclaw/diagnostics-otel",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
+              phase: "legacy-zip-only",
+              blockers: [],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toEqual({
+      package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
+      phase: "legacy-zip-only",
+      blockers: [],
+    });
+    expect(new URL(requestedUrl).pathname).toBe(
+      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/readiness",
+    );
+  });
+
+  it("fetches typed package artifact resolver reports", async () => {
+    let requestedUrl = "";
+    await expect(
+      fetchClawHubPackageArtifact({
+        name: "@openclaw/diagnostics-otel",
+        version: "2026.3.22",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              artifact: {
+                source: "clawhub",
+                artifactKind: "npm-pack",
+                packageName: "@openclaw/diagnostics-otel",
+                version: "2026.3.22",
+                downloadUrl: "https://clawhub.ai/api/v1/clawpacks/abc",
+                npmIntegrity: "sha512-demo",
+                npmShasum: "abc",
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toEqual({
+      artifact: {
+        source: "clawhub",
+        artifactKind: "npm-pack",
+        packageName: "@openclaw/diagnostics-otel",
+        version: "2026.3.22",
+        downloadUrl: "https://clawhub.ai/api/v1/clawpacks/abc",
+        npmIntegrity: "sha512-demo",
+        npmShasum: "abc",
+      },
+    });
+    expect(new URL(requestedUrl).pathname).toBe(
+      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/artifact",
+    );
+  });
+
+  it("fetches typed package security reports", async () => {
+    let requestedUrl = "";
+    await expect(
+      fetchClawHubPackageSecurity({
+        name: "@openclaw/diagnostics-otel",
+        version: "2026.3.22",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              releaseId: "rel_demo",
+              state: "approved",
+              reasonCode: "clean",
+              createdAt: 1774256733107,
+              scanState: "clean",
+              moderationState: "approved",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toEqual({
+      releaseId: "rel_demo",
+      state: "approved",
+      reasonCode: "clean",
+      createdAt: 1774256733107,
+      scanState: "clean",
+      moderationState: "approved",
+    });
+    expect(new URL(requestedUrl).pathname).toBe(
+      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/security",
+    );
+  });
+
   it("downloads package archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubPackageArchive({
       name: "@hyf/zai-external-alpha",
@@ -240,7 +363,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -279,7 +402,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -301,6 +424,66 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/declared sha256/);
   });
 
+  it("annotates 429 errors with the reset hint and a sign-in hint when unauthenticated", async () => {
+    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("Rate limit exceeded", {
+            status: 429,
+            headers: {
+              "RateLimit-Limit": "30",
+              "RateLimit-Remaining": "0",
+              "RateLimit-Reset": "42",
+            },
+          }),
+      }),
+    ).rejects.toThrow(/Rate limit exceeded \(resets in 42s\) Sign in for higher rate limits\.$/);
+  });
+
+  it("degrades gracefully on 429 when the response carries no rate-limit headers", async () => {
+    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () => new Response("Rate limit exceeded", { status: 429 }),
+      }),
+    ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
+  });
+
+  it("annotates 429 errors with the reset hint but no sign-in hint when authenticated", async () => {
+    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("Rate limit exceeded", {
+            status: 429,
+            headers: {
+              "RateLimit-Limit": "180",
+              "RateLimit-Remaining": "0",
+              "RateLimit-Reset": "10",
+            },
+          }),
+      }),
+    ).rejects.toThrow(/Rate limit exceeded \(resets in 10s\)$/);
+  });
+
+  it("skips the reset suffix on 429 when Retry-After is an HTTP-date", async () => {
+    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("Rate limit exceeded", {
+            status: 429,
+            headers: { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" },
+          }),
+      }),
+    ).rejects.toThrow(/Rate limit exceeded$/);
+  });
+
   it("downloads skill archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubSkillArchive({
       slug: "agentreceipt",
@@ -318,7 +501,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 });

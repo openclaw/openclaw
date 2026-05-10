@@ -71,7 +71,6 @@ function buildCodexAppServerPlannerConfig(workspaceDir: string): OpenClawConfig 
     agents: {
       defaults: {
         workspace: workspaceDir,
-        agentRuntime: { id: "codex", fallback: "none" },
         model: { primary: `openai/${CRESTODIAN_CODEX_MODEL}` },
       },
     },

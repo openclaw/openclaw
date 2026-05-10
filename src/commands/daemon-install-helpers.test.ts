@@ -127,13 +127,11 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.workingDirectory).toBe("/Users/me");
     expect(plan.environment).toEqual({ OPENCLAW_PORT: "3000" });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: { HOME: isolatedHome },
-        port: 3000,
-        extraPathDirs: ["/custom"],
-      }),
-    );
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    const serviceEnvRequest = mocks.buildServiceEnvironment.mock.calls[0]?.[0];
+    expect(serviceEnvRequest?.env).toStrictEqual({ HOME: isolatedHome });
+    expect(serviceEnvRequest?.port).toBe(3000);
+    expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
   });
 
   it("does not prepend '.' when nodePath is a bare executable name", async () => {
@@ -146,11 +144,8 @@ describe("buildGatewayInstallPlan", () => {
       nodePath: "node",
     });
 
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        extraPathDirs: undefined,
-      }),
-    );
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.extraPathDirs).toBeUndefined();
   });
 
   it("emits warnings when renderSystemNodeWarning returns one", async () => {
@@ -188,11 +183,8 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(plan.workingDirectory).toBe(path.join(isolatedHome, ".openclaw"));
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        platform: "darwin",
-      }),
-    );
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.platform).toBe("darwin");
   });
 
   it("does not invent a working directory for non-macOS service installs", async () => {
@@ -228,17 +220,11 @@ describe("buildGatewayInstallPlan", () => {
       runtime: "node",
     });
 
-    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wrapperPath,
-      }),
-    );
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: expect.objectContaining({
-          OPENCLAW_WRAPPER: wrapperPath,
-        }),
-      }),
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledOnce();
+    expect(mocks.resolveGatewayProgramArguments.mock.calls[0]?.[0]?.wrapperPath).toBe(wrapperPath);
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.env?.OPENCLAW_WRAPPER).toBe(
+      wrapperPath,
     );
     expect(plan.environment.OPENCLAW_WRAPPER).toBe(wrapperPath);
   });
@@ -307,6 +293,151 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(plan.environment.DISCORD_BOT_TOKEN).toBe("discord-test-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("includes passEnv values for configured exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OP_CONNECT_TOKEN: "op-connect-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/Discord/password"],
+              passEnv: ["OP_CONNECT_TOKEN"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+        channels: {
+          discord: {
+            token: { source: "exec", provider: "onepassword", id: "value" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OP_CONNECT_TOKEN).toBe("op-connect-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("allows safe inherited passEnv names while blocking dangerous exec SecretRef env", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const warn = vi.fn();
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        BASH_ENV: "/tmp/openclaw-test-bashenv",
+        XDG_CONFIG_HOME: "/tmp/openclaw-test-xdg-home",
+        XDG_CONFIG_DIRS: "/etc/xdg:/opt/xdg",
+        GH_TOKEN: "gh-test-token",
+        AWS_ACCESS_KEY_ID: "aws-access-key",
+        DOCKER_HOST: "tcp://docker.example.test:2376",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+      }),
+      port: 3000,
+      runtime: "node",
+      warn,
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/Discord/password"],
+              passEnv: [
+                "HOME",
+                "BASH_ENV",
+                "XDG_CONFIG_HOME",
+                "XDG_CONFIG_DIRS",
+                "GH_TOKEN",
+                "AWS_ACCESS_KEY_ID",
+                "DOCKER_HOST",
+                "NODE_TLS_REJECT_UNAUTHORIZED",
+              ],
+              allowInsecurePath: true,
+            },
+          },
+        },
+        channels: {
+          discord: {
+            token: { source: "exec", provider: "onepassword", id: "value" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.HOME).toBe(isolatedHome);
+    expect(plan.environment.BASH_ENV).toBeUndefined();
+    expect(plan.environment.XDG_CONFIG_HOME).toBeUndefined();
+    expect(plan.environment.XDG_CONFIG_DIRS).toBeUndefined();
+    expect(plan.environment.GH_TOKEN).toBeUndefined();
+    expect(plan.environment.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(plan.environment.DOCKER_HOST).toBeUndefined();
+    expect(plan.environment.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+    expect(warn).not.toHaveBeenCalledWith(
+      'Exec SecretRef passEnv ref "HOME" blocked by host-env security policy',
+      "Config SecretRef",
+    );
+    const warningMessages = warn.mock.calls.map(([message]) => message);
+    for (const blockedName of [
+      "XDG_CONFIG_HOME",
+      "XDG_CONFIG_DIRS",
+      "BASH_ENV",
+      "GH_TOKEN",
+      "AWS_ACCESS_KEY_ID",
+      "DOCKER_HOST",
+      "NODE_TLS_REJECT_UNAUTHORIZED",
+    ]) {
+      expect(warningMessages.some((message) => message.includes(blockedName))).toBe(true);
+    }
+    expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
+  });
+
+  it("does not include passEnv values for unused exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OP_CONNECT_TOKEN: "op-connect-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              passEnv: ["OP_CONNECT_TOKEN"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OP_CONNECT_TOKEN).toBeUndefined();
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
@@ -529,6 +660,67 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     );
   });
 
+  it("retains managed .env values for macOS LaunchAgent env files", async () => {
+    await writeStateDirDotEnv("TAVILY_API_KEY=dotenv-tavily\nOPENROUTER_API_KEY=or-key\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+    });
+
+    expect(plan.environment.TAVILY_API_KEY).toBe("dotenv-tavily");
+    expect(plan.environment.OPENROUTER_API_KEY).toBe("or-key");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "OPENROUTER_API_KEY,TAVILY_API_KEY",
+    );
+  });
+
+  it("does not retain config env values for macOS LaunchAgent env files", async () => {
+    await writeStateDirDotEnv("OPENROUTER_API_KEY=or-dotenv\nTAVILY_API_KEY=dotenv-tavily\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      config: {
+        env: {
+          vars: {
+            BRAVE_API_KEY: "brave-config-key",
+            OPENROUTER_API_KEY: "or-config-key",
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.BRAVE_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENROUTER_API_KEY).toBeUndefined();
+    expect(plan.environment.TAVILY_API_KEY).toBe("dotenv-tavily");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "BRAVE_API_KEY,OPENROUTER_API_KEY,TAVILY_API_KEY",
+    );
+  });
+
   it("works when .env file does not exist", async () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
 
@@ -719,7 +911,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       serviceEnvironment: {
         HOME: "/from-service",
         OPENCLAW_PORT: "3000",
-        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         TMPDIR: "/tmp",
       },
     });
@@ -741,7 +933,9 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    expect(plan.environment.PATH).toBe("/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+    expect(plan.environment.PATH).toBe(
+      "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    );
   });
 
   it("drops legacy inline env values when the key is now managed by .env", async () => {
@@ -768,6 +962,38 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.TAVILY_API_KEY).toBeUndefined();
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("TAVILY_API_KEY");
     expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/Users/test/.custom-tool");
+  });
+
+  it("keeps source metadata for EnvironmentFile-backed preserved vars", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        OPENROUTER_API_KEY: "or-operator-key",
+        CUSTOM_TOOL_HOME: "/Users/test/.custom-tool",
+        OPENCLAW_GATEWAY_TOKEN: "old-token",
+      },
+      existingEnvironmentValueSources: {
+        OPENROUTER_API_KEY: "file",
+        CUSTOM_TOOL_HOME: "inline",
+        OPENCLAW_GATEWAY_TOKEN: "file",
+      },
+    });
+
+    expect(plan.environment.OPENROUTER_API_KEY).toBe("or-operator-key");
+    expect(plan.environmentValueSources?.OPENROUTER_API_KEY).toBe("file");
+    expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/Users/test/.custom-tool");
+    expect(plan.environmentValueSources?.CUSTOM_TOOL_HOME).toBe("inline");
+    expect(plan.environment.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(plan.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
   });
 
   it("does not embed auth-profile env refs when the key is already durable", async () => {

@@ -140,11 +140,13 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
 
     await runCli(["qr", "--setup-code-only"]);
     const setupCode = findSetupCodeLogLine(runtimeLogs);
-    expect(setupCode).toBeTruthy();
-    const payload = decodeSetupCode(setupCode ?? "");
+    if (!setupCode) {
+      throw new Error("expected QR setup code log line");
+    }
+    const payload = decodeSetupCode(setupCode);
     expect(payload.url).toBe("ws://127.0.0.1:18789");
-    expect(payload.bootstrapToken).toBeTruthy();
-    expect(runtimeErrors).toEqual([]);
+    expect(payload.bootstrapToken).toBe("bootstrap-123");
+    expect(runtimeErrors).toStrictEqual([]);
 
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
@@ -156,7 +158,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
       "Token auto-auth is disabled for SecretRef-managed gateway.auth.token",
     );
     expect(joined).not.toContain("Token auto-auth unavailable");
-    expect(runtimeErrors).toEqual([]);
+    expect(runtimeErrors).toStrictEqual([]);
   });
 
   it("fails qr but keeps dashboard actionable when the shared token SecretRef is unresolved", async () => {

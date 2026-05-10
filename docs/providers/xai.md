@@ -33,8 +33,9 @@ OpenClaw ships a bundled `xai` provider plugin for Grok models.
 
 <Note>
 OpenClaw uses the xAI Responses API as the bundled xAI transport. The same
-`XAI_API_KEY` can also power Grok-backed `web_search`, first-class `x_search`,
-and remote `code_execution`.
+API key from `openclaw onboard --auth-choice xai-api-key` can also power
+first-class `x_search` and remote `code_execution`; `XAI_API_KEY` or plugin
+web-search config can power Grok-backed `web_search` too.
 If you store an xAI key under `plugins.entries.xai.config.webSearch.apiKey`,
 the bundled xAI model provider reuses that key as a fallback too.
 Set `plugins.entries.xai.config.webSearch.baseUrl` to route Grok `web_search`
@@ -68,7 +69,7 @@ variants are the current image-capable Grok refs in the bundled catalog.
 
 The bundled plugin maps xAI's current public API surface onto OpenClaw's shared
 provider and tool contracts. Capabilities that don't fit the shared contract
-(for example streaming TTS and realtime voice) are not exposed — see the table
+(for example streaming TTS and realtime voice) are not exposed - see the table
 below.
 
 | xAI capability             | OpenClaw surface                          | Status                                                              |
@@ -80,10 +81,10 @@ below.
 | Images                     | `image_generate`                          | Yes                                                                 |
 | Videos                     | `video_generate`                          | Yes                                                                 |
 | Batch text-to-speech       | `messages.tts.provider: "xai"` / `tts`    | Yes                                                                 |
-| Streaming TTS              | —                                         | Not exposed; OpenClaw's TTS contract returns complete audio buffers |
+| Streaming TTS              | -                                         | Not exposed; OpenClaw's TTS contract returns complete audio buffers |
 | Batch speech-to-text       | `tools.media.audio` / media understanding | Yes                                                                 |
 | Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`    | Yes                                                                 |
-| Realtime voice             | —                                         | Not exposed yet; different session/WebSocket contract               |
+| Realtime voice             | -                                         | Not exposed yet; different session/WebSocket contract               |
 | Files / batches            | Generic model API compatibility only      | Not a first-class OpenClaw tool                                     |
 
 <Note>
@@ -122,7 +123,8 @@ Legacy aliases still normalize to the canonical bundled ids:
 
 <AccordionGroup>
   <Accordion title="Web search">
-    The bundled `grok` web-search provider uses `XAI_API_KEY` too:
+    The bundled `grok` web-search provider can use `XAI_API_KEY` or a plugin
+    web-search key:
 
     ```bash
     openclaw config set tools.web.search.provider grok
@@ -343,13 +345,13 @@ Legacy aliases still normalize to the canonical bundled ids:
 
     | Key                | Type    | Default            | Description                          |
     | ------------------ | ------- | ------------------ | ------------------------------------ |
-    | `enabled`          | boolean | —                  | Enable or disable x_search           |
+    | `enabled`          | boolean | -                  | Enable or disable x_search           |
     | `model`            | string  | `grok-4-1-fast`    | Model used for x_search requests     |
-    | `baseUrl`          | string  | —                  | xAI Responses base URL override      |
-    | `inlineCitations`  | boolean | —                  | Include inline citations in results  |
-    | `maxTurns`         | number  | —                  | Maximum conversation turns           |
-    | `timeoutSeconds`   | number  | —                  | Request timeout in seconds           |
-    | `cacheTtlMinutes`  | number  | —                  | Cache time-to-live in minutes        |
+    | `baseUrl`          | string  | -                  | xAI Responses base URL override      |
+    | `inlineCitations`  | boolean | -                  | Include inline citations in results  |
+    | `maxTurns`         | number  | -                  | Maximum conversation turns           |
+    | `timeoutSeconds`   | number  | -                  | Request timeout in seconds           |
+    | `cacheTtlMinutes`  | number  | -                  | Cache time-to-live in minutes        |
 
     ```json5
     {
@@ -382,8 +384,8 @@ Legacy aliases still normalize to the canonical bundled ids:
     | ----------------- | ------- | ------------------ | ---------------------------------------- |
     | `enabled`         | boolean | `true` (if key available) | Enable or disable code execution  |
     | `model`           | string  | `grok-4-1-fast`    | Model used for code execution requests   |
-    | `maxTurns`        | number  | —                  | Maximum conversation turns               |
-    | `timeoutSeconds`  | number  | —                  | Request timeout in seconds               |
+    | `maxTurns`        | number  | -                  | Maximum conversation turns               |
+    | `timeoutSeconds`  | number  | -                  | Request timeout in seconds               |
 
     <Note>
     This is remote xAI sandbox execution, not local [`exec`](/tools/exec).
@@ -409,8 +411,9 @@ Legacy aliases still normalize to the canonical bundled ids:
   </Accordion>
 
   <Accordion title="Known limits">
-    - Auth is API-key only today. There is no xAI OAuth or device-code flow in
-      OpenClaw yet.
+    - Auth is API-key only today. The API key may be stored in an xAI auth
+      profile, environment variable, or plugin config; there is no xAI OAuth or
+      device-code flow in OpenClaw yet.
     - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
       normal xAI provider path because it requires a different upstream API
       surface than the standard OpenClaw xAI transport.

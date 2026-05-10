@@ -1,17 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
 import { handleQaInbound, isHttpMediaUrl } from "./inbound.js";
-
-const dispatchInboundReplyWithBaseMock = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/inbound-reply-dispatch", () => ({
-  dispatchInboundReplyWithBase: dispatchInboundReplyWithBaseMock,
-}));
-
-beforeEach(() => {
-  dispatchInboundReplyWithBaseMock.mockReset();
-});
 
 describe("isHttpMediaUrl", () => {
   it("accepts only http and https urls", () => {
@@ -60,7 +50,9 @@ describe("handleQaInbound", () => {
       },
     });
 
-    expect(dispatchInboundReplyWithBaseMock).toHaveBeenCalledTimes(1);
-    expect(dispatchInboundReplyWithBaseMock.mock.calls[0]?.[0].ctxPayload.WasMentioned).toBe(true);
+    expect(runtime.channel.turn.runPrepared).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(runtime.channel.turn.runPrepared).mock.calls[0]?.[0].ctxPayload.WasMentioned,
+    ).toBe(true);
   });
 });

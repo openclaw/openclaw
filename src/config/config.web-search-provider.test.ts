@@ -244,7 +244,7 @@ describe("web search provider config", () => {
   it("does not warn for brave plugin config when bundled web search allowlist compat applies", () => {
     const res = validateConfigObjectWithPlugins({
       plugins: {
-        allow: ["bluebubbles", "memory-core"],
+        allow: ["imessage", "memory-core"],
         entries: {
           brave: {
             config: {
@@ -434,6 +434,35 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("rejects installable provider ids when the plugin is not active", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        provider: "brave",
+      }),
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toContainEqual(
+      expect.objectContaining({
+        path: "tools.web.search.provider",
+        message:
+          'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+        allowedValues: expect.arrayContaining(["brave"]),
+      }),
+    );
+  });
+
   it("rejects unknown provider ids without plugin evidence", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
@@ -582,11 +611,6 @@ describe("web search provider auto-detection", () => {
   it("auto-detects grok when only XAI_API_KEY is set", () => {
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("grok");
-  });
-
-  it("auto-detects kimi when only KIMI_API_KEY is set", () => {
-    process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
-    expect(resolveSearchProvider({})).toBe("kimi");
   });
 
   it("auto-detects kimi when only MOONSHOT_API_KEY is set", () => {

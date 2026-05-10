@@ -271,8 +271,8 @@ describe("buildProbeTargets reason codes", () => {
     };
     await withClearedAnthropicEnv(async () => {
       const plan = await buildAnthropicPlanFromModelsJsonApiKey("ollama-local");
-      expect(plan.targets).toEqual([]);
-      expect(plan.results).toEqual([]);
+      expect(plan.targets).toStrictEqual([]);
+      expect(plan.results).toStrictEqual([]);
     });
   });
 
@@ -284,15 +284,11 @@ describe("buildProbeTargets reason codes", () => {
     };
     await withClearedAnthropicEnv(async () => {
       const plan = await buildAnthropicPlanFromModelsJsonApiKey("ALLCAPS_SAMPLE");
-      expect(plan.results).toEqual([]);
+      expect(plan.results).toStrictEqual([]);
       expect(plan.targets).toHaveLength(1);
-      expect(plan.targets[0]).toEqual(
-        expect.objectContaining({
-          provider: "anthropic",
-          source: "models.json",
-          label: "models.json",
-        }),
-      );
+      expect(plan.targets[0]?.provider).toBe("anthropic");
+      expect(plan.targets[0]?.source).toBe("models.json");
+      expect(plan.targets[0]?.label).toBe("models.json");
     });
   });
 
@@ -329,16 +325,12 @@ describe("buildProbeTargets reason codes", () => {
         },
       });
 
-      expect(plan.results).toEqual([]);
+      expect(plan.results).toStrictEqual([]);
       expect(plan.targets).toHaveLength(1);
-      expect(plan.targets[0]).toEqual(
-        expect.objectContaining({
-          provider: "zai",
-          model: { provider: "zai", model: "glm-4.7" },
-          source: "models.json",
-          label: "models.json",
-        }),
-      );
+      expect(plan.targets[0]?.provider).toBe("zai");
+      expect(plan.targets[0]?.model).toStrictEqual({ provider: "zai", model: "glm-4.7" });
+      expect(plan.targets[0]?.source).toBe("models.json");
+      expect(plan.targets[0]?.label).toBe("models.json");
     });
   });
 
@@ -374,16 +366,15 @@ describe("buildProbeTargets reason codes", () => {
       },
     });
 
-    expect(withoutWorkspace.targets).toEqual([]);
+    expect(withoutWorkspace.targets).toStrictEqual([]);
     expect(withWorkspace.targets).toHaveLength(1);
-    expect(withWorkspace.targets[0]).toEqual(
-      expect.objectContaining({
-        provider: "workspace-cloud",
-        source: "env",
-        label: "env",
-        model: { provider: "workspace-cloud", model: "workspace-model" },
-      }),
-    );
+    expect(withWorkspace.targets[0]?.provider).toBe("workspace-cloud");
+    expect(withWorkspace.targets[0]?.source).toBe("env");
+    expect(withWorkspace.targets[0]?.label).toBe("env");
+    expect(withWorkspace.targets[0]?.model).toStrictEqual({
+      provider: "workspace-cloud",
+      model: "workspace-model",
+    });
   });
 
   it("uses the requested agent auth store when building profile probe targets", async () => {
@@ -428,15 +419,11 @@ describe("buildProbeTargets reason codes", () => {
       }),
     }));
 
-    expect(defaultPlan.targets).toEqual([]);
-    expect(agentPlan.results).toEqual([]);
+    expect(defaultPlan.targets).toStrictEqual([]);
+    expect(agentPlan.results).toStrictEqual([]);
     expect(agentPlan.targets).toHaveLength(1);
-    expect(agentPlan.targets[0]).toEqual(
-      expect.objectContaining({
-        provider: "anthropic",
-        profileId: "anthropic:coder",
-        source: "profile",
-      }),
-    );
+    expect(agentPlan.targets[0]?.provider).toBe("anthropic");
+    expect(agentPlan.targets[0]?.profileId).toBe("anthropic:coder");
+    expect(agentPlan.targets[0]?.source).toBe("profile");
   });
 });

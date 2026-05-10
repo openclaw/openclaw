@@ -62,6 +62,53 @@ openclaw config get meta.lastTouchedVersion
 For intentional downgrade or emergency recovery only, set `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1` for the single command. Leave it unset for normal operation.
 </Warning>
 
+## Skill symlink skipped as path escape
+
+Use this when logs include:
+
+```text
+Skipping escaped skill path outside its configured root: ... reason=symlink-escape
+```
+
+OpenClaw treats every skill root as a containment boundary. A symlink under
+`~/.agents/skills`, `<workspace>/.agents/skills`, `<workspace>/skills`, or
+`~/.openclaw/skills` is skipped when its real target resolves outside that root
+unless the target is explicitly trusted.
+
+Inspect the link:
+
+```bash
+ls -l ~/.agents/skills/<name>
+realpath ~/.agents/skills/<name>
+openclaw config get skills.load
+```
+
+If the target is intentional, configure both the direct skill root and the
+allowed symlink target:
+
+```json5
+{
+  skills: {
+    load: {
+      extraDirs: ["~/Projects/manager/skills"],
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
+    },
+  },
+}
+```
+
+Then start a new session or wait for the skills watcher to refresh. Restart the
+gateway if the running process predates the config change.
+
+Do not use broad targets such as `~`, `/`, or a whole synced project folder.
+Keep `allowSymlinkTargets` scoped to the real skill root that contains trusted
+`SKILL.md` directories.
+
+Related:
+
+- [Skills config](/tools/skills-config#symlinked-sibling-repos)
+- [Configuration examples](/gateway/configuration-examples#symlinked-sibling-skill-repo)
+
 ## Anthropic 429 extra usage required for long context
 
 Use this when logs/errors include: `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
@@ -300,9 +347,10 @@ Related:
 - [Configuration](/gateway/configuration)
 - [Doctor](/gateway/doctor)
 
-## Gateway restored last-known-good config
+## Gateway rejected invalid config
 
-Use this when the Gateway starts, but logs say it restored `openclaw.json`.
+Use this when Gateway startup fails with `Invalid config` or hot reload logs say
+it skipped an invalid edit.
 
 ```bash
 openclaw logs --follow
@@ -313,19 +361,19 @@ openclaw doctor
 
 Look for:
 
-- `Config auto-restored from last-known-good`
-- `gateway: invalid config was restored from last-known-good backup`
-- `config reload restored last-known-good config after invalid-config`
-- A timestamped `openclaw.json.clobbered.*` file beside the active config
-- A main-agent system event that starts with `Config recovery warning`
+- `Invalid config at ...`
+- `config reload skipped (invalid config): ...`
+- `Config write rejected: ...`
+- A timestamped `openclaw.json.rejected.*` file beside the active config
+- A timestamped `openclaw.json.clobbered.*` file if `doctor --fix` repaired a broken direct edit
 
 <AccordionGroup>
   <Accordion title="What happened">
-    - The rejected config did not validate during startup or hot reload.
-    - OpenClaw preserved the rejected payload as `.clobbered.*`.
-    - The active config was restored from the last validated last-known-good copy.
-    - The next main-agent turn is warned not to blindly rewrite the rejected config.
-    - If all validation issues were under `plugins.entries.<id>...`, OpenClaw would not restore the whole file. Plugin-local failures stay loud while unrelated user settings remain in the active config.
+    - The config did not validate during startup, hot reload, or an OpenClaw-owned write.
+    - Gateway startup fails closed instead of rewriting `openclaw.json`.
+    - Hot reload skips invalid external edits and keeps the current runtime config active.
+    - OpenClaw-owned writes reject invalid/destructive payloads before commit and save `.rejected.*`.
+    - `openclaw doctor --fix` owns repair. It can remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
 
   </Accordion>
   <Accordion title="Inspect and repair">
@@ -338,16 +386,17 @@ Look for:
     ```
   </Accordion>
   <Accordion title="Common signatures">
-    - `.clobbered.*` exists → an external direct edit or startup read was restored.
+    - `.clobbered.*` exists → doctor preserved a broken external edit while repairing the active config.
     - `.rejected.*` exists → an OpenClaw-owned config write failed schema or clobber checks before commit.
     - `Config write rejected:` → the write tried to drop required shape, shrink the file sharply, or persist invalid config.
-    - `Rejected validation details:` → the recovery log or main-agent notice includes the schema path that caused the restore, such as `agents.defaults.execution` or `gateway.auth.password.source`.
-    - `missing-meta-vs-last-good`, `gateway-mode-missing-vs-last-good`, or `size-drop-vs-last-good:*` → startup treated the current file as clobbered because it lost fields or size compared with the last-known-good backup.
+    - `config reload skipped (invalid config):` → a direct edit failed validation and was ignored by the running Gateway.
+    - `Invalid config at ...` → startup failed before Gateway services booted.
+    - `missing-meta-vs-last-good`, `gateway-mode-missing-vs-last-good`, or `size-drop-vs-last-good:*` → an OpenClaw-owned write was rejected because it lost fields or size compared with the last-known-good backup.
     - `Config last-known-good promotion skipped` → the candidate contained redacted secret placeholders such as `***`.
 
   </Accordion>
   <Accordion title="Fix options">
-    1. Keep the restored active config if it is correct.
+    1. Run `openclaw doctor --fix` to let doctor repair prefixed/clobbered config or restore last-known-good.
     2. Copy only the intended keys from `.clobbered.*` or `.rejected.*`, then apply them with `openclaw config set` or `config.patch`.
     3. Run `openclaw config validate` before restarting.
     4. If you edit by hand, keep the full JSON5 config, not just the partial object you wanted to change.

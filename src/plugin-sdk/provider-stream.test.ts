@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import { VERSION } from "../version.js";
 import {
   composeProviderStreamWrappers as composeProviderStreamWrappersShared,
   createMoonshotThinkingWrapper as createMoonshotThinkingWrapperShared,
@@ -47,7 +48,7 @@ describe("composeProviderStreamWrappers", () => {
     expect(createToolStreamWrapper).toBe(createToolStreamWrapperShared);
   });
 
-  it("applies wrappers left to right", async () => {
+  it("applies wrappers left to right", () => {
     const order: string[] = [];
     const baseStreamFn: StreamFn = (_model, _context, _options) => {
       order.push("base");
@@ -64,10 +65,11 @@ describe("composeProviderStreamWrappers", () => {
         return result;
       };
 
-    const composed = composeProviderStreamWrappers(baseStreamFn, wrap("a"), undefined, wrap("b"));
+    const composed = requireStreamFn(
+      composeProviderStreamWrappers(baseStreamFn, wrap("a"), undefined, wrap("b")),
+    );
 
-    expect(typeof composed).toBe("function");
-    void composed?.({} as never, {} as never, {});
+    void composed({} as never, {} as never, {});
 
     expect(order).toEqual(["b:before", "a:before", "base", "a:after", "b:after"]);
   });
@@ -238,7 +240,11 @@ describe("buildProviderStreamFamilyHooks", () => {
       config: { thinkingConfig: { thinkingBudget: -1 } },
       service_tier: "flex",
     });
-    expect(capturedHeaders).toBeDefined();
+    expect(capturedHeaders).toEqual({
+      "User-Agent": `openclaw/${VERSION}`,
+      originator: "openclaw",
+      version: VERSION,
+    });
 
     const openRouterHooks = OPENROUTER_THINKING_STREAM_HOOKS;
     void requireStreamFn(

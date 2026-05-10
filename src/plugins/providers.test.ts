@@ -226,8 +226,10 @@ function resolveProviderOwnersFixture(params: { providerId: string }): readonly 
 
 function getLastRuntimeRegistryCall(): Record<string, unknown> {
   const call = resolveRuntimePluginRegistryMock.mock.calls.at(-1)?.[0];
-  expect(call).toBeDefined();
-  return (call ?? {}) as Record<string, unknown>;
+  if (!call) {
+    throw new Error("expected runtime plugin registry to be resolved");
+  }
+  return call as Record<string, unknown>;
 }
 
 function cloneOptions<T>(value: T): T {
@@ -279,8 +281,10 @@ function getLastResolvedPluginConfig() {
 
 function getLastSetupLoadedPluginConfig() {
   const call = loadOpenClawPluginsMock.mock.calls.at(-1)?.[0];
-  expect(call).toBeDefined();
-  return (call?.config ?? undefined) as
+  if (!call) {
+    throw new Error("expected OpenClaw plugin setup loader to be called");
+  }
+  return (call.config ?? undefined) as
     | {
         plugins?: {
           allow?: string[];
@@ -295,6 +299,7 @@ function createBundledProviderCompatOptions(params?: { onlyPluginIds?: readonly 
     config: {
       plugins: {
         allow: ["openrouter"],
+        bundledDiscovery: "compat" as const,
       },
     },
     bundledProviderAllowlistCompat: true,
@@ -593,6 +598,75 @@ describe("resolvePluginProviders", () => {
     ).toEqual(["legacy-auth-owner"]);
   });
 
+  it("filters bundled provider plugins by allowlist by default", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "kilocode",
+        providerIds: ["kilocode"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+      createManifestProviderPlugin({
+        id: "moonshot",
+        providerIds: ["moonshot"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+      createManifestProviderPlugin({
+        id: "openrouter",
+        providerIds: ["openrouter"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+    ]);
+
+    const discovered = resolveDiscoveredProviderPluginIds({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(discovered).toEqual(["openrouter"]);
+  });
+
+  it("returns all bundled provider plugins in explicit compat mode", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "kilocode",
+        providerIds: ["kilocode"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+      createManifestProviderPlugin({
+        id: "moonshot",
+        providerIds: ["moonshot"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+      createManifestProviderPlugin({
+        id: "openrouter",
+        providerIds: ["openrouter"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+    ]);
+
+    const discovered = resolveDiscoveredProviderPluginIds({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+          bundledDiscovery: "compat",
+        },
+      },
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(discovered).toEqual(["kilocode", "moonshot", "openrouter"]);
+  });
+
   it("treats explicit empty provider scopes as scoped-empty in provider helpers", () => {
     expect(
       resolveEnabledProviderPluginIds({
@@ -600,14 +674,14 @@ describe("resolvePluginProviders", () => {
         env: {} as NodeJS.ProcessEnv,
         onlyPluginIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       resolveDiscoveredProviderPluginIds({
         config: {},
         env: {} as NodeJS.ProcessEnv,
         onlyPluginIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it.each([
@@ -760,6 +834,7 @@ describe("resolvePluginProviders", () => {
       config: {
         plugins: {
           allow: ["openrouter"],
+          bundledDiscovery: "compat",
         },
       },
       bundledProviderAllowlistCompat: true,
@@ -773,11 +848,38 @@ describe("resolvePluginProviders", () => {
     });
   });
 
-  it("loads all discovered provider plugins in setup mode", () => {
+  it("scopes setup provider plugin discovery to the allowlist by default", () => {
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["google"],
+        },
+      },
+      mode: "setup",
+      includeUntrustedWorkspacePlugins: false,
+    });
+
+    expectLastSetupRegistryLoad({
+      onlyPluginIds: ["google"],
+    });
+    expect(getLastSetupLoadedPluginConfig()).toEqual(
+      expect.objectContaining({
+        plugins: expect.objectContaining({
+          allow: ["google"],
+          entries: expect.objectContaining({
+            google: { enabled: true },
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("loads all discovered provider plugins in setup mode for explicit compat configs", () => {
     resolvePluginProviders({
       config: {
         plugins: {
           allow: ["openrouter"],
+          bundledDiscovery: "compat",
           entries: {
             google: { enabled: false },
           },
@@ -815,6 +917,7 @@ describe("resolvePluginProviders", () => {
       config: {
         plugins: {
           allow: ["openrouter"],
+          bundledDiscovery: "compat",
         },
       },
       mode: "setup",
@@ -831,6 +934,7 @@ describe("resolvePluginProviders", () => {
       config: {
         plugins: {
           allow: ["openrouter", "workspace-provider"],
+          bundledDiscovery: "compat",
           entries: {
             "workspace-provider": { enabled: false },
           },
@@ -850,6 +954,7 @@ describe("resolvePluginProviders", () => {
       config: {
         plugins: {
           allow: ["openrouter", "workspace-provider"],
+          bundledDiscovery: "compat",
           deny: ["workspace-provider"],
           entries: {
             "workspace-provider": { enabled: false },
@@ -879,9 +984,7 @@ describe("resolvePluginProviders", () => {
       includeUntrustedWorkspacePlugins: false,
     });
 
-    expectLastSetupRegistryLoad({
-      onlyPluginIds: ["google", "kilocode", "moonshot"],
-    });
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("loads provider plugins from the auto-enabled config snapshot", () => {
@@ -1066,7 +1169,7 @@ describe("resolvePluginProviders", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not activate explicit runtime owners disabled in config", () => {
@@ -1091,7 +1194,7 @@ describe("resolvePluginProviders", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not activate explicit runtime owners outside the allowlist", () => {
@@ -1114,7 +1217,7 @@ describe("resolvePluginProviders", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("uses setup.providers to keep explicit provider owners on the setup path", () => {
@@ -1173,16 +1276,7 @@ describe("resolvePluginProviders", () => {
       mode: "setup",
     });
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            enabled: false,
-            allow: ["setup-owned-provider"],
-          }),
-        }),
-      }),
-    );
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("does not override explicitly disabled setup owners", () => {
@@ -1209,18 +1303,7 @@ describe("resolvePluginProviders", () => {
       mode: "setup",
     });
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: ["setup-owned-provider"],
-            entries: {
-              "setup-owned-provider": { enabled: false },
-            },
-          }),
-        }),
-      }),
-    );
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("filters explicit setup owners through the untrusted workspace discovery gate", () => {
@@ -1243,7 +1326,7 @@ describe("resolvePluginProviders", () => {
       includeUntrustedWorkspacePlugins: false,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -1267,7 +1350,7 @@ describe("resolvePluginProviders", () => {
       includeUntrustedWorkspacePlugins: false,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
@@ -1291,7 +1374,7 @@ describe("resolvePluginProviders", () => {
       activate: true,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
@@ -1318,7 +1401,7 @@ describe("resolvePluginProviders", () => {
       activate: true,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
@@ -1349,7 +1432,7 @@ describe("resolvePluginProviders", () => {
         },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not auto-activate explicitly disabled trusted workspace runtime owners", () => {
@@ -1377,7 +1460,7 @@ describe("resolvePluginProviders", () => {
         },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps legacy CLI backend ownership as the explicit provider fallback", () => {

@@ -53,7 +53,7 @@ const mockState = vi.hoisted(() => ({
 vi.mock("./runtime-api.js", () => {
   return {
     buildModelsProviderData: mockState.buildModelsProviderData,
-    createChannelReplyPipeline: vi.fn(() => ({
+    createChannelMessageReplyPipeline: vi.fn(() => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
     })),
@@ -205,6 +205,7 @@ const accountFixture: ResolvedMattermostAccount = {
   baseUrl: "https://chat.example.com",
   botTokenSource: "config",
   baseUrlSource: "config",
+  streamingMode: "partial",
   config: {},
 };
 

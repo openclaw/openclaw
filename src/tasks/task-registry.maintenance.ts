@@ -440,6 +440,10 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   return false;
 }
 
+function hasCliRunIdentity(task: TaskRecord): boolean {
+  return [task.sourceId, task.runId].some((candidate) => Boolean(candidate?.trim()));
+}
+
 function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
   if (task.runtime === "cron") {
     if (!taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()) {
@@ -451,6 +455,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 
   if (task.runtime === "cli" && hasActiveCliRun(task)) {
     return true;
+  }
+  if (task.runtime === "cli" && hasCliRunIdentity(task)) {
+    return false;
   }
 
   const childSessionKey = task.childSessionKey?.trim();
@@ -836,6 +843,56 @@ export function reconcileInspectableTasks(): TaskRecord[] {
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
+
+export type ActiveTaskRestartBlocker = {
+  taskId: string;
+  status: Extract<TaskStatus, "running">;
+  runtime: TaskRecord["runtime"];
+  runId?: string;
+  label?: string;
+  title?: string;
+};
+
+function isActiveTaskRestartBlockerStatus(
+  status: TaskStatus,
+): status is ActiveTaskRestartBlocker["status"] {
+  return status === "running";
+}
+
+function isTaskRestartBlocker(task: TaskRecord): task is TaskRecord & {
+  status: ActiveTaskRestartBlocker["status"];
+} {
+  // A task that is merely queued has not started user work yet; durable queued
+  // work can survive a gateway restart and should not indefinitely block one.
+  // Likewise, stale records that still say "running" but already have endedAt
+  // are registry inconsistencies, not live restart blockers.
+  return isActiveTaskRestartBlockerStatus(task.status) && !task.endedAt;
+}
+
+export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBlocker[] {
+  const blockers: ActiveTaskRestartBlocker[] = [];
+  for (const task of reconcileInspectableTasks()) {
+    if (!isTaskRestartBlocker(task)) {
+      continue;
+    }
+    const blocker: ActiveTaskRestartBlocker = {
+      taskId: task.taskId,
+      status: task.status,
+      runtime: task.runtime,
+    };
+    if (task.runId) {
+      blocker.runId = task.runId;
+    }
+    if (task.label) {
+      blocker.label = task.label;
+    }
+    if (task.task) {
+      blocker.title = task.task;
+    }
+    blockers.push(blocker);
+  }
+  return blockers;
+}
 
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
   return summarizeTaskRecords(reconcileInspectableTasks());

@@ -7,7 +7,6 @@ import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 
 const {
   createChannelPairingControllerMock,
-  dispatchInboundReplyWithBaseMock,
   readStoreAllowFromForDmPolicyMock,
   resolveDmGroupAccessWithCommandGateMock,
   resolveAllowlistProviderRuntimeGroupPolicyMock,
@@ -16,7 +15,6 @@ const {
 } = vi.hoisted(() => {
   return {
     createChannelPairingControllerMock: vi.fn(),
-    dispatchInboundReplyWithBaseMock: vi.fn(),
     readStoreAllowFromForDmPolicyMock: vi.fn(),
     resolveDmGroupAccessWithCommandGateMock: vi.fn(),
     resolveAllowlistProviderRuntimeGroupPolicyMock: vi.fn(),
@@ -33,7 +31,6 @@ vi.mock("../runtime-api.js", async () => {
   return {
     ...actual,
     createChannelPairingController: createChannelPairingControllerMock,
-    dispatchInboundReplyWithBase: dispatchInboundReplyWithBaseMock,
     readStoreAllowFromForDmPolicy: readStoreAllowFromForDmPolicyMock,
     resolveDmGroupAccessWithCommandGate: resolveDmGroupAccessWithCommandGateMock,
     resolveAllowlistProviderRuntimeGroupPolicy: resolveAllowlistProviderRuntimeGroupPolicyMock,
@@ -135,12 +132,15 @@ describe("nextcloud-talk inbound behavior", () => {
     readStoreAllowFromForDmPolicyMock.mockResolvedValue([]);
   });
 
-  // The DM pairing assertion currently depends on a mocked runtime barrel that Vitest
-  // does not bind reliably for this extension package.
-  it.skip("issues a DM pairing challenge and sends the challenge text", async () => {
+  it("issues a DM pairing challenge and sends the challenge text", async () => {
+    const issueChallenge = vi.fn(
+      async (params: { sendPairingReply: (text: string) => Promise<void> }) => {
+        await params.sendPairingReply("Pair with code 123456");
+      },
+    );
     createChannelPairingControllerMock.mockReturnValue({
       readStoreForDmPolicy: vi.fn(),
-      issueChallenge: vi.fn(),
+      issueChallenge,
     });
     resolveDmGroupAccessWithCommandGateMock.mockReturnValue({
       decision: "pairing",
@@ -152,12 +152,35 @@ describe("nextcloud-talk inbound behavior", () => {
 
     const statusSink = vi.fn();
     await handleNextcloudTalkInbound({
-      message: createMessage(),
+      message: createMessage({ timestamp: 1_736_380_800_000 }),
       account: createAccount(),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime: createRuntimeEnv(),
       statusSink,
     });
+
+    expect(issueChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderId: "user-1",
+        senderIdLine: "Your Nextcloud user id: user-1",
+        meta: { name: "Alice" },
+      }),
+    );
+    expect(sendMessageNextcloudTalkMock).toHaveBeenCalledWith(
+      "room-1",
+      "Pair with code 123456",
+      expect.objectContaining({
+        cfg: { channels: { "nextcloud-talk": {} } },
+        accountId: "default",
+      }),
+    );
+    expect(statusSink).toHaveBeenCalledWith({ lastInboundAt: 1_736_380_800_000 });
+    const outboundStatus = statusSink.mock.calls
+      .map(([status]) => status as { lastOutboundAt?: unknown })
+      .find((status) => status.lastOutboundAt !== undefined);
+    expect(typeof outboundStatus?.lastOutboundAt).toBe("number");
+    expect(outboundStatus?.lastOutboundAt).toBeGreaterThanOrEqual(1_736_380_800_000);
+    expect(sendMessageNextcloudTalkMock).toHaveBeenCalledTimes(1);
   });
 
   it("drops unmentioned group traffic before dispatch", async () => {
@@ -196,7 +219,7 @@ describe("nextcloud-talk inbound behavior", () => {
       runtime,
     });
 
-    expect(dispatchInboundReplyWithBaseMock).not.toHaveBeenCalled();
+    expect(sendMessageNextcloudTalkMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
   });
 });

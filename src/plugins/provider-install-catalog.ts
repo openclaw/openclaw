@@ -9,6 +9,12 @@ import {
 } from "./install-source-info.js";
 import type { InstalledPluginInstallRecordInfo } from "./installed-plugin-index.js";
 import type { PluginPackageInstall } from "./manifest.js";
+import {
+  getOfficialExternalPluginCatalogManifest,
+  listOfficialExternalProviderCatalogEntries,
+  resolveOfficialExternalPluginInstall,
+  type OfficialExternalProviderAuthChoice,
+} from "./official-external-plugin-catalog.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginRegistrySnapshot, type PluginRegistryRecord } from "./plugin-registry.js";
 import {
@@ -248,6 +254,84 @@ function resolveProviderIndexInstallCatalogEntries(params: {
   return entries;
 }
 
+function isProviderFlowScope(value: unknown): value is "text-inference" | "image-generation" {
+  return value === "text-inference" || value === "image-generation";
+}
+
+function normalizeProviderAuthChoiceScopes(
+  scopes: OfficialExternalProviderAuthChoice["onboardingScopes"],
+): ("text-inference" | "image-generation")[] | undefined {
+  if (!Array.isArray(scopes)) {
+    return undefined;
+  }
+  const normalized = scopes.filter(isProviderFlowScope);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function resolveOfficialExternalProviderInstallCatalogEntries(params: {
+  installedPluginIds: ReadonlySet<string>;
+  seenChoiceIds: ReadonlySet<string>;
+}): ProviderInstallCatalogEntry[] {
+  const entries: ProviderInstallCatalogEntry[] = [];
+  for (const entry of listOfficialExternalProviderCatalogEntries()) {
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    const pluginId = manifest?.plugin?.id?.trim();
+    if (!manifest || !pluginId || params.installedPluginIds.has(pluginId)) {
+      continue;
+    }
+    const install = resolveOfficialExternalPluginInstall(entry);
+    if (!install) {
+      continue;
+    }
+    for (const provider of manifest?.providers ?? []) {
+      const providerId = provider.id?.trim();
+      const label = provider.name?.trim() || manifest.plugin?.label?.trim() || entry.name?.trim();
+      if (!providerId || !label) {
+        continue;
+      }
+      for (const choice of provider.authChoices ?? []) {
+        const methodId = choice.method?.trim();
+        const choiceId = choice.choiceId?.trim();
+        const choiceLabel = choice.choiceLabel?.trim();
+        if (!methodId || !choiceId || !choiceLabel || params.seenChoiceIds.has(choiceId)) {
+          continue;
+        }
+        entries.push({
+          pluginId,
+          providerId,
+          methodId,
+          choiceId,
+          choiceLabel,
+          ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+          ...(choice.assistantPriority !== undefined
+            ? { assistantPriority: choice.assistantPriority }
+            : {}),
+          ...(choice.assistantVisibility
+            ? { assistantVisibility: choice.assistantVisibility }
+            : {}),
+          ...(choice.groupId ? { groupId: choice.groupId } : {}),
+          ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
+          ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+          ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
+          ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
+          ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
+          ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
+          ...(normalizeProviderAuthChoiceScopes(choice.onboardingScopes)
+            ? { onboardingScopes: normalizeProviderAuthChoiceScopes(choice.onboardingScopes) }
+            : {}),
+          label,
+          origin: "bundled",
+          install,
+          installSource: describePluginInstallSource(install, {
+            expectedPackageName: entry.name,
+          }),
+        });
+      }
+    }
+  }
+  return entries;
+}
+
 export function resolveProviderInstallCatalogEntries(
   params?: ProviderInstallCatalogParams,
 ): ProviderInstallCatalogEntry[] {
@@ -274,11 +358,18 @@ export function resolveProviderInstallCatalogEntries(
     })
     .toSorted((left, right) => left.choiceLabel.localeCompare(right.choiceLabel));
   const seenChoiceIds = new Set(manifestEntries.map((entry) => entry.choiceId));
+  const officialEntries = resolveOfficialExternalProviderInstallCatalogEntries({
+    installedPluginIds,
+    seenChoiceIds,
+  });
+  for (const entry of officialEntries) {
+    seenChoiceIds.add(entry.choiceId);
+  }
   const indexEntries = resolveProviderIndexInstallCatalogEntries({
     installedPluginIds,
     seenChoiceIds,
   });
-  return [...manifestEntries, ...indexEntries].toSorted((left, right) =>
+  return [...manifestEntries, ...officialEntries, ...indexEntries].toSorted((left, right) =>
     left.choiceLabel.localeCompare(right.choiceLabel),
   );
 }

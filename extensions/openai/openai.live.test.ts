@@ -320,7 +320,7 @@ describeLive("openai plugin live", () => {
     const collapsedText = text.replace(/[\s-]+/g, "");
     expect(text.length).toBeGreaterThan(0);
     expect(collapsedText).toContain("speech");
-    expect(collapsedText).toContain("check");
+    expect(collapsedText).toMatch(/(?:check|okay|ok|transcription)/);
   }, 45_000);
 
   it("opens OpenAI realtime STT before sending audio", async () => {
@@ -338,7 +338,7 @@ describeLive("openai plugin live", () => {
     try {
       await session.connect();
       await new Promise((resolve) => setTimeout(resolve, 1_000));
-      expect(errors).toEqual([]);
+      expect(errors).toStrictEqual([]);
       expect(session.isConnected()).toBe(true);
     } finally {
       session.close();

@@ -21,11 +21,83 @@ const taskExecutorMocks = vi.hoisted(() => ({
   createRunningTaskRun: vi.fn(),
 }));
 
+const VIDEO_GENERATION_PROVIDER_AUTH_ENV_VARS = [
+  "OPENAI_API_KEY",
+  "OPENAI_API_KEYS",
+  "GEMINI_API_KEY",
+  "GEMINI_API_KEYS",
+  "GOOGLE_API_KEY",
+  "GOOGLE_API_KEYS",
+  "DEEPINFRA_API_KEY",
+  "MODELSTUDIO_API_KEY",
+  "DASHSCOPE_API_KEY",
+  "QWEN_API_KEY",
+  "BYTEPLUS_API_KEY",
+  "COMFY_API_KEY",
+  "COMFY_CLOUD_API_KEY",
+  "FAL_KEY",
+  "FAL_API_KEY",
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+  "MINIMAX_API_KEY",
+  "MINIMAX_OAUTH_TOKEN",
+  "OPENROUTER_API_KEY",
+  "RUNWAYML_API_SECRET",
+  "RUNWAY_API_KEY",
+  "TOGETHER_API_KEY",
+  "XAI_API_KEY",
+  "VYDRA_API_KEY",
+] as const;
+
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 
+const GENERATION_PROVIDER_ENV_VARS = [
+  "BYTEPLUS_API_KEY",
+  "COMFY_API_KEY",
+  "COMFY_CLOUD_API_KEY",
+  "DASHSCOPE_API_KEY",
+  "DEEPINFRA_API_KEY",
+  "FAL_API_KEY",
+  "FAL_KEY",
+  "GCLOUD_PROJECT",
+  "GEMINI_API_KEY",
+  "GEMINI_API_KEYS",
+  "GOOGLE_API_KEY",
+  "GOOGLE_API_KEYS",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_CLOUD_API_KEY",
+  "GOOGLE_CLOUD_LOCATION",
+  "GOOGLE_CLOUD_PROJECT",
+  "LITELLM_API_KEY",
+  "MINIMAX_API_KEY",
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+  "MINIMAX_OAUTH_TOKEN",
+  "MODELSTUDIO_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENAI_API_KEYS",
+  "OPENROUTER_API_KEY",
+  "QWEN_API_KEY",
+  "RUNWAY_API_KEY",
+  "RUNWAYML_API_SECRET",
+  "TOGETHER_API_KEY",
+  "VYDRA_API_KEY",
+  "XAI_API_KEY",
+];
+
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
+}
+
+function expectVideoGenerateTool(
+  tool: ReturnType<typeof createVideoGenerateTool>,
+): NonNullable<ReturnType<typeof createVideoGenerateTool>> {
+  if (tool === null) {
+    throw new Error("expected video_generate tool");
+  }
+  expect(typeof tool.execute).toBe("function");
+  return tool;
 }
 
 function mockVideoPluginProvider(capabilities: Record<string, unknown> = {}) {
@@ -77,6 +149,9 @@ function mockSavedVideoResult(fileName = "out.mp4") {
 
 function resetVideoGenerateMocks() {
   vi.restoreAllMocks();
+  for (const key of VIDEO_GENERATION_PROVIDER_AUTH_ENV_VARS) {
+    vi.stubEnv(key, "");
+  }
   vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
@@ -87,7 +162,12 @@ function resetVideoGenerateMocks() {
 }
 
 describe("createVideoGenerateTool", () => {
-  beforeEach(resetVideoGenerateMocks);
+  beforeEach(() => {
+    resetVideoGenerateMocks();
+    for (const envVar of GENERATION_PROVIDER_ENV_VARS) {
+      vi.stubEnv(envVar, "");
+    }
+  });
 
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -100,7 +180,7 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("registers when video-generation config is present", () => {
-    expect(
+    expectVideoGenerateTool(
       createVideoGenerateTool({
         config: asConfig({
           agents: {
@@ -110,7 +190,7 @@ describe("createVideoGenerateTool", () => {
           },
         }),
       }),
-    ).not.toBeNull();
+    );
   });
 
   it("does not load runtime providers while registering an explicitly configured tool", () => {
@@ -120,7 +200,7 @@ describe("createVideoGenerateTool", () => {
         throw new Error("runtime provider list should not run during tool registration");
       });
 
-    expect(
+    expectVideoGenerateTool(
       createVideoGenerateTool({
         config: asConfig({
           agents: {
@@ -130,7 +210,28 @@ describe("createVideoGenerateTool", () => {
           },
         }),
       }),
-    ).not.toBeNull();
+    );
+    expect(listProviders).not.toHaveBeenCalled();
+  });
+
+  it("does not load runtime providers while resolving an explicitly configured model", () => {
+    const listProviders = vi
+      .spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders")
+      .mockImplementation(() => {
+        throw new Error("runtime provider list should not run for explicit video model config");
+      });
+
+    expect(
+      resolveVideoGenerationModelConfigForTool({
+        cfg: asConfig({
+          agents: {
+            defaults: {
+              videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+            },
+          },
+        }),
+      }),
+    ).toEqual({ primary: "qwen/wan2.6-t2v" });
     expect(listProviders).not.toHaveBeenCalled();
   });
 
@@ -218,7 +319,7 @@ describe("createVideoGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected video_generate tool");
     }
@@ -458,8 +559,10 @@ describe("createVideoGenerateTool", () => {
         taskId: "task-123",
       },
     });
-    expect(typeof scheduledWork).toBe("function");
-    await scheduledWork?.();
+    if (!scheduledWork) {
+      throw new Error("expected scheduled video generation work");
+    }
+    await scheduledWork();
     expect(saveSpy).not.toHaveBeenCalled();
     expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -496,7 +599,7 @@ describe("createVideoGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected video_generate tool");
     }
@@ -854,6 +957,7 @@ describe("createVideoGenerateTool", () => {
 
     expect(generateSpy).toHaveBeenCalledWith(
       expect.objectContaining({
+        autoProviderFallback: false,
         providerOptions: { seed: 42, draft: true },
       }),
     );
@@ -981,17 +1085,22 @@ describe("createVideoGenerateTool", () => {
     expect(generateSpy).toHaveBeenCalledWith(expect.objectContaining({ aspectRatio: "adaptive" }));
   });
 
-  it("rejects unsupported aspectRatio values", async () => {
+  it("accepts provider-specific aspectRatio and resolution values and forwards them to the runtime", async () => {
     mockVideoPluginProvider();
+    const generateSpy = mockSavedVideoResult();
     const tool = createVideoPluginTool();
 
-    await expect(
-      tool.execute("call-1", {
-        prompt: "lobster",
+    await tool.execute("call-1", {
+      prompt: "lobster",
+      aspectRatio: "17:9",
+      resolution: "draft-large",
+    });
+
+    expect(generateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
         aspectRatio: "17:9",
+        resolution: "draft-large",
       }),
-    ).rejects.toThrow(
-      "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, or adaptive",
     );
   });
 });

@@ -1,6 +1,7 @@
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -11,7 +12,10 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
+import {
+  normalizeConfiguredProviderCatalogModelId,
+  normalizeStaticProviderModelId,
+} from "./model-ref-shared.js";
 import {
   type ModelRef,
   findNormalizedProviderValue,
@@ -33,6 +37,10 @@ const OPENROUTER_COMPAT_FREE_ALIAS = "openrouter:free";
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
+};
+
+type ManifestNormalizationContext = {
+  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
 };
 
 function sanitizeModelWarningValue(value: string): string {
@@ -118,7 +126,11 @@ export function inferUniqueProviderFromConfiguredModels(params: {
         if (!modelId) {
           continue;
         }
-        if (modelId === model || normalizeLowercaseStringOrEmpty(modelId) === normalized) {
+        const normalizedModelId = normalizeConfiguredProviderCatalogModelId(providerId, modelId);
+        if (
+          normalizedModelId === model ||
+          normalizeLowercaseStringOrEmpty(normalizedModelId) === normalized
+        ) {
           addProvider(providerId);
         }
       }
@@ -179,12 +191,14 @@ function isConcreteOpenRouterFreeModelRef(ref: ModelRef): boolean {
   return ref.provider === "openrouter" && ref.model.includes("/") && ref.model.endsWith(":free");
 }
 
-function resolveConfiguredOpenRouterCompatFreeRef(params: {
-  cfg: OpenClawConfig;
-  defaultProvider: string;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
-}): ModelRef | null {
+function resolveConfiguredOpenRouterCompatFreeRef(
+  params: {
+    cfg: OpenClawConfig;
+    defaultProvider: string;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ManifestNormalizationContext,
+): ModelRef | null {
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   for (const raw of Object.keys(configuredModels)) {
     if (!raw.includes("/")) {
@@ -193,6 +207,7 @@ function resolveConfiguredOpenRouterCompatFreeRef(params: {
     const parsed = parseModelRef(raw, params.defaultProvider, {
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
+      manifestPlugins: params.manifestPlugins,
     });
     if (parsed && isConcreteOpenRouterFreeModelRef(parsed)) {
       return parsed;
@@ -211,24 +226,28 @@ function resolveConfiguredOpenRouterCompatFreeRef(params: {
     return normalizeModelRef("openrouter", modelId, {
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
+      manifestPlugins: params.manifestPlugins,
     });
   }
 
   return null;
 }
 
-export function resolveConfiguredOpenRouterCompatAlias(params: {
-  cfg?: OpenClawConfig;
-  raw: string;
-  defaultProvider: string;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
-}): ModelRef | null {
+export function resolveConfiguredOpenRouterCompatAlias(
+  params: {
+    cfg?: OpenClawConfig;
+    raw: string;
+    defaultProvider: string;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ManifestNormalizationContext,
+): ModelRef | null {
   const normalized = normalizeLowercaseStringOrEmpty(params.raw);
   if (normalized === "openrouter:auto") {
     return normalizeModelRef("openrouter", "auto", {
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
+      manifestPlugins: params.manifestPlugins,
     });
   }
   if (normalized !== OPENROUTER_COMPAT_FREE_ALIAS || !params.cfg) {
@@ -239,32 +258,38 @@ export function resolveConfiguredOpenRouterCompatAlias(params: {
     defaultProvider: params.defaultProvider,
     allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
 }
 
-function parseModelRefWithCompatAlias(params: {
-  cfg?: OpenClawConfig;
-  raw: string;
-  defaultProvider: string;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
-}): ModelRef | null {
+function parseModelRefWithCompatAlias(
+  params: {
+    cfg?: OpenClawConfig;
+    raw: string;
+    defaultProvider: string;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ManifestNormalizationContext,
+): ModelRef | null {
   return (
     resolveConfiguredOpenRouterCompatAlias(params) ??
     resolveExactConfiguredProviderRef(params) ??
     parseModelRef(params.raw, params.defaultProvider, {
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
+      manifestPlugins: params.manifestPlugins,
     })
   );
 }
 
-function resolveExactConfiguredProviderRef(params: {
-  cfg?: OpenClawConfig;
-  raw: string;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
-}): ModelRef | null {
+function resolveExactConfiguredProviderRef(
+  params: {
+    cfg?: OpenClawConfig;
+    raw: string;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ManifestNormalizationContext,
+): ModelRef | null {
   const slash = params.raw.indexOf("/");
   if (slash <= 0 || !params.cfg?.models?.providers) {
     return null;
@@ -293,6 +318,7 @@ function resolveExactConfiguredProviderRef(params: {
     provider,
     model: normalizeStaticProviderModelId(provider, modelRaw.trim(), {
       allowManifestNormalization: params.allowManifestNormalization,
+      manifestPlugins: params.manifestPlugins,
     }),
   };
 }
@@ -336,12 +362,14 @@ export function buildConfiguredAllowlistKeys(params: {
   return keys.size > 0 ? keys : null;
 }
 
-export function buildModelAliasIndex(params: {
-  cfg: OpenClawConfig;
-  defaultProvider: string;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
-}): ModelAliasIndex {
+export function buildModelAliasIndex(
+  params: {
+    cfg: OpenClawConfig;
+    defaultProvider: string;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ManifestNormalizationContext,
+): ModelAliasIndex {
   const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
   const byKey = new Map<string, string[]>();
 
@@ -353,6 +381,7 @@ export function buildModelAliasIndex(params: {
       defaultProvider: params.defaultProvider,
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
+      manifestPlugins: params.manifestPlugins,
     });
     if (!parsed) {
       continue;
@@ -420,6 +449,7 @@ function applyModelCatalogMetadata(params: {
   }
   const nextAlias = alias ?? params.entry.alias;
   const nextContextWindow = configuredEntry?.contextWindow ?? params.entry.contextWindow;
+  const nextContextTokens = configuredEntry?.contextTokens ?? params.entry.contextTokens;
   const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
   const nextInput = configuredEntry?.input ?? params.entry.input;
   const nextCompat = configuredEntry?.compat ?? params.entry.compat;
@@ -429,6 +459,7 @@ function applyModelCatalogMetadata(params: {
     name: configuredEntry?.name ?? params.entry.name,
     ...(nextAlias ? { alias: nextAlias } : {}),
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
+    ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
     ...(nextCompat ? { compat: nextCompat } : {}),
@@ -443,6 +474,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
   const configuredEntry = params.metadata.configuredByKey.get(key);
   const alias = params.metadata.aliasByKey.get(key);
   const nextContextWindow = configuredEntry?.contextWindow;
+  const nextContextTokens = configuredEntry?.contextTokens;
   const nextReasoning = configuredEntry?.reasoning;
   const nextInput = configuredEntry?.input;
   const nextCompat = configuredEntry?.compat;
@@ -453,20 +485,23 @@ function buildSyntheticAllowedCatalogEntry(params: {
     provider: params.parsed.provider,
     ...(alias ? { alias } : {}),
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
+    ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
     ...(nextCompat ? { compat: nextCompat } : {}),
   };
 }
 
-export function resolveModelRefFromString(params: {
-  cfg?: OpenClawConfig;
-  raw: string;
-  defaultProvider: string;
-  aliasIndex?: ModelAliasIndex;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
-}): { ref: ModelRef; alias?: string } | null {
+export function resolveModelRefFromString(
+  params: {
+    cfg?: OpenClawConfig;
+    raw: string;
+    defaultProvider: string;
+    aliasIndex?: ModelAliasIndex;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ManifestNormalizationContext,
+): { ref: ModelRef; alias?: string } | null {
   const { model } = splitTrailingAuthProfile(params.raw);
   if (!model) {
     return null;
@@ -482,6 +517,7 @@ export function resolveModelRefFromString(params: {
     defaultProvider: params.defaultProvider,
     allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
   if (!parsed) {
     return null;
@@ -602,7 +638,10 @@ export function buildAllowedModelSetWithFallbacks(params: {
         })
       : null;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
-  const catalogKeys = new Set(catalog.map((entry) => modelKey(entry.provider, entry.id)));
+  const catalogKeys = new Set<string>();
+  for (const entry of catalog) {
+    catalogKeys.add(modelKey(entry.provider, entry.id));
+  }
 
   if (allowAny) {
     if (defaultKey) {
@@ -802,7 +841,8 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
       continue;
     }
     for (const model of provider.models) {
-      const id = normalizeOptionalString(model?.id) ?? "";
+      const rawId = normalizeOptionalString(model?.id) ?? "";
+      const id = rawId ? normalizeConfiguredProviderCatalogModelId(providerId, rawId) : "";
       if (!id) {
         continue;
       }
@@ -810,6 +850,10 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
       const contextWindow =
         typeof model?.contextWindow === "number" && model.contextWindow > 0
           ? model.contextWindow
+          : undefined;
+      const contextTokens =
+        typeof model?.contextTokens === "number" && model.contextTokens > 0
+          ? model.contextTokens
           : undefined;
       const reasoning = typeof model?.reasoning === "boolean" ? model.reasoning : undefined;
       const input = Array.isArray(model?.input) ? model.input : undefined;
@@ -819,6 +863,7 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
         id,
         name,
         contextWindow,
+        contextTokens,
         reasoning,
         input,
         compat,

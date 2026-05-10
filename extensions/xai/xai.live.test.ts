@@ -97,7 +97,7 @@ describeLive("xai plugin live", () => {
       const cfg = createLiveConfig();
 
       const voices = await speechProvider.listVoices?.({});
-      expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "eve" })]));
+      expect(voices?.some((voice) => voice.id === "eve")).toBe(true);
 
       const audioFile = await speechProvider.synthesize({
         text: "OpenClaw xAI text to speech integration test OK.",
@@ -208,7 +208,7 @@ describeLive("xai plugin live", () => {
           console.warn(`[xai:live] skip realtime-open: billing drift: ${billingError.message}`);
           return;
         }
-        expect(errors).toEqual([]);
+        expect(errors).toStrictEqual([]);
         expect(session.isConnected()).toBe(true);
       } finally {
         session.close();

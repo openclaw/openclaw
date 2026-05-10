@@ -229,7 +229,16 @@ describe("openai codex provider", () => {
           },
         },
       ],
-      defaultModel: "openai-codex/gpt-5.5",
+      defaultModel: "openai/gpt-5.5",
+      configPatch: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {},
+            },
+          },
+        },
+      },
     });
     expect(result?.profiles[0]?.credential).not.toHaveProperty("idToken");
   });
@@ -237,6 +246,9 @@ describe("openai codex provider", () => {
   async function runRemoteDeviceCodeAuthFlow() {
     const provider = buildOpenAICodexProviderPlugin();
     const deviceCodeMethod = provider.auth?.find((method) => method.id === "device-code");
+    if (!deviceCodeMethod) {
+      throw new Error("expected OpenAI Codex device-code auth method");
+    }
     const note = vi.fn(async () => {});
     const progress = { update: vi.fn(), stop: vi.fn() };
     const runtime = {
@@ -259,7 +271,7 @@ describe("openai codex provider", () => {
     });
 
     await expect(
-      deviceCodeMethod?.run({
+      deviceCodeMethod.run({
         config: {},
         env: process.env,
         prompter: {
@@ -271,7 +283,11 @@ describe("openai codex provider", () => {
         openUrl: async () => {},
         oauth: { createVpsAwareHandlers: (() => ({})) as never },
       }),
-    ).resolves.toBeDefined();
+    ).resolves.toMatchObject({
+      profiles: expect.arrayContaining([
+        expect.objectContaining({ profileId: "openai-codex:default" }),
+      ]),
+    });
 
     return { note, runtime };
   }
@@ -401,6 +417,43 @@ describe("openai codex provider", () => {
       input: ["text", "image"],
       contextWindow: 400_000,
       contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("honors providerConfig.baseUrl in the gpt-5.5 synthesis fallback", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      modelRegistry: createSingleModelRegistry(createCodexTemplate({}), null) as never,
+      providerConfig: { baseUrl: "http://proxy.local:30400" },
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-5.5",
+      api: "openai-codex-responses",
+      baseUrl: "http://proxy.local:30400",
+    });
+  });
+
+  it("honors providerConfig.baseUrl in the gpt-5.4 synthesis fallback", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const emptyRegistry = { find: () => null };
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelRegistry: emptyRegistry as never,
+      providerConfig: { baseUrl: "http://proxy.local:30400" },
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "http://proxy.local:30400",
+      contextWindow: 1_050_000,
       maxTokens: 128_000,
     });
   });

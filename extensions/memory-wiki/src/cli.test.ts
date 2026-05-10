@@ -481,14 +481,14 @@ cli note
     });
     expect(dryRun.dryRun).toBe(true);
     expect(dryRun.createdCount).toBe(1);
-    await expect(fs.readdir(path.join(rootDir, "sources"))).resolves.toEqual([]);
+    await expect(fs.readdir(path.join(rootDir, "sources"))).resolves.toStrictEqual([]);
 
     const applied = await runWikiChatGptImport({
       config,
       exportPath: exportDir,
       json: true,
     });
-    expect(applied.runId).toBeTruthy();
+    expect(applied.runId).toMatch(/^chatgpt-[a-f0-9]{12}$/u);
     expect(applied.createdCount).toBe(1);
     const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
       (entry) => entry !== "index.md",
@@ -508,10 +508,13 @@ cli note
     expect(secondDryRun.createdCount).toBe(0);
     expect(secondDryRun.updatedCount).toBe(0);
     expect(secondDryRun.skippedCount).toBe(1);
+    if (!applied.runId) {
+      throw new Error("Expected ChatGPT import dry-run apply runId");
+    }
 
     const rollback = await runWikiChatGptRollback({
       config,
-      runId: applied.runId!,
+      runId: applied.runId,
       json: true,
     });
     expect(rollback.alreadyRolledBack).toBe(false);
@@ -519,6 +522,6 @@ cli note
       fs
         .readdir(path.join(rootDir, "sources"))
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 });

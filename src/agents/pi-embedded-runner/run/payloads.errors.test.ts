@@ -40,6 +40,13 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
   };
 
+  const expectNoPayloadTextContaining = (
+    payloads: ReturnType<typeof buildPayloads>,
+    needle: string,
+  ) => {
+    expect(payloads.some((payload) => (payload.text ?? "").includes(needle))).toBe(false);
+  };
+
   function expectSinglePayloadSummary(
     payloads: ReturnType<typeof buildPayloads>,
     expected: { text: string; isError?: boolean },
@@ -77,7 +84,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.some((payload) => payload.text === errorJson)).toBe(false);
+    expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
   });
 
   it("suppresses mutating tool warnings when an assistant error reply already covers the turn", () => {
@@ -90,8 +97,8 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.some((payload) => payload.text?.includes("Edit"))).toBe(false);
-    expect(payloads.some((payload) => payload.text?.includes("missing"))).toBe(false);
+    expectNoPayloadTextContaining(payloads, "Edit");
+    expectNoPayloadTextContaining(payloads, "missing");
   });
 
   it("keeps mutating tool warnings when assistant error artifacts are not user-facing", () => {
@@ -118,7 +125,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.some((payload) => payload.text === errorJsonPretty)).toBe(false);
+    expect(payloads.map((payload) => payload.text)).not.toContain(errorJsonPretty);
   });
 
   it("suppresses raw error JSON from fallback assistant text", () => {
@@ -127,7 +134,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
+    expectNoPayloadTextContaining(payloads, "request_id");
   });
 
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
@@ -181,7 +188,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
+    expectNoPayloadTextContaining(payloads, "request_id");
   });
 
   it("does not suppress error-shaped JSON when the assistant did not error", () => {
@@ -451,7 +458,7 @@ describe("buildEmbeddedRunPayloads", () => {
       },
     });
     const warningText = seed[0]?.text;
-    expect(warningText).toBeTruthy();
+    expect(warningText).toBe("⚠️ ✍️ Write failed");
 
     const payloads = buildPayloads({
       assistantTexts: [warningText ?? ""],

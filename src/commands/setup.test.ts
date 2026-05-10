@@ -8,9 +8,11 @@ function createSetupDeps(home: string) {
   const configPath = path.join(home, ".openclaw", "openclaw.json");
   return {
     createConfigIO: () => ({ configPath }),
-    ensureAgentWorkspace: vi.fn(async (params?: { dir?: string }) => ({
-      dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
-    })),
+    ensureAgentWorkspace: vi.fn(
+      async (params?: { dir?: string; skipOptionalBootstrapFiles?: string[] }) => ({
+        dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
+      }),
+    ),
     formatConfigPath: (value: string) => value,
     logConfigUpdated: vi.fn(
       (runtime: { log: (message: string) => void }, opts: { path?: string; suffix?: string }) => {
@@ -45,6 +47,27 @@ describe("setupCommand", () => {
 
       expect(raw).toContain('"mode": "local"');
       expect(raw).toContain('"workspace"');
+    });
+  });
+
+  it("explains that plain setup only initializes local files", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const deps = createSetupDeps(home);
+
+      await setupCommand(undefined, runtime, deps);
+
+      const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logs).toContain(
+        "Setup complete: config, workspace, and session directories are ready.",
+      );
+      expect(logs).toContain("openclaw onboard");
+      expect(logs).toContain("openclaw configure");
+      expect(logs).toContain("openclaw channels add");
     });
   });
 
@@ -111,12 +134,10 @@ describe("setupCommand", () => {
 
       await setupCommand(undefined, runtime, deps);
 
-      expect(deps.ensureAgentWorkspace).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dir: workspace,
-          skipOptionalBootstrapFiles: ["IDENTITY.md", "USER.md"],
-        }),
-      );
+      expect(deps.ensureAgentWorkspace).toHaveBeenCalledOnce();
+      const [workspaceParams] = deps.ensureAgentWorkspace.mock.calls[0] ?? [];
+      expect(workspaceParams?.dir).toBe(workspace);
+      expect(workspaceParams?.skipOptionalBootstrapFiles).toEqual(["IDENTITY.md", "USER.md"]);
     });
   });
 
@@ -142,7 +163,7 @@ describe("setupCommand", () => {
         gateway?: { mode?: string };
       };
 
-      expect(raw.agents?.defaults?.workspace).toBeTruthy();
+      expect(raw.agents?.defaults?.workspace).toBe(workspace);
       expect(raw.gateway?.mode).toBe("local");
     });
   });

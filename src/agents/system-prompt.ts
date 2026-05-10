@@ -6,6 +6,7 @@ import {
   hasNativeApprovalPromptRuntimeCapability,
   isKnownNativeApprovalPromptChannel,
 } from "../channels/plugins/native-approval-prompt.js";
+import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import {
@@ -13,6 +14,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
 import {
   buildFullBootstrapPromptLines,
@@ -63,6 +65,34 @@ type StablePromptPrefixCacheEntry = {
   value: string;
 };
 
+function normalizeSubagentDelegationMode(mode?: SubagentDelegationMode): SubagentDelegationMode {
+  return mode === "prefer" ? "prefer" : "suggest";
+}
+
+function buildSubagentDelegationPreferenceSection(params: {
+  mode: SubagentDelegationMode;
+  isMinimal: boolean;
+  hasSessionsSpawn: boolean;
+  hasSubagents: boolean;
+}): string[] {
+  if (params.isMinimal || params.mode !== "prefer" || !params.hasSessionsSpawn) {
+    return [];
+  }
+  return [
+    "## Sub-Agent Delegation",
+    "Mode: prefer. You are the responsive coordinator for this conversation.",
+    "- Reply directly only for trivial chat, clarifying questions, or a short answer already known from current context.",
+    "- Anything requiring more work than a direct reply should go through `sessions_spawn`; avoid doing expensive tool calls yourself.",
+    "- Delegate file/code inspection, shell commands, web/browser use, long reads, debugging, coding, multi-step analysis, comparisons, non-trivial summarization, and background waiting.",
+    '- Give the child a clear task. Omit `context` for isolated children; set `context:"fork"` only when current transcript details matter.',
+    "- After spawning, do not poll for completion. Child completion is push-based and returns as a runtime event; synthesize that result for the user.",
+    params.hasSubagents
+      ? "- Use `subagents(action=list|steer|kill)` only when explicitly asked for status, or when debugging/intervening; never use it in a wait loop."
+      : "",
+    "",
+  ].filter(Boolean);
+}
+
 const stablePromptPrefixCache = new Map<string, StablePromptPrefixCacheEntry>();
 
 function cacheStablePromptPrefix(key: string, build: () => string): string {
@@ -102,6 +132,10 @@ function getContextFileBasename(pathValue: string): string {
 
 function isDynamicContextFile(pathValue: string): boolean {
   return DYNAMIC_CONTEXT_FILE_BASENAMES.has(getContextFileBasename(pathValue));
+}
+
+function isBootstrapContextFile(pathValue: string): boolean {
+  return /(^|[\\/])BOOTSTRAP\.md$/iu.test(pathValue.trim());
 }
 
 function sanitizeContextFileContentForPrompt(content: string): string {
@@ -198,8 +232,8 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
   return [
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
-    `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
-    "- If multiple could apply: choose the most specific one, then read/follow it.",
+    `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.`,
+    `- If multiple could apply: choose the most specific one, read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.`,
     "- If none clearly apply: do not read any SKILL.md.",
     "Constraints: never read more than one skill up front; only read after selecting.",
     "- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
@@ -223,32 +257,97 @@ function buildMemorySection(params: {
   });
 }
 
-export function buildAgentUserPromptPrefix(params: {
+export function buildAgentBootstrapSystemContext(params: {
   bootstrapMode?: BootstrapMode;
-}): string | undefined {
+  hasBootstrapFileInProjectContext?: boolean;
+}): string[] {
   if (!params.bootstrapMode || params.bootstrapMode === "none") {
-    return undefined;
+    return [];
   }
   if (params.bootstrapMode === "limited") {
     return [
-      "[Bootstrap pending]",
+      "## Bootstrap Pending",
       ...buildLimitedBootstrapPromptLines({
         introLine:
           "Bootstrap is still pending for this workspace, but this run cannot safely complete the full BOOTSTRAP.md workflow here.",
         nextStepLine:
           "Typical next steps include switching to a primary interactive run with normal workspace access or having the user complete the canonical BOOTSTRAP.md deletion afterward.",
       }),
-    ].join("\n");
+      "",
+    ];
   }
   return [
-    "[Bootstrap pending]",
+    "## Bootstrap Pending",
     ...buildFullBootstrapPromptLines({
-      readLine:
-        "Please read BOOTSTRAP.md from the workspace and follow it before replying normally.",
+      readLine: params.hasBootstrapFileInProjectContext
+        ? "BOOTSTRAP.md is included below in Project Context; follow it before replying normally."
+        : "Please read BOOTSTRAP.md from the workspace and follow it before replying normally.",
       firstReplyLine:
         "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md, not a generic greeting.",
     }),
-  ].join("\n");
+    "",
+  ];
+}
+
+export function buildAgentBootstrapSystemPromptSupplement(params: {
+  bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
+  contextFiles?: EmbeddedContextFile[];
+}): string | undefined {
+  const supplement = buildAgentBootstrapSystemPromptSections({
+    ...params,
+    includeProjectContext: true,
+  })
+    .join("\n")
+    .trim();
+  return supplement.length > 0 ? supplement : undefined;
+}
+
+export function buildAgentBootstrapSystemPromptSections(params: {
+  bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
+  contextFiles?: EmbeddedContextFile[];
+  includeProjectContext?: boolean;
+}): string[] {
+  const bootstrapFiles =
+    params.bootstrapMode === "full"
+      ? sortContextFilesForPrompt(params.contextFiles ?? []).filter((file) =>
+          isBootstrapContextFile(file.path),
+        )
+      : [];
+  const lines = [
+    ...buildAgentBootstrapSystemContext({
+      bootstrapMode: params.bootstrapMode,
+      hasBootstrapFileInProjectContext: bootstrapFiles.length > 0,
+    }),
+  ];
+  const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
+  if (bootstrapTruncationNotice) {
+    lines.push("## Bootstrap Context Notice", bootstrapTruncationNotice, "");
+  }
+  if (params.includeProjectContext === true && bootstrapFiles.length > 0) {
+    lines.push(
+      ...buildProjectContextSection({
+        files: bootstrapFiles,
+        heading: "# Project Context",
+        dynamic: false,
+      }),
+    );
+  }
+  return lines;
+}
+
+export function appendAgentBootstrapSystemPromptSupplement(params: {
+  systemPrompt: string;
+  bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
+  contextFiles?: EmbeddedContextFile[];
+}): string {
+  const supplement = buildAgentBootstrapSystemPromptSupplement(params);
+  if (!supplement) {
+    return params.systemPrompt;
+  }
+  return `${params.systemPrompt.trimEnd()}\n\n${supplement}`;
 }
 
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
@@ -309,11 +408,7 @@ function buildAssistantOutputDirectivesSection(isMinimal: boolean) {
   ];
 }
 
-function buildWebchatCanvasSection(params: {
-  isMinimal: boolean;
-  runtimeChannel?: string;
-  canvasRootDir?: string;
-}) {
+function buildWebchatCanvasSection(params: { isMinimal: boolean; runtimeChannel?: string }) {
   if (params.isMinimal || params.runtimeChannel !== "webchat") {
     return [];
   }
@@ -325,9 +420,7 @@ function buildWebchatCanvasSection(params: {
     '- Use self-closing form for hosted embed documents: `[embed ref="cv_123" title="Status" height="320" /]`.',
     '- You may also use an explicit hosted URL: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
     '- Never use local filesystem paths or `file://...` URLs in `[embed ...]`. Hosted embeds must point at `/__openclaw__/canvas/...` URLs or use `ref="..."`.',
-    params.canvasRootDir
-      ? `- The active hosted embed root for this session is: \`${sanitizeForPromptLiteral(params.canvasRootDir)}\`. If you manually stage a hosted embed file, write it there, not in the workspace.`
-      : "- The active hosted embed root is profile-scoped, not workspace-scoped. If you manually stage a hosted embed file, write it under the active profile embed root, not in the workspace.",
+    "- The active hosted embed root is profile-scoped, not workspace-scoped. If you manually stage a hosted embed file, write it under the active profile embed root, not in the workspace.",
     "- Quote all attribute values. Prefer `ref` for hosted documents unless you already have the full `/__openclaw__/canvas/documents/<id>/index.html` URL.",
     "",
   ];
@@ -502,6 +595,51 @@ function formatFullAccessBlockedReason(reason?: EmbeddedFullAccessBlockedReason)
   }
   return "runtime constraints";
 }
+
+const MODEL_IDENTITY_PREFIX = "Current model identity:";
+
+export function buildModelIdentityPromptLine(model?: string): string | undefined {
+  const trimmed = model?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return `${MODEL_IDENTITY_PREFIX} ${trimmed}. If asked what model you are, answer with this value for the current run.`;
+}
+
+export function appendModelIdentitySystemPrompt(params: {
+  systemPrompt: string;
+  model?: string;
+}): string {
+  const line = buildModelIdentityPromptLine(params.model);
+  if (!line) {
+    return params.systemPrompt;
+  }
+
+  let replaced = false;
+  const nextLines = params.systemPrompt
+    .split(/\r?\n/u)
+    .filter((candidate) => {
+      if (!candidate.trimStart().startsWith(MODEL_IDENTITY_PREFIX)) {
+        return true;
+      }
+      if (replaced) {
+        return false;
+      }
+      replaced = true;
+      return true;
+    })
+    .map((candidate) =>
+      candidate.trimStart().startsWith(MODEL_IDENTITY_PREFIX) ? line : candidate,
+    );
+
+  if (replaced) {
+    return nextLines.join("\n");
+  }
+
+  const base = params.systemPrompt.trimEnd();
+  return base ? `${base}\n\n${line}` : line;
+}
+
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
@@ -518,6 +656,8 @@ export function buildAgentSystemPrompt(params: {
   userTime?: string;
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
+  bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   heartbeatPrompt?: string;
   docsPath?: string;
@@ -529,6 +669,8 @@ export function buildAgentSystemPrompt(params: {
   /** Controls the generic silent-reply section. Channel-aware prompts can set "none". */
   silentReplyPromptMode?: SilentReplyPromptMode;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Prompt-only strength for delegating non-trivial work through sub-agents. Defaults to "suggest". */
+  subagentDelegationMode?: SubagentDelegationMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
   /** Registered runtime slash/native command names such as `codex`. */
@@ -547,7 +689,7 @@ export function buildAgentSystemPrompt(params: {
     channel?: string;
     capabilities?: string[];
     repoRoot?: string;
-    canvasRootDir?: string;
+    activeProcessSessions?: ActiveProcessSessionReference[];
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
@@ -708,6 +850,7 @@ export function buildAgentSystemPrompt(params: {
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const runtimeInfo = params.runtimeInfo;
+  const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
   const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
   const runtimeCapabilitiesLower = new Set(
@@ -718,6 +861,7 @@ export function buildAgentSystemPrompt(params: {
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
+  const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const silentReplyPromptMode = sourceMessageToolOnly
     ? "none"
@@ -767,7 +911,9 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return ["You are a personal assistant running inside OpenClaw.", modelIdentityLine]
+      .filter(Boolean)
+      .join("\n");
   }
 
   const contextFiles = params.contextFiles ?? [];
@@ -777,6 +923,12 @@ export function buildAgentSystemPrompt(params: {
   const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
   const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
   const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
+  const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
+    bootstrapMode: params.bootstrapMode,
+    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
+    contextFiles: orderedContextFiles,
+    includeProjectContext: false,
+  });
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
     promptMode,
@@ -798,10 +950,13 @@ export function buildAgentSystemPrompt(params: {
     threadBoundAcpSpawnEnabled,
     sourceMessageToolOnly,
     silentReplyPromptMode,
+    subagentDelegationMode,
     sandboxInfo: params.sandboxInfo,
     displayWorkspaceDir,
     workspaceGuidance,
     workspaceNotes,
+    bootstrapMode: params.bootstrapMode,
+    bootstrapSystemPromptSections,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     skillsPrompt,
@@ -862,6 +1017,12 @@ export function buildAgentSystemPrompt(params: {
         : []),
       "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
       "",
+      ...buildSubagentDelegationPreferenceSection({
+        mode: subagentDelegationMode,
+        isMinimal,
+        hasSessionsSpawn,
+        hasSubagents: availableTools.has("subagents"),
+      }),
       ...buildOverridablePromptSection({
         override: providerSectionOverrides.interaction_style,
         fallback: [],
@@ -1016,6 +1177,7 @@ export function buildAgentSystemPrompt(params: {
       ...buildTimeSection({
         userTimezone,
       }),
+      ...bootstrapSystemPromptSections,
       "## Workspace Files (injected)",
       "These user-editable files are loaded by OpenClaw and included below in Project Context.",
       "",
@@ -1071,7 +1233,6 @@ export function buildAgentSystemPrompt(params: {
     ...buildWebchatCanvasSection({
       isMinimal,
       runtimeChannel,
-      canvasRootDir: params.runtimeInfo?.canvasRootDir,
     }),
     ...buildMessagingSection({
       isMinimal,
@@ -1123,10 +1284,29 @@ export function buildAgentSystemPrompt(params: {
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    ...(modelIdentityLine ? [modelIdentityLine] : []),
+    ...buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
   return lines.filter(Boolean).join("\n");
+}
+
+function buildActiveProcessSessionReferenceLines(
+  sessions: ActiveProcessSessionReference[] | undefined,
+): string[] {
+  if (!sessions?.length) {
+    return [];
+  }
+  return [
+    "Active background exec sessions in this scope:",
+    ...sessions.map((session) => {
+      const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
+      const cwd = session.cwd ? ` cwd=${sanitizeForPromptLiteral(session.cwd)}` : "";
+      return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
+    }),
+    "Use the process tool with a sessionId to poll, log, write to, or terminate these sessions. If prior context lost a sessionId, run process list.",
+  ];
 }
 
 export function buildRuntimeLine(
@@ -1140,6 +1320,7 @@ export function buildRuntimeLine(
     defaultModel?: string;
     shell?: string;
     repoRoot?: string;
+    activeProcessSessions?: ActiveProcessSessionReference[];
   },
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],

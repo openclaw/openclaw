@@ -53,6 +53,29 @@ vi.mock("../chat/build-chat-items.ts", () => ({
     stream: string | null;
     streamStartedAt: number | null;
   }) => {
+    if (
+      props.messages.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { __testDivider?: unknown }).__testDivider === true,
+      )
+    ) {
+      return [
+        {
+          kind: "divider",
+          key: "divider:compaction:test",
+          label: "Compacted history",
+          description:
+            "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+          action: {
+            kind: "session-checkpoints",
+            label: "Open checkpoints",
+          },
+          timestamp: 1,
+        },
+      ];
+    }
     if (props.messages.length > 0) {
       return [
         {
@@ -207,10 +230,12 @@ function createChatHeaderState(
           currentModel = normalized.slice(slashIndex + 1);
         } else {
           currentModel = normalized;
-          const matchingProviders = catalog
-            .filter((entry) => entry.id === normalized)
-            .map((entry) => entry.provider)
-            .filter(Boolean);
+          const matchingProviders: string[] = [];
+          for (const entry of catalog) {
+            if (entry.id === normalized && entry.provider) {
+              matchingProviders.push(entry.provider);
+            }
+          }
           currentModelProvider =
             matchingProviders.length === 1 ? matchingProviders[0] : currentModelProvider;
         }
@@ -308,6 +333,17 @@ async function flushTasks() {
   await vi.dynamicImportSettled();
 }
 
+function getChatModelSelect(container: Element): HTMLSelectElement {
+  const select = container.querySelector<HTMLSelectElement>(
+    'select[data-chat-model-select="true"]',
+  );
+  expect(select).toBeInstanceOf(HTMLSelectElement);
+  if (!(select instanceof HTMLSelectElement)) {
+    throw new Error("Expected chat model select");
+  }
+  return select;
+}
+
 function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {}) {
   const container = document.createElement("div");
   render(
@@ -344,7 +380,7 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       sidebarContent: null,
       sidebarError: null,
       splitRatio: 0.6,
-      canvasHostUrl: null,
+      canvasPluginSurfaceUrl: null,
       embedSandboxMode: "scripts",
       allowExternalEmbedUrls: false,
       assistantName: "Val",
@@ -366,12 +402,14 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       onSend: () => undefined,
       onCompact: () => undefined,
       onToggleRealtimeTalk: () => undefined,
+      onDismissError: () => undefined,
       onAbort: () => undefined,
       onQueueRemove: () => undefined,
       onQueueSteer: () => undefined,
       onDismissSideResult: () => undefined,
       onNewSession: () => undefined,
       onClearHistory: () => undefined,
+      onOpenSessionCheckpoints: () => undefined,
       agentsList: null,
       currentAgentId: "main",
       onAgentChange: () => undefined,
@@ -389,6 +427,26 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
   return container;
 }
 
+describe("chat compaction divider", () => {
+  it("renders checkpoint recovery copy and action", () => {
+    const onOpenSessionCheckpoints = vi.fn();
+    const container = renderChatView({
+      messages: [{ __testDivider: true }],
+      onOpenSessionCheckpoints,
+    });
+
+    expect(container.textContent).toContain("Compacted history");
+    expect(container.textContent).toContain("Earlier turns are preserved");
+    const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
+    expect(button?.textContent).toContain("Open checkpoints");
+
+    expect(button).toBeInstanceOf(HTMLButtonElement);
+    button!.click();
+
+    expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+  });
+});
+
 afterEach(() => {
   loadSessionsMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
@@ -401,7 +459,7 @@ describe("chat loading skeleton", () => {
   it("shows the skeleton while the initial history load has no rendered content", () => {
     const container = renderChatView({ loading: true });
 
-    expect(container.querySelector(".chat-loading-skeleton")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-loading-skeleton")).toHaveLength(1);
     expect(container.querySelector(".agent-chat__welcome")).toBeNull();
   });
 
@@ -440,7 +498,7 @@ describe("chat loading skeleton", () => {
     });
 
     expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
-    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
 });
 
@@ -448,22 +506,42 @@ describe("chat voice controls", () => {
   it("keeps Talk visible without the stale browser dictation button", () => {
     const container = renderChatView();
 
-    expect(container.querySelector('[aria-label="Start Talk"]')).not.toBeNull();
+    expect(container.querySelectorAll('[aria-label="Start Talk"]')).toHaveLength(1);
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
+  });
+
+  it("lets users dismiss Talk start errors", () => {
+    const onDismissError = vi.fn();
+    const container = renderChatView({
+      error: 'Realtime voice provider "openai" is not configured',
+      realtimeTalkStatus: "error",
+      realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
+      onDismissError,
+    });
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'Realtime voice provider "openai" is not configured',
+    );
+
+    const dismiss = container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]');
+    expect(dismiss).toBeInstanceOf(HTMLButtonElement);
+    dismiss!.click();
+
+    expect(onDismissError).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("chat slash menu accessibility", () => {
   function inputDraft(container: HTMLElement, value: string) {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).not.toBeNull();
+    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
     textarea!.value = value;
     textarea!.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
   function keydownComposer(container: HTMLElement, key: string) {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).not.toBeNull();
+    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
     textarea!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   }
 
@@ -519,12 +597,17 @@ describe("chat slash menu accessibility", () => {
       : null;
     const status = container.querySelector<HTMLElement>("#chat-slash-active-announcement");
 
-    expect(nextActiveId).toBeTruthy();
+    if (!nextActiveId) {
+      throw new Error("Expected command navigation to set aria-activedescendant");
+    }
     expect(nextActiveId).not.toBe(initialActiveId);
     expect(activeOption?.getAttribute("aria-selected")).toBe("true");
     expect(status?.getAttribute("aria-live")).toBe("polite");
-    expect(status?.textContent?.trim()).toBeTruthy();
-    expect(status?.textContent).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
+    const announcementText = status?.textContent?.trim();
+    if (!announcementText) {
+      throw new Error("Expected command navigation to update the live announcement");
+    }
+    expect(announcementText).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
   });
 
   it("wires fixed argument suggestions with command-and-argument option ids", () => {
@@ -555,11 +638,12 @@ describe("chat slash menu accessibility", () => {
 
     inputDraft(container, "/");
     container = renderChatView({ draft, onDraftChange });
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.getAttribute("aria-activedescendant"),
-    ).toBeTruthy();
+    const activeDescendant = container
+      .querySelector<HTMLTextAreaElement>("textarea")
+      ?.getAttribute("aria-activedescendant");
+    if (!activeDescendant) {
+      throw new Error("Expected slash suggestions to set aria-activedescendant");
+    }
 
     inputDraft(container, "plain message");
     container = renderChatView({ draft, onDraftChange });
@@ -588,12 +672,12 @@ describe("chat attachment picker", () => {
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
     const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
 
-    expect(input).not.toBeNull();
+    expect(input).toBeInstanceOf(HTMLInputElement);
     Object.defineProperty(input!, "files", {
       configurable: true,
       value: [file],
     });
-    input?.dispatchEvent(new Event("change", { bubbles: true }));
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
 
     await vi.waitFor(() => {
       expect(onAttachmentsChange).toHaveBeenCalledWith([
@@ -608,7 +692,7 @@ describe("chat attachment picker", () => {
     const nextAttachments = onAttachmentsChange.mock.calls[0]?.[0] ?? [];
     expect(getChatAttachmentDataUrl(nextAttachments[0])).toMatch(/^data:application\/pdf;base64,/);
     const preview = renderChatView({ attachments: nextAttachments });
-    expect(preview.querySelector(".chat-attachment-thumb--file")).not.toBeNull();
+    expect(preview.querySelectorAll(".chat-attachment-thumb--file")).toHaveLength(1);
     expect(preview.textContent).toContain("brief.pdf");
   });
 
@@ -618,12 +702,12 @@ describe("chat attachment picker", () => {
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
     const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
 
-    expect(input).not.toBeNull();
+    expect(input).toBeInstanceOf(HTMLInputElement);
     Object.defineProperty(input!, "files", {
       configurable: true,
       value: [file],
     });
-    input?.dispatchEvent(new Event("change", { bubbles: true }));
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onAttachmentsChange).not.toHaveBeenCalled();
   });
@@ -701,7 +785,6 @@ describe("chat welcome", () => {
     let container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
 
     const avatar = container.querySelector<HTMLElement>(".agent-chat__avatar");
-    expect(avatar).not.toBeNull();
     expect(avatar?.tagName).toBe("DIV");
     expect(avatar?.textContent).toContain("VC");
     expect(avatar?.getAttribute("aria-label")).toBe("Val");
@@ -712,7 +795,6 @@ describe("chat welcome", () => {
     });
 
     const imageAvatar = container.querySelector<HTMLImageElement>("img");
-    expect(imageAvatar).not.toBeNull();
     expect(imageAvatar?.getAttribute("src")).toBe("blob:identity-avatar");
     expect(imageAvatar?.getAttribute("alt")).toBe("Val");
 
@@ -721,13 +803,139 @@ describe("chat welcome", () => {
     const fallbackAvatar = container.querySelector<HTMLImageElement>(
       ".agent-chat__avatar--logo img",
     );
-    expect(fallbackAvatar).not.toBeNull();
     expect(fallbackAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
     expect(fallbackAvatar?.getAttribute("alt")).toBe("Val");
   });
 });
 
 describe("chat session controls", () => {
+  it("filters chat sessions by agent and switches to that agent's recent session", () => {
+    const { state } = createChatHeaderState();
+    const onSwitchSession = vi.fn();
+    state.sessionKey = "agent:alpha:main";
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 4,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        { key: "agent:alpha:main", kind: "direct", updatedAt: 4 },
+        { key: "agent:alpha:dashboard:alpha-recent", kind: "direct", updatedAt: 3 },
+        { key: "agent:beta:dashboard:beta-recent", kind: "direct", updatedAt: 2 },
+        { key: "agent:beta:main", kind: "direct", updatedAt: 1 },
+      ],
+    };
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    const agentSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-agent-filter="true"]',
+    );
+    const sessionSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-session-select="true"]',
+    );
+
+    expect(agentSelect?.value).toBe("alpha");
+    expect([...sessionSelect!.options].map((option) => option.value)).toEqual([
+      "agent:alpha:main",
+      "agent:alpha:dashboard:alpha-recent",
+    ]);
+
+    agentSelect!.value = "beta";
+    agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
+  });
+
+  it("falls back to the selected agent's main session when no sessions exist yet", () => {
+    const { state } = createChatHeaderState();
+    const onSwitchSession = vi.fn();
+    state.sessionKey = "agent:alpha:main";
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [{ key: "agent:alpha:main", kind: "direct", updatedAt: 4 }],
+    };
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    const agentSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-agent-filter="true"]',
+    );
+    expect(agentSelect).toBeInstanceOf(HTMLSelectElement);
+
+    agentSelect!.value = "beta";
+    agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:main");
+  });
+
+  it("renders session switch feedback in the chat controls live region", () => {
+    const { state } = createChatHeaderState();
+    state.sessionSwitchNotice = { id: 1, text: "Switched to Coding" };
+    state.sessionSwitchFlashKey = state.sessionKey;
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const notice = container.querySelector<HTMLElement>(".chat-controls__session-notice");
+    expect(notice?.getAttribute("role")).toBe("status");
+    expect(notice?.getAttribute("aria-live")).toBe("polite");
+    expect(notice?.textContent?.trim()).toBe("Switched to Coding");
+    expect(container.querySelectorAll(".chat-controls__session-row--flash")).toHaveLength(1);
+  });
+
+  it("shows the active agent main session instead of a blank select when no row exists yet", () => {
+    const { state } = createChatHeaderState();
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = "agent:main:main";
+    state.agentsList = {
+      defaultId: "main",
+      mainKey: "agent:main:main",
+      scope: "all",
+      agents: [{ id: "main", name: "MB Black" }],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 0,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const sessionSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-session-select="true"]',
+    );
+
+    expect(sessionSelect?.value).toBe("agent:main:main");
+    expect([...sessionSelect!.options].map((option) => option.value)).toEqual(["agent:main:main"]);
+    expect(sessionSelect?.selectedOptions[0]?.textContent?.trim()).toBe("main");
+  });
+
   it("patches the current session model and refreshes active tool visibility", async () => {
     const { state, request } = createChatHeaderState();
     state.agentsPanel = "tools";
@@ -741,14 +949,11 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const modelSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(modelSelect).not.toBeNull();
-    expect(modelSelect?.value).toBe("");
+    const modelSelect = getChatModelSelect(container);
+    expect(modelSelect.value).toBe("");
 
-    modelSelect!.value = "openai/gpt-5-mini";
-    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    modelSelect.value = "openai/gpt-5-mini";
+    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
@@ -771,14 +976,11 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const modelSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(modelSelect).not.toBeNull();
-    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
+    const modelSelect = getChatModelSelect(container);
+    expect(modelSelect.value).toBe("openai/gpt-5-mini");
 
-    modelSelect!.value = "";
-    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    modelSelect.value = "";
+    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
@@ -796,11 +998,8 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const modelSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(modelSelect).not.toBeNull();
-    expect(modelSelect?.disabled).toBe(true);
+    const modelSelect = getChatModelSelect(container);
+    expect(modelSelect.disabled).toBe(true);
   });
 
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
@@ -808,20 +1007,15 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const modelSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(modelSelect).not.toBeNull();
+    const modelSelect = getChatModelSelect(container);
 
-    modelSelect!.value = "openai/gpt-5-mini";
-    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    modelSelect.value = "openai/gpt-5-mini";
+    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
     render(renderChatSessionSelect(state), container);
 
-    const rerendered = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(rerendered?.value).toBe("openai/gpt-5-mini");
+    const rerendered = getChatModelSelect(container);
+    expect(rerendered.value).toBe("openai/gpt-5-mini");
   });
 
   it("uses default thinking options when the active session is absent", () => {
@@ -852,7 +1046,7 @@ describe("chat session controls", () => {
       [...(thinkingSelect?.options ?? [])]
         .find((option) => option.value === "max")
         ?.textContent?.trim(),
-    ).toBe("maximum");
+    ).toBe("Override: maximum");
   });
 
   it("labels chat thinking default from the active session row", () => {
@@ -869,8 +1063,46 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
-    expect(thinkingSelect?.title).toBe("Default (adaptive)");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
+  });
+
+  it("always renders full thinking labels", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai-codex",
+      thinkingDefault: "high",
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai-codex",
+      defaultsThinkingDefault: "high",
+      defaultsThinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "low" },
+        { id: "medium", label: "medium" },
+        { id: "high", label: "high" },
+        { id: "xhigh", label: "xhigh" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+
+    expect(container.querySelector('select[data-chat-thinking-select-compact="true"]')).toBeNull();
+    expect(thinkingSelect?.value).toBe("");
+    expect(thinkingSelect?.title).toBe("Inherited: high");
+    expect([...thinkingSelect!.options].map((option) => option.textContent?.trim())).toEqual([
+      "Inherited: high",
+      "Off",
+      "Override: low",
+      "Override: medium",
+      "Override: high",
+      "Override: xhigh",
+    ]);
   });
 
   it("labels chat thinking default from session defaults when the row is absent", () => {
@@ -886,7 +1118,7 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
-    expect(thinkingSelect?.title).toBe("Default (adaptive)");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
   });
 });

@@ -12,7 +12,7 @@ Adds the Synology Chat channel surface for sending and receiving OpenClaw messag
 ## Distribution
 
 - Package: `@openclaw/synology-chat`
-- Install route: ClawHub + npm
+- Install route: npm; ClawHub
 
 ## Surface
 

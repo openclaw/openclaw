@@ -301,7 +301,7 @@ function expectFailedInstallResult<
   if (params.code) {
     expect(params.result.code).toBe(params.code);
   }
-  expect(params.result.error).toBeDefined();
+  expect(params.result.error).toBeTypeOf("string");
   params.messageIncludes.forEach((fragment) => {
     expect(params.result.error).toContain(fragment);
   });
@@ -771,11 +771,7 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(
-      warnings.some((warning) =>
-        warning.includes("allowed because it is an official source-linked ClawHub package"),
-      ),
-    ).toBe(true);
+    expect(warnings).toStrictEqual([]);
   });
 
   it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
@@ -930,6 +926,34 @@ describe("installPluginFromArchive", () => {
     }
   });
 
+  it("rejects package installs when a TypeScript extension entry has no compiled runtime output", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "source-only-runtime-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./src/index.ts"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "src", "index.ts"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("requires compiled runtime output");
+      expect(result.error).toContain("./dist/index.js");
+      expect(result.error).toContain("plugin packaging issue");
+      expect(result.error).toContain("disable/uninstall the plugin");
+    }
+  });
+
   it("rejects package installs when runtimeExtensions length does not match extensions", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
@@ -956,6 +980,37 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
       expect(result.error).toContain("runtimeExtensions length (1)");
       expect(result.error).toContain("extensions length (2)");
+    }
+  });
+
+  it("rejects package installs when runtimeExtensions contains a blank entry", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "runtime-blank-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["./src/index.ts"],
+          runtimeExtensions: [" "],
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "src", "index.ts"), "export {};\n");
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("openclaw.runtimeExtensions[0]");
+      expect(result.error).toContain("non-empty string");
     }
   });
 
@@ -1087,7 +1142,9 @@ describe("installPluginFromArchive", () => {
       expect(result.error).toContain('Plugin "dangerous-plugin" installation blocked');
       expect(result.error).toContain("dangerous code patterns detected");
     }
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("allows package installs when dangerous scanner patterns are only in tests", async () => {
@@ -1111,7 +1168,9 @@ describe("installPluginFromArchive", () => {
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
     expect(result.ok).toBe(true);
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(false);
+    expect(warnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("still scans declared package entrypoints when they live under test-looking paths", async () => {
@@ -1933,11 +1992,7 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(
-      warnings.some((warning) =>
-        warning.includes("allowed because it is an official source-linked ClawHub package"),
-      ),
-    ).toBe(true);
+    expect(warnings).toStrictEqual([]);
   });
 
   it("does not flag the real qa-matrix plugin as dangerous install code", async () => {
@@ -2017,7 +2072,9 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Bundle "dangerous-bundle" installation blocked');
     }
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("allows bundle installs when dangerous scanner patterns are only in tests", async () => {
@@ -2035,7 +2092,9 @@ describe("installPluginFromArchive", () => {
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
     expect(result.ok).toBe(true);
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(false);
+    expect(warnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("blocks bundle installs when a vendored manifest declares a blocked dependency", async () => {
@@ -2401,7 +2460,9 @@ describe("installPluginFromArchive", () => {
         extensions: ["index.js"],
       },
     });
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
     expect(
       warnings.some((w) => w.includes("blocked by plugin hook: Blocked by enterprise policy")),
     ).toBe(true);
@@ -2543,8 +2604,12 @@ describe("installPluginFromArchive", () => {
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
     expect(result.ok).toBe(false);
-    expect(warnings.some((w) => w.includes("hidden/node_modules path"))).toBe(true);
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("hidden/node_modules path")]),
+    );
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("blocks install when scanner throws", async () => {
@@ -2571,7 +2636,7 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
       expect(result.error).toContain("code safety scan failed (Error: scanner exploded)");
     }
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
     scanSpy.mockRestore();
   });
 });
@@ -2758,7 +2823,9 @@ describe("installPluginFromDir", () => {
     });
 
     expectInstalledWithPluginId(res, extensionsDir, "matrix");
-    expect(infoMessages.some((msg) => msg.includes("differs from npm package name"))).toBe(false);
+    expect(infoMessages).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("differs from npm package name")]),
+    );
   });
 
   it.each([
@@ -3011,6 +3078,8 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
     expect(result.ok).toBe(true);
-    expect(warnings.some((w) => w.includes("Could not locate openclaw package root"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("Could not locate openclaw package root")]),
+    );
   });
 });

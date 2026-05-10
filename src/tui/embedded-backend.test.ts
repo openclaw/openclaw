@@ -4,6 +4,7 @@ import { defaultRuntime } from "../runtime.js";
 
 const agentCommandFromIngressMock = vi.fn();
 let registeredListener: ((evt: unknown) => void) | undefined;
+const embeddedEventTimestamp = Date.parse("2026-05-09T07:26:00.000Z");
 
 vi.mock("../agents/agent-command.js", () => ({
   agentCommandFromIngress: (...args: unknown[]) => agentCommandFromIngressMock(...args),
@@ -113,12 +114,15 @@ vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
 }));
 
 function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((error?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -132,6 +136,8 @@ describe("EmbeddedTuiBackend", () => {
   const originalRuntimeError = defaultRuntime.error;
 
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(embeddedEventTimestamp);
     agentCommandFromIngressMock.mockReset();
     registeredListener = undefined;
     setEmbeddedMode(false);
@@ -140,6 +146,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     setEmbeddedMode(false);
     defaultRuntime.log = originalRuntimeLog;
     defaultRuntime.error = originalRuntimeError;
@@ -203,7 +210,7 @@ describe("EmbeddedTuiBackend", () => {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "hello" }],
-            timestamp: expect.any(Number),
+            timestamp: embeddedEventTimestamp,
           },
         },
       },
@@ -225,7 +232,7 @@ describe("EmbeddedTuiBackend", () => {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "hello" }],
-            timestamp: expect.any(Number),
+            timestamp: embeddedEventTimestamp,
           },
         },
       },
@@ -271,22 +278,29 @@ describe("EmbeddedTuiBackend", () => {
       .filter((entry) => entry.event === "chat")
       .map(
         (entry) =>
-          entry.payload as { state?: string; message?: { content?: Array<{ text?: string }> } },
+          entry.payload as {
+            runId?: string;
+            sessionKey?: string;
+            state?: string;
+            stopReason?: string;
+            message?: { content?: Array<{ text?: string }> };
+          },
       );
     const nonEmptyDeltas = chatPayloads.filter(
       (payload) => payload.state === "delta" && payload.message?.content?.[0]?.text,
     );
     expect(nonEmptyDeltas).toHaveLength(0);
-    expect(chatPayloads.at(-1)).toEqual(
-      expect.objectContaining({
-        state: "final",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "No" }],
-          timestamp: expect.any(Number),
-        },
-      }),
-    );
+    expect(chatPayloads.at(-1)).toStrictEqual({
+      runId: "run-local-no",
+      sessionKey: "agent:main:main",
+      state: "final",
+      stopReason: "stop",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "No" }],
+        timestamp: embeddedEventTimestamp,
+      },
+    });
   });
 
   it("emits side-result events for local /btw runs", async () => {
@@ -332,6 +346,39 @@ describe("EmbeddedTuiBackend", () => {
     ]);
   });
 
+  it("emits side-result events for local /side alias runs", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    agentCommandFromIngressMock.mockResolvedValueOnce({
+      payloads: [{ text: "alias answer" }],
+      meta: {},
+    });
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "/side what changed?",
+      runId: "run-side-1",
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "run-side-1",
+        sessionKey: "agent:main:main",
+        question: "what changed?",
+        text: "alias answer",
+      },
+    });
+  });
+
   it("registers tool-first local runs before forwarding agent events", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
@@ -371,7 +418,7 @@ describe("EmbeddedTuiBackend", () => {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "" }],
-            timestamp: expect.any(Number),
+            timestamp: embeddedEventTimestamp,
           },
         },
       },
@@ -392,7 +439,7 @@ describe("EmbeddedTuiBackend", () => {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "done" }],
-            timestamp: expect.any(Number),
+            timestamp: embeddedEventTimestamp,
           },
         },
       },
@@ -427,6 +474,34 @@ describe("EmbeddedTuiBackend", () => {
 
     expect(result).toEqual({ ok: true, aborted: true });
     expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it("passes explicit chat timeouts to the agent command as seconds", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    agentCommandFromIngressMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+      meta: {},
+    });
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    try {
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "Wake up, my friend!",
+        runId: "run-explicit-timeout",
+        timeoutMs: 300_000,
+      });
+      await flushMicrotasks();
+
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+      const ingressOptions = agentCommandFromIngressMock.mock.calls[0]?.[0] as
+        | { timeout?: unknown }
+        | undefined;
+      expect(ingressOptions?.timeout).toBe("300");
+    } finally {
+      backend.stop();
+    }
   });
 
   it("restores embedded mode and runtime loggers on stop", async () => {

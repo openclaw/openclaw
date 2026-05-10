@@ -12,7 +12,7 @@ Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/mattermost`
-- Install route: ClawHub + npm
+- Install route: included in OpenClaw
 
 ## Surface
 
