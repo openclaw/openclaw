@@ -29,7 +29,6 @@ struct DebugSettings: View {
     @State private var tunnelResetInFlight = false
     @State private var tunnelResetStatus: String?
     @State private var pendingKill: DebugActions.PortListener?
-    @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
     @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
 
     @State private var canvasSessionKey: String = "main"
@@ -262,28 +261,10 @@ struct DebugSettings: View {
                         .labelsHidden()
                         .help("Controls the macOS app log verbosity.")
 
-                        Toggle("Write rolling diagnostics log (JSONL)", isOn: self.$diagnosticsFileLogEnabled)
-                            .toggleStyle(.checkbox)
-                            .help(
-                                "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. " +
-                                    "Enable only while actively debugging.")
-
-                        HStack(spacing: 8) {
-                            Button("Open folder") {
-                                NSWorkspace.shared.open(DiagnosticsFileLog.logDirectoryURL())
-                            }
-                            .buttonStyle(.bordered)
-                            Button("Clear") {
-                                Task { try? await DiagnosticsFileLog.shared.clear() }
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        Text(DiagnosticsFileLog.logFileURL().path)
+                        Text("Use Console.app or `log stream` for macOS app logs.")
                             .font(.caption2.monospaced())
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
                     }
                 }
             }
