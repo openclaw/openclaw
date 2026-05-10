@@ -629,6 +629,24 @@ describe("runtime.llm.complete", () => {
     ).rejects.toThrow('model override "openai/gpt-5.5" is not allowlisted');
   });
 
+  it("rejects auth-profile suffixes on complete without explicit trust", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+        allowModelOverride: true,
+      },
+    });
+
+    await expect(
+      llm.complete({
+        model: "openai/gpt-5.5@openai-codex:work",
+        messages: [{ role: "user", content: "Ping" }],
+      }),
+    ).rejects.toThrow("cannot override the auth profile");
+  });
+
   it("returns parsed structured JSON for text-only completion and validates the schema", async () => {
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
@@ -835,6 +853,44 @@ describe("runtime.llm.complete", () => {
       input: [{ type: "text", text: "Hello" }],
       jsonMode: false,
     });
+
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "openai/gpt-5.5",
+        preferredProfile: "openai-codex:work",
+      }),
+    );
+  });
+
+  it("allows auth-profile suffixes through plugin llm policy", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        plugins: {
+          entries: {
+            "trusted-plugin": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openai/gpt-5.5"],
+                allowProfileOverride: true,
+              },
+            },
+          },
+        },
+      }),
+      authority: {
+        allowComplete: true,
+      },
+    });
+
+    await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+      llm.completeStructured({
+        model: "openai/gpt-5.5@openai-codex:work",
+        instructions: "Extract summary.",
+        input: [{ type: "text", text: "Hello" }],
+        jsonMode: false,
+      }),
+    );
 
     expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
