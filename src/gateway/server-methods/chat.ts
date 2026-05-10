@@ -2260,9 +2260,14 @@ export const chatHandlers: GatewayRequestHandlers = {
           }
 
           if (modelOverride) {
+            // When imageModelPrimary is providerless, resolve against the image
+            // model's own provider context (derived from the primary or fallbacks),
+            // not the session model's provider, so catalog lookups and alias
+            // resolution use the correct provider.
+            const overrideDefaultProvider = imageModelProvider ?? modelRef.provider;
             const overrideRef = resolveModelRefFromString({
               raw: modelOverride,
-              defaultProvider: modelRef.provider,
+              defaultProvider: overrideDefaultProvider,
               aliasIndex,
             });
             if (overrideRef) {
@@ -2272,6 +2277,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             } else {
               // Alias resolution failed; use the raw modelOverride string as parseModel
               // so that resolveModelSupportsVision can still match it against imageModelConfig.
+              // Use the image model's provider context for catalog lookups.
+              parseProvider = overrideDefaultProvider;
               parseModel = modelOverride;
             }
           }

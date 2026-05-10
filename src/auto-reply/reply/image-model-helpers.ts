@@ -306,35 +306,23 @@ export async function resolveModelSupportsVision(
     if (catalogEntry !== undefined) {
       return modelSupportsVision(catalogEntry);
     }
-
-    // Catalog does not contain this model. Fall back to imageModel config
-    // as a lenient signal — the user may have configured a custom or
-    // provider-specific model that the catalog does not yet cover.
-    if (imageModelConfig) {
-      const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
-      const { keys: imageModelKeys } = collectImageModelKeys({
-        imageModelConfig,
-        aliasIndex,
-        defaultProvider,
-      });
-      if (isImageModel(provider, model, imageModelKeys)) {
-        return true;
-      }
-    }
-    return false;
   } catch {
-    // Catalog lookup failed entirely. Fall back to imageModel config.
-    if (imageModelConfig) {
-      const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
-      const { keys: imageModelKeys } = collectImageModelKeys({
-        imageModelConfig,
-        aliasIndex,
-        defaultProvider,
-      });
-      if (isImageModel(provider, model, imageModelKeys)) {
-        return true;
-      }
-    }
-    return false;
+    // Catalog lookup failed; fall through to config-based detection.
   }
+
+  // Catalog does not contain this model (or lookup failed). Fall back to
+  // imageModel config as a lenient signal — the user may have configured a
+  // custom or provider-specific model that the catalog does not yet cover.
+  if (imageModelConfig) {
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
+    const { keys: imageModelKeys } = collectImageModelKeys({
+      imageModelConfig,
+      aliasIndex,
+      defaultProvider,
+    });
+    if (isImageModel(provider, model, imageModelKeys)) {
+      return true;
+    }
+  }
+  return false;
 }

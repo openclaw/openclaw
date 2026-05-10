@@ -246,6 +246,35 @@ describe("resolveModelSupportsVision", () => {
     expect(result).toBe(false);
   });
 
+  it("falls back to imageModelConfig when catalog lookup fails and model matches", async () => {
+    mockBuildModelAliasIndex.mockReturnValue({});
+    mockResolveModelRefFromString.mockReturnValue({
+      ref: { provider: "openai", model: "gpt-4o" },
+    });
+    mockLoadModelCatalog.mockRejectedValue(new Error("catalog error"));
+
+    const result = await resolveModelSupportsVision({
+      ...baseParams,
+      imageModelConfig: { primary: "openai/gpt-4o" } as never,
+    });
+    expect(result).toBe(true);
+  });
+
+  it("falls back to imageModelConfig when catalog has no entry and model matches", async () => {
+    mockBuildModelAliasIndex.mockReturnValue({});
+    mockResolveModelRefFromString.mockReturnValue({
+      ref: { provider: "openai", model: "gpt-4o" },
+    });
+    mockLoadModelCatalog.mockResolvedValue([]);
+    mockFindModelInCatalog.mockReturnValue(undefined);
+
+    const result = await resolveModelSupportsVision({
+      ...baseParams,
+      imageModelConfig: { primary: "openai/gpt-4o" } as never,
+    });
+    expect(result).toBe(true);
+  });
+
   it("uses custom loadModelCatalog when provided", async () => {
     mockBuildModelAliasIndex.mockReturnValue({});
     mockResolveModelRefFromString.mockReturnValue(null);
