@@ -5,6 +5,8 @@ import {
   type StructuredExtractionRequest,
   type StructuredExtractionResult,
 } from "openclaw/plugin-sdk/media-understanding";
+import { validateJsonSchemaValue } from "../../src/plugins/schema-validator.js";
+import type { JsonSchemaObject } from "../../src/shared/json-schema.types.js";
 import { CODEX_PROVIDER_ID, FALLBACK_CODEX_MODELS } from "./provider-catalog.js";
 import { type CodexAppServerClientFactory } from "./src/app-server/client-factory.js";
 import type { CodexAppServerClient } from "./src/app-server/client.js";
@@ -27,7 +29,6 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./src/app-server/protocol.js";
-import { validateJsonSchemaValue } from "../../src/plugins/schema-validator.js";
 
 const DEFAULT_CODEX_IMAGE_MODEL =
   FALLBACK_CODEX_MODELS.find((model) => model.inputModalities.includes("image"))?.id ??
@@ -358,6 +359,10 @@ function buildStructuredExtractionPrompt(req: StructuredExtractionRequest): stri
     .join("\n\n");
 }
 
+function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function normalizeStructuredExtractionResult(params: {
   text: string;
   model: string;
@@ -376,7 +381,7 @@ function normalizeStructuredExtractionResult(params: {
     } catch {
       throw new Error("Codex structured extraction returned invalid JSON.");
     }
-    if (params.req.jsonSchema) {
+    if (isJsonSchemaObject(params.req.jsonSchema)) {
       const validation = validateJsonSchemaValue({
         schema: params.req.jsonSchema,
         cacheKey: "codex.media-understanding.extractStructured",
