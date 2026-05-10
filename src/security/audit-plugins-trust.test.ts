@@ -255,8 +255,8 @@ describe("security audit install metadata findings", () => {
           );
         },
         expectedPresent: [
-          "plugins.installs_unpinned_npm_specs",
-          "plugins.installs_missing_integrity",
+          "plugins.index_unpinned_npm_specs",
+          "plugins.index_missing_integrity",
           "hooks.installs_unpinned_npm_specs",
           "hooks.installs_missing_integrity",
         ],
@@ -290,8 +290,8 @@ describe("security audit install metadata findings", () => {
           );
         },
         expectedAbsent: [
-          "plugins.installs_unpinned_npm_specs",
-          "plugins.installs_missing_integrity",
+          "plugins.index_unpinned_npm_specs",
+          "plugins.index_missing_integrity",
           "hooks.installs_unpinned_npm_specs",
           "hooks.installs_missing_integrity",
         ],
@@ -326,7 +326,7 @@ describe("security audit install metadata findings", () => {
             stateDir,
           );
         },
-        expectedPresent: ["plugins.installs_version_drift", "hooks.installs_version_drift"],
+        expectedPresent: ["plugins.index_version_drift", "hooks.installs_version_drift"],
       },
     ];
 

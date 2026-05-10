@@ -301,7 +301,7 @@ Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in 
 
 Plugin install metadata is machine-managed state, not user config. Installs and updates write it to the global SQLite database at `state/openclaw.sqlite` under the active OpenClaw state directory. Its `installed_plugin_index/current` KV entry keeps the durable `installRecords` map, including records for broken or missing plugin manifests, plus the manifest-derived cold registry cache in `plugins`. Legacy `plugins/installs.json` files are doctor migration inputs only.
 
-When OpenClaw sees shipped legacy `plugins.installs` records in config, runtime reads treat them as compatibility input without rewriting `openclaw.json`. Explicit plugin writes and `openclaw doctor --fix` move those records into the plugin index and remove the config key when config writes are allowed; if either write fails, the config records are kept so the install metadata is not lost.
+Legacy `plugins.installs` records in config are migration input only. Run `openclaw doctor --fix` to import them into the plugin index and remove the config key before normal runtime use. Explicit plugin install/update/uninstall commands write the plugin index directly and keep authored config free of install records.
 
 ### Uninstall
 

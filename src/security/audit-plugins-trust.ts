@@ -451,7 +451,7 @@ export async function collectPluginsTrustFindings(params: {
       .map(([pluginId, record]) => `${pluginId} (${record.spec})`);
     if (unpinned.length > 0) {
       findings.push({
-        checkId: "plugins.installs_unpinned_npm_specs",
+        checkId: "plugins.index_unpinned_npm_specs",
         severity: "warn",
         title: "Plugin index includes unpinned npm specs",
         detail: `Unpinned plugin index install records:\n${unpinned.map((entry) => `- ${entry}`).join("\n")}`,
@@ -467,7 +467,7 @@ export async function collectPluginsTrustFindings(params: {
       .map(([pluginId]) => pluginId);
     if (missingIntegrity.length > 0) {
       findings.push({
-        checkId: "plugins.installs_missing_integrity",
+        checkId: "plugins.index_missing_integrity",
         severity: "warn",
         title: "Plugin index is missing integrity metadata",
         detail: `Plugin index records missing integrity:\n${missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
@@ -493,7 +493,7 @@ export async function collectPluginsTrustFindings(params: {
     }
     if (pluginVersionDrift.length > 0) {
       findings.push({
-        checkId: "plugins.installs_version_drift",
+        checkId: "plugins.index_version_drift",
         severity: "warn",
         title: "Plugin index records drift from installed package versions",
         detail: `Detected plugin install metadata drift:\n${pluginVersionDrift.map((entry) => `- ${entry}`).join("\n")}`,
