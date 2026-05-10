@@ -24,28 +24,36 @@ Update `ExecStart` to:
 
 - `ExecStart=/usr/bin/node /home/ec2-user/polytropos/releases/current/index.js gateway --port 18789`
 
-## Preconditions
+## Migration setup (part of the task)
 
-- `~/polytropos/releases/current` exists and points at a valid release directory.
-- The release directory is a byte-for-byte copy of an OpenClaw `dist/` tree (see `docs/polytropos/CORE-RELEASES.md`).
+Before changing `ExecStart`, perform the initial release setup described in:
 
-## Procedure (one-time)
+- `docs/polytropos/CORE-RELEASES.md`
 
-1) Stop gateway (brief downtime):
+Minimum setup required:
+
+- create `~/polytropos/releases/<version>/` as a byte-for-byte copy of the currently installed OpenClaw `dist/` directory
+- set `~/polytropos/releases/current` to point at that release
+
+## Procedure (one-time cutover)
+
+1) Ensure `~/polytropos/releases/current/index.js` exists.
+
+2) Stop gateway (brief downtime):
 
    - `systemctl --user stop openclaw-gateway`
 
-2) Edit service file in place (single change to ExecStart).
+3) Edit service file in place (single change to ExecStart).
 
-3) Reload systemd user units:
+4) Reload systemd user units:
 
    - `systemctl --user daemon-reload`
 
-4) Start gateway:
+5) Start gateway:
 
    - `systemctl --user start openclaw-gateway`
 
-5) Verify:
+6) Verify:
 
    - `openclaw gateway status`
    - `openclaw doctor --non-interactive`
