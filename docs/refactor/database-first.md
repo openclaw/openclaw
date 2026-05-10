@@ -792,6 +792,9 @@ sessionId}` and session key context.
 - The bundled session-memory hook now resolves previous-session context from
   SQLite by `{agentId, sessionId}`. It no longer scans, stores, or synthesizes
   transcript paths or `workspace/sessions` directories.
+- The bundled command-logger hook now writes command audit rows to the shared
+  SQLite `command_log_entries` table instead of appending
+  `logs/commands.log`.
 - `migration_runs` records legacy-state migration executions with status,
   timestamps, and JSON reports.
 - `migration_sources` records each imported legacy file source with hash, size,
@@ -812,7 +815,8 @@ sessionId}` and session key context.
   `cache/*.json` stores, generic `thread-bindings.json` sidecars, cron
   state/run-log JSON, config health JSON, restart and lock sidecars, Voice Wake
   settings, plugin binding approvals, installed plugin index JSON, File
-  Transfer audit JSONL, and Memory Wiki activity logs.
+  Transfer audit JSONL, Memory Wiki activity logs, and the old bundled
+  `command-logger` text log.
 
 ## Target Schema Shape
 

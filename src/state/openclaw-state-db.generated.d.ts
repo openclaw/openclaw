@@ -97,6 +97,16 @@ export interface CaptureSessions {
   started_at: number;
 }
 
+export interface CommandLogEntries {
+  action: string;
+  entry_json: string;
+  id: string;
+  sender_id: string;
+  session_key: string;
+  source: string;
+  timestamp_ms: number;
+}
+
 export interface Commitments {
   agent_id: string;
   channel: string;
@@ -358,6 +368,7 @@ export interface DB {
   capture_blobs: CaptureBlobs;
   capture_events: CaptureEvents;
   capture_sessions: CaptureSessions;
+  command_log_entries: CommandLogEntries;
   commitments: Commitments;
   cron_jobs: CronJobs;
   cron_run_logs: CronRunLogs;

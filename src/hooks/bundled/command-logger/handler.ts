@@ -23,14 +23,10 @@
  * ```
  */
 
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { resolveStateDir } from "../../../config/paths.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { appendRegularFile } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { HookHandler } from "../../hooks.js";
+import { recordCommandLogEntry } from "./store.sqlite.js";
 
 const log = createSubsystemLogger("command-logger");
 
@@ -44,26 +40,13 @@ const logCommand: HookHandler = async (event) => {
   }
 
   try {
-    // Create log directory
-    const stateDir = resolveStateDir(process.env, os.homedir);
-    const logDir = path.join(stateDir, "logs");
-    await fs.mkdir(logDir, { recursive: true });
-
-    // Append to command log file
-    const logFile = path.join(logDir, "commands.log");
-    const logLine =
-      JSON.stringify({
-        timestamp: event.timestamp.toISOString(),
-        action: event.action,
-        sessionKey: event.sessionKey,
-        senderId: event.context.senderId ?? "unknown",
-        source: event.context.commandSource ?? "unknown",
-      }) + "\n";
-
-    await appendRegularFile({
-      filePath: logFile,
-      content: logLine,
-      rejectSymlinkParents: true,
+    recordCommandLogEntry({
+      timestamp: event.timestamp,
+      action: event.action,
+      sessionKey: event.sessionKey,
+      senderId: typeof event.context.senderId === "string" ? event.context.senderId : "unknown",
+      source:
+        typeof event.context.commandSource === "string" ? event.context.commandSource : "unknown",
     });
   } catch (err) {
     const message = formatErrorMessage(err);

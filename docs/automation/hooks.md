@@ -166,7 +166,7 @@ Npm specs are registry-only (package name + optional exact version or dist-tag).
 | --------------------- | ------------------------------------------------- | -------------------------------------------------------------- |
 | session-memory        | `command:new`, `command:reset`                    | Saves session context to `<workspace>/memory/`                 |
 | bootstrap-extra-files | `agent:bootstrap`                                 | Injects additional bootstrap files from glob patterns          |
-| command-logger        | `command`                                         | Logs all commands to `~/.openclaw/logs/commands.log`           |
+| command-logger        | `command`                                         | Logs all commands to the shared SQLite state database          |
 | compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts/ends |
 | boot-md               | `gateway:startup`                                 | Runs `BOOT.md` when the gateway starts                         |
 
@@ -207,7 +207,8 @@ Paths resolve relative to workspace. Only recognized bootstrap basenames are loa
 
 ### command-logger details
 
-Logs every slash command to `~/.openclaw/logs/commands.log`.
+Logs every slash command to the `command_log_entries` table in
+`~/.openclaw/state/openclaw.sqlite`.
 
 <a id="compaction-notifier"></a>
 
