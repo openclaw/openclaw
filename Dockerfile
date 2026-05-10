@@ -124,7 +124,7 @@ RUN cp pnpm-workspace.yaml /tmp/pnpm-workspace.source.yaml && \
       printf '  - %s/%s\n' "$OPENCLAW_BUNDLED_PLUGIN_DIR" "$ext" >> /tmp/pnpm-workspace.runtime.yaml; \
     done && \
     cp /tmp/pnpm-workspace.runtime.yaml pnpm-workspace.yaml && \
-    CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod && \
+    CI=true pnpm_config_frozen_lockfile=false pnpm prune --prod && \
     cp /tmp/pnpm-workspace.source.yaml pnpm-workspace.yaml && \
     node scripts/postinstall-bundled-plugins.mjs && \
     OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs && \

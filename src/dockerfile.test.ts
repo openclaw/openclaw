@@ -123,7 +123,7 @@ describe("Dockerfile", () => {
     expect(dockerfile.split(normalizedExtensionLoop).length - 1).toBe(2);
     expect(dockerfile).toContain("pnpm-workspace.runtime.yaml");
     expect(dockerfile).toContain("  - ui\\n");
-    expect(dockerfile).toContain("CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod");
+    expect(dockerfile).toContain("CI=true pnpm_config_frozen_lockfile=false pnpm prune --prod");
     expect(dockerfile).toContain(
       'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs',
     );
@@ -149,7 +149,7 @@ describe("Dockerfile", () => {
     };
     const saveSourceWorkspace = "cp pnpm-workspace.yaml /tmp/pnpm-workspace.source.yaml";
     const usePruneWorkspace = "cp /tmp/pnpm-workspace.runtime.yaml pnpm-workspace.yaml";
-    const pruneProd = "CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod";
+    const pruneProd = "CI=true pnpm_config_frozen_lockfile=false pnpm prune --prod";
     const restoreSourceWorkspace = "cp /tmp/pnpm-workspace.source.yaml pnpm-workspace.yaml";
     const finalWorkspaceCopy =
       "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .";
