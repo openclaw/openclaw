@@ -161,11 +161,16 @@ export function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): str
     }
     const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
     const primary = resolvePrimaryStringValue(agent.model);
+    const location = `agents.list[${index}].model (id=${id})`;
     const modelStr =
       typeof agent.model === "string" ? `"${agent.model}"` : `{ primary: "${primary}" }`;
+    const shape =
+      typeof agent.model === "string"
+        ? "bare string with no fallbacks"
+        : 'object with no explicit "fallbacks" key';
     warnings.push(
       [
-        `- agents.list[${id}].model is ${modelStr} with no explicit fallbacks key. At runtime this clobbers agents.defaults.model.fallbacks (${defaultFallbacks.join(", ")}), leaving the agent with no fallbacks.`,
+        `- ${location} is ${modelStr}, a ${shape}. At runtime this clobbers agents.defaults.model.fallbacks (${defaultFallbacks.join(", ")}), leaving the agent with no fallbacks.`,
         `  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.`,
       ].join("\n"),
     );
