@@ -316,7 +316,7 @@ export async function triggerAutoTitleGeneration(params: {
     await updateSessionStoreEntry({
       storePath,
       sessionKey,
-      update: async () => ({ aiTitle: aiTitle.trim() as string }),
+      update: async () => ({ aiTitle: aiTitle.trim() }),
     });
   } catch {
     // Non-critical; don't block on failure

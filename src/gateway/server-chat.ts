@@ -182,7 +182,7 @@ export function createAgentEventHandler({
     try {
       const entry = loadSessionEntry(sessionKey);
       if (!entry.entry || !entry.storePath || !entry.entry.sessionId) { return; }
-      const cfg = await getRuntimeConfig();
+      const cfg = getRuntimeConfig();
       const titleConfig = resolveSessionTitleConfig(cfg?.agents?.defaults?.sessionTitle);
       await triggerAutoTitleGeneration({
         sessionKey,
