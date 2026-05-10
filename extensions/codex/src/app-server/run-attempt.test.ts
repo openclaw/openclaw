@@ -675,9 +675,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     const dynamicToolNames = bridge.specs.map((tool) => tool.name);
 
-    expect(dynamicToolNames).not.toEqual(
-      expect.arrayContaining(["tool_search_code", "tool_search", "tool_describe", "tool_call"]),
-    );
+    for (const toolName of ["tool_search_code", "tool_search", "tool_describe", "tool_call"]) {
+      expect(dynamicToolNames).not.toContain(toolName);
+    }
   });
 
   it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
@@ -824,36 +824,39 @@ describe("runCodexAppServerAttempt", () => {
       "assistant",
       "toolResult",
     ]);
-    expect(result.messagesSnapshot[1]).toMatchObject({
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "call-wiki-status-1",
-          name: "wiki_status",
-          arguments: { topic: "README.md" },
-          input: { topic: "README.md" },
-        },
-      ],
-    });
-    expect(result.messagesSnapshot[2]).toMatchObject({
-      role: "toolResult",
-      toolCallId: "call-wiki-status-1",
-      toolName: "wiki_status",
-      isError: false,
-      content: [
-        expect.objectContaining({
-          type: "toolResult",
-          id: "call-wiki-status-1",
-          name: "wiki_status",
-          toolName: "wiki_status",
-          toolCallId: "call-wiki-status-1",
-          toolUseId: "call-wiki-status-1",
-          tool_use_id: "call-wiki-status-1",
-          content: "wiki_status done",
-        }),
-      ],
-    });
+    const assistantMessage = result.messagesSnapshot[1];
+    if (assistantMessage?.role !== "assistant") {
+      throw new Error("expected mirrored assistant tool-call message");
+    }
+    expect(assistantMessage.content).toStrictEqual([
+      {
+        type: "toolCall",
+        id: "call-wiki-status-1",
+        name: "wiki_status",
+        arguments: { topic: "README.md" },
+        input: { topic: "README.md" },
+      },
+    ]);
+    const toolResultMessage = result.messagesSnapshot[2];
+    if (toolResultMessage?.role !== "toolResult") {
+      throw new Error("expected mirrored tool-result message");
+    }
+    expect(toolResultMessage.toolCallId).toBe("call-wiki-status-1");
+    expect(toolResultMessage.toolName).toBe("wiki_status");
+    expect(toolResultMessage.isError).toBe(false);
+    expect(toolResultMessage.content).toStrictEqual([
+      {
+        type: "toolResult",
+        id: "call-wiki-status-1",
+        name: "wiki_status",
+        toolName: "wiki_status",
+        toolCallId: "call-wiki-status-1",
+        toolUseId: "call-wiki-status-1",
+        tool_use_id: "call-wiki-status-1",
+        content: "wiki_status done",
+        text: "wiki_status done",
+      },
+    ]);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("tool_search");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("function_call_output");
   });

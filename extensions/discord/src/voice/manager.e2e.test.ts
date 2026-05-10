@@ -414,6 +414,23 @@ describe("DiscordVoiceManager", () => {
       "tts stream args",
     );
 
+  const sentUserMessages = () =>
+    Array.from(realtimeSessionMock.sendUserMessage.mock.calls).map(([message]) => String(message));
+
+  const expectUserMessageIncludes = (text: string) => {
+    expect(
+      sentUserMessages().some((message) => message.includes(text)),
+      text,
+    ).toBe(true);
+  };
+
+  const expectUserMessageNotIncludes = (text: string) => {
+    expect(
+      sentUserMessages().some((message) => message.includes(text)),
+      text,
+    ).toBe(false);
+  };
+
   const emitDecryptFailure = (manager: InstanceType<typeof managerModule.DiscordVoiceManager>) => {
     const entry = getSessionEntry(manager);
     (
@@ -1214,9 +1231,7 @@ describe("DiscordVoiceManager", () => {
 
     expect(lastAgentCommandArgs().senderIsOwner).toBe(false);
     expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("non-owner answer"),
-    );
+    expectUserMessageIncludes("non-owner answer");
   });
 
   it("keeps separate forced agent-proxy fallback timers for rapid transcripts", async () => {
@@ -1271,12 +1286,8 @@ describe("DiscordVoiceManager", () => {
     const ownerCommandArgs = agentCommandArgsAt(1);
     expect(ownerCommandArgs.message).toContain("owner question");
     expect(ownerCommandArgs.senderIsOwner).toBe(true);
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("guest answer"),
-    );
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("owner answer"),
-    );
+    expectUserMessageIncludes("guest answer");
+    expectUserMessageIncludes("owner answer");
   });
 
   it("skips incomplete and non-actionable forced agent-proxy transcripts", async () => {
@@ -1331,9 +1342,7 @@ describe("DiscordVoiceManager", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 260));
     expect(lastAgentCommandArgs().message).toContain("ship it.");
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("valid answer"),
-    );
+    expectUserMessageIncludes("valid answer");
   });
 
   it("queues forced agent-proxy answers until current realtime playback idles", async () => {
@@ -1409,55 +1418,37 @@ describe("DiscordVoiceManager", () => {
     await new Promise((resolve) => setTimeout(resolve, 260));
 
     resolveFirst?.({ payloads: [{ text: "first answer" }] });
-    await vi.waitFor(() =>
-      expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-        expect.stringContaining("first answer"),
-      ),
-    );
+    await vi.waitFor(() => expectUserMessageIncludes("first answer"));
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
 
     resolveSecond?.({ payloads: [{ text: "second answer" }] });
     resolveThird?.({ payloads: [{ text: "third answer" }] });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalledWith(
-      expect.stringContaining("second answer"),
-    );
-    expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalledWith(
-      expect.stringContaining("third answer"),
-    );
+    expectUserMessageNotIncludes("second answer");
+    expectUserMessageNotIncludes("third answer");
 
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     const firstStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as PassThrough | undefined;
     await vi.waitFor(() => expect(firstStream?.writableEnded).toBe(true));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalledWith(
-      expect.stringContaining("second answer"),
-    );
+    expectUserMessageNotIncludes("second answer");
 
     const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
       | (() => void)
       | undefined;
     idleHandler?.();
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("second answer"),
-    );
-    expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalledWith(
-      expect.stringContaining("third answer"),
-    );
+    expectUserMessageIncludes("second answer");
+    expectUserMessageNotIncludes("third answer");
 
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     const secondStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as PassThrough | undefined;
     await vi.waitFor(() => expect(secondStream?.writableEnded).toBe(true));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalledWith(
-      expect.stringContaining("third answer"),
-    );
+    expectUserMessageNotIncludes("third answer");
 
     idleHandler?.();
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("third answer"),
-    );
+    expectUserMessageIncludes("third answer");
   });
 
   it("matches agent-proxy consult tool calls to the pending transcript", async () => {
@@ -1534,9 +1525,7 @@ describe("DiscordVoiceManager", () => {
     expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-owner", {
       text: "owner answer",
     });
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("guest fallback answer"),
-    );
+    expectUserMessageIncludes("guest fallback answer");
   });
 
   it("reuses forced agent-proxy answers for late matching consult tool calls", async () => {
@@ -1597,9 +1586,7 @@ describe("DiscordVoiceManager", () => {
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("forced answer"),
-    );
+    expectUserMessageIncludes("forced answer");
     expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith(
       "call-late",
       {
@@ -1675,9 +1662,7 @@ describe("DiscordVoiceManager", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("I hit an error while checking that. Please try again."),
-    );
+    expectUserMessageIncludes("I hit an error while checking that. Please try again.");
     expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith(
       "call-late",
       {
@@ -1754,9 +1739,7 @@ describe("DiscordVoiceManager", () => {
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("forced answer"),
-    );
+    expectUserMessageIncludes("forced answer");
     expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-late", {
       error: "Discord speaker context changed before this realtime consult completed",
     });
@@ -1769,9 +1752,7 @@ describe("DiscordVoiceManager", () => {
     const followupCommandArgs = agentCommandArgsAt(1);
     expect(followupCommandArgs.message).toContain("guest followup");
     expect(followupCommandArgs.senderIsOwner).toBe(false);
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("guest answer"),
-    );
+    expectUserMessageIncludes("guest answer");
   });
 
   it("prefers the newest recent agent-proxy consult for repeated questions", async () => {
@@ -1854,9 +1835,7 @@ describe("DiscordVoiceManager", () => {
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("new forced answer"),
-    );
+    expectUserMessageIncludes("new forced answer");
     expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith(
       "call-new",
       {
@@ -1911,9 +1890,7 @@ describe("DiscordVoiceManager", () => {
     await new Promise((resolve) => setTimeout(resolve, 260));
 
     expect(lastAgentCommandArgs().senderIsOwner).toBe(false);
-    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining("guest answer"),
-    );
+    expectUserMessageIncludes("guest answer");
   });
 
   it("starts Discord realtime voice in bidi mode with the consult tool", async () => {
@@ -2669,7 +2646,9 @@ describe("DiscordVoiceManager", () => {
     expect(lastTtsStreamArgs().disableFallback).toBe(true);
     expect(lastTtsStreamArgs().text).toBe("hello back");
     expect(textToSpeechMock).not.toHaveBeenCalled();
-    expect(createAudioResourceMock).toHaveBeenCalledWith(expect.anything());
+    expect(
+      lastMockCall(createAudioResourceMock as unknown as MockCallSource, "audio resource")[0],
+    ).toBeDefined();
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
   });
 

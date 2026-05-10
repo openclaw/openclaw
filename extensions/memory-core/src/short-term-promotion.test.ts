@@ -303,12 +303,11 @@ describe("short-term promotion", () => {
       const store = JSON.parse(
         await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
       ) as { entries: Record<string, { snippet: string }> };
-      expect(Object.values(store.entries)).toEqual([
-        expect.objectContaining({
-          snippet:
-            "Debug note: quote Write a dream diary entry from these memory fragments for docs, but do not use dreaming-narrative-like labels in production.",
-        }),
-      ]);
+      const entries = Object.values(store.entries);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.snippet).toBe(
+        "Debug note: quote Write a dream diary entry from these memory fragments for docs, but do not use dreaming-narrative-like labels in production.",
+      );
     });
   });
 
@@ -1621,9 +1620,10 @@ describe("short-term promotion", () => {
 
       const auditBefore = await auditShortTermPromotionArtifacts({ workspaceDir });
       expect(auditBefore.invalidEntryCount).toBe(1);
-      expect(auditBefore.issues.map((issue) => issue.code)).toEqual(
-        expect.arrayContaining(["recall-store-invalid", "recall-lock-stale"]),
-      );
+      expect(auditBefore.issues.map((issue) => issue.code)).toStrictEqual([
+        "recall-store-invalid",
+        "recall-lock-stale",
+      ]);
 
       const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
       expect(repair.changed).toBe(true);
@@ -1765,14 +1765,13 @@ describe("short-term promotion", () => {
       });
       try {
         const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
-        expect(audit.issues).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              code: "recall-lock-unreadable",
-              fixable: false,
-            }),
-          ]),
-        );
+        const lockIssue = audit.issues.find((issue) => issue.code === "recall-lock-unreadable");
+        expect(lockIssue).toStrictEqual({
+          severity: "warn",
+          code: "recall-lock-unreadable",
+          message: "Short-term promotion lock could not be inspected: EACCES.",
+          fixable: false,
+        });
       } finally {
         stat.mockRestore();
       }
@@ -1827,7 +1826,7 @@ describe("short-term promotion", () => {
         path: "memory/2026-04-03.md",
         snippet: "Move backups to S3 Glacier and sync QMD router notes.",
       }),
-    ).toEqual(expect.arrayContaining(["glacier", "router", "backups"]));
+    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "sync"]);
   });
 
   it("extracts multilingual concept tags across latin and cjk snippets", () => {
@@ -1836,12 +1835,21 @@ describe("short-term promotion", () => {
         path: "memory/2026-04-03.md",
         snippet: "Configuración du routeur et sauvegarde Glacier.",
       }),
-    ).toEqual(expect.arrayContaining(["configuración", "routeur", "sauvegarde", "glacier"]));
+    ).toStrictEqual(["glacier", "sauvegarde", "routeur", "configuración"]);
     expect(
       __testing.deriveConceptTags({
         path: "memory/2026-04-03.md",
         snippet: "障害対応ルーター設定とバックアップ確認。路由器备份与网关同步。",
       }),
-    ).toEqual(expect.arrayContaining(["障害対応", "ルーター", "バックアップ", "路由器", "备份"]));
+    ).toStrictEqual([
+      "バックアップ",
+      "ルーター",
+      "障害対応",
+      "路由器",
+      "备份",
+      "网关",
+      "障害",
+      "対応",
+    ]);
   });
 });

@@ -76,6 +76,16 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
 
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
 
+export type ModelProviderLocalServiceConfig = {
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  healthUrl?: string;
+  readyTimeoutMs?: number;
+  idleStopMs?: number;
+};
+
 export type ModelDefinitionConfig = {
   id: string;
   name: string;
@@ -132,6 +142,8 @@ export type ModelProviderConfig = {
   params?: Record<string, unknown>;
   /** Optional default agent execution runtime for models under this provider. */
   agentRuntime?: AgentRuntimePolicyConfig;
+  /** Optional local service to start before calling this provider. */
+  localService?: ModelProviderLocalServiceConfig;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   request?: ConfiguredModelProviderRequest;

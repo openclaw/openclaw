@@ -232,7 +232,7 @@ describe("TwitchClientManager", () => {
       await manager.getClient(testAccount);
 
       expect(mockOnMessage).toHaveBeenCalled();
-      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("Set up handlers for"));
+      expect(mockLogger.info).toHaveBeenCalledWith("Set up handlers for testbot:testchannel");
     });
 
     it("should create separate clients for same account with different channels", async () => {
@@ -279,7 +279,7 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       expect(mockQuit).toHaveBeenCalledTimes(1);
-      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("Disconnected"));
+      expect(mockLogger.info).toHaveBeenCalledWith("Disconnected testbot:testchannel");
     });
 
     it("should clear client and message handler", async () => {

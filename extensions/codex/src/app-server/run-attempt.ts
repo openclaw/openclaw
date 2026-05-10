@@ -640,6 +640,7 @@ export async function runCodexAppServerAttempt(
     promptText = projection.promptText;
     prePromptMessageCount = projection.prePromptMessageCount;
   }
+  promptText = prependCurrentTurnContext(promptText, params.currentTurnContext);
   const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
     prompt: promptText,
     developerInstructions,
@@ -2490,6 +2491,14 @@ function isNonEmptyString(value: unknown): value is string {
 
 function joinPresentSections(...sections: Array<string | undefined>): string {
   return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
+}
+
+function prependCurrentTurnContext(
+  prompt: string,
+  context: EmbeddedRunAttemptParams["currentTurnContext"],
+): string {
+  const text = context?.text.trim();
+  return text ? [text, prompt].filter(Boolean).join("\n\n") : prompt;
 }
 
 function handleApprovalRequest(params: {

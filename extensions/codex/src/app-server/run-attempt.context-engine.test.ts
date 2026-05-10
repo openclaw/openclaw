@@ -237,14 +237,18 @@ function expectRequestInputTextContains(
   harness: ReturnType<typeof createStartedThreadHarness>,
   expected: string,
 ): void {
+  expect(getRequestInputText(harness)).toContain(expected);
+}
+
+function getRequestInputText(harness: ReturnType<typeof createStartedThreadHarness>): string {
   const params = requireRequestParams(harness, "turn/start");
   const input = requireArray(params.input, "turn/start input");
-  expect(
-    input.some((entry) => {
+  return input
+    .map((entry) => {
       const item = requireRecord(entry, "turn/start input entry");
-      return item.type === "text" && optionalString(item.text).includes(expected);
-    }),
-  ).toBe(true);
+      return item.type === "text" ? optionalString(item.text) : "";
+    })
+    .join("\n");
 }
 
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {
@@ -308,6 +312,37 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
     expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps current-turn context at the front of the Codex context-engine prompt", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("older context", Date.now()) as never,
+    );
+    const contextEngine = createContextEngine();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.currentTurnContext = {
+      text: [
+        "Conversation context (untrusted, chronological, selected for current message):",
+        "#6474 Sun 2026-05-10 22:22 GMT+5:30 [reply target] OpenClaw: anchor REPLYCTX this is the old message",
+        "#6498 Sun 2026-05-10 22:22 GMT+5:30 OpenClaw: filler REPLYCTX 23",
+      ].join("\n"),
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const inputText = getRequestInputText(harness);
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("Current user request:\nhello");
+    expect(inputText).toContain("[reply target] OpenClaw: anchor REPLYCTX");
+    expect(inputText.trim().startsWith("Conversation context (untrusted")).toBe(true);
+
+    await harness.completeTurn();
+    await run;
   });
 
   it("calls afterTurn with the mirrored transcript and runs turn maintenance", async () => {
