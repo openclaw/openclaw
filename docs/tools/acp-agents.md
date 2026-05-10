@@ -180,7 +180,7 @@ Quick `/acp` flow from chat:
     arguments or rewrite Codex thread records. Use explicit ACP only
     when you want the ACP runtime/session model. The embedded Codex
     support boundary is documented in the
-    [Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
+    [Codex harness v1 support contract](/plugins/codex-harness-runtime#v1-support-contract).
 
   </Accordion>
   <Accordion title="Model / provider / runtime selection cheat sheet">
@@ -840,6 +840,7 @@ permission modes, see
 - [Agent send](/tools/agent-send)
 - [CLI Backends](/gateway/cli-backends)
 - [Codex harness](/plugins/codex-harness)
+- [Codex harness runtime](/plugins/codex-harness-runtime)
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
 - [`openclaw acp` (bridge mode)](/cli/acp)
 - [Sub-agents](/tools/subagents)

@@ -1416,10 +1416,11 @@ export async function runReplyAgent(params: {
         });
       }
     }
-    const cliSessionId = isCliProvider(providerUsed, cfg)
+    const usedCliProvider = isCliProvider(providerUsed, cfg);
+    const cliSessionId = usedCliProvider
       ? normalizeOptionalString(runResult.meta?.agentMeta?.sessionId)
       : undefined;
-    const cliSessionBinding = isCliProvider(providerUsed, cfg)
+    const cliSessionBinding = usedCliProvider
       ? runResult.meta?.agentMeta?.cliSessionBinding
       : undefined;
     const runtimeContextTokens =
@@ -1447,6 +1448,7 @@ export async function runReplyAgent(params: {
       usage,
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
+      usageIsContextSnapshot: usedCliProvider ? true : undefined,
       modelUsed,
       providerUsed,
       contextTokensUsed,

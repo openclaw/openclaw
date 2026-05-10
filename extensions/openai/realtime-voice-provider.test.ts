@@ -1037,6 +1037,39 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
   });
 
+  it("does not request a realtime response for suppressed tool results", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.submitToolResult("call_1", { status: "already_delivered" }, { suppressResponse: true });
+
+    expect(parseSent(socket).slice(-1)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: JSON.stringify({ status: "already_delivered" }),
+        },
+      },
+    ]);
+    expect(parseSent(socket)).not.toContainEqual({ type: "response.create" });
+  });
+
   it("does not flush deferred response.create while a tool result is still continuing", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();

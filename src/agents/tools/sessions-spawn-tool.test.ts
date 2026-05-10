@@ -292,6 +292,70 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("accepts taskName as a stable subagent handle", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, { description?: string; type?: string } | undefined>;
+    };
+
+    expect(requireSchemaProperty(schema.properties, "taskName").description).toContain(
+      "Stable optional alias",
+    );
+
+    const result = await tool.execute("call-task-name", {
+      task: "review subagent handling",
+      taskName: "review_subagents",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:1",
+    });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "review subagent handling",
+        taskName: "review_subagents",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects invalid taskName before spawning", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-bad-task-name", {
+      task: "review subagent handling",
+      taskName: "Bad-Name",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    expect(JSON.stringify(result.details)).toContain("Invalid taskName");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["last", "all"])("rejects reserved taskName %s before spawning", async (taskName) => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute(`call-reserved-task-name-${taskName}`, {
+      task: "review subagent handling",
+      taskName,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    expect(JSON.stringify(result.details)).toContain("Reserved subagent targets");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { status: "error" as const, error: "spawn failed" },
     { status: "forbidden" as const, error: "not allowed" },

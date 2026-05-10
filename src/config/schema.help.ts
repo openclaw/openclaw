@@ -162,6 +162,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Realtime provider model id override for browser or Gateway-owned Talk sessions.",
   "talk.realtime.voice":
     "Realtime provider voice id override for browser or Gateway-owned Talk sessions.",
+  "talk.realtime.instructions":
+    "Additional system instructions appended to OpenClaw's built-in realtime Talk prompt. Use this for voice style, tone, and other provider-facing realtime behavior while keeping agent-consult guidance intact.",
   "talk.realtime.mode": "Talk execution mode: realtime, stt-tts, or transcription.",
   "talk.realtime.transport":
     "Talk byte/session transport: webrtc, provider-websocket, gateway-relay, or managed-room.",

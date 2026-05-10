@@ -24,6 +24,25 @@ describe("OpenClawSchema talk validation", () => {
     ).toThrow(/consultThinkingLevel/i);
   });
 
+  it("accepts additional realtime Talk instructions", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          realtime: {
+            provider: "openai",
+            providers: {
+              openai: {
+                model: "gpt-realtime",
+                voice: "alloy",
+              },
+            },
+            instructions: "Speak with crisp diction.",
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it.each([
     ["boolean", true],
     ["string", "1500"],

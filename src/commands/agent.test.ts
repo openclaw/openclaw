@@ -380,13 +380,13 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-        scope: "all",
-        config: expect.any(Object),
-        activationSourceConfig: expect.any(Object),
-        workspaceDir: path.join(home, "openclaw"),
-        onlyPluginIds: ["codex"],
-      });
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledOnce();
+      const registryLoad = pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls[0]?.[0];
+      expect(registryLoad?.scope).toBe("all");
+      expect(registryLoad?.config).toBeTypeOf("object");
+      expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
+      expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
+      expect(registryLoad?.onlyPluginIds).toEqual(["codex"]);
       expectLastRunProviderModel("openai", "gpt-5.2");
     });
   });
@@ -541,11 +541,9 @@ describe("agentCommand", () => {
         { sendMessageTelegram },
       );
 
-      expect(sendMessageTelegram).toHaveBeenCalledWith(
-        "+1222",
-        "assistant-visible",
-        expect.objectContaining({ verbose: false }),
-      );
+      expect(sendMessageTelegram).toHaveBeenCalledWith("+1222", "assistant-visible", {
+        verbose: false,
+      });
       expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
       const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
         .calls[0]?.[0];
@@ -567,13 +565,9 @@ describe("agentCommand", () => {
       await agentCommand({ message: "ping", agentId: "main" }, runtime);
 
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openai",
-          model: "gpt-5.5",
-          fastMode: true,
-        }),
-      );
+      expect(callArgs?.provider).toBe("openai");
+      expect(callArgs?.model).toBe("gpt-5.5");
+      expect(callArgs?.fastMode).toBe(true);
     });
   });
 
@@ -593,13 +587,11 @@ describe("agentCommand", () => {
 
       expect(loadModelCatalog).not.toHaveBeenCalled();
       expectLastRunProviderModel("openrouter", "openrouter/auto");
-      expect(modelSelectionModule.resolveThinkingDefault).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "auto",
-          catalog: undefined,
-        }),
-      );
+      const thinkingDefaultCall = vi.mocked(modelSelectionModule.resolveThinkingDefault).mock
+        .calls[0]?.[0];
+      expect(thinkingDefaultCall?.provider).toBe("openrouter");
+      expect(thinkingDefaultCall?.model).toBe("auto");
+      expect(thinkingDefaultCall?.catalog).toBeUndefined();
     });
   });
 
@@ -620,15 +612,11 @@ describe("agentCommand", () => {
       );
 
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "openrouter/auto",
-          modelRun: true,
-          promptMode: "none",
-          disableTools: true,
-        }),
-      );
+      expect(callArgs?.provider).toBe("openrouter");
+      expect(callArgs?.model).toBe("openrouter/auto");
+      expect(callArgs?.modelRun).toBe(true);
+      expect(callArgs?.promptMode).toBe("none");
+      expect(callArgs?.disableTools).toBe(true);
     });
   });
 
@@ -673,16 +661,12 @@ describe("agentCommand", () => {
 
       expect(runTurn).not.toHaveBeenCalled();
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "openrouter/auto",
-          prompt: "Reply with exactly OPENCLAW-MODEL-OK",
-          modelRun: true,
-          promptMode: "none",
-          disableTools: true,
-        }),
-      );
+      expect(callArgs?.provider).toBe("openrouter");
+      expect(callArgs?.model).toBe("openrouter/auto");
+      expect(callArgs?.prompt).toBe("Reply with exactly OPENCLAW-MODEL-OK");
+      expect(callArgs?.modelRun).toBe(true);
+      expect(callArgs?.promptMode).toBe("none");
+      expect(callArgs?.disableTools).toBe(true);
     });
   });
 

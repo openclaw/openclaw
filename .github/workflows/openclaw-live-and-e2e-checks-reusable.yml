@@ -523,6 +523,8 @@ jobs:
           install-bun: "true"
 
       - name: Build dist for repo E2E
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run repo E2E suite
@@ -568,6 +570,8 @@ jobs:
             (inputs.include_live_suites && matrix.requires_live_suites)
           ) &&
           (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Configure suite-specific env

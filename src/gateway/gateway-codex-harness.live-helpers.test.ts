@@ -124,6 +124,13 @@ describe("gateway codex harness live helpers", () => {
     ).toBe(true);
   });
 
+  it("accepts the online idle status emitted by current codex", () => {
+    const text =
+      "I'm online in `/tmp/openclaw-live-codex-harness-KiaUQ4/workspace/dev`, with workspace-write access. No active task is running right now.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
   it("accepts the completed-work status emitted by current codex", () => {
     const text = "No active work is running. Ready for the next task.";
 

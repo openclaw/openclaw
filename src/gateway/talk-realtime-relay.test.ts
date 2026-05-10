@@ -245,6 +245,13 @@ describe("talk realtime gateway relay", () => {
       callId: "call-1",
       result: { ok: true },
     });
+    submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-2",
+      result: { status: "already_delivered" },
+      options: { suppressResponse: true },
+    });
     cancelTalkRealtimeRelayTurn({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
@@ -261,6 +268,12 @@ describe("talk realtime gateway relay", () => {
       { willContinue: true },
     );
     expect(bridge.submitToolResult).toHaveBeenNthCalledWith(2, "call-1", { ok: true }, undefined);
+    expect(bridge.submitToolResult).toHaveBeenNthCalledWith(
+      3,
+      "call-2",
+      { status: "already_delivered" },
+      { suppressResponse: true },
+    );
     expect(bridge.handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
     expect(bridge.close).toHaveBeenCalled();
     expect(events).toEqual(

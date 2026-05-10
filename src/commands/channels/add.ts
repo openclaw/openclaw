@@ -6,6 +6,11 @@ import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import {
+  formatUnknownChannelMessage,
+  formatUnsupportedChannelActionMessage,
+} from "../../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -345,7 +350,7 @@ export async function channelsAddCommand(
   if (!channel) {
     const hint = catalogEntry
       ? `Plugin ${catalogEntry.meta.label} could not be loaded after install. Run openclaw doctor --fix, then retry openclaw channels add.`
-      : `Unknown channel: ${rawChannel}. Run openclaw channels list --all to see configured and installable channels.`;
+      : formatUnknownChannelMessage({ channel: rawChannel });
     runtime.error(hint);
     runtime.exit(1);
     return;
@@ -354,7 +359,10 @@ export async function channelsAddCommand(
   const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
   if (!plugin?.setup?.applyAccountConfig) {
     runtime.error(
-      `Channel ${channel} does not support non-interactive add. Run openclaw channels add with no flags for guided setup, or openclaw channels list --all to inspect available channels.`,
+      `${formatUnsupportedChannelActionMessage({
+        channel,
+        action: "non-interactive add",
+      })} Run ${formatCliCommand("openclaw channels add")} with no flags for guided setup.`,
     );
     runtime.exit(1);
     return;

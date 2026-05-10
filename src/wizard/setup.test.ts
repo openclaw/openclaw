@@ -67,7 +67,7 @@ const finalizeSetupWizard = vi.hoisted(() =>
     }
 
     const hatch = await options.prompter.select({
-      message: "Choose your first chat surface",
+      message: "How do you want to hatch your agent?",
       options: [],
     });
     if (hatch !== "tui") {
@@ -352,7 +352,7 @@ describe("runSetupWizard", () => {
       if (message === "Select channel (QuickStart)") {
         return "__skip__";
       }
-      if (message === "Choose your first chat surface") {
+      if (message === "How do you want to hatch your agent?") {
         return "skip";
       }
       return "skip";
@@ -543,7 +543,7 @@ describe("runSetupWizard", () => {
     }
 
     const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
-      if (opts.message === "Choose your first chat surface") {
+      if (opts.message === "How do you want to hatch your agent?") {
         return "tui";
       }
       return "quickstart";

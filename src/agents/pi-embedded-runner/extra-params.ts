@@ -14,6 +14,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
+import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
@@ -131,7 +132,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
 };
-export type SupportedTransport = "sse" | "websocket" | "auto";
+export type SupportedTransport = AgentRuntimeTransport;
 
 function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
   return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;

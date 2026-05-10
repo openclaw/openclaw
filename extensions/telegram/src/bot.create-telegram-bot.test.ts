@@ -415,6 +415,71 @@ describe("createTelegramBot", () => {
     expect(events).toEqual(["busy:start", "status", "busy:end"]);
   });
 
+  it("lets Telegram topic messages without chat forum metadata use separate lanes", async () => {
+    installPerKeySequentializer();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    const events: string[] = [];
+    let releaseFirstTopic!: () => void;
+    const firstTopicGate = new Promise<void>((resolve) => {
+      releaseFirstTopic = resolve;
+    });
+
+    createTelegramBot({ token: "tok" });
+    const sequentializer = sequentializeSpy.mock.results[0]?.value as
+      | TelegramMiddleware
+      | undefined;
+    expect(sequentializer).toBeDefined();
+    if (!sequentializer) {
+      return;
+    }
+
+    const topicCtx = (threadId: number, updateId: number) => {
+      const base = makeForumGroupMessageCtx({ threadId, text: `topic ${threadId}` });
+      return {
+        ...base,
+        message: {
+          ...base.message,
+          message_id: updateId,
+          is_topic_message: true,
+          chat: {
+            id: -1001234567890,
+            type: "supergroup",
+            title: "Forum Group",
+          },
+        },
+        update: { update_id: updateId },
+      };
+    };
+
+    const firstPromise = sequentializer(topicCtx(10, 301), async () => {
+      events.push("first:start");
+      await firstTopicGate;
+      events.push("first:end");
+    });
+
+    await flushTelegramTestMicrotasks();
+    expect(events).toEqual(["first:start"]);
+
+    await sequentializer(topicCtx(20, 302), async () => {
+      events.push("second");
+    });
+
+    expect(events).toEqual(["first:start", "second"]);
+
+    releaseFirstTopic();
+    await firstPromise;
+    expect(events).toEqual(["first:start", "second", "first:end"]);
+  });
+
   it("keeps ordinary Telegram messages serialized within the same topic", async () => {
     installPerKeySequentializer();
     loadConfig.mockReturnValue({

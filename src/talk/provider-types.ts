@@ -50,6 +50,11 @@ export type RealtimeVoiceToolCallEvent = {
 };
 
 export type RealtimeVoiceToolResultOptions = {
+  /**
+   * Submit the tool result without prompting the realtime provider to generate a new assistant
+   * response. Use when another channel has already delivered the user-visible answer.
+   */
+  suppressResponse?: boolean;
   willContinue?: boolean;
 };
 

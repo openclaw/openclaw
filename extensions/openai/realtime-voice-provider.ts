@@ -368,6 +368,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     this.continuingToolCallIds.delete(callId);
+    if (options?.suppressResponse === true) {
+      return;
+    }
     this.requestResponseCreate();
   }
 

@@ -109,7 +109,8 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('"all-since-"');
     expect(workflow).toContain("npm-onboard-channel-agent gateway-network config-reload");
     expect(workflow).toContain("npm-onboard-channel-agent doctor-switch");
-    expect(workflow).toContain("update-channel-switch update-corrupt-plugin upgrade-survivor");
+    expect(workflow).toContain("update-channel-switch skill-install update-corrupt-plugin");
+    expect(workflow).toContain("update-corrupt-plugin upgrade-survivor");
     expect(workflow).toContain("published-upgrade-survivor");
     expect(workflow).toContain("published-upgrade-survivor update-restart-auth");
     expect(workflow).toContain("plugins-offline plugin-update");
@@ -558,7 +559,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("suite_profile: custom");
     expect(workflow).toContain(
-      "docker_lanes: doctor-switch update-channel-switch update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update",
+      "docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update",
     );
     expect(workflow).toContain(
       "published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}",
@@ -646,6 +647,21 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("PACKAGE_TELEGRAM_RESULT:");
     expect(workflow).toContain("package_telegram=${PACKAGE_TELEGRAM_RESULT}");
     expect(workflow).not.toContain("npm_telegram:");
+  });
+
+  it("gives release build steps enough Node heap", () => {
+    for (const workflowPath of [LIVE_E2E_WORKFLOW, RELEASE_CHECKS_WORKFLOW]) {
+      const jobs = readWorkflow(workflowPath).jobs ?? {};
+      for (const [jobName, job] of Object.entries(jobs)) {
+        for (const step of job.steps ?? []) {
+          if (step.run === "pnpm build") {
+            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toMatchObject({
+              NODE_OPTIONS: "--max-old-space-size=8192",
+            });
+          }
+        }
+      }
+    }
   });
 
   it("runs full release children from the trusted workflow ref", () => {

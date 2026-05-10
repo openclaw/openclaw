@@ -54,6 +54,8 @@ export type TalkRealtimeConfig = {
   model?: string;
   /** Provider voice override for realtime sessions. */
   voice?: string;
+  /** Additional system instructions appended to realtime Talk sessions. */
+  instructions?: string;
   /** Realtime execution mode. */
   mode?: "realtime" | "stt-tts" | "transcription";
   /** Byte/session transport. */
