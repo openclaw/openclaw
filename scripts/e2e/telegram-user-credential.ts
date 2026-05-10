@@ -165,7 +165,7 @@ async function tgzBase64(path: string) {
 
 async function writePrivateJson(path: string, payload: JsonObject) {
   const expanded = expandHome(path);
-  await mkdir(expanded.substring(0, expanded.lastIndexOf("/")), { recursive: true });
+  await mkdir(expanded.slice(0, expanded.lastIndexOf("/")), { recursive: true });
   await writeFile(expanded, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   await chmodPrivate(expanded);
 }
