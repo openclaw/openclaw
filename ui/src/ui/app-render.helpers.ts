@@ -310,9 +310,9 @@ export function renderChatControls(state: AppViewState) {
       </button>
       <button
         class="btn btn--sm btn--icon ${state.settings.chatExpandToolCalls ? "active" : ""}"
-        ?disabled=${!showToolCalls}
+        ?disabled=${disableThinkingToggle || !showToolCalls}
         @click=${() => {
-          if (!showToolCalls) {
+          if (disableThinkingToggle || !showToolCalls) {
             return;
           }
           state.applySettings({
@@ -321,7 +321,7 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${state.settings.chatExpandToolCalls}
-        title=${!showToolCalls ? t("chat.onboardingDisabled") : t("chat.expandToolCallsToggle")}
+        title=${disableThinkingToggle || !showToolCalls ? t("chat.onboardingDisabled") : t("chat.expandToolCallsToggle")}
       >
         ${expandToolCallsIcon}
       </button>
