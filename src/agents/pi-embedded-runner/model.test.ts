@@ -1315,6 +1315,7 @@ describe("resolveModel", () => {
       name: "Healer Alpha",
       input: ["text", "image"],
       reasoning: true,
+      supportsTools: false,
       contextWindow: 262144,
       maxTokens: 65536,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -1323,7 +1324,7 @@ describe("resolveModel", () => {
     const result = resolveModelForTest("openrouter", "openrouter/healer-alpha", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
+    const resolvedModel = expectRecordFields(result.model, {
       provider: "openrouter",
       id: "openrouter/healer-alpha",
       name: "Healer Alpha",
@@ -1332,6 +1333,7 @@ describe("resolveModel", () => {
       contextWindow: 262144,
       maxTokens: 65536,
     });
+    expect(resolvedModel.compat).toMatchObject({ supportsTools: false });
   });
 
   it("falls back to text-only when OpenRouter API cache is empty", () => {

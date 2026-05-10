@@ -869,9 +869,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         // Catchup bypasses the inbound debouncer so each row is awaited
         // serially and dispatch failure can hold the cursor. Split-sends
         // from before the gateway gap therefore arrive as separate turns
-        // rather than coalesced — same behavior the retired BlueBubbles
-        // catchup had. Live notifications continue to flow through the
-        // debouncer.
+        // rather than coalesced. Live notifications continue to flow through
+        // the debouncer.
         dispatchPayload: (message) => handleMessageNow(message),
         runtime,
       });

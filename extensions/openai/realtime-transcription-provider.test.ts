@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const { FakeWebSocket, providerAuthMocks, ssrfMocks } = vi.hoisted(() => {
@@ -99,6 +99,11 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     providerAuthMocks.isProviderAuthProfileConfigured.mockReset();
     providerAuthMocks.resolveProviderAuthProfileApiKey.mockReset();
     ssrfMocks.fetchWithSsrFGuard.mockReset();
+    vi.stubEnv("OPENAI_API_KEY", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("normalizes OpenAI config defaults", () => {
@@ -238,10 +243,15 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
 
     expect(release).toHaveBeenCalled();
     expect(parseSent(socket)[0]).toMatchObject({
-      type: "transcription_session.update",
+      type: "session.update",
       session: {
-        input_audio_format: "g711_ulaw",
-        input_audio_transcription: { model: "gpt-4o-transcribe" },
+        type: "transcription",
+        audio: {
+          input: {
+            format: { type: "audio/pcmu" },
+            transcription: { model: "gpt-4o-transcribe" },
+          },
+        },
       },
     });
     session.close();
@@ -270,19 +280,24 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     expect(session.isConnected()).toBe(false);
     expect(parseSent(socket)).toEqual([
       {
-        type: "transcription_session.update",
+        type: "session.update",
         session: {
-          input_audio_format: "g711_ulaw",
-          input_audio_transcription: {
-            model: "gpt-4o-transcribe",
-            language: "en",
-            prompt: "expect OpenClaw product names",
-          },
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.45,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 900,
+          type: "transcription",
+          audio: {
+            input: {
+              format: { type: "audio/pcmu" },
+              transcription: {
+                model: "gpt-4o-transcribe",
+                language: "en",
+                prompt: "expect OpenClaw product names",
+              },
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.45,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 900,
+              },
+            },
           },
         },
       },
@@ -294,19 +309,24 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     expect(session.isConnected()).toBe(true);
     expect(parseSent(socket)).toEqual([
       {
-        type: "transcription_session.update",
+        type: "session.update",
         session: {
-          input_audio_format: "g711_ulaw",
-          input_audio_transcription: {
-            model: "gpt-4o-transcribe",
-            language: "en",
-            prompt: "expect OpenClaw product names",
-          },
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.45,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 900,
+          type: "transcription",
+          audio: {
+            input: {
+              format: { type: "audio/pcmu" },
+              transcription: {
+                model: "gpt-4o-transcribe",
+                language: "en",
+                prompt: "expect OpenClaw product names",
+              },
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.45,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 900,
+              },
+            },
           },
         },
       },
