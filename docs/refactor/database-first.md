@@ -698,6 +698,9 @@ sessionId}` and session key context.
 - Matrix startup maintenance no longer moves legacy Matrix files. Startup only
   reports pending migration state and tells the operator to run
   `openclaw doctor --fix`; the snapshot/import/delete step remains doctor-owned.
+- Matrix migration snapshot reuse markers now live in SQLite plugin state
+  instead of `matrix/migration-snapshot.json`; doctor can still reuse the same
+  verified pre-migration archive without writing a sidecar state file.
 - Nostr bus cursors and profile publish state now use shared SQLite plugin
   state. Their legacy JSON import plan lives in the Nostr plugin setup/doctor
   migration surface.

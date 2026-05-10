@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,7 +16,6 @@ import { detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import {
   hasActionableMatrixMigration,
   maybeCreateMatrixMigrationSnapshot,
-  resolveMatrixMigrationSnapshotMarkerPath,
   resolveMatrixMigrationSnapshotOutputDir,
 } from "./migration-snapshot.js";
 import { resolveMatrixAccountStorageRoot } from "./storage-paths.js";
@@ -52,6 +52,7 @@ function seedLegacyMatrixCrypto(home: string) {
 
 describe("matrix migration snapshots", () => {
   beforeEach(() => {
+    resetPluginStateStoreForTests();
     createBackupArchiveMock.mockReset();
     legacyCryptoInspectorAvailability.available = true;
     createBackupArchiveMock.mockImplementation(
@@ -83,7 +84,7 @@ describe("matrix migration snapshots", () => {
       });
 
       expect(result.created).toBe(true);
-      expect(result.markerPath).toBe(resolveMatrixMigrationSnapshotMarkerPath(process.env));
+      expect(result.markerKey).toBe("current");
       expect(
         result.archivePath.startsWith(resolveMatrixMigrationSnapshotOutputDir(process.env)),
       ).toBe(true);
@@ -92,6 +93,18 @@ describe("matrix migration snapshots", () => {
         output: resolveMatrixMigrationSnapshotOutputDir(process.env),
         includeWorkspace: false,
       });
+
+      const reused = await maybeCreateMatrixMigrationSnapshot({
+        trigger: "unit-test-rerun",
+        createBackupArchive: createBackupArchiveMock,
+      });
+
+      expect(reused).toEqual({
+        created: false,
+        archivePath: result.archivePath,
+        markerKey: "current",
+      });
+      expect(createBackupArchiveMock).toHaveBeenCalledTimes(1);
     });
   });
 

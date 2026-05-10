@@ -3,7 +3,6 @@ import { detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import { detectLegacyMatrixState } from "./legacy-state.js";
 import {
   maybeCreateMatrixMigrationSnapshot,
-  resolveMatrixMigrationSnapshotMarkerPath,
   resolveMatrixMigrationSnapshotOutputDir,
 } from "./migration-snapshot-backup.js";
 
@@ -46,8 +45,4 @@ export function hasActionableMatrixMigration(params: {
   return resolveMatrixMigrationStatus(params).actionable;
 }
 
-export {
-  maybeCreateMatrixMigrationSnapshot,
-  resolveMatrixMigrationSnapshotMarkerPath,
-  resolveMatrixMigrationSnapshotOutputDir,
-};
+export { maybeCreateMatrixMigrationSnapshot, resolveMatrixMigrationSnapshotOutputDir };

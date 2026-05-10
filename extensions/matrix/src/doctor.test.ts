@@ -133,7 +133,7 @@ describe("matrix doctor", () => {
     vi.mocked(runtimeApi.maybeCreateMatrixMigrationSnapshot).mockResolvedValue({
       archivePath: "/tmp/matrix-backup.tgz",
       created: true,
-      markerPath: "/tmp/marker.json",
+      markerKey: "current",
     });
     vi.mocked(runtimeApi.autoMigrateLegacyMatrixState).mockResolvedValue({
       migrated: true,

@@ -45,7 +45,7 @@ Automatic migration covers:
 
 Snapshot details:
 
-- OpenClaw writes a marker file at `~/.openclaw/matrix/migration-snapshot.json` after a successful snapshot so later doctor passes can reuse the same archive.
+- OpenClaw records the successful snapshot in SQLite plugin state after the archive is verified, so later doctor passes can reuse the same archive without creating another state file.
 - These automatic Matrix migration snapshots back up config + state only (`includeWorkspace: false`).
 - If Matrix only has warning-only migration state, for example because `userId` or `accessToken` is still missing, OpenClaw does not create the snapshot yet because no Matrix mutation is actionable.
 - If the snapshot step fails, OpenClaw skips Matrix migration for that run instead of mutating state without a recovery point.

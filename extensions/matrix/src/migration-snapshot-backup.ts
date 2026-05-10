@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveRequiredHomeDir, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 const MATRIX_MIGRATION_SNAPSHOT_DIRNAME = "openclaw-migrations";
+const MATRIX_MIGRATION_SNAPSHOT_NAMESPACE = "migration-snapshot";
+const MATRIX_MIGRATION_SNAPSHOT_KEY = "current";
 
 type MatrixMigrationSnapshotMarker = {
   version: 1;
@@ -17,42 +19,59 @@ type MatrixMigrationSnapshotMarker = {
 type MatrixMigrationSnapshotResult = {
   created: boolean;
   archivePath: string;
-  markerPath: string;
+  markerKey: string;
 };
 
-function loadSnapshotMarker(filePath: string): MatrixMigrationSnapshotMarker | null {
-  try {
-    if (!fs.existsSync(filePath)) {
-      return null;
-    }
-    const parsed = JSON.parse(
-      fs.readFileSync(filePath, "utf8"),
-    ) as Partial<MatrixMigrationSnapshotMarker>;
-    if (
-      parsed.version !== 1 ||
-      typeof parsed.createdAt !== "string" ||
-      typeof parsed.archivePath !== "string" ||
-      typeof parsed.trigger !== "string"
-    ) {
-      return null;
-    }
-    return {
-      version: 1,
-      createdAt: parsed.createdAt,
-      archivePath: parsed.archivePath,
-      trigger: parsed.trigger,
-      includeWorkspace: parsed.includeWorkspace === true,
-    };
-  } catch {
-    return null;
-  }
+const snapshotMarkerStore = createPluginStateKeyedStore<MatrixMigrationSnapshotMarker>("matrix", {
+  namespace: MATRIX_MIGRATION_SNAPSHOT_NAMESPACE,
+  maxEntries: 1,
+});
+
+function isMatrixMigrationSnapshotMarker(value: unknown): value is MatrixMigrationSnapshotMarker {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    (value as Partial<MatrixMigrationSnapshotMarker>).version === 1 &&
+    typeof (value as Partial<MatrixMigrationSnapshotMarker>).createdAt === "string" &&
+    typeof (value as Partial<MatrixMigrationSnapshotMarker>).archivePath === "string" &&
+    typeof (value as Partial<MatrixMigrationSnapshotMarker>).trigger === "string"
+  );
 }
 
-export function resolveMatrixMigrationSnapshotMarkerPath(
-  env: NodeJS.ProcessEnv = process.env,
-): string {
+async function loadSnapshotMarker(
+  env: NodeJS.ProcessEnv,
+): Promise<MatrixMigrationSnapshotMarker | null> {
+  const value = await withSnapshotStateEnv(env, async () =>
+    snapshotMarkerStore.lookup(MATRIX_MIGRATION_SNAPSHOT_KEY),
+  );
+  return isMatrixMigrationSnapshotMarker(value) ? value : null;
+}
+
+async function writeSnapshotMarker(
+  env: NodeJS.ProcessEnv,
+  marker: MatrixMigrationSnapshotMarker,
+): Promise<void> {
+  await withSnapshotStateEnv(env, async () =>
+    snapshotMarkerStore.register(MATRIX_MIGRATION_SNAPSHOT_KEY, marker),
+  );
+}
+
+async function withSnapshotStateEnv<T>(
+  env: NodeJS.ProcessEnv,
+  action: () => Promise<T>,
+): Promise<T> {
   const stateDir = resolveStateDir(env, os.homedir);
-  return path.join(stateDir, "matrix", "migration-snapshot.json");
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  try {
+    return await action();
+  } finally {
+    if (previous == null) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
+  }
 }
 
 export function resolveMatrixMigrationSnapshotOutputDir(
@@ -72,8 +91,7 @@ export async function maybeCreateMatrixMigrationSnapshot(params: {
   const env = params.env ?? process.env;
   const createBackupArchive =
     params.createBackupArchive ?? (await import("openclaw/plugin-sdk/runtime")).createBackupArchive;
-  const markerPath = resolveMatrixMigrationSnapshotMarkerPath(env);
-  const existingMarker = loadSnapshotMarker(markerPath);
+  const existingMarker = await loadSnapshotMarker(env);
   if (existingMarker?.archivePath && fs.existsSync(existingMarker.archivePath)) {
     params.log?.info?.(
       `matrix: reusing existing pre-migration backup snapshot: ${existingMarker.archivePath}`,
@@ -81,7 +99,7 @@ export async function maybeCreateMatrixMigrationSnapshot(params: {
     return {
       created: false,
       archivePath: existingMarker.archivePath,
-      markerPath,
+      markerKey: MATRIX_MIGRATION_SNAPSHOT_KEY,
     };
   }
   if (existingMarker?.archivePath && !fs.existsSync(existingMarker.archivePath)) {
@@ -106,11 +124,11 @@ export async function maybeCreateMatrixMigrationSnapshot(params: {
     trigger: params.trigger,
     includeWorkspace: snapshot.includeWorkspace,
   };
-  await writeJsonFileAtomically(markerPath, marker);
+  await writeSnapshotMarker(env, marker);
   params.log?.info?.(`matrix: created pre-migration backup snapshot: ${snapshot.archivePath}`);
   return {
     created: true,
     archivePath: snapshot.archivePath,
-    markerPath,
+    markerKey: MATRIX_MIGRATION_SNAPSHOT_KEY,
   };
 }
