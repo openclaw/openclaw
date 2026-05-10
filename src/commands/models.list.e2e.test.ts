@@ -493,10 +493,12 @@ describe("models list/status", () => {
     }
 
     const payload = parseJsonLog(runtime);
-    expect(payload.models).toHaveLength(1);
-    const model = payload.models[0];
-    expect(model.key).toBe("workspace-cloud/model-a");
-    expect(model.available).toBe(true);
+    expect(payload.models).toEqual([
+      expect.objectContaining({
+        key: "workspace-cloud/model-a",
+        available: true,
+      }),
+    ]);
   });
 
   it("models list all includes unauthenticated provider catalog rows", async () => {
@@ -512,12 +514,14 @@ describe("models list/status", () => {
 
     const payload = parseJsonLog(runtime);
     expect(loadModelCatalog).not.toHaveBeenCalled();
-    expect(payload.models).toHaveLength(1);
-    const model = payload.models[0];
-    expect(model.key).toBe("moonshot/kimi-k2.6");
-    expect(model.name).toBe("Kimi K2.6");
-    expect(model.available).toBe(false);
-    expect(model.missing).toBe(false);
+    expect(payload.models).toEqual([
+      expect.objectContaining({
+        key: "moonshot/kimi-k2.6",
+        name: "Kimi K2.6",
+        available: false,
+        missing: false,
+      }),
+    ]);
   });
 
   it("models list rejects provider display labels", async () => {
@@ -678,11 +682,13 @@ describe("models list/status", () => {
     await modelsListCommand({ all: true, json: true }, runtime);
 
     const payload = parseJsonLog(runtime);
-    expect(payload.models).toHaveLength(1);
-    const model = payload.models[0];
-    expect(model.key).toBe("custom-proxy/custom-model");
-    expect(model.name).toBe("Custom Model");
-    expect(model.missing).toBe(false);
+    expect(payload.models).toEqual([
+      expect.objectContaining({
+        key: "custom-proxy/custom-model",
+        name: "Custom Model",
+        missing: false,
+      }),
+    ]);
   });
 
   it("toModelRow marks unavailable when cfg/authStore and availability are undefined", () => {

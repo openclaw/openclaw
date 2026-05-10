@@ -59,10 +59,11 @@ describe("visible reply config schema", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const visibleRepliesIssue = result.issues.find(
-        (issue) => issue.path === "messages.visibleReplies",
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          path: "messages.visibleReplies",
+        }),
       );
-      expect(visibleRepliesIssue?.path).toBe("messages.visibleReplies");
     }
   });
 });

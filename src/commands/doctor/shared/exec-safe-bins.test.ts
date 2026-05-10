@@ -134,20 +134,17 @@ describe("doctor exec safe bin helpers", () => {
     } as OpenClawConfig);
 
     expect(hits).toHaveLength(1);
-    const hit = hits[0];
-    if (!hit) {
-      throw new Error("expected trusted-dir hint hit");
-    }
-    expect(hit.scopePath).toBe("tools.exec");
-    expect(hit.bin).toBe("custom-safe-bin");
-    expect(hit.resolvedPath).toBe(binPath);
+    expect(hits[0]).toMatchObject({
+      scopePath: "tools.exec",
+      bin: "custom-safe-bin",
+      resolvedPath: binPath,
+    });
 
-    const warnings = collectExecSafeBinTrustedDirHintWarnings(hits);
-    expect(
-      warnings.some((warning) => warning.includes("tools.exec.safeBins entry 'custom-safe-bin'")),
-    ).toBe(true);
-    expect(warnings.some((warning) => warning.includes("tools.exec.safeBinTrustedDirs"))).toBe(
-      true,
+    expect(collectExecSafeBinTrustedDirHintWarnings(hits)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("tools.exec.safeBins entry 'custom-safe-bin'"),
+        expect.stringContaining("tools.exec.safeBinTrustedDirs"),
+      ]),
     );
 
     rmSync(tempDir, { recursive: true, force: true });

@@ -106,7 +106,9 @@ async function expectAcceptedWorkspace(params: { agentId: string; expectedWorksp
   );
 
   expect(result.status).toBe("accepted");
-  expect(getRegisteredRun()?.workspaceDir).toBe(params.expectedWorkspaceDir);
+  expect(getRegisteredRun()).toMatchObject({
+    workspaceDir: params.expectedWorkspaceDir,
+  });
 }
 
 describe("spawnSubagentDirect workspace inheritance", () => {
@@ -186,8 +188,10 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       lightContext: true,
     });
 
-    expect(agentParams?.bootstrapContextMode).toBe("lightweight");
-    expect(agentParams?.bootstrapContextRunKind).toBe("default");
+    expect(agentParams).toMatchObject({
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "default",
+    });
   });
 
   it("omits bootstrap context flags for default subagent spawns", async () => {
@@ -231,15 +235,19 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       },
     );
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("spawn startup failed");
+    expect(result).toMatchObject({
+      status: "error",
+      error: "spawn startup failed",
+    });
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
 
     const deleteCall = findLastSessionDeleteCall();
-    expect(deleteCall?.params?.key).toBe(result.childSessionKey);
-    expect(deleteCall?.params?.deleteTranscript).toBe(true);
-    expect(deleteCall?.params?.emitLifecycleHooks).toBe(false);
+    expect(deleteCall?.params).toMatchObject({
+      key: result.childSessionKey,
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+    });
   });
 
   it("keeps lifecycle hooks enabled when registerSubagentRun fails after thread binding succeeds", async () => {
@@ -285,14 +293,18 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       },
     );
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("Failed to register subagent run: registry unavailable");
-    expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
-    expect(result.runId).toBe("run-thread-register-fail");
+    expect(result).toMatchObject({
+      status: "error",
+      error: "Failed to register subagent run: registry unavailable",
+      childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
+      runId: "run-thread-register-fail",
+    });
 
     const deleteCall = findLastSessionDeleteCall();
-    expect(deleteCall?.params?.key).toBe(result.childSessionKey);
-    expect(deleteCall?.params?.deleteTranscript).toBe(true);
-    expect(deleteCall?.params?.emitLifecycleHooks).toBe(true);
+    expect(deleteCall?.params).toMatchObject({
+      key: result.childSessionKey,
+      deleteTranscript: true,
+      emitLifecycleHooks: true,
+    });
   });
 });

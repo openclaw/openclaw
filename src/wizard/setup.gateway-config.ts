@@ -1,4 +1,3 @@
-import { formatPortRangeHint } from "../cli/error-format.js";
 import {
   normalizeGatewayTokenInput,
   randomToken,
@@ -53,14 +52,6 @@ function normalizeWizardTextInput(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function validateGatewayPortInput(value: unknown): string | undefined {
-  const port = Number(normalizeWizardTextInput(value));
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    return formatPortRangeHint();
-  }
-  return undefined;
-}
-
 export async function configureGatewayForSetup(
   opts: ConfigureGatewayOptions,
 ): Promise<ConfigureGatewayResult> {
@@ -75,7 +66,7 @@ export async function configureGatewayForSetup(
             await prompter.text({
               message: "Gateway port",
               initialValue: String(localPort),
-              validate: validateGatewayPortInput,
+              validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
             }),
           ),
           10,
@@ -85,13 +76,13 @@ export async function configureGatewayForSetup(
     flow === "quickstart"
       ? quickstartGateway.bind
       : await prompter.select<GatewayWizardSettings["bind"]>({
-          message: "Gateway bind address",
+          message: "Gateway bind",
           options: [
-            { value: "loopback", label: "Loopback (127.0.0.1)", hint: "This machine only" },
-            { value: "lan", label: "LAN (0.0.0.0)", hint: "Reachable on your local network" },
-            { value: "tailnet", label: "Tailnet (Tailscale IP)", hint: "Reachable over Tailscale" },
-            { value: "auto", label: "Auto (Loopback -> LAN)", hint: "Try loopback first" },
-            { value: "custom", label: "Custom IP", hint: "Bind to one local address" },
+            { value: "loopback", label: "Loopback (127.0.0.1)" },
+            { value: "lan", label: "LAN (0.0.0.0)" },
+            { value: "tailnet", label: "Tailnet (Tailscale IP)" },
+            { value: "auto", label: "Auto (Loopback → LAN)" },
+            { value: "custom", label: "Custom IP" },
           ],
         });
 
@@ -113,11 +104,11 @@ export async function configureGatewayForSetup(
     flow === "quickstart"
       ? quickstartGateway.authMode
       : ((await prompter.select({
-          message: "Gateway access protection",
+          message: "Gateway auth",
           options: [
             {
               value: "token",
-              label: "Token (recommended)",
+              label: "Token",
               hint: "Recommended default (local + remote)",
             },
             { value: "password", label: "Password" },
@@ -156,19 +147,13 @@ export async function configureGatewayForSetup(
   // - Tailscale wants bind=loopback so we never expose a non-loopback server + tailscale serve/funnel at once.
   // - Funnel requires password auth.
   if (tailscaleMode !== "off" && bind !== "loopback") {
-    await prompter.note(
-      "Tailscale exposure requires bind=loopback. I will switch the bind address to loopback.",
-      "Gateway bind",
-    );
+    await prompter.note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
     bind = "loopback";
     customBindHost = undefined;
   }
 
   if (tailscaleMode === "funnel" && authMode !== "password") {
-    await prompter.note(
-      "Tailscale Funnel requires password auth. I will switch Gateway auth to password.",
-      "Gateway auth",
-    );
+    await prompter.note("Tailscale funnel requires password auth.", "Note");
     authMode = "password";
   }
 

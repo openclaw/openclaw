@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 
 export function createWhatsAppPollFixture() {
   const cfg = { marker: "resolved-cfg" } as OpenClawConfig;

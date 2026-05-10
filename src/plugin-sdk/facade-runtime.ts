@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
   getCachedPluginSourceModuleLoader,
   type PluginModuleLoaderCache,
@@ -74,18 +74,15 @@ function resolveFacadeModuleLocationUncached(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  const env = params.env ?? process.env;
-  if (!areBundledPluginsDisabled(env)) {
-    const bundledPluginsDir = resolveBundledPluginsDir(env);
-    const bundledLocation = resolveBundledFacadeModuleLocation({
-      ...params,
-      currentModulePath: CURRENT_MODULE_PATH,
-      packageRoot: OPENCLAW_PACKAGE_ROOT,
-      bundledPluginsDir,
-    });
-    if (bundledLocation) {
-      return bundledLocation;
-    }
+  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
+  const bundledLocation = resolveBundledFacadeModuleLocation({
+    ...params,
+    currentModulePath: CURRENT_MODULE_PATH,
+    packageRoot: OPENCLAW_PACKAGE_ROOT,
+    bundledPluginsDir,
+  });
+  if (bundledLocation) {
+    return bundledLocation;
   }
   return resolveRegistryPluginModuleLocation(params);
 }

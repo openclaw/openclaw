@@ -49,48 +49,6 @@ describe("sessions_spawn context modes", () => {
     });
   }
 
-  function requireAcceptedResult(result: Awaited<ReturnType<typeof spawnSubagentDirect>>) {
-    expect(result.status).toBe("accepted");
-    if (result.status !== "accepted") {
-      throw new Error(`expected accepted result, got ${result.status}`);
-    }
-    return result;
-  }
-
-  function requireStoreEntry(store: SessionStore, key: string): Record<string, unknown> {
-    const entry = store[key];
-    if (!entry) {
-      throw new Error(`expected session store entry ${key}`);
-    }
-    return entry;
-  }
-
-  function requireChildSessionKey(result: Awaited<ReturnType<typeof spawnSubagentDirect>>): string {
-    const key = result.childSessionKey;
-    if (!key) {
-      throw new Error("expected child session key");
-    }
-    return key;
-  }
-
-  function requireFirstMockArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-    const arg = mock.mock.calls.at(0)?.[0];
-    if (!arg || typeof arg !== "object") {
-      throw new Error("expected first mock argument object");
-    }
-    return arg as Record<string, unknown>;
-  }
-
-  function requireGatewayRequest(method: string): GatewayRequest {
-    const request = callGatewayMock.mock.calls
-      .map(([arg]) => arg as GatewayRequest)
-      .find((candidate) => candidate.method === method);
-    if (!request) {
-      throw new Error(`expected gateway request ${method}`);
-    }
-    return request;
-  }
-
   it("forks the requester transcript when context=fork", async () => {
     const store: SessionStore = {
       main: {
@@ -113,26 +71,27 @@ describe("sessions_spawn context modes", () => {
       { agentSessionKey: "main" },
     );
 
-    const accepted = requireAcceptedResult(result);
-    expect(accepted.runId).toBe("run-1");
+    expect(result).toMatchObject({ status: "accepted", runId: "run-1" });
     expect(forkSessionFromParentMock).toHaveBeenCalledWith({
       parentEntry: store.main,
       agentId: "main",
       sessionsDir: path.dirname(storePath),
     });
-    const childSessionKey = requireChildSessionKey(accepted);
-    const childEntry = requireStoreEntry(store, childSessionKey);
-    expect(childEntry.sessionId).toBe("forked-session-id");
-    expect(childEntry.sessionFile).toBe("/tmp/forked-session.jsonl");
-    expect(childEntry.forkedFromParent).toBe(true);
-
-    const prepareContext = requireFirstMockArg(prepareSubagentSpawn);
-    expect(prepareContext.parentSessionKey).toBe("main");
-    expect(prepareContext.childSessionKey).toBe(childSessionKey);
-    expect(prepareContext.contextMode).toBe("fork");
-    expect(prepareContext.parentSessionId).toBe("parent-session-id");
-    expect(prepareContext.childSessionId).toBe("forked-session-id");
-    expect(prepareContext.childSessionFile).toBe("/tmp/forked-session.jsonl");
+    expect(store[result.childSessionKey ?? ""]).toMatchObject({
+      sessionId: "forked-session-id",
+      sessionFile: "/tmp/forked-session.jsonl",
+      forkedFromParent: true,
+    });
+    expect(prepareSubagentSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionKey: "main",
+        childSessionKey: result.childSessionKey,
+        contextMode: "fork",
+        parentSessionId: "parent-session-id",
+        childSessionId: "forked-session-id",
+        childSessionFile: "/tmp/forked-session.jsonl",
+      }),
+    );
   });
 
   it("keeps the default spawn context isolated", async () => {
@@ -147,10 +106,13 @@ describe("sessions_spawn context modes", () => {
 
     expect(result.status).toBe("accepted");
     expect(forkSessionFromParentMock).not.toHaveBeenCalled();
-    const prepareContext = requireFirstMockArg(prepareSubagentSpawn);
-    expect(prepareContext.parentSessionKey).toBe("main");
-    expect(prepareContext.childSessionKey).toBe(requireChildSessionKey(result));
-    expect(prepareContext.contextMode).toBe("isolated");
+    expect(prepareSubagentSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionKey: "main",
+        childSessionKey: result.childSessionKey,
+        contextMode: "isolated",
+      }),
+    );
   });
 
   it("falls back to isolated context when requested fork is too large", async () => {
@@ -171,15 +133,17 @@ describe("sessions_spawn context modes", () => {
       { agentSessionKey: "main" },
     );
 
-    const accepted = requireAcceptedResult(result);
-    expect(accepted.runId).toBe("run-1");
-    expect(accepted.note).toContain("Parent context is too large to fork");
+    expect(result).toMatchObject({ status: "accepted", runId: "run-1" });
+    expect(result.note).toContain("Parent context is too large to fork");
     expect(forkSessionFromParentMock).not.toHaveBeenCalled();
-    const prepareContext = requireFirstMockArg(prepareSubagentSpawn);
-    expect(prepareContext.parentSessionKey).toBe("main");
-    expect(prepareContext.childSessionKey).toBe(requireChildSessionKey(accepted));
-    expect(prepareContext.contextMode).toBe("isolated");
-    expect(prepareContext.parentSessionId).toBe("parent-session-id");
+    expect(prepareSubagentSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionKey: "main",
+        childSessionKey: result.childSessionKey,
+        contextMode: "isolated",
+        parentSessionId: "parent-session-id",
+      }),
+    );
   });
 
   it("forks by default for thread-bound subagent sessions", async () => {
@@ -215,10 +179,16 @@ describe("sessions_spawn context modes", () => {
       agentId: "main",
       sessionsDir: path.dirname(storePath),
     });
-    const cleanupRequest = requireGatewayRequest("sessions.delete");
-    expect(cleanupRequest.params?.key).toBe(result.childSessionKey);
-    expect(cleanupRequest.params?.deleteTranscript).toBe(true);
-    expect(cleanupRequest.params?.emitLifecycleHooks).toBe(false);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          key: result.childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        }),
+      }),
+    );
     expect(prepareSubagentSpawn).not.toHaveBeenCalled();
   });
 
@@ -264,8 +234,7 @@ describe("sessions_spawn context modes", () => {
 
     const result = await spawnSubagentDirect({ task: "clean worker" }, { agentSessionKey: "main" });
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("agent start failed");
+    expect(result).toMatchObject({ status: "error", error: "agent start failed" });
     expect(rollback).toHaveBeenCalledTimes(1);
     expect(callGatewayMock.mock.calls.map((call) => (call[0] as GatewayRequest).method)).toContain(
       "sessions.delete",

@@ -19,7 +19,6 @@ const hoisted = vi.hoisted(() => ({
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
   prepareProviderDynamicModelMock: vi.fn(async () => {}),
-  resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
 }));
 const {
@@ -33,7 +32,6 @@ const {
   fetchMock,
   registerProviderStreamForModelMock,
   prepareProviderDynamicModelMock,
-  resolveModelAsyncMock,
   resolveModelWithRegistryMock,
 } = hoisted;
 
@@ -88,7 +86,7 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
 }));
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModelAsync: resolveModelAsyncMock,
+  resolveModelWithRegistry: resolveModelWithRegistryMock,
 }));
 
 const { describeImageWithModel } = await import("./image.js");
@@ -127,22 +125,6 @@ describe("describeImageWithModel", () => {
       // automatically get the right model through resolveModelWithRegistry.
       ({ modelRegistry, provider, modelId }: ResolveModelWithRegistryTestParams) =>
         modelRegistry.find(provider, modelId),
-    );
-    resolveModelAsyncMock.mockImplementation(
-      async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
-        const authStorage = {
-          setRuntimeApiKey: setRuntimeApiKeyMock,
-        };
-        const modelRegistry = discoverModelsMock(authStorage, agentDir);
-        const model = resolveModelWithRegistryMock({
-          provider,
-          modelId,
-          modelRegistry,
-          cfg,
-          agentDir,
-        });
-        return { authStorage, model, modelRegistry };
-      },
     );
   });
 

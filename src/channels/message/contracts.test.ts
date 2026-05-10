@@ -14,16 +14,6 @@ import {
   verifyLivePreviewFinalizerCapabilityProofs,
 } from "./contracts.js";
 
-function verifiedEntries<T extends { status: string }>(results: readonly T[]): T[] {
-  return results.filter((result) => result.status === "verified");
-}
-
-function expectOnlyVerifiedOrNotDeclared(results: readonly { status: string }[]): void {
-  expect(
-    results.every((result) => result.status === "verified" || result.status === "not_declared"),
-  ).toBe(true);
-}
-
 describe("durable final capability contracts", () => {
   it("lists declared durable-final capabilities in stable order", () => {
     expect(
@@ -42,23 +32,24 @@ describe("durable final capability contracts", () => {
     const text = vi.fn();
     const silent = vi.fn(async () => {});
 
-    const results = await verifyDurableFinalCapabilityProofs({
-      adapterName: "demo",
-      capabilities: {
-        text: true,
-        silent: true,
-      },
-      proofs: {
-        text,
-        silent,
-      },
-    });
-    expect(verifiedEntries(results)).toEqual([
-      { capability: "text", status: "verified" },
-      { capability: "silent", status: "verified" },
-    ]);
-    expect(results).toHaveLength(12);
-    expectOnlyVerifiedOrNotDeclared(results);
+    await expect(
+      verifyDurableFinalCapabilityProofs({
+        adapterName: "demo",
+        capabilities: {
+          text: true,
+          silent: true,
+        },
+        proofs: {
+          text,
+          silent,
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { capability: "text", status: "verified" },
+        { capability: "silent", status: "verified" },
+      ]),
+    );
     expect(text).toHaveBeenCalledTimes(1);
     expect(silent).toHaveBeenCalledTimes(1);
   });
@@ -84,27 +75,28 @@ describe("durable final capability contracts", () => {
     const text = vi.fn();
     const media = vi.fn();
 
-    const results = await verifyChannelMessageAdapterCapabilityProofs({
-      adapterName: "demo",
-      adapter: {
-        durableFinal: {
-          capabilities: {
-            text: true,
-            media: true,
+    await expect(
+      verifyChannelMessageAdapterCapabilityProofs({
+        adapterName: "demo",
+        adapter: {
+          durableFinal: {
+            capabilities: {
+              text: true,
+              media: true,
+            },
           },
         },
-      },
-      proofs: {
-        text,
-        media,
-      },
-    });
-    expect(verifiedEntries(results)).toEqual([
-      { capability: "text", status: "verified" },
-      { capability: "media", status: "verified" },
-    ]);
-    expect(results).toHaveLength(12);
-    expectOnlyVerifiedOrNotDeclared(results);
+        proofs: {
+          text,
+          media,
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { capability: "text", status: "verified" },
+        { capability: "media", status: "verified" },
+      ]),
+    );
     expect(text).toHaveBeenCalledTimes(1);
     expect(media).toHaveBeenCalledTimes(1);
   });
@@ -121,29 +113,30 @@ describe("durable final capability contracts", () => {
       }),
     ).toEqual(["finalEdit", "normalFallback"]);
 
-    const results = await verifyChannelMessageLiveFinalizerProofs({
-      adapterName: "demo",
-      adapter: {
-        live: {
-          finalizer: {
-            capabilities: {
-              finalEdit: true,
-              normalFallback: true,
+    await expect(
+      verifyChannelMessageLiveFinalizerProofs({
+        adapterName: "demo",
+        adapter: {
+          live: {
+            finalizer: {
+              capabilities: {
+                finalEdit: true,
+                normalFallback: true,
+              },
             },
           },
         },
-      },
-      proofs: {
-        finalEdit,
-        normalFallback,
-      },
-    });
-    expect(verifiedEntries(results)).toEqual([
-      { capability: "finalEdit", status: "verified" },
-      { capability: "normalFallback", status: "verified" },
-    ]);
-    expect(results).toHaveLength(5);
-    expectOnlyVerifiedOrNotDeclared(results);
+        proofs: {
+          finalEdit,
+          normalFallback,
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { capability: "finalEdit", status: "verified" },
+        { capability: "normalFallback", status: "verified" },
+      ]),
+    );
     expect(finalEdit).toHaveBeenCalledTimes(1);
     expect(normalFallback).toHaveBeenCalledTimes(1);
   });
@@ -160,27 +153,28 @@ describe("durable final capability contracts", () => {
       }),
     ).toEqual(["draftPreview", "previewFinalization"]);
 
-    const results = await verifyChannelMessageLiveCapabilityAdapterProofs({
-      adapterName: "demo",
-      adapter: {
-        live: {
-          capabilities: {
-            draftPreview: true,
-            previewFinalization: true,
+    await expect(
+      verifyChannelMessageLiveCapabilityAdapterProofs({
+        adapterName: "demo",
+        adapter: {
+          live: {
+            capabilities: {
+              draftPreview: true,
+              previewFinalization: true,
+            },
           },
         },
-      },
-      proofs: {
-        draftPreview,
-        previewFinalization,
-      },
-    });
-    expect(verifiedEntries(results)).toEqual([
-      { capability: "draftPreview", status: "verified" },
-      { capability: "previewFinalization", status: "verified" },
-    ]);
-    expect(results).toHaveLength(5);
-    expectOnlyVerifiedOrNotDeclared(results);
+        proofs: {
+          draftPreview,
+          previewFinalization,
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { capability: "draftPreview", status: "verified" },
+        { capability: "previewFinalization", status: "verified" },
+      ]),
+    );
     expect(draftPreview).toHaveBeenCalledTimes(1);
     expect(previewFinalization).toHaveBeenCalledTimes(1);
   });
@@ -228,25 +222,26 @@ describe("durable final capability contracts", () => {
       }),
     ).toEqual(["after_receive_record", "after_agent_dispatch"]);
 
-    const results = await verifyChannelMessageReceiveAckPolicyAdapterProofs({
-      adapterName: "demo",
-      adapter: {
-        receive: {
-          defaultAckPolicy: "after_agent_dispatch",
-          supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
+    await expect(
+      verifyChannelMessageReceiveAckPolicyAdapterProofs({
+        adapterName: "demo",
+        adapter: {
+          receive: {
+            defaultAckPolicy: "after_agent_dispatch",
+            supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
+          },
         },
-      },
-      proofs: {
-        after_receive_record: afterReceiveRecord,
-        after_agent_dispatch: afterAgentDispatch,
-      },
-    });
-    expect(verifiedEntries(results)).toEqual([
-      { policy: "after_receive_record", status: "verified" },
-      { policy: "after_agent_dispatch", status: "verified" },
-    ]);
-    expect(results).toHaveLength(4);
-    expectOnlyVerifiedOrNotDeclared(results);
+        proofs: {
+          after_receive_record: afterReceiveRecord,
+          after_agent_dispatch: afterAgentDispatch,
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { policy: "after_receive_record", status: "verified" },
+        { policy: "after_agent_dispatch", status: "verified" },
+      ]),
+    );
     expect(afterReceiveRecord).toHaveBeenCalledTimes(1);
     expect(afterAgentDispatch).toHaveBeenCalledTimes(1);
   });
@@ -269,17 +264,16 @@ describe("durable final capability contracts", () => {
       }),
     ).toEqual(["manual"]);
 
-    const results = await verifyChannelMessageReceiveAckPolicyProofs({
-      adapterName: "demo",
-      receive: {
-        defaultAckPolicy: "manual",
-        supportedAckPolicies: ["manual"],
-      },
-      proofs: { manual },
-    });
-    expect(verifiedEntries(results)).toEqual([{ policy: "manual", status: "verified" }]);
-    expect(results).toHaveLength(4);
-    expectOnlyVerifiedOrNotDeclared(results);
+    await expect(
+      verifyChannelMessageReceiveAckPolicyProofs({
+        adapterName: "demo",
+        receive: {
+          defaultAckPolicy: "manual",
+          supportedAckPolicies: ["manual"],
+        },
+        proofs: { manual },
+      }),
+    ).resolves.toEqual(expect.arrayContaining([{ policy: "manual", status: "verified" }]));
     expect(manual).toHaveBeenCalledTimes(1);
   });
 

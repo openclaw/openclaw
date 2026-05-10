@@ -88,12 +88,7 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
     resolveMainSessionKey: () => "agent:main:main",
     resolveStorePath: () => "/tmp/sessions-main.json",
     isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-    queueEmbeddedPiMessageWithOutcome: (sessionId: string) => ({
-      queued: false,
-      sessionId,
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    }),
+    queueEmbeddedPiMessage: () => false,
   }),
 );
 vi.mock("./subagent-announce-delivery.js", () => ({
@@ -181,6 +176,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   resolveStorePath: () => "/tmp/sessions-main.json",
   resolveMainSessionKey: () => "agent:main:main",
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+  queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
   waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
     waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
 }));

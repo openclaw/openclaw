@@ -90,35 +90,6 @@ function requireSlackListPeers() {
   return listPeers;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
-
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an array`);
-  }
-  return value;
-}
-
-function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key]).toEqual(expectedValue);
-  }
-}
-
-function requireMockCallArg(mock: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
-  return requireRecord(mock.mock.calls[callIndex]?.[argIndex], "mock call argument");
-}
-
 describe("slackPlugin actions", () => {
   it("prefers session lookup for announce target routing", () => {
     expect(slackPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
@@ -138,7 +109,7 @@ describe("slackPlugin actions", () => {
     });
 
     expect(discovery?.actions).toContain("send");
-    expect(discovery?.capabilities).toContain("presentation");
+    expect(discovery?.capabilities).toEqual(expect.arrayContaining(["presentation"]));
     expect(discovery?.schema).toBeUndefined();
   });
 
@@ -192,19 +163,13 @@ describe("slackPlugin actions", () => {
       },
     };
 
-    expectRecordFields(
-      slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "default" }),
-      "default message tool discovery",
+    expect(slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "default" })).toMatchObject(
       {
         actions: ["send"],
         capabilities: ["presentation"],
       },
     );
-    const workDiscovery = requireRecord(
-      slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "work" }),
-      "work message tool discovery",
-    );
-    expectRecordFields(workDiscovery, "work message tool discovery", {
+    expect(slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "work" })).toMatchObject({
       actions: [
         "send",
         "react",
@@ -215,8 +180,8 @@ describe("slackPlugin actions", () => {
         "download-file",
         "upload-file",
       ],
+      capabilities: expect.arrayContaining(["presentation"]),
     });
-    expect(requireArray(workDiscovery.capabilities, "work capabilities")).toContain("presentation");
   });
 
   it("uses configured defaultAccount for pairing approval notifications", async () => {
@@ -248,13 +213,15 @@ describe("slackPlugin actions", () => {
       id: "U12345678",
     });
 
-    expect(sendMessageSlackMock.mock.calls[0]?.[0]).toBe("user:U12345678");
-    expect(String(sendMessageSlackMock.mock.calls[0]?.[1])).toContain("approved");
-    expectRecordFields(requireMockCallArg(sendMessageSlackMock, 0, 2), "send options", {
-      accountId: "work",
-      cfg,
-      token: "xoxb-work",
-    });
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "user:U12345678",
+      expect.stringContaining("approved"),
+      expect.objectContaining({
+        accountId: "work",
+        cfg,
+        token: "xoxb-work",
+      }),
+    );
   });
 
   it("does not expose Slack-native message tool schema", () => {
@@ -305,14 +272,16 @@ describe("slackPlugin actions", () => {
       },
     });
 
-    expectRecordFields(requireMockCallArg(handleSlackActionMock, 0, 0), "Slack action", {
-      action: "readMessages",
-      channelId: "C123",
-      threadId: "1712345678.123456",
-      messageId: "1712345678.654321",
-    });
-    expect(handleSlackActionMock.mock.calls[0]?.[1]).toEqual({});
-    expect(handleSlackActionMock.mock.calls[0]?.[2]).toBeUndefined();
+    expect(handleSlackActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "readMessages",
+        channelId: "C123",
+        threadId: "1712345678.123456",
+        messageId: "1712345678.654321",
+      }),
+      {},
+      undefined,
+    );
   });
 
   it("forwards media access through the bundled Slack action invoke path", async () => {
@@ -339,19 +308,21 @@ describe("slackPlugin actions", () => {
       },
     } as never);
 
-    expectRecordFields(requireMockCallArg(handleSlackActionMock, 0, 0), "Slack action", {
-      action: "uploadFile",
-      to: "channel:C123",
-      filePath: "/tmp/workspace-agent/renders/file.wav",
-      initialComment: "render",
-    });
-    expect(handleSlackActionMock.mock.calls[0]?.[1]).toEqual({});
-    expectRecordFields(requireMockCallArg(handleSlackActionMock, 0, 2), "Slack action context", {
-      currentChannelId: "C123",
-      replyToMode: "all",
-      mediaLocalRoots,
-      mediaReadFile,
-    });
+    expect(handleSlackActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "/tmp/workspace-agent/renders/file.wav",
+        initialComment: "render",
+      }),
+      {},
+      expect.objectContaining({
+        currentChannelId: "C123",
+        replyToMode: "all",
+        mediaLocalRoots,
+        mediaReadFile,
+      }),
+    );
   });
 });
 
@@ -402,7 +373,7 @@ describe("slackPlugin status", () => {
       currentSessionKey: "agent:main:slack:channel:C1:thread:1712345678.123456",
     });
 
-    expectRecordFields(route, "Slack route", {
+    expect(route).toMatchObject({
       sessionKey: "agent:main:slack:channel:c1:thread:1712345678.123456",
       baseSessionKey: "agent:main:slack:channel:c1",
       threadId: "1712345678.123456",
@@ -494,9 +465,13 @@ describe("slackPlugin outbound", () => {
       deps: { sendSlack },
     });
 
-    expect(sendSlack.mock.calls[0]?.[0]).toBe("C123");
-    expect(sendSlack.mock.calls[0]?.[1]).toBe("hello");
-    expect(requireMockCallArg(sendSlack, 0, 2).threadTs).toBe("1712345678.123456");
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        threadTs: "1712345678.123456",
+      }),
+    );
     expect(result).toEqual({ channel: "slack", messageId: "m-text" });
   });
 
@@ -515,12 +490,14 @@ describe("slackPlugin outbound", () => {
       deps: { sendSlack },
     });
 
-    expect(sendSlack.mock.calls[0]?.[0]).toBe("C999");
-    expect(sendSlack.mock.calls[0]?.[1]).toBe("caption");
-    expectRecordFields(requireMockCallArg(sendSlack, 0, 2), "send options", {
-      mediaUrl: "https://example.com/image.png",
-      threadTs: "1712000000.000001",
-    });
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C999",
+      "caption",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/image.png",
+        threadTs: "1712000000.000001",
+      }),
+    );
     expect(result).toEqual({ channel: "slack", messageId: "m-media" });
   });
 
@@ -538,9 +515,13 @@ describe("slackPlugin outbound", () => {
       deps: { sendSlack },
     });
 
-    expect(sendSlack.mock.calls[0]?.[0]).toBe("C123");
-    expect(sendSlack.mock.calls[0]?.[1]).toBe("hello");
-    expect(requireMockCallArg(sendSlack, 0, 2).threadTs).toBe("1712345678.123456");
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        threadTs: "1712345678.123456",
+      }),
+    );
     expect(result).toEqual({ channel: "slack", messageId: "m-text" });
   });
 
@@ -557,9 +538,13 @@ describe("slackPlugin outbound", () => {
       deps: { sendSlack },
     });
 
-    expect(sendSlack.mock.calls[0]?.[0]).toBe("C123");
-    expect(sendSlack.mock.calls[0]?.[1]).toBe("hello");
-    expect(requireMockCallArg(sendSlack, 0, 2).threadTs).toBeUndefined();
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        threadTs: undefined,
+      }),
+    );
   });
 
   it("falls back to auto-thread lookup when replyToId is not a Slack thread timestamp", () => {
@@ -652,12 +637,14 @@ describe("slackPlugin outbound", () => {
       deps: { sendSlack },
     });
 
-    expect(sendSlack.mock.calls[0]?.[0]).toBe("C999");
-    expect(sendSlack.mock.calls[0]?.[1]).toBe("caption");
-    expectRecordFields(requireMockCallArg(sendSlack, 0, 2), "send options", {
-      mediaUrl: "/tmp/workspace/image.png",
-      mediaLocalRoots,
-    });
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C999",
+      "caption",
+      expect.objectContaining({
+        mediaUrl: "/tmp/workspace/image.png",
+        mediaLocalRoots,
+      }),
+    );
     expect(result).toEqual({ channel: "slack", messageId: "m-media-local" });
   });
 
@@ -686,29 +673,40 @@ describe("slackPlugin outbound", () => {
     });
 
     expect(sendSlack).toHaveBeenCalledTimes(3);
-    expect(sendSlack.mock.calls[0]?.[0]).toBe("C999");
-    expect(sendSlack.mock.calls[0]?.[1]).toBe("");
-    expectRecordFields(requireMockCallArg(sendSlack, 0, 2), "first media options", {
-      mediaUrl: "https://example.com/1.png",
-      mediaLocalRoots: ["/tmp/media"],
-    });
-    expect(sendSlack.mock.calls[1]?.[0]).toBe("C999");
-    expect(sendSlack.mock.calls[1]?.[1]).toBe("");
-    expectRecordFields(requireMockCallArg(sendSlack, 1, 2), "second media options", {
-      mediaUrl: "https://example.com/2.png",
-      mediaLocalRoots: ["/tmp/media"],
-    });
-    expect(sendSlack.mock.calls[2]?.[0]).toBe("C999");
-    expect(sendSlack.mock.calls[2]?.[1]).toBe("hello");
-    expect(requireMockCallArg(sendSlack, 2, 2).blocks).toEqual([
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "Block body",
-        },
-      },
-    ]);
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      1,
+      "C999",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/1.png",
+        mediaLocalRoots: ["/tmp/media"],
+      }),
+    );
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      2,
+      "C999",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/2.png",
+        mediaLocalRoots: ["/tmp/media"],
+      }),
+    );
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      3,
+      "C999",
+      "hello",
+      expect.objectContaining({
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "Block body",
+            },
+          },
+        ],
+      }),
+    );
     expect(result).toEqual({ channel: "slack", messageId: "m-final" });
   });
 
@@ -750,27 +748,36 @@ describe("slackPlugin outbound", () => {
       deps: { sendSlack },
     });
 
-    expect(sendSlack.mock.calls[0]?.[0]).toBe("user:U123");
-    expect(sendSlack.mock.calls[0]?.[1]).toBe("Slack interactive smoke.");
-    const blocks = requireArray(requireMockCallArg(sendSlack, 0, 2).blocks, "Slack blocks");
-    expectRecordFields(blocks[0], "text block", { type: "section" });
-    expectRecordFields(blocks[1], "button actions block", { type: "actions" });
-    const buttons = requireArray(
-      requireRecord(blocks[1], "button actions block").elements,
-      "button elements",
+    expect(sendSlack).toHaveBeenCalledWith(
+      "user:U123",
+      "Slack interactive smoke.",
+      expect.objectContaining({
+        blocks: [
+          expect.objectContaining({
+            type: "section",
+          }),
+          expect.objectContaining({
+            type: "actions",
+            elements: [
+              expect.objectContaining({ type: "button", value: "approve" }),
+              expect.objectContaining({ type: "button", value: "reject" }),
+            ],
+          }),
+          expect.objectContaining({
+            type: "actions",
+            elements: [
+              expect.objectContaining({
+                type: "static_select",
+                options: [
+                  expect.objectContaining({ value: "canary" }),
+                  expect.objectContaining({ value: "production" }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
     );
-    expectRecordFields(buttons[0], "approve button", { type: "button", value: "approve" });
-    expectRecordFields(buttons[1], "reject button", { type: "button", value: "reject" });
-    expectRecordFields(blocks[2], "select actions block", { type: "actions" });
-    const selectElements = requireArray(
-      requireRecord(blocks[2], "select actions block").elements,
-      "select elements",
-    );
-    const select = requireRecord(selectElements[0], "select element");
-    expect(select.type).toBe("static_select");
-    const options = requireArray(select.options, "select options");
-    expectRecordFields(options[0], "canary option", { value: "canary" });
-    expectRecordFields(options[1], "production option", { value: "production" });
     expect(result).toEqual({ channel: "slack", messageId: "m-interactive" });
   });
 });
@@ -861,9 +868,11 @@ describe("slackPlugin outbound new targets", () => {
       deps: { sendSlack },
     });
 
-    expect(sendSlack.mock.calls[0]?.[0]).toBe("user:U99NEW");
-    expect(sendSlack.mock.calls[0]?.[1]).toBe("hello new user");
-    expect(requireMockCallArg(sendSlack, 0, 2).cfg).toBe(cfg);
+    expect(sendSlack).toHaveBeenCalledWith(
+      "user:U99NEW",
+      "hello new user",
+      expect.objectContaining({ cfg }),
+    );
     expect(result).toEqual({ channel: "slack", messageId: "m-new-user", channelId: "D999" });
   });
 
@@ -879,9 +888,11 @@ describe("slackPlugin outbound new targets", () => {
       deps: { sendSlack },
     });
 
-    expect(sendSlack.mock.calls[0]?.[0]).toBe("channel:C555NEW");
-    expect(sendSlack.mock.calls[0]?.[1]).toBe("hello channel");
-    expect(requireMockCallArg(sendSlack, 0, 2).cfg).toBe(cfg);
+    expect(sendSlack).toHaveBeenCalledWith(
+      "channel:C555NEW",
+      "hello channel",
+      expect.objectContaining({ cfg }),
+    );
     expect(result).toEqual({ channel: "slack", messageId: "m-new-chan", channelId: "C555" });
   });
 
@@ -898,12 +909,14 @@ describe("slackPlugin outbound new targets", () => {
       deps: { sendSlack },
     });
 
-    expect(sendSlack.mock.calls[0]?.[0]).toBe("user:U88NEW");
-    expect(sendSlack.mock.calls[0]?.[1]).toBe("here is a file");
-    expectRecordFields(requireMockCallArg(sendSlack, 0, 2), "send options", {
-      cfg,
-      mediaUrl: "https://example.com/file.png",
-    });
+    expect(sendSlack).toHaveBeenCalledWith(
+      "user:U88NEW",
+      "here is a file",
+      expect.objectContaining({
+        cfg,
+        mediaUrl: "https://example.com/file.png",
+      }),
+    );
     expect(result).toEqual({ channel: "slack", messageId: "m-new-media", channelId: "D888" });
   });
 });

@@ -31,12 +31,9 @@ describe("getSecretTargetRegistry metadata reuse", () => {
       config: {},
       env: process.env,
     });
-    const calls = metadataMocks.getCurrentPluginMetadataSnapshot.mock.calls as unknown as Array<
-      [{ allowWorkspaceScopedSnapshot?: boolean }]
-    >;
-    for (const [call] of calls) {
-      expect(call.allowWorkspaceScopedSnapshot).not.toBe(true);
-    }
+    expect(metadataMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalledWith(
+      expect.objectContaining({ allowWorkspaceScopedSnapshot: true }),
+    );
     expect(metadataMocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
       config: {},
       env: process.env,

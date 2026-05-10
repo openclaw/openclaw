@@ -288,7 +288,6 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
             fileScale: 2,
             fileMaxWidth: 960,
             mode: "both",
-            ttlSeconds: 21600,
           },
         },
       },
@@ -313,7 +312,6 @@ Supported defaults:
 - `fileScale`
 - `fileMaxWidth`
 - `mode`
-- `ttlSeconds`
 
 Explicit tool parameters override these defaults.
 

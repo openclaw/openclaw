@@ -1,7 +1,6 @@
 export type {
   BlockReplyContext,
   GetReplyOptions,
-  PartialReplyPayload,
   ReplyThreadingPolicy,
   TypingPolicy,
 } from "./get-reply-options.types.js";

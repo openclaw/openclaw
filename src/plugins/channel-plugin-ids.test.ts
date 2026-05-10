@@ -72,12 +72,11 @@ import {
   listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   listExplicitConfiguredChannelIdsForConfig,
+  loadGatewayStartupPluginPlan,
   resolveConfiguredChannelPresencePolicy,
-  resolveConfiguredDeferredChannelPluginIdsFromRegistry,
+  resolveConfiguredDeferredChannelPluginIds,
   resolveConfiguredChannelPluginIds,
   resolveGatewayStartupPluginIds,
-  resolveGatewayStartupPluginIdsFromRegistry,
-  resolveGatewayStartupPluginPlanFromRegistry,
 } from "./channel-plugin-ids.js";
 
 function withManifestLoadPaths<T extends { id: string }>(
@@ -430,13 +429,6 @@ function filterManifestRegistryForInstalledIndex(params: {
   };
 }
 
-function createPluginPlanningTestEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
-    ...overrides,
-  };
-}
-
 function useManifestRegistryFixture(
   registry: PluginManifestRegistry = createManifestRegistryFixture(),
 ) {
@@ -452,18 +444,17 @@ function expectStartupPluginIds(params: {
   env?: NodeJS.ProcessEnv;
   expected: readonly string[];
 }) {
-  const manifestRegistry = loadPluginManifestRegistry() as PluginManifestRegistry;
   expect(
-    resolveGatewayStartupPluginIdsFromRegistry({
+    resolveGatewayStartupPluginIds({
       config: params.config,
       ...(params.activationSourceConfig !== undefined
         ? { activationSourceConfig: params.activationSourceConfig }
         : {}),
-      env: createPluginPlanningTestEnv(params.env),
-      index: createInstalledPluginIndexFixture(manifestRegistry),
-      manifestRegistry,
+      workspaceDir: "/tmp",
+      env: params.env ?? process.env,
     }),
   ).toEqual(params.expected);
+  expect(loadPluginManifestRegistry).toHaveBeenCalled();
 }
 
 function expectStartupPluginIdsCase(params: {
@@ -473,19 +464,6 @@ function expectStartupPluginIdsCase(params: {
   expected: readonly string[];
 }) {
   expectStartupPluginIds(params);
-}
-
-function resolveConfiguredDeferredChannelPluginIdsForFixture(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): string[] {
-  const manifestRegistry = loadPluginManifestRegistry() as PluginManifestRegistry;
-  return resolveConfiguredDeferredChannelPluginIdsFromRegistry({
-    config: params.config,
-    env: createPluginPlanningTestEnv(params.env),
-    index: createInstalledPluginIndexFixture(manifestRegistry),
-    manifestRegistry,
-  });
 }
 
 function createStartupConfig(params: {
@@ -1178,17 +1156,18 @@ describe("resolveGatewayStartupPluginIds", () => {
 
     expectStartupPluginIdsCase({
       config,
-      env: createPluginPlanningTestEnv({
+      env: {
         DEMO_CHANNEL_ANYTHING: "1",
-      }),
+      } as NodeJS.ProcessEnv,
       expected: ["demo-channel", "browser", "memory-core"],
     });
     expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
+      resolveConfiguredDeferredChannelPluginIds({
         config,
-        env: createPluginPlanningTestEnv({
+        workspaceDir: "/tmp",
+        env: {
           DEMO_CHANNEL_ANYTHING: "1",
-        }),
+        } as NodeJS.ProcessEnv,
       }),
     ).toStrictEqual([]);
   });
@@ -1196,7 +1175,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   it("keeps explicitly trusted deferred channel owners eligible at startup", () => {
     useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
     expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
+      resolveConfiguredDeferredChannelPluginIds({
         config: {
           channels: {
             "demo-channel": {
@@ -1207,7 +1186,8 @@ describe("resolveGatewayStartupPluginIds", () => {
             allow: ["workspace-demo-channel-plugin"],
           },
         } as OpenClawConfig,
-        env: createPluginPlanningTestEnv(),
+        workspaceDir: "/tmp",
+        env: {},
       }),
     ).toEqual(["workspace-demo-channel-plugin"]);
   });
@@ -1224,7 +1204,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           allow: ["browser"],
         },
       } as OpenClawConfig,
-      env: createPluginPlanningTestEnv(),
+      env: {},
       expected: ["demo-channel", "browser"],
     });
   });
@@ -1239,7 +1219,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
       } as OpenClawConfig,
-      env: createPluginPlanningTestEnv(),
+      env: {},
       expected: ["browser", "memory-core"],
     });
   });
@@ -1255,9 +1235,9 @@ describe("resolveGatewayStartupPluginIds", () => {
 
     expectStartupPluginIdsCase({
       config: {} as OpenClawConfig,
-      env: createPluginPlanningTestEnv({
+      env: {
         OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
-      }),
+      } as NodeJS.ProcessEnv,
       expected: ["browser", "memory-core"],
     });
   });
@@ -1273,24 +1253,27 @@ describe("resolveGatewayStartupPluginIds", () => {
     );
 
     expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
+      resolveConfiguredDeferredChannelPluginIds({
         config: {
           plugins: {
             allow: ["workspace-demo-channel-plugin"],
           },
         } as OpenClawConfig,
-        env: createPluginPlanningTestEnv({
+        workspaceDir: "/tmp",
+        env: {
           OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
-        }),
+        } as NodeJS.ProcessEnv,
       }),
     ).toStrictEqual([]);
   });
 
-  it("resolves channel, deferred, and startup plugin ids from one manifest registry", () => {
+  it("loads channel, deferred, and startup plugin ids from one manifest registry", () => {
     const registry = createManifestRegistryFixture();
     const index = createInstalledPluginIndexFixture(registry);
+    loadPluginRegistrySnapshot.mockReset().mockReturnValue(index);
+    loadPluginManifestRegistryForInstalledIndex.mockReset().mockReturnValue(registry);
 
-    const plan = resolveGatewayStartupPluginPlanFromRegistry({
+    const plan = loadGatewayStartupPluginPlan({
       config: {
         channels: {
           "demo-channel": {
@@ -1298,21 +1281,22 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
       } as OpenClawConfig,
-      env: createPluginPlanningTestEnv(),
-      index,
-      manifestRegistry: registry,
+      workspaceDir: "/tmp",
+      env: {},
     });
 
     expect(plan.channelPluginIds).toContain("demo-channel");
     expect(plan.pluginIds).toContain("demo-channel");
     expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([]);
+    expect(loadPluginRegistrySnapshot).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
   });
 
   it("does not treat explicitly disabled stale channel config as deferred startup intent", () => {
     useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
 
     expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
+      resolveConfiguredDeferredChannelPluginIds({
         config: {
           channels: {
             "demo-channel": {
@@ -1324,7 +1308,8 @@ describe("resolveGatewayStartupPluginIds", () => {
             allow: ["workspace-demo-channel-plugin"],
           },
         } as OpenClawConfig,
-        env: createPluginPlanningTestEnv(),
+        workspaceDir: "/tmp",
+        env: {},
       }),
     ).toStrictEqual([]);
   });

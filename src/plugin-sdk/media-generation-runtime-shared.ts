@@ -1,7 +1,4 @@
-/**
- * @deprecated Public SDK subpath has no bundled extension production imports.
- * Prefer capability-specific generation core/runtime subpaths.
- */
+// Narrow shared media-generation runtime exports for generation plugin runtimes.
 
 export {
   buildNoCapabilityModelConfiguredMessage,

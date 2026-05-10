@@ -4,7 +4,6 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { SubagentDelegationMode } from "../../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ActiveProcessSessionReference } from "../bash-process-references.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
@@ -60,7 +59,6 @@ export function buildEmbeddedSystemPrompt(params: {
     channel?: string;
     /** Supported message actions for the current channel (e.g., react, edit, unsend) */
     channelActions?: string[];
-    activeProcessSessions?: ActiveProcessSessionReference[];
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;

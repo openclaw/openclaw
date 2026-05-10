@@ -46,6 +46,14 @@ function mediaTranscribedIndexes(media: InboundMediaFacts[]): number[] | undefin
   return indexes.length > 0 ? indexes : undefined;
 }
 
+function commandAuthorized(access: AccessFacts | undefined): boolean | undefined {
+  const commands = access?.commands;
+  if (!commands) {
+    return undefined;
+  }
+  return commands.authorizers.some((entry) => entry.allowed);
+}
+
 function keepSupplementalContext(params: {
   mode?: ContextVisibilityMode;
   kind: "quote" | "forwarded" | "thread";
@@ -100,13 +108,6 @@ export function filterChannelTurnSupplementalContext(params: {
     forwarded,
     thread,
   };
-}
-
-function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): boolean | undefined {
-  const commands = access?.commands;
-  return typeof commands?.authorized === "boolean"
-    ? commands.authorized
-    : commands?.authorizers?.some((entry) => entry.allowed);
 }
 
 export function buildChannelTurnContext(
@@ -173,7 +174,7 @@ export function buildChannelTurnContext(
     Provider: params.provider ?? params.channel,
     Surface: params.surface ?? params.provider ?? params.channel,
     WasMentioned: params.access?.mentions?.wasMentioned,
-    CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access),
+    CommandAuthorized: commandAuthorized(params.access),
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
     OriginatingChannel: params.channel,

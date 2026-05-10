@@ -8,8 +8,7 @@ import {
   consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedPiRunHandleActive,
-  formatEmbeddedPiQueueFailureSummary,
-  queueEmbeddedPiMessageWithOutcome,
+  queueEmbeddedPiMessage,
   requestEmbeddedRunModelSwitch,
   resolveActiveEmbeddedRunHandleSessionId,
   setActiveEmbeddedRun,
@@ -20,12 +19,12 @@ import {
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 
 function createRunHandle(
-  overrides: { isCompacting?: boolean; isStreaming?: boolean; abort?: () => void } = {},
+  overrides: { isCompacting?: boolean; abort?: () => void } = {},
 ): RunHandle {
   const abort = overrides.abort ?? (() => {});
   return {
     queueMessage: async () => {},
-    isStreaming: () => overrides.isStreaming ?? true,
+    isStreaming: () => true,
     isCompacting: () => overrides.isCompacting ?? false,
     abort,
   };
@@ -76,9 +75,7 @@ describe("pi-embedded runner run registry", () => {
     });
 
     expect(
-      queueEmbeddedPiMessageWithOutcome("session-steer", "continue", {
-        steeringMode: "one-at-a-time",
-      }).queued,
+      queueEmbeddedPiMessage("session-steer", "continue", { steeringMode: "one-at-a-time" }),
     ).toBe(true);
 
     expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "one-at-a-time" });
@@ -91,43 +88,9 @@ describe("pi-embedded runner run registry", () => {
       queueMessage,
     });
 
-    expect(queueEmbeddedPiMessageWithOutcome("session-default-steer", "continue").queued).toBe(
-      true,
-    );
+    expect(queueEmbeddedPiMessage("session-default-steer", "continue")).toBe(true);
 
     expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
-  });
-
-  it("returns a structured no-active-run queue failure", () => {
-    const outcome = queueEmbeddedPiMessageWithOutcome("session-missing", "continue");
-
-    expect(outcome).toEqual({
-      queued: false,
-      sessionId: "session-missing",
-      reason: "no_active_run",
-      gatewayHealth: "live",
-    });
-    expect(formatEmbeddedPiQueueFailureSummary(outcome)).toBe(
-      "queue_message_failed reason=no_active_run sessionId=session-missing gatewayHealth=live",
-    );
-  });
-
-  it("returns structured queue failures for inactive active-run states", () => {
-    setActiveEmbeddedRun("session-not-streaming", createRunHandle({ isStreaming: false }));
-    setActiveEmbeddedRun("session-compacting", createRunHandle({ isCompacting: true }));
-
-    expect(queueEmbeddedPiMessageWithOutcome("session-not-streaming", "continue")).toEqual({
-      queued: false,
-      sessionId: "session-not-streaming",
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    });
-    expect(queueEmbeddedPiMessageWithOutcome("session-compacting", "continue")).toEqual({
-      queued: false,
-      sessionId: "session-compacting",
-      reason: "compacting",
-      gatewayHealth: "live",
-    });
   });
 
   it("force-clears an aborted run that does not drain", async () => {

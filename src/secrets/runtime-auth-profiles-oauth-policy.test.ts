@@ -64,10 +64,9 @@ describe("secrets runtime oauth auth-profile SecretRef policy", () => {
     });
 
     const resolved = snapshot.authStores[0]?.store.profiles["anthropic:default"];
-    expect(resolved?.type).toBe("token");
-    if (resolved?.type !== "token") {
-      throw new Error("expected token auth profile");
-    }
-    expect(resolved?.token).toBe("token-value");
+    expect(resolved).toMatchObject({
+      type: "token",
+      token: "token-value",
+    });
   });
 });

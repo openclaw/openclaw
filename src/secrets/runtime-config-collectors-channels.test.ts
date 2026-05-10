@@ -27,27 +27,27 @@ describe("runtime channel config collectors", () => {
       collectRuntimeConfigAssignments,
     });
     getBootstrapChannelSecrets.mockReturnValue(undefined);
-    const config = {
-      channels: {
-        imessage: {
-          accounts: {
-            ops: {},
-          },
-        },
-      },
-    } as OpenClawConfig;
 
     collectChannelConfigAssignments({
-      config,
+      config: {
+        channels: {
+          imessage: {
+            accounts: {
+              ops: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
       defaults: undefined,
       context: {} as ResolverContext,
     });
 
-    const loadCall = loadChannelSecretContractApi.mock.calls[0]?.[0];
-    expect(loadCall?.channelId).toBe("imessage");
-    expect(loadCall?.config).toBe(config);
-    expect(loadCall?.env).toBeUndefined();
-    expect(loadCall?.loadablePluginOrigins).toBeUndefined();
+    expect(loadChannelSecretContractApi).toHaveBeenCalledWith({
+      channelId: "imessage",
+      config: expect.any(Object),
+      env: undefined,
+      loadablePluginOrigins: undefined,
+    });
     expect(collectRuntimeConfigAssignments).toHaveBeenCalledOnce();
     expect(getBootstrapChannelSecrets).not.toHaveBeenCalled();
   });
@@ -60,23 +60,23 @@ describe("runtime channel config collectors", () => {
     getBootstrapChannelSecrets.mockReturnValue({
       collectRuntimeConfigAssignments,
     });
-    const config = {
-      channels: {
-        legacy: {},
-      },
-    } as OpenClawConfig;
 
     collectChannelConfigAssignments({
-      config,
+      config: {
+        channels: {
+          legacy: {},
+        },
+      } as OpenClawConfig,
       defaults: undefined,
       context: {} as ResolverContext,
     });
 
-    const loadCall = loadChannelSecretContractApi.mock.calls[0]?.[0];
-    expect(loadCall?.channelId).toBe("legacy");
-    expect(loadCall?.config).toBe(config);
-    expect(loadCall?.env).toBeUndefined();
-    expect(loadCall?.loadablePluginOrigins).toBeUndefined();
+    expect(loadChannelSecretContractApi).toHaveBeenCalledWith({
+      channelId: "legacy",
+      config: expect.any(Object),
+      env: undefined,
+      loadablePluginOrigins: undefined,
+    });
     expect(getBootstrapChannelSecrets).toHaveBeenCalledWith("legacy");
     expect(collectRuntimeConfigAssignments).toHaveBeenCalledOnce();
   });

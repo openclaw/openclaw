@@ -86,10 +86,9 @@ describe("collectSmallModelRiskFindings", () => {
 
   it.each([
     {
-      name: "small model without web/browser tools is informational even without sandbox all",
+      name: "small model without sandbox all stays critical even when browser/web tools are off",
       cfg: browserOffCfg,
       env: {},
-      expectedSeverity: "info",
       detailIncludes: ["web=[off]", "No web/browser tools detected"],
       detailExcludes: ["web=[browser]"],
     },
@@ -97,11 +96,10 @@ describe("collectSmallModelRiskFindings", () => {
       name: "treats browser as enabled by default when browser config is omitted",
       cfg: browserDefaultCfg,
       env: {},
-      expectedSeverity: "critical",
       detailIncludes: ["web=[browser]"],
       detailExcludes: ["No web/browser tools detected"],
     },
-  ])("$name", ({ cfg, env, expectedSeverity, detailIncludes, detailExcludes }) => {
+  ])("$name", ({ cfg, env, detailIncludes, detailExcludes }) => {
     const finding = requireFirstFinding(
       collectSmallModelRiskFindings({
         cfg,
@@ -111,7 +109,7 @@ describe("collectSmallModelRiskFindings", () => {
     );
 
     expect(finding.checkId).toBe("models.small_params");
-    expect(finding.severity).toBe(expectedSeverity);
+    expect(finding.severity).toBe("critical");
     expect(finding.detail).toContain("ollama/mistral-8b");
     for (const snippet of detailIncludes) {
       expect(finding.detail).toContain(snippet);

@@ -3,10 +3,6 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import {
-  formatUnknownChannelMessage,
-  formatUnsupportedChannelActionMessage,
-} from "../../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
@@ -163,7 +159,9 @@ export async function channelsRemoveCommand(
   }
   const resolvedChannel = resolvedPluginState?.channelId ?? channel;
   if (!resolvedChannel) {
-    runtime.error(formatUnknownChannelMessage({ channel: rawChannel }));
+    runtime.error(
+      `Unknown channel "${rawChannel}". Run ${formatCliCommand("openclaw channels list")} to see supported channels.`,
+    );
     runtime.exit(1);
     return;
   }
@@ -177,7 +175,7 @@ export async function channelsRemoveCommand(
       runtime.exit(1);
       return;
     }
-    runtime.error(formatUnknownChannelMessage({ channel: resolvedChannel }));
+    runtime.error(`Unknown channel "${resolvedChannel}".`);
     runtime.exit(1);
     return;
   }
@@ -199,7 +197,7 @@ export async function channelsRemoveCommand(
   if (deleteConfig) {
     if (!plugin.config.deleteAccount) {
       runtime.error(
-        `${formatUnsupportedChannelActionMessage({ channel, action: "delete" })} Use ${formatCliCommand("openclaw channels remove --channel " + channel)} to disable it without deleting config.`,
+        `Channel "${channel}" does not support delete. Use disable/remove without --delete.`,
       );
       runtime.exit(1);
       return;
@@ -216,7 +214,7 @@ export async function channelsRemoveCommand(
   } else {
     if (!plugin.config.setAccountEnabled) {
       runtime.error(
-        `${formatUnsupportedChannelActionMessage({ channel, action: "disable" })} Use ${formatCliCommand("openclaw channels remove --channel " + channel + " --delete")} only if you want to remove config.`,
+        `Channel "${channel}" does not support disable. Use --delete only if you want to remove config.`,
       );
       runtime.exit(1);
       return;

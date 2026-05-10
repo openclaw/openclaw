@@ -51,9 +51,11 @@ describe("planAllModelListSources", () => {
       cfg: {},
     });
 
-    expect(plan.kind).toBe("manifest");
-    expect(plan.requiresInitialRegistry).toBe(false);
-    expect(plan.skipRuntimeModelSuppression).toBe(true);
+    expect(plan).toMatchObject({
+      kind: "manifest",
+      requiresInitialRegistry: false,
+      skipRuntimeModelSuppression: true,
+    });
     expect(plan.manifestCatalogRows).toEqual([catalogRow]);
     expect(mocks.loadStaticManifestCatalogRowsForList).toHaveBeenCalledWith({
       cfg: {},
@@ -75,9 +77,11 @@ describe("planAllModelListSources", () => {
       cfg: {},
     });
 
-    expect(plan.kind).toBe("provider-index");
-    expect(plan.requiresInitialRegistry).toBe(false);
-    expect(plan.skipRuntimeModelSuppression).toBe(true);
+    expect(plan).toMatchObject({
+      kind: "provider-index",
+      requiresInitialRegistry: false,
+      skipRuntimeModelSuppression: true,
+    });
     expect(plan.providerIndexCatalogRows).toEqual([providerIndexRow]);
     expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
   });
@@ -92,9 +96,11 @@ describe("planAllModelListSources", () => {
       cfg: {},
     });
 
-    expect(plan.kind).toBe("registry");
-    expect(plan.requiresInitialRegistry).toBe(true);
-    expect(plan.skipRuntimeModelSuppression).toBe(false);
+    expect(plan).toMatchObject({
+      kind: "registry",
+      requiresInitialRegistry: true,
+      skipRuntimeModelSuppression: false,
+    });
     expect(plan.manifestCatalogRows).toEqual([catalogRow]);
     expect(mocks.loadStaticManifestCatalogRowsForList).toHaveBeenCalledWith({
       cfg: {},
@@ -110,15 +116,18 @@ describe("planAllModelListSources", () => {
   it("allows scoped runtime catalog plans to fall back to registry rows", async () => {
     const { planAllModelListSources } = await import("./list.source-plan.js");
 
-    const plan = await planAllModelListSources({
-      all: true,
-      providerFilter: "openrouter",
-      cfg: {},
+    await expect(
+      planAllModelListSources({
+        all: true,
+        providerFilter: "openrouter",
+        cfg: {},
+      }),
+    ).resolves.toMatchObject({
+      kind: "provider-runtime-scoped",
+      requiresInitialRegistry: false,
+      skipRuntimeModelSuppression: false,
+      fallbackToRegistryWhenEmpty: true,
     });
-    expect(plan.kind).toBe("provider-runtime-scoped");
-    expect(plan.requiresInitialRegistry).toBe(false);
-    expect(plan.skipRuntimeModelSuppression).toBe(false);
-    expect(plan.fallbackToRegistryWhenEmpty).toBe(true);
   });
 
   it("keeps broad all-model lists on the registry path with cheap catalog supplements", async () => {
@@ -132,9 +141,11 @@ describe("planAllModelListSources", () => {
       cfg: {},
     });
 
-    expect(plan.kind).toBe("registry");
-    expect(plan.requiresInitialRegistry).toBe(true);
-    expect(plan.skipRuntimeModelSuppression).toBe(false);
+    expect(plan).toMatchObject({
+      kind: "registry",
+      requiresInitialRegistry: true,
+      skipRuntimeModelSuppression: false,
+    });
     expect(plan.manifestCatalogRows).toEqual([catalogRow]);
     expect(plan.providerIndexCatalogRows).toEqual([providerIndexRow]);
     expect(mocks.loadSupplementalManifestCatalogRowsForList).toHaveBeenCalledWith({
@@ -148,14 +159,17 @@ describe("planAllModelListSources", () => {
     const { planAllModelListSources } = await import("./list.source-plan.js");
     mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
 
-    const plan = await planAllModelListSources({
-      all: true,
-      providerFilter: "codex",
-      cfg: {},
+    await expect(
+      planAllModelListSources({
+        all: true,
+        providerFilter: "codex",
+        cfg: {},
+      }),
+    ).resolves.toMatchObject({
+      kind: "provider-runtime-static",
+      requiresInitialRegistry: false,
+      skipRuntimeModelSuppression: true,
+      fallbackToRegistryWhenEmpty: true,
     });
-    expect(plan.kind).toBe("provider-runtime-static");
-    expect(plan.requiresInitialRegistry).toBe(false);
-    expect(plan.skipRuntimeModelSuppression).toBe(true);
-    expect(plan.fallbackToRegistryWhenEmpty).toBe(true);
   });
 });

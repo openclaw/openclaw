@@ -5,4 +5,4 @@ export {
   makeCacheableSignalKeyStore,
   makeWASocket,
   useMultiFileAuthState,
-} from "baileys";
+} from "@whiskeysockets/baileys";

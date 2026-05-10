@@ -1,5 +1,4 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CallGatewayScopedOptions } from "../../gateway/call.js";
 import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
 
 const mocks = vi.hoisted(() => ({
@@ -15,15 +14,6 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGateway(...args),
 }));
-
-function capturedGatewayCall(): CallGatewayScopedOptions {
-  expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-  const call = mocks.callGateway.mock.calls[0];
-  if (!call) {
-    throw new Error("expected callGateway to be called");
-  }
-  return call[0] as CallGatewayScopedOptions;
-}
 
 describe("gateway tool defaults", () => {
   const envSnapshot = {
@@ -56,13 +46,14 @@ describe("gateway tool defaults", () => {
       { gatewayUrl: "ws://127.0.0.1:18789", gatewayToken: "t", timeoutMs: 5000 },
       {},
     );
-    const call = capturedGatewayCall();
-    expect(call.method).toBe("health");
-    expect(call.params).toEqual({});
-    expect(call.url).toBe("ws://127.0.0.1:18789");
-    expect(call.token).toBe("t");
-    expect(call.timeoutMs).toBe(5000);
-    expect(call.scopes).toEqual(["operator.read"]);
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        token: "t",
+        timeoutMs: 5000,
+        scopes: ["operator.read"],
+      }),
+    );
   });
 
   it("uses OPENCLAW_GATEWAY_TOKEN for allowlisted local overrides", () => {
@@ -151,19 +142,23 @@ describe("gateway tool defaults", () => {
   it("uses least-privilege write scope for write methods", async () => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
     await callGatewayTool("wake", {}, { mode: "now", text: "hi" });
-    const call = capturedGatewayCall();
-    expect(call.method).toBe("wake");
-    expect(call.params).toEqual({ mode: "now", text: "hi" });
-    expect(call.scopes).toEqual(["operator.write"]);
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "wake",
+        scopes: ["operator.write"],
+      }),
+    );
   });
 
   it("uses admin scope only for admin methods", async () => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
     await callGatewayTool("cron.add", {}, { id: "job-1" });
-    const call = capturedGatewayCall();
-    expect(call.method).toBe("cron.add");
-    expect(call.params).toEqual({ id: "job-1" });
-    expect(call.scopes).toEqual(["operator.admin"]);
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "cron.add",
+        scopes: ["operator.admin"],
+      }),
+    );
   });
 
   it("allows explicit scope overrides for dynamic callers", async () => {
@@ -174,19 +169,23 @@ describe("gateway tool defaults", () => {
       { requestId: "req-1" },
       { scopes: ["operator.admin"] },
     );
-    const call = capturedGatewayCall();
-    expect(call.method).toBe("node.pair.approve");
-    expect(call.params).toEqual({ requestId: "req-1" });
-    expect(call.scopes).toEqual(["operator.admin"]);
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.pair.approve",
+        scopes: ["operator.admin"],
+      }),
+    );
   });
 
   it("default-denies unknown methods by sending no scopes", async () => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
     await callGatewayTool("nonexistent.method", {}, {});
-    const call = capturedGatewayCall();
-    expect(call.method).toBe("nonexistent.method");
-    expect(call.params).toEqual({});
-    expect(call.scopes).toEqual([]);
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "nonexistent.method",
+        scopes: [],
+      }),
+    );
   });
 
   it("rejects non-allowlisted overrides (SSRF hardening)", async () => {

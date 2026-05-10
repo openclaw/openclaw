@@ -17,17 +17,7 @@ import {
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
 
-type DetectZaiEndpoint = (params: {
-  apiKey: string;
-  endpoint?: "global" | "cn" | "coding-global" | "coding-cn";
-  timeoutMs?: number;
-  fetchFn?: typeof fetch;
-}) => Promise<{
-  endpoint: "global" | "cn" | "coding-global" | "coding-cn";
-  baseUrl: string;
-  modelId: string;
-  note: string;
-} | null>;
+type DetectZaiEndpoint = typeof import("../plugins/provider-zai-endpoint.js").detectZaiEndpoint;
 
 const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
@@ -77,6 +67,9 @@ vi.mock("./auth-choice.apply.api-providers.js", () => {
 });
 
 const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
+vi.mock("../plugins/provider-zai-endpoint.js", () => ({
+  detectZaiEndpoint,
+}));
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",

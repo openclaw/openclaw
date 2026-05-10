@@ -262,9 +262,11 @@ describe("sendControlledSubagentMessage", () => {
       message: "continue",
     });
 
-    expect(result.status).toBe("error");
-    expect(typeof result.runId).toBe("string");
-    expect(result.error).toBe("gateway unavailable");
+    expect(result).toEqual({
+      status: "error",
+      runId: expect.any(String),
+      error: "gateway unavailable",
+    });
   });
 
   it("does not send to a newer live run when the caller passes a stale run entry", async () => {
@@ -555,10 +557,12 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
     });
 
-    expect(result.found).toBe(true);
-    expect(result.killed).toBe(true);
-    expect(result.runId).toBe("run-worker");
-    expect(result.sessionKey).toBe(childSessionKey);
+    expect(result).toMatchObject({
+      found: true,
+      killed: true,
+      runId: "run-worker",
+      sessionKey: childSessionKey,
+    });
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
   });
 
@@ -604,10 +608,12 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
     });
 
-    expect(result.found).toBe(true);
-    expect(result.killed).toBe(false);
-    expect(result.runId).toBe("run-current-admin");
-    expect(result.sessionKey).toBe(childSessionKey);
+    expect(result).toMatchObject({
+      found: true,
+      killed: false,
+      runId: "run-current-admin",
+      sessionKey: childSessionKey,
+    });
   });
 
   it("still terminates the run when session store persistence fails during kill", async () => {
@@ -642,10 +648,12 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
     });
 
-    expect(result.found).toBe(true);
-    expect(result.killed).toBe(true);
-    expect(result.runId).toBe("run-worker-store-fail");
-    expect(result.sessionKey).toBe(childSessionKey);
+    expect(result).toMatchObject({
+      found: true,
+      killed: true,
+      runId: "run-worker-store-fail",
+      sessionKey: childSessionKey,
+    });
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
   });
 });
@@ -1224,9 +1232,10 @@ describe("steerControlledSubagentRun", () => {
         sessionId: undefined,
         error: "failed to replace steered subagent run",
       });
-      const storedRun = getSubagentRunByChildSessionKey("agent:main:subagent:steer-worker");
-      expect(storedRun?.runId).toBe("run-steer-old");
-      expect(storedRun?.suppressAnnounceReason).toBeUndefined();
+      expect(getSubagentRunByChildSessionKey("agent:main:subagent:steer-worker")).toMatchObject({
+        runId: "run-steer-old",
+        suppressAnnounceReason: undefined,
+      });
     } finally {
       replaceSpy.mockRestore();
     }

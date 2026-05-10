@@ -19,8 +19,7 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
 }));
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
-type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
-const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
+const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
 const gatewayLogMessages = vi.hoisted(() => [] as string[]);
@@ -158,7 +157,7 @@ vi.mock("./dev.js", () => ({
 }));
 
 vi.mock("./run-loop.js", () => ({
-  runGatewayLoop: (params: { start: GatewayLoopStart }) => runGatewayLoop(params),
+  runGatewayLoop: (params: { start: () => Promise<unknown> }) => runGatewayLoop(params),
 }));
 
 describe("gateway run option collisions", () => {
@@ -302,41 +301,6 @@ describe("gateway run option collisions", () => {
         startupConfigSnapshotRead: {
           snapshot: configState.snapshot,
         },
-      }),
-    );
-  });
-
-  it("uses the startup snapshot only for the first in-process gateway start", async () => {
-    runGatewayLoop.mockImplementationOnce(async ({ start }: { start: GatewayLoopStart }) => {
-      await start({ startupStartedAt: 1000 });
-      await start({ startupStartedAt: 2000 });
-    });
-
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
-
-    expect(startGatewayServer).toHaveBeenCalledTimes(2);
-    expect(startGatewayServer).toHaveBeenNthCalledWith(
-      1,
-      18789,
-      expect.objectContaining({
-        startupStartedAt: 1000,
-        startupConfigSnapshotRead: {
-          snapshot: configState.snapshot,
-        },
-      }),
-    );
-    expect(startGatewayServer).toHaveBeenNthCalledWith(
-      2,
-      18789,
-      expect.not.objectContaining({
-        startupConfigSnapshotRead: expect.anything(),
-      }),
-    );
-    expect(startGatewayServer).toHaveBeenNthCalledWith(
-      2,
-      18789,
-      expect.objectContaining({
-        startupStartedAt: 2000,
       }),
     );
   });

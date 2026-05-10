@@ -72,10 +72,12 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
       lane: "cron",
     });
 
-    expect(result.status).toBe("skipped");
-    expect(result.provider).toBe("ollama");
-    expect(result.model).toBe("qwen3:32b");
-    expect(result.sessionId).toBe("cron-session");
+    expect(result).toMatchObject({
+      status: "skipped",
+      provider: "ollama",
+      model: "qwen3:32b",
+      sessionId: "cron-session",
+    });
     expect(result.error).toContain("local provider endpoint is not reachable");
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });

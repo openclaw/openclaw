@@ -11,7 +11,6 @@ export function describeTelegramInteractiveButtonBehavior(): void {
               type: "buttons",
               buttons: [
                 { label: "Approve", value: "approve", style: "success" },
-                { label: "Docs", url: "https://example.com/docs", style: "primary" },
                 { label: "Reject", value: "reject", style: "danger" },
                 { label: "Later", value: "later" },
                 { label: "Archive", value: "archive" },
@@ -26,13 +25,10 @@ export function describeTelegramInteractiveButtonBehavior(): void {
       ).toEqual([
         [
           { text: "Approve", callback_data: "approve", style: "success" },
-          { text: "Docs", url: "https://example.com/docs", style: "primary" },
           { text: "Reject", callback_data: "reject", style: "danger" },
-        ],
-        [
           { text: "Later", callback_data: "later", style: undefined },
-          { text: "Archive", callback_data: "archive", style: undefined },
         ],
+        [{ text: "Archive", callback_data: "archive", style: undefined }],
         [{ text: "Alpha", callback_data: "alpha", style: undefined }],
       ]);
     });
@@ -64,20 +60,12 @@ export function describeTelegramInteractiveButtonBehavior(): void {
             blocks: [
               {
                 type: "buttons",
-                buttons: [
-                  { label: "Retry", value: "retry", style: "primary" },
-                  { label: "Docs", value: "docs", url: "https://example.com/docs" },
-                ],
+                buttons: [{ label: "Retry", value: "retry", style: "primary" }],
               },
             ],
           },
         }),
-      ).toEqual([
-        [
-          { text: "Retry", callback_data: "retry", style: "primary" },
-          { text: "Docs", url: "https://example.com/docs", style: undefined },
-        ],
-      ]);
+      ).toEqual([[{ text: "Retry", callback_data: "retry", style: "primary" }]]);
     });
   });
 }

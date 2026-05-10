@@ -265,9 +265,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,
         CommandAuthorized: params.access?.commands
-          ? (params.access.commands.authorized ??
-            params.access.commands.authorizers?.some((entry) => entry.allowed) ??
-            false)
+          ? params.access.commands.authorizers.some((entry) => entry.allowed)
           : false,
         ...params.extra,
       }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
@@ -638,8 +636,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       turn: {
         run: runChannelTurnMock,
-        runAssembled:
-          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
         runResolved: vi.fn(
           async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) =>
             await runChannelTurnMock({

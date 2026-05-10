@@ -103,10 +103,11 @@ describe("provider flow install catalog contributions", () => {
         source: "manifest",
       },
     ]);
-    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledTimes(1);
-    expect(
-      resolveManifestProviderAuthChoices.mock.calls[0]?.[0]?.includeUntrustedWorkspacePlugins,
-    ).toBe(false);
+    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
     expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
     expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
@@ -197,10 +198,11 @@ describe("provider flow install catalog contributions", () => {
         source: "install-catalog",
       },
     ]);
-    expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledTimes(1);
-    expect(
-      resolveProviderInstallCatalogEntries.mock.calls[0]?.[0]?.includeUntrustedWorkspacePlugins,
-    ).toBe(false);
+    expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
   });
 
   it("adds a fallback group when install-catalog entries omit group metadata", () => {

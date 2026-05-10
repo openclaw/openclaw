@@ -235,11 +235,10 @@ describe("voice-call outbound helpers", () => {
       inlineTwiml: undefined,
       preConnectTwiml: "<DtmfRedirect />",
     });
-    const metadata = (
-      ctx.activeCalls.get(callId) as { metadata?: Record<string, unknown> } | undefined
-    )?.metadata;
-    expect(metadata?.initialMessage).toBe("hello meet");
-    expect(metadata?.mode).toBe("conversation");
+    expect(ctx.activeCalls.get(callId)?.metadata).toMatchObject({
+      initialMessage: "hello meet",
+      mode: "conversation",
+    });
   });
 
   it("rejects DTMF sequences outside conversation mode", async () => {
@@ -449,7 +448,7 @@ describe("voice-call outbound helpers", () => {
       providerCallId: "provider-1",
       reason: "hangup-bot",
     });
-    expect((call as { endReason?: string }).endReason).toBe("hangup-bot");
+    expect(call).toMatchObject({ endReason: "hangup-bot" });
     const endedAt = (call as { endedAt?: unknown }).endedAt;
     expect(endedAt).toBeTypeOf("number");
     if (typeof endedAt === "number") {
@@ -483,7 +482,7 @@ describe("voice-call outbound helpers", () => {
       providerCallId: "provider-1",
       reason: "timeout",
     });
-    expect((call as { endReason?: string }).endReason).toBe("timeout");
+    expect(call).toMatchObject({ endReason: "timeout" });
     const endedAt = (call as { endedAt?: unknown }).endedAt;
     expect(endedAt).toBeTypeOf("number");
     if (typeof endedAt === "number") {

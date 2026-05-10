@@ -22,7 +22,7 @@ vi.mock("./accounts.js", () => ({
   }),
 }));
 
-vi.mock("./client-adapter.js", () => ({
+vi.mock("./client.js", () => ({
   signalRpcRequest: (...args: unknown[]) => rpcMock(...args),
 }));
 

@@ -8,13 +8,14 @@ import {
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+} from "openclaw/plugin-sdk/config-types";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -27,8 +28,9 @@ import {
 } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
+import { isSenderAllowed } from "./bot-access.js";
 import type {
   TelegramLogger,
   TelegramMediaRef,
@@ -46,7 +48,6 @@ import {
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
-import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 
 type StickerVisionRuntime = typeof import("./sticker-vision.runtime.js");
 type MediaUnderstandingRuntime = typeof import("./media-understanding.runtime.js");
@@ -183,28 +184,22 @@ export async function resolveTelegramInboundBody(params: {
   const mentionRegexes = buildMentionRegexes(cfg, routeAgentId);
   const messageTextParts = getTelegramTextParts(msg);
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
+  const senderAllowedForCommands = isSenderAllowed({
+    allow: allowForCommands,
+    senderId,
+    senderUsername,
+  });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {
     botUsername,
   });
-  const commandGate = await resolveTelegramCommandIngressAuthorization({
-    accountId: accountId ?? "default",
-    cfg,
-    dmPolicy: "pairing",
-    isGroup,
-    chatId,
-    resolvedThreadId,
-    senderId,
-    effectiveDmAllow,
-    effectiveGroupAllow,
-    ownerAccess: { ownerList: [], senderIsOwner: false },
-    eventKind: "message",
+  const commandGate = resolveControlCommandGate({
+    useAccessGroups,
+    authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
-    modeWhenAccessGroupsOff: "allow",
-    includeDmAllowForGroupCommands: false,
   });
-  const commandAuthorized = commandGate.authorized;
+  const commandAuthorized = commandGate.commandAuthorized;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
 
   const primaryMedia = resolveTelegramPrimaryMedia(msg);
@@ -245,7 +240,7 @@ export async function resolveTelegramInboundBody(params: {
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
   const senderAllowedForAudioPreflight =
-    !useAccessGroups || !allowForCommands.hasEntries || commandAuthorized;
+    !useAccessGroups || !allowForCommands.hasEntries || senderAllowedForCommands;
 
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
@@ -319,7 +314,7 @@ export async function resolveTelegramInboundBody(params: {
   });
   const wasMentioned = options?.forceWasMentioned === true ? true : computedWasMentioned;
 
-  if (isGroup && commandGate.shouldBlockControlCommand) {
+  if (isGroup && commandGate.shouldBlock) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",

@@ -1,6 +1,7 @@
 export { zaloPlugin } from "./src/channel.js";
 export {
   createZaloSetupWizardProxy,
+  evaluateZaloGroupAccess,
   resolveZaloRuntimeGroupPolicy,
   zaloDmPolicy,
   zaloSetupAdapter,

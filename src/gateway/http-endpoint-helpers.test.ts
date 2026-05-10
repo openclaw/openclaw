@@ -15,7 +15,6 @@ vi.mock("./http-common.js", () => {
     readJsonBodyOrError: vi.fn(),
     sendJson: vi.fn(),
     sendMethodNotAllowed: vi.fn(),
-    sendMissingScopeForbidden: vi.fn(),
   };
 });
 
@@ -25,8 +24,7 @@ vi.mock("./method-scopes.js", () => {
   };
 });
 
-const { readJsonBodyOrError, sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } =
-  await import("./http-common.js");
+const { readJsonBodyOrError, sendJson, sendMethodNotAllowed } = await import("./http-common.js");
 const { authorizeGatewayHttpRequestOrReply, resolveTrustedHttpOperatorScopes } =
   await import("./http-utils.js");
 const { authorizeOperatorScopesForMethod } = await import("./method-scopes.js");
@@ -104,8 +102,8 @@ describe("handleGatewayPostJsonEndpoint", () => {
       allowed: false,
       missingScope: "operator.write",
     });
-    const mockedSendMissingScopeForbidden = vi.mocked(sendMissingScopeForbidden);
-    mockedSendMissingScopeForbidden.mockClear();
+    const mockedSendJson = vi.mocked(sendJson);
+    mockedSendJson.mockClear();
     vi.mocked(readJsonBodyOrError).mockClear();
 
     const result = await handleGatewayPostJsonEndpoint(
@@ -127,9 +125,16 @@ describe("handleGatewayPostJsonEndpoint", () => {
     expect(vi.mocked(authorizeOperatorScopesForMethod)).toHaveBeenCalledWith("chat.send", [
       "operator.approvals",
     ]);
-    expect(mockedSendMissingScopeForbidden).toHaveBeenCalledWith(
+    expect(mockedSendJson).toHaveBeenCalledWith(
       expect.anything(),
-      "operator.write",
+      403,
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          type: "forbidden",
+          message: "missing scope: operator.write",
+        }),
+      }),
     );
     expect(vi.mocked(readJsonBodyOrError)).not.toHaveBeenCalled();
   });

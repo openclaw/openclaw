@@ -77,20 +77,31 @@ describe("buildChannelsTable", () => {
       },
     );
 
-    const row = table.rows.find((entry) => entry.id === "discord");
-    expect(row?.state).toBe("ok");
-    expect(row?.detail).not.toContain("unavailable");
-    const detailRow = table.details[0]?.rows[0];
-    expect(detailRow?.Status).toBe("OK");
-    expect(detailRow?.Notes).toContain("credential available in gateway runtime");
+    expect(table.rows).toContainEqual(
+      expect.objectContaining({
+        id: "discord",
+        state: "ok",
+        detail: expect.not.stringContaining("unavailable"),
+      }),
+    );
+    expect(table.details[0]?.rows[0]).toEqual(
+      expect.objectContaining({
+        Status: "OK",
+        Notes: expect.stringContaining("credential available in gateway runtime"),
+      }),
+    );
   });
 
   it("warns when a configured token is unavailable and there is no live account proof", async () => {
     const table = await buildChannelsTable({ channels: { discord: { enabled: true } } });
 
-    const row = table.rows.find((entry) => entry.id === "discord");
-    expect(row?.state).toBe("warn");
-    expect(row?.detail).toContain("unavailable");
+    expect(table.rows).toContainEqual(
+      expect.objectContaining({
+        id: "discord",
+        state: "warn",
+        detail: expect.stringContaining("unavailable"),
+      }),
+    );
   });
 
   it("shows configured official external channels when the plugin is missing", async () => {

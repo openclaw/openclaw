@@ -18,7 +18,8 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveOpenDmAllowlistAccess } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
   checkBotMentioned,
@@ -32,6 +33,7 @@ import {
 import {
   buildAgentMediaPayload,
   evaluateSupplementalContextVisibility,
+  filterSupplementalContextItems,
   normalizeAgentId,
   resolveChannelContextVisibilityMode,
 } from "./bot-runtime-api.js";
@@ -45,10 +47,9 @@ import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
 import {
   hasExplicitFeishuGroupConfig,
-  resolveFeishuDmIngressAccess,
+  isFeishuGroupAllowed,
+  resolveFeishuAllowlistMatch,
   resolveFeishuGroupConfig,
-  resolveFeishuGroupConversationIngressAccess,
-  resolveFeishuGroupSenderActivationIngressAccess,
   resolveFeishuReplyPolicy,
 } from "./policy.js";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
@@ -352,33 +353,44 @@ export function buildFeishuAgentBody(params: {
   return messageBody;
 }
 
-async function shouldIncludeFetchedGroupContextMessage(params: {
-  cfg: ClawdbotConfig;
-  accountId: string;
-  chatId: string;
+function isFetchedGroupContextSenderAllowed(params: {
+  isGroup: boolean;
+  allowFrom: Array<string | number>;
+  senderId?: string;
+  senderType?: string;
+}): boolean {
+  if (!params.isGroup || params.allowFrom.length === 0) {
+    return true;
+  }
+  if (params.senderType === "app") {
+    return true;
+  }
+  const senderId = params.senderId?.trim();
+  const senderAllowed =
+    !!senderId &&
+    isFeishuGroupAllowed({
+      groupPolicy: "allowlist",
+      allowFrom: params.allowFrom,
+      senderId,
+      senderName: undefined,
+    });
+  return senderAllowed;
+}
+
+function shouldIncludeFetchedGroupContextMessage(params: {
   isGroup: boolean;
   allowFrom: Array<string | number>;
   mode: "all" | "allowlist" | "allowlist_quote";
   kind: "quote" | "thread" | "history";
   senderId?: string;
   senderType?: string;
-}): Promise<boolean> {
-  let senderAllowed =
-    !params.isGroup || params.allowFrom.length === 0 || params.senderType === "app";
-  const senderId = params.senderId?.trim();
-  if (!senderAllowed && senderId) {
-    const access = await resolveFeishuGroupSenderActivationIngressAccess({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      chatId: params.chatId,
-      allowFrom: params.allowFrom,
-      senderOpenId: senderId,
-      senderUserId: senderId,
-      requireMention: false,
-      mentionedBot: true,
-    });
-    senderAllowed = access.senderAccess.decision === "allow";
-  }
+}): boolean {
+  const senderAllowed = isFetchedGroupContextSenderAllowed({
+    isGroup: params.isGroup,
+    allowFrom: params.allowFrom,
+    senderId: params.senderId,
+    senderType: params.senderType,
+  });
   return evaluateSupplementalContextVisibility({
     mode: params.mode,
     kind: params.kind,
@@ -386,38 +398,29 @@ async function shouldIncludeFetchedGroupContextMessage(params: {
   }).include;
 }
 
-async function filterFetchedGroupContextMessages<
+function filterFetchedGroupContextMessages<
   T extends Pick<FeishuMessageInfo, "senderId" | "senderType">,
 >(
   messages: readonly T[],
   params: {
-    cfg: ClawdbotConfig;
-    accountId: string;
-    chatId: string;
     isGroup: boolean;
     allowFrom: Array<string | number>;
     mode: "all" | "allowlist" | "allowlist_quote";
     kind: "quote" | "thread" | "history";
   },
-): Promise<T[]> {
-  const results: Array<T | undefined> = await Promise.all(
-    messages.map(async (message) =>
-      (await shouldIncludeFetchedGroupContextMessage({
-        cfg: params.cfg,
-        accountId: params.accountId,
-        chatId: params.chatId,
+): T[] {
+  return filterSupplementalContextItems({
+    items: messages,
+    mode: params.mode,
+    kind: params.kind,
+    isSenderAllowed: (message) =>
+      isFetchedGroupContextSenderAllowed({
         isGroup: params.isGroup,
         allowFrom: params.allowFrom,
-        mode: params.mode,
-        kind: params.kind,
         senderId: message.senderId,
         senderType: message.senderType,
-      }))
-        ? message
-        : undefined,
-    ),
-  );
-  return results.filter((message): message is T => message !== undefined);
+      }),
+  }).items;
 }
 
 export async function handleFeishuMessage(params: {
@@ -592,6 +595,7 @@ export async function handleFeishuMessage(params: {
   const groupHistoryKey = isGroup ? (groupSession?.peerId ?? ctx.chatId) : undefined;
   const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
+  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const rawBroadcastAgents = isGroup ? resolveBroadcastAgents(cfg, ctx.chatId) : null;
   const broadcastAgents = rawBroadcastAgents
     ? [...new Set(rawBroadcastAgents.map((id) => normalizeAgentId(id)))]
@@ -635,20 +639,37 @@ export async function handleFeishuMessage(params: {
       groupId: ctx.chatId,
     });
 
-    const groupIngress = await resolveFeishuGroupConversationIngressAccess({
-      cfg,
-      accountId: account.accountId,
-      chatId: ctx.chatId,
-      groupPolicy,
-      groupAllowFrom,
-      groupExplicitlyConfigured,
-    });
+    // Check if this GROUP is allowed (groupAllowFrom contains group IDs like oc_xxx, not user IDs)
+    const groupAllowed =
+      groupPolicy !== "disabled" &&
+      (groupExplicitlyConfigured ||
+        isFeishuGroupAllowed({
+          groupPolicy,
+          allowFrom: groupAllowFrom,
+          senderId: ctx.chatId, // Check group ID, not sender ID
+          senderName: undefined,
+        }));
 
-    if (groupIngress.ingress.admission !== "dispatch") {
+    if (!groupAllowed) {
       log(
         `feishu[${account.accountId}]: group ${ctx.chatId} not in groupAllowFrom (groupPolicy=${groupPolicy})`,
       );
       return;
+    }
+
+    // Sender-level allowlist: per-group allowFrom takes precedence, then global groupSenderAllowFrom
+    if (effectiveGroupSenderAllowFrom.length > 0) {
+      const senderAllowed = isFeishuGroupAllowed({
+        groupPolicy: "allowlist",
+        allowFrom: effectiveGroupSenderAllowFrom,
+        senderId: ctx.senderOpenId,
+        senderIds: [senderUserId],
+        senderName: ctx.senderName,
+      });
+      if (!senderAllowed) {
+        log(`feishu: sender ${ctx.senderOpenId} not in group ${ctx.chatId} sender allowlist`);
+        return;
+      }
     }
 
     ({ requireMention } = resolveFeishuReplyPolicy({
@@ -659,21 +680,7 @@ export async function handleFeishuMessage(params: {
       groupPolicy,
     }));
 
-    const groupSenderActivationIngress = await resolveFeishuGroupSenderActivationIngressAccess({
-      cfg,
-      accountId: account.accountId,
-      chatId: ctx.chatId,
-      allowFrom: effectiveGroupSenderAllowFrom,
-      senderOpenId: ctx.senderOpenId,
-      senderUserId,
-      requireMention,
-      mentionedBot: ctx.mentionedBot,
-    });
-    if (groupSenderActivationIngress.senderAccess.decision !== "allow") {
-      log(`feishu: sender ${ctx.senderOpenId} not in group ${ctx.chatId} sender allowlist`);
-      return;
-    }
-    if (groupSenderActivationIngress.ingress.admission !== "dispatch") {
+    if (requireMention && !ctx.mentionedBot) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
       // Record to pending history for non-broadcast groups only. For broadcast groups,
       // the mentioned handler's broadcast dispatch writes the turn directly into all
@@ -708,22 +715,34 @@ export async function handleFeishuMessage(params: {
       commandProbeBody,
       cfg,
     );
-    const dmIngress = isDirect
-      ? await resolveFeishuDmIngressAccess({
-          cfg,
-          accountId: account.accountId,
-          dmPolicy,
-          allowFrom: configAllowFrom,
-          readAllowFromStore: pairing.readAllowFromStore,
-          senderOpenId: ctx.senderOpenId,
-          senderUserId,
-          conversationId: ctx.senderOpenId,
-          mayPair: true,
-          ...(shouldComputeCommandAuthorized ? { command: { hasControlCommand: true } } : {}),
-        })
-      : null;
-    if (isDirect && dmIngress?.ingress.admission !== "dispatch") {
-      if (dmIngress?.ingress.admission === "pairing-required") {
+    const storeAllowFrom =
+      !isGroup && dmPolicy !== "allowlist" && dmPolicy !== "open"
+        ? await pairing.readAllowFromStore().catch(() => [])
+        : [];
+    const effectiveDmAllowFrom = [...configAllowFrom, ...storeAllowFrom];
+    const dmAllowed = resolveFeishuAllowlistMatch({
+      allowFrom: effectiveDmAllowFrom,
+      senderId: ctx.senderOpenId,
+      senderIds: [senderUserId],
+      senderName: ctx.senderName,
+    }).allowed;
+
+    const dmAccessAllowed =
+      dmPolicy === "open"
+        ? resolveOpenDmAllowlistAccess({
+            effectiveAllowFrom: effectiveDmAllowFrom,
+            isSenderAllowed: (allowFrom) =>
+              resolveFeishuAllowlistMatch({
+                allowFrom,
+                senderId: ctx.senderOpenId,
+                senderIds: [senderUserId],
+                senderName: ctx.senderName,
+              }).allowed,
+          }).decision === "allow"
+        : dmAllowed;
+
+    if (isDirect && !dmAccessAllowed) {
+      if (dmPolicy === "pairing") {
         await pairing.issueChallenge({
           senderId: ctx.senderOpenId,
           senderIdLine: `Your Feishu user id: ${ctx.senderOpenId}`,
@@ -755,7 +774,13 @@ export async function handleFeishuMessage(params: {
 
     const commandAllowFrom = isGroup
       ? (groupConfig?.allowFrom ?? configAllowFrom)
-      : (dmIngress?.senderAccess.effectiveAllowFrom ?? configAllowFrom);
+      : effectiveDmAllowFrom;
+    const senderAllowedForCommands = resolveFeishuAllowlistMatch({
+      allowFrom: commandAllowFrom,
+      senderId: ctx.senderOpenId,
+      senderIds: [senderUserId],
+      senderName: ctx.senderName,
+    }).allowed;
 
     // In group chats, the session is scoped to the group, but the *speaker* is the sender.
     // Using a group-scoped From causes the agent to treat different users as the same person.
@@ -957,36 +982,12 @@ export async function handleFeishuMessage(params: {
         ? shouldComputeCommandAuthorized
         : core.channel.commands.shouldComputeCommandAuthorized(effectiveCommandProbeBody, cfg);
     const commandAuthorized = shouldComputeEffectiveCommandAuthorized
-      ? isDirect && audioTranscript === undefined && dmIngress
-        ? dmIngress.commandAccess.authorized
-        : isGroup
-          ? (
-              await resolveFeishuGroupSenderActivationIngressAccess({
-                cfg,
-                accountId: account.accountId,
-                chatId: ctx.chatId,
-                allowFrom: commandAllowFrom,
-                senderOpenId: ctx.senderOpenId,
-                senderUserId,
-                requireMention: false,
-                mentionedBot: true,
-                command: { hasControlCommand: true },
-              })
-            ).commandAccess.authorized
-          : (
-              await resolveFeishuDmIngressAccess({
-                cfg,
-                accountId: account.accountId,
-                dmPolicy,
-                allowFrom: configAllowFrom,
-                readAllowFromStore: pairing.readAllowFromStore,
-                senderOpenId: ctx.senderOpenId,
-                senderUserId,
-                conversationId: ctx.senderOpenId,
-                mayPair: false,
-                command: { hasControlCommand: true },
-              })
-            ).commandAccess.authorized
+      ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+          useAccessGroups,
+          authorizers: [
+            { configured: commandAllowFrom.length > 0, allowed: senderAllowedForCommands },
+          ],
+        })
       : undefined;
 
     // Fetch quoted/replied message content if parentId exists
@@ -1001,17 +1002,14 @@ export async function handleFeishuMessage(params: {
         });
         if (
           quotedMessageInfo &&
-          (await shouldIncludeFetchedGroupContextMessage({
-            cfg,
-            accountId: account.accountId,
-            chatId: ctx.chatId,
+          shouldIncludeFetchedGroupContextMessage({
             isGroup,
             allowFrom: effectiveGroupSenderAllowFrom,
             mode: contextVisibilityMode,
             kind: "quote",
             senderId: quotedMessageInfo.senderId,
             senderType: quotedMessageInfo.senderType,
-          }))
+          })
         ) {
           quotedContent = quotedMessageInfo.content;
           log(
@@ -1117,17 +1115,14 @@ export async function handleFeishuMessage(params: {
         rootMessageThreadId = rootMessageInfo?.threadId;
         if (
           rootMessageInfo &&
-          !(await shouldIncludeFetchedGroupContextMessage({
-            cfg,
-            accountId: account.accountId,
-            chatId: ctx.chatId,
+          !shouldIncludeFetchedGroupContextMessage({
             isGroup,
             allowFrom: effectiveGroupSenderAllowFrom,
             mode: contextVisibilityMode,
             kind: "thread",
             senderId: rootMessageInfo.senderId,
             senderType: rootMessageInfo.senderType,
-          }))
+          })
         ) {
           log(
             `feishu[${account.accountId}]: skipped thread starter from sender ${rootMessageInfo.senderId ?? "unknown"} (mode=${contextVisibilityMode})`,
@@ -1213,10 +1208,7 @@ export async function handleFeishuMessage(params: {
             .map((id) => id?.trim())
             .filter((id): id is string => id !== undefined && id.length > 0),
         );
-        const allowlistedMessages = await filterFetchedGroupContextMessages(threadMessages, {
-          cfg,
-          accountId: account.accountId,
-          chatId: ctx.chatId,
+        const allowlistedMessages = filterFetchedGroupContextMessages(threadMessages, {
           isGroup,
           allowFrom: effectiveGroupSenderAllowFrom,
           mode: contextVisibilityMode,

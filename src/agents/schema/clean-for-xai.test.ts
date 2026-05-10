@@ -1,18 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripUnsupportedSchemaKeywords } from "../../plugin-sdk/provider-tools.js";
-
-const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
-  "minLength",
-  "maxLength",
-  "minItems",
-  "maxItems",
-  "minContains",
-  "maxContains",
-]);
-
-function stripXaiUnsupportedKeywords(schema: unknown): unknown {
-  return stripUnsupportedSchemaKeywords(schema, XAI_UNSUPPORTED_SCHEMA_KEYWORDS);
-}
+import { stripXaiUnsupportedKeywords } from "../../plugin-sdk/provider-tools.js";
 
 describe("stripXaiUnsupportedKeywords", () => {
   it("strips minLength and maxLength from string properties", () => {

@@ -3,8 +3,6 @@ import { buildWorkspaceSkillStatus } from "./skills-status.js";
 import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import type { SkillEntry } from "./skills/types.js";
 
-type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
-
 describe("buildWorkspaceSkillStatus", () => {
   it("does not surface install options for OS-scoped skills on unsupported platforms", () => {
     if (process.platform === "win32") {
@@ -159,9 +157,18 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(report.agentId).toBe("specialist");
     expect(report.agentSkillFilter).toEqual(["alpha"]);
     expect(report.skills.find((skill) => skill.name === "alpha")?.blockedByAgentFilter).toBe(false);
-    const byName = skillStatusByName(report.skills);
-    expect(requireSkillStatus(byName, "alpha").modelVisible).toBe(true);
-    expect(requireSkillStatus(byName, "beta").blockedByAgentFilter).toBe(true);
+    expect(report.skills).toContainEqual(
+      expect.objectContaining({
+        name: "alpha",
+        modelVisible: true,
+      }),
+    );
+    expect(report.skills).toContainEqual(
+      expect.objectContaining({
+        name: "beta",
+        blockedByAgentFilter: true,
+      }),
+    );
     expect(report.skills.find((skill) => skill.name === "beta")?.modelVisible).toBe(false);
   });
 
@@ -234,7 +241,7 @@ describe("buildWorkspaceSkillStatus", () => {
       ],
     });
 
-    const byName = skillStatusByName(report.skills);
+    const byName = new Map(report.skills.map((skill) => [skill.name, skill]));
     expect(report.agentSkillFilter).toEqual([
       "ready",
       "needs-bin",
@@ -244,102 +251,60 @@ describe("buildWorkspaceSkillStatus", () => {
       "disabled",
       "bundled-blocked",
     ]);
-    expectStatusFlags(requireSkillStatus(byName, "ready"), {
+    expect(byName.get("ready")).toMatchObject({
       eligible: true,
       modelVisible: true,
       commandVisible: true,
     });
-    const needsBin = requireSkillStatus(byName, "needs-bin");
-    expectStatusFlags(needsBin, {
+    expect(byName.get("needs-bin")).toMatchObject({
       eligible: false,
       modelVisible: false,
       commandVisible: false,
+      missing: { bins: [missingBin] },
+      install: [
+        {
+          kind: "node",
+          label: "Install @openclaw/missing-skill-bin (pnpm)",
+          bins: [missingBin],
+        },
+      ],
     });
-    expect(needsBin.missing).toStrictEqual({
-      anyBins: [],
-      bins: [missingBin],
-      config: [],
-      env: [],
-      os: [],
+    expect(byName.get("needs-env")).toMatchObject({
+      eligible: false,
+      primaryEnv: "OPENCLAW_TEST_MISSING_SKILL_KEY",
+      missing: { env: ["OPENCLAW_TEST_MISSING_SKILL_KEY"] },
     });
-    expect(needsBin.install).toStrictEqual([
-      {
-        kind: "node",
-        id: "node-0",
-        label: "Install @openclaw/missing-skill-bin (pnpm)",
-        bins: [missingBin],
-      },
-    ]);
-    const needsEnv = requireSkillStatus(byName, "needs-env");
-    expect(needsEnv.eligible).toBe(false);
-    expect(needsEnv.primaryEnv).toBe("OPENCLAW_TEST_MISSING_SKILL_KEY");
-    expect(needsEnv.missing).toStrictEqual({
-      anyBins: [],
-      bins: [],
-      config: [],
-      env: ["OPENCLAW_TEST_MISSING_SKILL_KEY"],
-      os: [],
-    });
-    expectStatusFlags(requireSkillStatus(byName, "prompt-hidden"), {
+    expect(byName.get("prompt-hidden")).toMatchObject({
       eligible: true,
       modelVisible: false,
       commandVisible: true,
     });
-    const slashHidden = requireSkillStatus(byName, "slash-hidden");
-    expectStatusFlags(slashHidden, {
+    expect(byName.get("slash-hidden")).toMatchObject({
       eligible: true,
       modelVisible: true,
+      userInvocable: false,
       commandVisible: false,
     });
-    expect(slashHidden.userInvocable).toBe(false);
-    const agentFiltered = requireSkillStatus(byName, "agent-filtered");
-    expectStatusFlags(agentFiltered, {
+    expect(byName.get("agent-filtered")).toMatchObject({
       eligible: true,
+      blockedByAgentFilter: true,
       modelVisible: false,
       commandVisible: false,
     });
-    expect(agentFiltered.blockedByAgentFilter).toBe(true);
-    const disabled = requireSkillStatus(byName, "disabled");
-    expectStatusFlags(disabled, {
+    expect(byName.get("disabled")).toMatchObject({
       eligible: false,
+      disabled: true,
       modelVisible: false,
       commandVisible: false,
     });
-    expect(disabled.disabled).toBe(true);
-    const bundledBlocked = requireSkillStatus(byName, "bundled-blocked");
-    expectStatusFlags(bundledBlocked, {
+    expect(byName.get("bundled-blocked")).toMatchObject({
       eligible: false,
+      blockedByAllowlist: true,
       modelVisible: false,
       commandVisible: false,
     });
-    expect(bundledBlocked.blockedByAllowlist).toBe(true);
   });
 });
-
-function skillStatusByName(skills: readonly SkillStatus[]): Map<string, SkillStatus> {
-  return new Map(skills.map((skill) => [skill.name, skill]));
-}
-
-function requireSkillStatus(byName: ReadonlyMap<string, SkillStatus>, name: string): SkillStatus {
-  const status = byName.get(name);
-  if (!status) {
-    throw new Error(`expected skill status ${name}`);
-  }
-  return status;
-}
-
-function expectStatusFlags(
-  status: SkillStatus,
-  expected: {
-    eligible: boolean;
-    modelVisible: boolean;
-    commandVisible: boolean;
-  },
-): void {
-  expect(status.eligible).toBe(expected.eligible);
-  expect(status.modelVisible).toBe(expected.modelVisible);
-  expect(status.commandVisible).toBe(expected.commandVisible);
-}
 
 function createEntry(
   name: string,

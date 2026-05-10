@@ -198,57 +198,6 @@ function getCapturedReplyOptions() {
   )?.replyOptions;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function requireMockArg(
-  mock: { mock: { calls: unknown[][] } },
-  callIndex: number,
-  argIndex: number,
-  label: string,
-) {
-  return requireRecord(mock.mock.calls[callIndex]?.[argIndex], label);
-}
-
-function requireLastMockArg(
-  mock: { mock: { calls: unknown[][] } },
-  argIndex: number,
-  label: string,
-) {
-  const callIndex = mock.mock.calls.length - 1;
-  return requireMockArg(mock, callIndex, argIndex, label);
-}
-
-function expectReplyResultFields(
-  deliverReply: { mock: { calls: unknown[][] } },
-  fields: Record<string, unknown>,
-) {
-  const params = requireLastMockArg(deliverReply, 0, "deliver reply params");
-  expectRecordFields(requireRecord(params.replyResult, "reply result"), fields);
-}
-
-function expectRememberSentContextFields(
-  rememberSentText: { mock: { calls: unknown[][] } },
-  text: unknown,
-  fields: Record<string, unknown>,
-) {
-  const call = rememberSentText.mock.calls.at(-1);
-  expect(call?.[0]).toBe(text);
-  expectRecordFields(requireRecord(call?.[1], "remember sent context"), fields);
-}
-
 type BufferedReplyParams = Parameters<typeof dispatchWhatsAppBufferedReply>[0];
 
 function makeReplyLogger(): BufferedReplyParams["replyLogger"] {
@@ -339,7 +288,7 @@ describe("whatsapp inbound dispatch", () => {
       },
     });
 
-    expectRecordFields(requireRecord(ctx, "inbound context"), {
+    expect(ctx).toMatchObject({
       Body: "Alice: hi",
       BodyForAgent: "hi",
       BodyForCommands: "hi",
@@ -372,7 +321,7 @@ describe("whatsapp inbound dispatch", () => {
       transcript: "spoken transcript",
     });
 
-    expectRecordFields(requireRecord(ctx, "voice inbound context"), {
+    expect(ctx).toMatchObject({
       Body: "spoken transcript",
       BodyForAgent: "spoken transcript",
       BodyForCommands: "<media:audio>",
@@ -571,10 +520,14 @@ describe("whatsapp inbound dispatch", () => {
     );
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
-    expectReplyResultFields(deliverReply, {
-      mediaUrls: ["/tmp/generated.jpg"],
-      text: "generated image",
-    });
+    expect(deliverReply).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          mediaUrls: ["/tmp/generated.jpg"],
+          text: "generated image",
+        }),
+      }),
+    );
 
     await deliver?.({ text: "block payload" }, { kind: "block" });
     await deliver?.({ text: "final payload" }, { kind: "final" });
@@ -607,30 +560,27 @@ describe("whatsapp inbound dispatch", () => {
     const deliver = getCapturedDeliver();
     await deliver?.({ text: "final payload" }, { kind: "final" });
 
-    const durableParams = requireMockArg(
-      deliverInboundReplyWithMessageSendContextMock,
-      0,
-      0,
-      "durable delivery params",
+    expect(deliverInboundReplyWithMessageSendContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        accountId: "default",
+        agentId: "main",
+        to: "+1000",
+        payload: expect.objectContaining({ text: "final payload" }),
+        info: { kind: "final" },
+        ctxPayload: expect.objectContaining({
+          SessionKey: "agent:main:whatsapp:+15551234567",
+        }),
+      }),
     );
-    expectRecordFields(durableParams, {
-      channel: "whatsapp",
-      accountId: "default",
-      agentId: "main",
-      to: "+1000",
-      info: { kind: "final" },
-    });
-    expectRecordFields(requireRecord(durableParams.payload, "durable payload"), {
-      text: "final payload",
-    });
-    expectRecordFields(requireRecord(durableParams.ctxPayload, "durable context"), {
-      SessionKey: "agent:main:whatsapp:+15551234567",
-    });
     expect(deliverReply).not.toHaveBeenCalled();
-    expectRememberSentContextFields(rememberSentText, "final payload", {
-      combinedBody: "incoming",
-      combinedBodySessionKey: "agent:main:whatsapp:+15551234567",
-    });
+    expect(rememberSentText).toHaveBeenCalledWith(
+      "final payload",
+      expect.objectContaining({
+        combinedBody: "incoming",
+        combinedBodySessionKey: "agent:main:whatsapp:+15551234567",
+      }),
+    );
   });
 
   it("does not fall back when durable WhatsApp delivery suppresses a send", async () => {
@@ -653,19 +603,13 @@ describe("whatsapp inbound dispatch", () => {
     const deliver = getCapturedDeliver();
     await deliver?.({ text: "cancelled by hook" }, { kind: "final" });
 
-    const durableParams = requireMockArg(
-      deliverInboundReplyWithMessageSendContextMock,
-      0,
-      0,
-      "suppressed durable delivery params",
+    expect(deliverInboundReplyWithMessageSendContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        payload: expect.objectContaining({ text: "cancelled by hook" }),
+        info: { kind: "final" },
+      }),
     );
-    expectRecordFields(durableParams, {
-      channel: "whatsapp",
-      info: { kind: "final" },
-    });
-    expectRecordFields(requireRecord(durableParams.payload, "suppressed payload"), {
-      text: "cancelled by hook",
-    });
     expect(deliverReply).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();
   });
@@ -693,14 +637,21 @@ describe("whatsapp inbound dispatch", () => {
     );
 
     expect(deliverInboundReplyWithMessageSendContextMock).not.toHaveBeenCalled();
-    expectReplyResultFields(deliverReply, {
-      mediaUrls: ["/tmp/generated.jpg"],
-      text: "generated image",
-    });
-    expectRememberSentContextFields(rememberSentText, "generated image", {
-      combinedBody: "hi",
-      combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
-    });
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          mediaUrls: ["/tmp/generated.jpg"],
+          text: "generated image",
+        }),
+      }),
+    );
+    expect(rememberSentText).toHaveBeenCalledWith(
+      "generated image",
+      expect.objectContaining({
+        combinedBody: "hi",
+        combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
+      }),
+    );
   });
 
   it("normalizes WhatsApp payload text before delivery and echo bookkeeping", async () => {
@@ -722,11 +673,18 @@ describe("whatsapp inbound dispatch", () => {
       { kind: "final" },
     );
 
-    expectReplyResultFields(deliverReply, { text: "Before\n\nAfter" });
-    expectRememberSentContextFields(rememberSentText, "Before\n\nAfter", {
-      combinedBody: "hi",
-      combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
-    });
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({ text: "Before\n\nAfter" }),
+      }),
+    );
+    expect(rememberSentText).toHaveBeenCalledWith(
+      "Before\n\nAfter",
+      expect.objectContaining({
+        combinedBody: "hi",
+        combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
+      }),
+    );
   });
 
   it("suppresses reasoning and compaction payloads before WhatsApp delivery", async () => {
@@ -816,7 +774,9 @@ describe("whatsapp inbound dispatch", () => {
       msg: makeMsg({ from: "+15550001000", chatType: "direct" }),
     });
 
-    expect(getCapturedReplyOptions()?.disableBlockStreaming).toBe(false);
+    expect(getCapturedReplyOptions()).toMatchObject({
+      disableBlockStreaming: false,
+    });
     expect(getCapturedReplyOptions()?.sourceReplyDeliveryMode).toBeUndefined();
   });
 
@@ -826,7 +786,7 @@ describe("whatsapp inbound dispatch", () => {
       msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group" }),
     });
 
-    expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
+    expect(getCapturedReplyOptions()).toMatchObject({
       sourceReplyDeliveryMode: "message_tool_only",
       disableBlockStreaming: true,
     });
@@ -842,7 +802,7 @@ describe("whatsapp inbound dispatch", () => {
       msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group" }),
     });
 
-    expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
+    expect(getCapturedReplyOptions()).toMatchObject({
       sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: false,
     });
@@ -913,13 +873,13 @@ describe("whatsapp inbound dispatch", () => {
 
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expect(rememberSentText).not.toHaveBeenCalled();
-    const warnMock = replyLogger.warn as unknown as { mock: { calls: unknown[][] } };
-    const warningContext = requireMockArg(warnMock, 0, 0, "warning context");
-    expectRecordFields(warningContext, {
-      replyKind: "final",
-      conversationId: "+1000",
-    });
-    expect(warnMock.mock.calls[0]?.[1]).toBe("auto-reply was not accepted by WhatsApp provider");
+    expect(replyLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyKind: "final",
+        conversationId: "+1000",
+      }),
+      "auto-reply was not accepted by WhatsApp provider",
+    );
   });
 
   it("returns true for tool-only media turns after delivering media", async () => {
@@ -970,11 +930,15 @@ describe("whatsapp inbound dispatch", () => {
     ).resolves.toBe(true);
 
     expect(deliverReply).toHaveBeenCalledTimes(1);
-    expectReplyResultFields(deliverReply, {
-      mediaUrls: ["/tmp/generated.jpg"],
-      text: undefined,
-    });
-    expectRememberSentContextFields(rememberSentText, undefined, {});
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          mediaUrls: ["/tmp/generated.jpg"],
+          text: undefined,
+        }),
+      }),
+    );
+    expect(rememberSentText).toHaveBeenCalledWith(undefined, expect.any(Object));
   });
 
   it("passes sendComposing through as the reply typing callback", async () => {

@@ -2,18 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { PluginEnableResult } from "../plugins/enable.js";
-import { resolveNpmInstallSpecsForUpdateChannel } from "../plugins/install-channel-specs.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { VERSION } from "../version.js";
-
-function expectedNpmInstallSpec(spec: string): string {
-  return resolveNpmInstallSpecsForUpdateChannel({
-    spec,
-    updateChannel: resolveRegistryUpdateChannel({ currentVersion: VERSION }),
-  }).installSpec;
-}
 
 const resolveBundledInstallPlanForCatalogEntry = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => unknown>(() => undefined),
@@ -94,64 +84,6 @@ function requireCapturedPrompt<T>(captured: T | undefined): T {
   }
   return captured;
 }
-
-type MockWithUnknownCalls = {
-  mock: {
-    calls: unknown[][];
-  };
-};
-
-function readFirstMockCall(mock: unknown, label: string): unknown[] {
-  const calls = (mock as MockWithUnknownCalls).mock.calls;
-  const call = calls[0];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call;
-}
-
-type NpmPackInstallCall = {
-  archivePath?: string;
-  expectedPluginId?: string;
-  trustedSourceLinkedOfficialInstall?: boolean;
-};
-
-type NpmSpecInstallCall = {
-  expectedIntegrity?: string;
-  expectedPluginId?: string;
-  spec?: string;
-  timeoutMs?: number;
-  trustedSourceLinkedOfficialInstall?: boolean;
-};
-
-type ClawHubInstallCall = {
-  expectedPluginId?: string;
-  mode?: string;
-  spec?: string;
-  timeoutMs?: number;
-};
-
-type PluginInstallRecord = {
-  artifactFormat?: string;
-  artifactKind?: string;
-  clawhubPackage?: string;
-  clawpackSize?: number;
-  installPath?: string;
-  integrity?: string;
-  npmIntegrity?: string;
-  npmShasum?: string;
-  npmTarballName?: string;
-  pluginId?: string;
-  resolvedAt?: string;
-  resolvedName?: string;
-  resolvedSpec?: string;
-  resolvedVersion?: string;
-  shasum?: string;
-  source?: string;
-  sourcePath?: string;
-  spec?: string;
-  version?: string;
-};
 
 describe("ensureOnboardingPluginInstalled", () => {
   beforeEach(() => {
@@ -242,18 +174,16 @@ describe("ensureOnboardingPluginInstalled", () => {
 
     expect(select).not.toHaveBeenCalled();
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
-    const [packCall] = readFirstMockCall(
-      installPluginFromNpmPackArchive,
-      "installPluginFromNpmPackArchive",
-    ) as [NpmPackInstallCall];
-    expect(packCall.archivePath).toBe(archivePath);
-    expect(packCall.expectedPluginId).toBe("demo-plugin");
-    expect(packCall).not.toHaveProperty("trustedSourceLinkedOfficialInstall");
-    const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
-      OpenClawConfig,
-      PluginInstallRecord,
-    ];
-    expect(recordUpdate).toEqual({
+    expect(installPluginFromNpmPackArchive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        archivePath,
+        expectedPluginId: "demo-plugin",
+      }),
+    );
+    expect(installPluginFromNpmPackArchive.mock.calls[0]?.[0]).not.toHaveProperty(
+      "trustedSourceLinkedOfficialInstall",
+    );
+    expect(recordPluginInstall).toHaveBeenCalledWith(expect.anything(), {
       pluginId: "demo-plugin",
       source: "npm",
       spec: "file:demo-plugin-1.2.3.tgz",
@@ -305,12 +235,15 @@ describe("ensureOnboardingPluginInstalled", () => {
       runtime: { log: vi.fn() } as never,
     });
 
-    const [npmCall] = readFirstMockCall(installPluginFromNpmSpec, "installPluginFromNpmSpec") as [
-      NpmSpecInstallCall,
-    ];
-    expect(npmCall.trustedSourceLinkedOfficialInstall).toBeUndefined();
-    expect(npmCall.spec).toBe("@openclaw/codex@2026.5.8");
-    expect(npmCall.expectedPluginId).toBe("codex");
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.not.objectContaining({ trustedSourceLinkedOfficialInstall: true }),
+    );
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/codex@2026.5.8",
+        expectedPluginId: "codex",
+      }),
+    );
   });
 
   it("installs and records ClawHub provider plugins with source facts", async () => {
@@ -360,36 +293,38 @@ describe("ensureOnboardingPluginInstalled", () => {
       runtime: {} as never,
     });
 
-    const [clawHubCall] = readFirstMockCall(
-      installPluginFromClawHub,
-      "installPluginFromClawHub",
-    ) as [ClawHubInstallCall];
-    expect(clawHubCall.spec).toBe("clawhub:demo-plugin@2026.5.2");
-    expect(clawHubCall.expectedPluginId).toBe("demo-plugin");
-    expect(clawHubCall.mode).toBe("install");
-    expect(clawHubCall.timeoutMs).toBe(300_000);
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo-plugin@2026.5.2",
+        expectedPluginId: "demo-plugin",
+        mode: "install",
+        timeoutMs: 300_000,
+      }),
+    );
     expect(update).toHaveBeenCalledWith("Downloading");
     expect(stop).toHaveBeenCalledWith("Installed Demo Provider plugin");
-    const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
-      OpenClawConfig,
-      PluginInstallRecord,
-    ];
-    expect(recordUpdate.pluginId).toBe("demo-plugin");
-    expect(recordUpdate.source).toBe("clawhub");
-    expect(recordUpdate.spec).toBe("clawhub:demo-plugin@2026.5.2");
-    expect(recordUpdate.installPath).toBe("/tmp/demo-plugin");
-    expect(recordUpdate.version).toBe("2026.5.2");
-    expect(recordUpdate.integrity).toBe("sha256-clawpack");
-    expect(recordUpdate.clawhubPackage).toBe("demo-plugin");
-    expect(recordUpdate.clawpackSize).toBe(4096);
+    expect(recordPluginInstall).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        pluginId: "demo-plugin",
+        source: "clawhub",
+        spec: "clawhub:demo-plugin@2026.5.2",
+        installPath: "/tmp/demo-plugin",
+        version: "2026.5.2",
+        integrity: "sha256-clawpack",
+        clawhubPackage: "demo-plugin",
+        clawpackSize: 4096,
+      }),
+    );
     expect(result.installed).toBe(true);
     expect(result.status).toBe("installed");
-    const installed = result.cfg.plugins?.installs?.["demo-plugin"] as
-      | PluginInstallRecord
-      | undefined;
-    expect(installed?.pluginId).toBe("demo-plugin");
-    expect(installed?.source).toBe("clawhub");
-    expect(installed?.spec).toBe("clawhub:demo-plugin@2026.5.2");
+    expect(result.cfg.plugins?.installs).toEqual({
+      "demo-plugin": expect.objectContaining({
+        pluginId: "demo-plugin",
+        source: "clawhub",
+        spec: "clawhub:demo-plugin@2026.5.2",
+      }),
+    });
   });
 
   it("passes npm specs and optional expected integrity to npm installs with progress", async () => {
@@ -441,40 +376,38 @@ describe("ensureOnboardingPluginInstalled", () => {
       runtime: {} as never,
     });
 
-    const [npmCall] = readFirstMockCall(installPluginFromNpmSpec, "installPluginFromNpmSpec") as [
-      NpmSpecInstallCall,
-    ];
-    expect(npmCall.spec).toBe("@wecom/wecom-openclaw-plugin@1.2.3");
-    expect(npmCall.expectedPluginId).toBe("demo-plugin");
-    expect(npmCall.expectedIntegrity).toBe("sha512-wecom");
-    expect(npmCall.trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(npmCall.timeoutMs).toBe(300_000);
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@wecom/wecom-openclaw-plugin@1.2.3",
+        expectedPluginId: "demo-plugin",
+        expectedIntegrity: "sha512-wecom",
+        trustedSourceLinkedOfficialInstall: true,
+        timeoutMs: 300_000,
+      }),
+    );
     expect(update).toHaveBeenCalledWith("Downloading");
     expect(stop).toHaveBeenCalledWith("Installed WeCom plugin");
     expect(buildNpmResolutionInstallFields).toHaveBeenCalledWith(npmResolution);
-    const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
-      OpenClawConfig,
-      PluginInstallRecord,
-    ];
-    expect(recordUpdate.pluginId).toBe("demo-plugin");
-    expect(recordUpdate.source).toBe("npm");
-    expect(recordUpdate.spec).toBe("@wecom/wecom-openclaw-plugin@1.2.3");
-    expect(recordUpdate.installPath).toBe("/tmp/demo-plugin");
-    expect(recordUpdate.version).toBe("1.2.3");
-    expect(recordUpdate.resolvedName).toBe(installFields.resolvedName);
-    expect(recordUpdate.resolvedVersion).toBe(installFields.resolvedVersion);
-    expect(recordUpdate.resolvedSpec).toBe(installFields.resolvedSpec);
-    expect(recordUpdate.integrity).toBe(installFields.integrity);
-    expect(recordUpdate.shasum).toBe(installFields.shasum);
-    expect(recordUpdate.resolvedAt).toBe(installFields.resolvedAt);
+    expect(recordPluginInstall).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        pluginId: "demo-plugin",
+        source: "npm",
+        spec: "@wecom/wecom-openclaw-plugin@1.2.3",
+        installPath: "/tmp/demo-plugin",
+        version: "1.2.3",
+        ...installFields,
+      }),
+    );
     expect(result.installed).toBe(true);
     expect(result.status).toBe("installed");
-    const installed = result.cfg.plugins?.installs?.["demo-plugin"] as
-      | PluginInstallRecord
-      | undefined;
-    expect(installed?.pluginId).toBe("demo-plugin");
-    expect(installed?.source).toBe("npm");
-    expect(installed?.spec).toBe("@wecom/wecom-openclaw-plugin@1.2.3");
+    expect(result.cfg.plugins?.installs).toEqual({
+      "demo-plugin": expect.objectContaining({
+        pluginId: "demo-plugin",
+        source: "npm",
+        spec: "@wecom/wecom-openclaw-plugin@1.2.3",
+      }),
+    });
     expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
   });
 
@@ -547,7 +480,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
 
     expect(captured?.options).toEqual([
-      { value: "npm", label: `Download from npm (${expectedNpmInstallSpec("@demo/plugin")})` },
+      { value: "npm", label: "Download from npm (@demo/plugin)" },
       { value: "skip", label: "Skip for now" },
     ]);
     expect(captured?.initialValue).toBe("npm");
@@ -665,11 +598,12 @@ describe("ensureOnboardingPluginInstalled", () => {
       promptInstall: false,
     });
 
-    const [npmCall] = readFirstMockCall(installPluginFromNpmSpec, "installPluginFromNpmSpec") as [
-      NpmSpecInstallCall,
-    ];
-    expect(npmCall.spec).toBe("@openclaw/demo-plugin@2026.5.2");
-    expect(npmCall.expectedPluginId).toBe("demo-plugin");
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/demo-plugin@2026.5.2",
+        expectedPluginId: "demo-plugin",
+      }),
+    );
     expect(result.installed).toBe(true);
   });
 
@@ -958,17 +892,21 @@ describe("ensureOnboardingPluginInstalled", () => {
       });
 
       const realPluginDir = await fs.realpath(pluginDir);
-      const [recordCfg, recordUpdate] = readFirstMockCall(
-        recordPluginInstall,
-        "recordPluginInstall",
-      ) as [OpenClawConfig, PluginInstallRecord];
-      expect(recordCfg.plugins?.load?.paths).toEqual([realPluginDir]);
-      expect(recordUpdate).toEqual({
-        pluginId: "demo-plugin",
-        source: "path",
-        sourcePath: "./plugins/demo",
-        spec: "@demo/plugin@1.2.3",
-      });
+      expect(recordPluginInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          plugins: {
+            load: {
+              paths: [realPluginDir],
+            },
+          },
+        }),
+        {
+          pluginId: "demo-plugin",
+          source: "path",
+          sourcePath: "./plugins/demo",
+          spec: "@demo/plugin@1.2.3",
+        },
+      );
       expect(result.installed).toBe(true);
       expect(result.status).toBe("installed");
       expect(result.cfg.plugins?.installs).toEqual({
@@ -1130,17 +1068,21 @@ describe("ensureOnboardingPluginInstalled", () => {
           "Failed to install @demo/plugin@1.2.3: registry unavailable\nReturning to selection.",
           "Plugin install",
         );
-        const [recordCfg, recordUpdate] = readFirstMockCall(
-          recordPluginInstall,
-          "recordPluginInstall",
-        ) as [OpenClawConfig, PluginInstallRecord];
-        expect(recordCfg.plugins?.load?.paths).toEqual([realPluginDir]);
-        expect(recordUpdate).toEqual({
-          pluginId: "demo-plugin",
-          source: "path",
-          sourcePath: "./plugins/demo",
-          spec: "@demo/plugin@1.2.3",
-        });
+        expect(recordPluginInstall).toHaveBeenCalledWith(
+          expect.objectContaining({
+            plugins: {
+              load: {
+                paths: [realPluginDir],
+              },
+            },
+          }),
+          {
+            pluginId: "demo-plugin",
+            source: "path",
+            sourcePath: "./plugins/demo",
+            spec: "@demo/plugin@1.2.3",
+          },
+        );
         expect(result.installed).toBe(true);
         expect(result.status).toBe("installed");
         expect(result.cfg.plugins?.installs).toEqual({

@@ -763,7 +763,6 @@ export async function refreshChat(
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
-      agentId: resolveAgentIdForSession(host) ?? undefined,
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),

@@ -10,13 +10,11 @@ import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibili
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import {
   buildModelAliasIndex,
-  modelKey,
   normalizeProviderId,
   resolveBareModelDefaultProvider,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -78,13 +76,6 @@ export async function buildModelsProviderData(
   });
 
   const catalog = await loadModelCatalog({ config: cfg });
-  const visibilityPolicy = createModelVisibilityPolicy({
-    cfg,
-    catalog,
-    defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault.model,
-    agentId,
-  });
   const visibleCatalog = resolveVisibleModelCatalog({
     cfg,
     catalog,
@@ -102,16 +93,11 @@ export async function buildModelsProviderData(
     cfg,
     defaultProvider: resolvedDefault.provider,
   });
-  const restrictToProviderWildcards =
-    options.view !== "all" && visibilityPolicy.hasProviderWildcards;
 
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
     if (!isModelPickerVisibleProvider(key)) {
-      return;
-    }
-    if (restrictToProviderWildcards && !visibilityPolicy.allows({ provider: key, model: m })) {
       return;
     }
     const set = byProvider.get(key) ?? new Set<string>();
@@ -169,7 +155,7 @@ export async function buildModelsProviderData(
     add(entry.provider, entry.id);
   }
 
-  for (const raw of visibilityPolicy.exactModelRefs) {
+  for (const raw of Object.keys(cfg.agents?.defaults?.models ?? {})) {
     addRawModelRef(raw);
   }
 

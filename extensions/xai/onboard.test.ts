@@ -13,8 +13,10 @@ import { applyXaiConfig, applyXaiProviderConfig, XAI_DEFAULT_MODEL_REF } from ".
 describe("xai onboard", () => {
   it("adds xAI provider with correct settings", () => {
     const cfg = applyXaiConfig({});
-    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
+    expect(cfg.models?.providers?.xai).toMatchObject({
+      baseUrl: "https://api.x.ai/v1",
+      api: "openai-responses",
+    });
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(XAI_DEFAULT_MODEL_REF);
   });
 
@@ -31,13 +33,16 @@ describe("xai onboard", () => {
     expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
     expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
     expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
-    const modelIds = cfg.models?.providers?.xai?.models.map((m) => m.id) ?? [];
-    expect(modelIds).toContain("custom-model");
-    expect(modelIds).toContain("grok-4.3");
-    expect(modelIds).toContain("grok-4");
-    expect(modelIds).toContain("grok-4-1-fast");
-    expect(modelIds).toContain("grok-4.20-beta-latest-reasoning");
-    expect(modelIds).toContain("grok-code-fast-1");
+    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual(
+      expect.arrayContaining([
+        "custom-model",
+        "grok-4.3",
+        "grok-4",
+        "grok-4-1-fast",
+        "grok-4.20-beta-latest-reasoning",
+        "grok-code-fast-1",
+      ]),
+    );
   });
 
   it("adds expected alias for the default model", () => {

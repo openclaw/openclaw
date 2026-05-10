@@ -5,7 +5,6 @@ import {
   applyCustomApiConfig,
   buildAnthropicVerificationProbeRequest,
   buildOpenAiVerificationProbeRequest,
-  CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
   inferCustomModelSupportsImageInput,
   parseNonInteractiveCustomApiFlags,
   resolveCustomModelImageInputInference,
@@ -55,7 +54,7 @@ it("uses expanded max_tokens for openai verification probes", () => {
     modelId: "detected-model",
   });
 
-  expect(request.body.max_tokens).toBe(16);
+  expect(request.body).toMatchObject({ max_tokens: 16 });
 });
 it("uses azure responses-specific headers and body for openai verification probes", () => {
   const request = buildOpenAiVerificationProbeRequest({
@@ -101,30 +100,20 @@ it("uses expanded max_tokens for anthropic verification probes", () => {
   });
 
   expect(request.endpoint).toBe("https://example.com/v1/messages");
-  expect(request.body.max_tokens).toBe(1);
+  expect(request.body).toMatchObject({ max_tokens: 1 });
 });
 
 describe("applyCustomApiConfig", () => {
   it.each([
     {
-      name: "uses stable default context window for newly added custom models",
+      name: "uses hard-min context window for newly added custom models",
       existingContextWindow: undefined,
-      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
+      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
     },
     {
       name: "upgrades existing custom model context window when below hard minimum",
       existingContextWindow: 2048,
-      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
-    },
-    {
-      name: "raises legacy generated hard-min context window (#79428)",
-      existingContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
-      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
-    },
-    {
-      name: "preserves explicit small context window when already valid",
-      existingContextWindow: 8192,
-      expectedContextWindow: 8192,
+      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
     },
     {
       name: "preserves existing custom model context window when already above minimum",
@@ -302,9 +291,10 @@ describe("applyCustomApiConfig", () => {
       "custom",
       "custom-2",
     ]);
-    const provider = result.config.models?.providers?.["custom-2"];
-    expect(provider?.baseUrl).toBe("http://localhost:11434/v1");
-    expect(provider?.models?.[0]?.id).toBe("llama3");
+    expect(result.config.models?.providers?.["custom-2"]).toMatchObject({
+      baseUrl: "http://localhost:11434/v1",
+      models: [{ id: "llama3" }],
+    });
   });
 
   it("does not add azure fields for non-azure URLs", () => {

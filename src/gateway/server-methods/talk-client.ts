@@ -24,7 +24,6 @@ import { chatHandlers } from "./chat.js";
 import { asRecord } from "./record-shared.js";
 import {
   buildRealtimeInstructions,
-  buildRealtimeVoiceLaunchOptions,
   buildTalkRealtimeConfig,
   isUnsupportedBrowserWebRtcSession,
 } from "./talk-shared.js";
@@ -115,10 +114,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       provider?: string;
       model?: string;
       voice?: string;
-      vadThreshold?: number;
-      silenceDurationMs?: number;
-      prefixPaddingMs?: number;
-      reasoningEffort?: string;
       mode?: string;
       transport?: string;
       brain?: string;
@@ -185,17 +180,13 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         cfgForResolve: runtimeConfig,
         noRegisteredProviderMessage: "No realtime voice provider registered",
       });
-      const launchOptions = buildRealtimeVoiceLaunchOptions({
-        requested: typedParams,
-        defaults: realtimeConfig,
-      });
       if (resolution.provider.createBrowserSession && transport !== "gateway-relay") {
         const session = await resolution.provider.createBrowserSession({
-          cfg: runtimeConfig,
           providerConfig: resolution.providerConfig,
-          instructions: buildRealtimeInstructions(realtimeConfig.instructions),
+          instructions: buildRealtimeInstructions(),
           tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
-          ...launchOptions,
+          model: normalizeOptionalString(typedParams.model) ?? realtimeConfig.model,
+          voice: normalizeOptionalString(typedParams.voice) ?? realtimeConfig.voice,
         });
         if (
           !isUnsupportedBrowserWebRtcSession(session) &&

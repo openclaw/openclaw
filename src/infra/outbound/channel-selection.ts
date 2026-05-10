@@ -102,21 +102,6 @@ function formatMissingOfficialExternalChannelsMessage(
   return `Configured official external channels ${labels} are missing their plugins. Run: openclaw doctor --fix, or install individually: ${installCommands}.`;
 }
 
-function formatNoConfiguredChannelsMessage(): string {
-  return [
-    "Channel is required (no configured channels detected).",
-    "Run openclaw channels add to configure one, or pass --channel <channel> after enabling a channel.",
-    "Use openclaw channels list --all to see available channel ids.",
-  ].join(" ");
-}
-
-function formatMultipleConfiguredChannelsMessage(configured: readonly string[]): string {
-  return [
-    `Channel is required when multiple channels are configured: ${configured.join(", ")}.`,
-    "Pass --channel <channel> to choose one.",
-  ].join(" ");
-}
-
 function isAccountEnabled(account: unknown): boolean {
   if (!account || typeof account !== "object") {
     return true;
@@ -278,9 +263,11 @@ export async function resolveMessageChannelSelection(params: {
         `Channel is required (no available channels detected). ${formatMissingOfficialExternalChannelsMessage(repairHints)}`,
       );
     }
-    throw new Error(formatNoConfiguredChannelsMessage());
+    throw new Error("Channel is required (no configured channels detected).");
   }
-  throw new Error(formatMultipleConfiguredChannelsMessage(configured));
+  throw new Error(
+    `Channel is required when multiple channels are configured: ${configured.join(", ")}`,
+  );
 }
 
 export const __testing = {

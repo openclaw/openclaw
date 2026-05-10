@@ -112,42 +112,6 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   }
 
-  function findBlockReplyPayload(
-    onBlockReply: { mock: { calls: unknown[][] } },
-    text: string,
-  ): { mediaUrls?: unknown } | undefined {
-    return onBlockReply.mock.calls
-      .map((call) => call[0] as { text?: unknown; mediaUrls?: unknown })
-      .find((payload) => payload.text === text);
-  }
-
-  function expectBlockReplyPayload(
-    onBlockReply: { mock: { calls: unknown[][] } },
-    expected: { text: string; mediaUrls?: string[] },
-  ): void {
-    const payload = findBlockReplyPayload(onBlockReply, expected.text);
-    expect(payload).toBeDefined();
-    if (!payload) {
-      throw new Error(`Expected block reply text: ${expected.text}`);
-    }
-    if (expected.mediaUrls !== undefined) {
-      expect(payload.mediaUrls).toStrictEqual(expected.mediaUrls);
-    }
-  }
-
-  function expectLifecyclePayload(
-    payloads: Array<Record<string, unknown>>,
-    expected: { phase: string; livenessState: string; replayInvalid: boolean },
-  ): void {
-    const payload = payloads.find(
-      (item) =>
-        item.phase === expected.phase &&
-        item.livenessState === expected.livenessState &&
-        item.replayInvalid === expected.replayInvalid,
-    );
-    expect(payload).toBeDefined();
-  }
-
   it("captures usage from completions timings on done events", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
 
@@ -398,10 +362,12 @@ describe("subscribeEmbeddedPiSession", () => {
     });
     await flushBlockReplyCallbacks();
 
-    expectBlockReplyPayload(onBlockReply, {
-      text: "Here is the image.",
-      mediaUrls: ["/tmp/generated.png"],
-    });
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here is the image.",
+        mediaUrls: ["/tmp/generated.png"],
+      }),
+    );
   });
 
   it("does not duplicate generated image media when the assistant reply has MEDIA lines", async () => {
@@ -451,10 +417,12 @@ describe("subscribeEmbeddedPiSession", () => {
     });
     await flushBlockReplyCallbacks();
 
-    expectBlockReplyPayload(onBlockReply, {
-      text: "Here is the selected image.",
-      mediaUrls: ["./selected.png"],
-    });
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here is the selected image.",
+        mediaUrls: ["./selected.png"],
+      }),
+    );
   });
 
   it("does not attach generated image media to an early streamed chunk before explicit MEDIA", async () => {
@@ -497,9 +465,11 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "Generated 1 image.\n");
 
-    expectBlockReplyPayload(onBlockReply, {
-      text: "Generated 1 image.",
-    });
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Generated 1 image.",
+      }),
+    );
     const earlyMediaPayloads = onBlockReply.mock.calls
       .map(([payload]) => payload)
       .filter((payload) => payload.mediaUrls?.length);
@@ -572,10 +542,12 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "agent_end" });
     await flushBlockReplyCallbacks();
 
-    expectBlockReplyPayload(onBlockReply, {
-      text: "Here it is.",
-      mediaUrls: ["/tmp/lobster-boss.mp3"],
-    });
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here it is.",
+        mediaUrls: ["/tmp/lobster-boss.mp3"],
+      }),
+    );
   });
 
   it.each([
@@ -638,9 +610,11 @@ describe("subscribeEmbeddedPiSession", () => {
       emit({ type: "message_start", message: { role: "assistant" } });
       emitAssistantTextDelta(emit, firstChunk);
 
-      expectBlockReplyPayload(onBlockReply, {
-        text: firstChunk.trim(),
-      });
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: firstChunk.trim(),
+        }),
+      );
       const earlyMediaPayloads = onBlockReply.mock.calls
         .map(([payload]) => payload)
         .filter((payload) => payload.mediaUrls?.length);
@@ -1057,10 +1031,9 @@ describe("subscribeEmbeddedPiSession", () => {
     // Look for lifecycle:error event
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
 
-    expect(lifecycleError).toBeDefined();
-    const error = (lifecycleError?.data as { error?: unknown } | undefined)?.error;
-    expect(typeof error).toBe("string");
-    expect(error).toContain("API rate limit reached");
+    expect(lifecycleError).toMatchObject({
+      data: { error: expect.stringContaining("API rate limit reached") },
+    });
   });
 
   it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {
@@ -1094,11 +1067,13 @@ describe("subscribeEmbeddedPiSession", () => {
       hadPotentialSideEffects: true,
     });
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expectLifecyclePayload(payloads, {
-      phase: "end",
-      livenessState: "abandoned",
-      replayInvalid: true,
-    });
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      }),
+    );
   });
 
   it("preserves deterministic side-effect liveness across compaction retries", () => {
@@ -1124,10 +1099,12 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "agent_end" });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expectLifecyclePayload(payloads, {
-      phase: "end",
-      livenessState: "working",
-      replayInvalid: true,
-    });
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: "working",
+        replayInvalid: true,
+      }),
+    );
   });
 });

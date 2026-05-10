@@ -5,10 +5,7 @@ import {
   collectGatewayHttpSessionKeyOverrideFindings,
 } from "./audit-extra.sync.js";
 
-function requireFinding(
-  findings: Array<{ checkId: string; detail: string; severity?: string }>,
-  checkId: string,
-) {
+function requireFinding(findings: Array<{ checkId: string; detail: string }>, checkId: string) {
   const finding = findings.find((entry) => entry.checkId === checkId);
   if (!finding) {
     throw new Error(`Expected ${checkId} finding`);
@@ -84,9 +81,9 @@ describe("security audit gateway HTTP auth findings", () => {
     ];
 
     if (expectedFinding) {
-      const finding = requireFinding(findings, expectedFinding.checkId);
-      expect(finding.severity).toBe(expectedFinding.severity);
+      expect(findings).toEqual(expect.arrayContaining([expect.objectContaining(expectedFinding)]));
       if (detailIncludes) {
+        const finding = requireFinding(findings, expectedFinding.checkId);
         for (const text of detailIncludes) {
           expect(finding.detail, `${expectedFinding.checkId}:${text}`).toContain(text);
         }

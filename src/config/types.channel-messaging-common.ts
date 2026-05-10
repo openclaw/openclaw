@@ -8,7 +8,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channel-health.js";
+} from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
 
 export type CommonChannelMessagingConfig = {

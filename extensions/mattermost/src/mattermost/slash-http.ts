@@ -480,7 +480,7 @@ async function authorizeSlashInvocation(params: {
       })
       .catch(() => []),
   );
-  const decision = await authorizeMattermostCommandInvocation({
+  const decision = authorizeMattermostCommandInvocation({
     account,
     cfg,
     senderId,

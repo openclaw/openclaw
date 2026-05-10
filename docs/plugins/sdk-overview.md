@@ -72,15 +72,7 @@ entry, channel, provider, auth, runtime, capability, memory, and reserved
 bundled-plugin helpers). For the full catalog — grouped and linked — see
 [Plugin SDK subpaths](/plugins/sdk-subpaths).
 
-The compiler entrypoint inventory lives in
-`scripts/lib/plugin-sdk-entrypoints.json`; package exports are generated from
-the public subset after subtracting repo-local test/internal subpaths listed in
-`scripts/lib/plugin-sdk-private-local-only-subpaths.json`. Run
-`pnpm plugin-sdk:surface` to audit the public export count. Deprecated public
-subpaths that are old enough and unused by bundled extension production code are
-tracked in `scripts/lib/plugin-sdk-deprecated-public-subpaths.json`; broad
-deprecated re-export barrels are tracked in
-`scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json`.
+The generated list of 200+ subpaths lives in `scripts/lib/plugin-sdk-entrypoints.json`.
 
 ## Registration API
 

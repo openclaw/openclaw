@@ -450,7 +450,6 @@ export function readClaudeCliCredentials(options?: {
   return parseClaudeCliOauthCredential(data.claudeAiOauth);
 }
 
-/** @deprecated Anthropic provider-owned CLI credential helper; do not use from third-party plugins. */
 export function readClaudeCliCredentialsCached(options?: {
   allowKeychainPrompt?: boolean;
   ttlMs?: number;

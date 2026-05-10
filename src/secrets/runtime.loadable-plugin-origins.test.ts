@@ -69,30 +69,16 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
       includeAuthStoreRefs: false,
     });
 
-    const snapshotCalls = manifestMocks.loadPluginMetadataSnapshot.mock.calls as unknown as Array<
-      [
-        {
-          config: {
-            plugins?: unknown;
-          };
-          workspaceDir: unknown;
-          env: Record<string, unknown>;
-        },
-      ]
-    >;
-    const snapshotParams = snapshotCalls[0]?.[0];
-    expect(snapshotParams?.config.plugins).toStrictEqual({
-      entries: {
-        demo: {
-          config: {
-            apiKey: { source: "env", provider: "default", id: "DEMO_API_KEY" },
-          },
-        },
-      },
+    expect(manifestMocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
+      config: expect.objectContaining({
+        plugins: expect.any(Object),
+      }),
+      workspaceDir: expect.any(String),
+      env: expect.objectContaining({
+        HOME: "/home/demo",
+        DEMO_API_KEY: "sk-demo",
+      }),
     });
-    expect(typeof snapshotParams?.workspaceDir).toBe("string");
-    expect(snapshotParams?.env.HOME).toBe("/home/demo");
-    expect(snapshotParams?.env.DEMO_API_KEY).toBe("sk-demo");
     expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).toHaveBeenCalledWith(snapshot);
   });
 });

@@ -44,15 +44,21 @@ describe("command control-plane plugin discovery", () => {
     const cfg = createColdPluginConfig(plugin.rootDir, plugin.pluginId);
     const env = createColdPluginHermeticEnv(workspaceDir);
 
-    const authChoice = buildAuthChoiceOptions({
-      store: {} as never,
-      includeSkip: false,
-      config: cfg,
-      workspaceDir,
-      env,
-    }).find((choice) => choice.value === plugin.authChoiceId);
-    expect(authChoice?.label).toBe("Cold Provider API key");
-    expect(authChoice?.groupId).toBe(plugin.providerId);
+    expect(
+      buildAuthChoiceOptions({
+        store: {} as never,
+        includeSkip: false,
+        config: cfg,
+        workspaceDir,
+        env,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        value: plugin.authChoiceId,
+        label: "Cold Provider API key",
+        groupId: plugin.providerId,
+      }),
+    );
     expect(
       formatAuthChoiceChoicesForCli({
         config: cfg,

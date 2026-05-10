@@ -9,7 +9,6 @@ import {
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
   settleInboundWork,
-  waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 
 const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
@@ -111,12 +110,13 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await vi.waitFor(() => expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999"));
+    await settleInboundWork();
 
     // Should NOT call onMessage for unauthorized senders
     expect(onMessage).not.toHaveBeenCalled();
     // Should NOT send read receipts for blocked senders (privacy + avoids Baileys Bad MAC churn).
     expect(sock.readMessages).not.toHaveBeenCalled();
+    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     await listener.close();
   });
@@ -146,7 +146,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await waitForMessageCalls(onMessage, 1);
+    await settleInboundWork();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
@@ -176,7 +176,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await waitForMessageCalls(onMessage, 1);
+    await settleInboundWork();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(sock.readMessages).not.toHaveBeenCalled();

@@ -1,12 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   buildPluginApi,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setAwsSharedIniFileLoaderForTest } from "./aws-credential-refresh.js";
 import { resetBedrockDiscoveryCacheForTest } from "./discovery.js";
@@ -209,55 +208,6 @@ function runtimePluginConfig(config?: Record<string, unknown>): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an array`);
-  }
-  return value;
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function expectWrappedResultFields(result: unknown, fields: Record<string, unknown>) {
-  expectRecordFields(requireRecord(result, "wrapped stream result"), fields);
-}
-
-function expectPayloadServiceTier(result: Record<string, unknown>, type: string) {
-  expectRecordFields(requireRecord(result._capturedPayload, "captured payload"), {
-    serviceTier: { type },
-  });
-}
-
-function expectThinkingProfile(
-  profile: unknown,
-  fields: { defaultLevel?: string; levelIds?: string[]; includesAdaptive?: boolean },
-) {
-  const record = requireRecord(profile, "thinking profile");
-  if (fields.defaultLevel !== undefined) {
-    expect(record.defaultLevel).toBe(fields.defaultLevel);
-  }
-  const levelIds = requireArray(record.levels, "thinking levels").map((level) =>
-    String(requireRecord(level, "thinking level").id),
-  );
-  if (fields.levelIds) {
-    expect(levelIds).toEqual(fields.levelIds);
-  }
-  if (fields.includesAdaptive !== undefined) {
-    expect(levelIds.includes("adaptive")).toBe(fields.includesAdaptive);
-  }
-}
-
 describe("amazon-bedrock provider plugin", () => {
   beforeEach(() => {
     foundationModelResults.length = 0;
@@ -295,20 +245,23 @@ describe("amazon-bedrock provider plugin", () => {
   it("marks Claude 4.6 Bedrock models as adaptive by default", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
-    expectThinkingProfile(
+    expect(
       provider.resolveThinkingProfile?.({
         provider: "amazon-bedrock",
         modelId: "us.anthropic.claude-opus-4-6-v1",
       } as never),
-      { includesAdaptive: true, defaultLevel: "adaptive" },
-    );
-    expectThinkingProfile(
+    ).toMatchObject({
+      levels: expect.arrayContaining([{ id: "adaptive" }]),
+      defaultLevel: "adaptive",
+    });
+    expect(
       provider.resolveThinkingProfile?.({
         provider: "amazon-bedrock",
         modelId: "amazon.nova-micro-v1:0",
       } as never),
-      { includesAdaptive: false },
-    );
+    ).toMatchObject({
+      levels: expect.not.arrayContaining([{ id: "adaptive" }]),
+    });
   });
 
   it("mirrors Claude Opus 4.7 thinking levels for Bedrock model refs", async () => {
@@ -320,16 +273,24 @@ describe("amazon-bedrock provider plugin", () => {
       "eu.anthropic.claude-opus-4-7",
       "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-7",
     ]) {
-      expectThinkingProfile(
+      expect(
         provider.resolveThinkingProfile?.({
           provider: "amazon-bedrock",
           modelId,
         } as never),
-        {
-          levelIds: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
-          defaultLevel: "off",
-        },
-      );
+      ).toMatchObject({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+          { id: "adaptive" },
+          { id: "max" },
+        ],
+        defaultLevel: "off",
+      });
     }
   });
 
@@ -361,7 +322,7 @@ describe("amazon-bedrock provider plugin", () => {
       streamFn: (_model: unknown, _context: unknown, options: Record<string, unknown>) => options,
     } as never);
 
-    expectWrappedResultFields(
+    expect(
       wrapped?.(
         {
           api: "openai-completions",
@@ -371,43 +332,34 @@ describe("amazon-bedrock provider plugin", () => {
         { messages: [] } as never,
         {},
       ),
-      { cacheRetention: "none" },
-    );
+    ).toMatchObject({
+      cacheRetention: "none",
+    });
   });
 
   it("refreshes AWS shared config cache before Bedrock sends", async () => {
-    await withEnvAsync(
-      {
-        AWS_ACCESS_KEY_ID: undefined,
-        AWS_SECRET_ACCESS_KEY: undefined,
-        AWS_BEARER_TOKEN_BEDROCK: undefined,
-        AWS_BEDROCK_SKIP_AUTH: undefined,
+    const order: string[] = [];
+    refreshSharedConfigCache.mockImplementationOnce(async () => {
+      order.push("refresh");
+    });
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: ANTHROPIC_MODEL,
+      streamFn: spyStreamFn,
+    } as never);
+    const result = wrapped?.(ANTHROPIC_MODEL_DESCRIPTOR, { messages: [] } as never, {
+      onPayload: () => {
+        order.push("original");
       },
-      async () => {
-        const order: string[] = [];
-        refreshSharedConfigCache.mockImplementationOnce(async () => {
-          order.push("refresh");
-        });
-        const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
-        const wrapped = provider.wrapStreamFn?.({
-          provider: "amazon-bedrock",
-          modelId: ANTHROPIC_MODEL,
-          streamFn: spyStreamFn,
-        } as never);
-        const result = wrapped?.(ANTHROPIC_MODEL_DESCRIPTOR, { messages: [] } as never, {
-          onPayload: () => {
-            order.push("original");
-          },
-        }) as Record<string, unknown> | undefined;
+    }) as Record<string, unknown> | undefined;
 
-        await (
-          result?.onPayload as ((p: Record<string, unknown>, model: unknown) => unknown) | undefined
-        )?.({}, ANTHROPIC_MODEL_DESCRIPTOR);
+    await (
+      result?.onPayload as ((p: Record<string, unknown>, model: unknown) => unknown) | undefined
+    )?.({}, ANTHROPIC_MODEL_DESCRIPTOR);
 
-        expect(refreshSharedConfigCache).toHaveBeenCalledWith({ ignoreCache: true });
-        expect(order).toEqual(["refresh", "original"]);
-      },
-    );
+    expect(refreshSharedConfigCache).toHaveBeenCalledWith({ ignoreCache: true });
+    expect(order).toEqual(["refresh", "original"]);
   });
 
   it("omits temperature for Bedrock Opus 4.7 model ids", async () => {
@@ -428,7 +380,7 @@ describe("amazon-bedrock provider plugin", () => {
       { temperature: 0.2, maxTokens: 10 },
     ) as Record<string, unknown> | undefined;
 
-    expectWrappedResultFields(result, { maxTokens: 10 });
+    expect(result).toMatchObject({ maxTokens: 10 });
     expect(result).not.toHaveProperty("temperature");
   });
 
@@ -450,7 +402,7 @@ describe("amazon-bedrock provider plugin", () => {
       { temperature: 0.2, maxTokens: 10 },
     ) as Record<string, unknown> | undefined;
 
-    expectWrappedResultFields(result, { maxTokens: 10 });
+    expect(result).toMatchObject({ maxTokens: 10 });
     expect(result).not.toHaveProperty("temperature");
   });
 
@@ -474,7 +426,7 @@ describe("amazon-bedrock provider plugin", () => {
       { temperature: 0, region: "us-west-2" } as never,
     ) as Record<string, unknown> | undefined;
 
-    expectWrappedResultFields(result, { region: "us-west-2" });
+    expect(result).toMatchObject({ region: "us-west-2" });
     expect(result).not.toHaveProperty("temperature");
   });
 
@@ -496,7 +448,7 @@ describe("amazon-bedrock provider plugin", () => {
       { temperature: 0.4, maxTokens: 12 },
     ) as Record<string, unknown> | undefined;
 
-    expectWrappedResultFields(result, { maxTokens: 12 });
+    expect(result).toMatchObject({ maxTokens: 12 });
     expect(result).not.toHaveProperty("temperature");
   });
 
@@ -581,7 +533,7 @@ describe("amazon-bedrock provider plugin", () => {
       const discovery = pluginJson.configSchema?.properties?.discovery;
       const guardrail = pluginJson.configSchema?.properties?.guardrail;
 
-      expectRecordFields(requireRecord(discovery, "discovery schema"), {
+      expect(discovery).toMatchObject({
         type: "object",
         additionalProperties: false,
       });
@@ -604,7 +556,7 @@ describe("amazon-bedrock provider plugin", () => {
         minimum: 1,
       });
 
-      expectRecordFields(requireRecord(guardrail, "guardrail schema"), {
+      expect(guardrail).toMatchObject({
         type: "object",
         additionalProperties: false,
       });
@@ -635,7 +587,7 @@ describe("amazon-bedrock provider plugin", () => {
 
       expect(result).not.toHaveProperty("_capturedPayload");
       // The onPayload hook should not exist when no guardrail is configured
-      expectWrappedResultFields(result, { cacheRetention: "none" });
+      expect(result).toMatchObject({ cacheRetention: "none" });
     });
 
     it("injects all four fields when guardrail config includes optional fields", async () => {
@@ -717,7 +669,7 @@ describe("amazon-bedrock provider plugin", () => {
         },
       });
       // Non-Anthropic models should also get cacheRetention: "none"
-      expectWrappedResultFields(result, { cacheRetention: "none" });
+      expect(result).toMatchObject({ cacheRetention: "none" });
     });
 
     it("uses live plugin config to inject guardrailConfig after startup disable", async () => {
@@ -757,7 +709,7 @@ describe("amazon-bedrock provider plugin", () => {
       );
 
       expect(result).not.toHaveProperty("_capturedPayload");
-      expectWrappedResultFields(result, { cacheRetention: "none" });
+      expect(result).toMatchObject({ cacheRetention: "none" });
     });
   });
 
@@ -777,7 +729,7 @@ describe("amazon-bedrock provider plugin", () => {
         runtimePluginConfig(undefined),
         { serviceTier: "flex" },
       );
-      expectPayloadServiceTier(result, "flex");
+      expect(result._capturedPayload).toMatchObject({ serviceTier: { type: "flex" } });
     });
 
     it("injects serviceTier for valid snake_case value ('priority')", async () => {
@@ -789,7 +741,7 @@ describe("amazon-bedrock provider plugin", () => {
         runtimePluginConfig(undefined),
         { service_tier: "priority" },
       );
-      expectPayloadServiceTier(result, "priority");
+      expect(result._capturedPayload).toMatchObject({ serviceTier: { type: "priority" } });
     });
 
     it("injects serviceTier for all valid tier names", async () => {
@@ -802,7 +754,7 @@ describe("amazon-bedrock provider plugin", () => {
           runtimePluginConfig(undefined),
           { serviceTier: tier },
         );
-        expectPayloadServiceTier(result, tier);
+        expect(result._capturedPayload).toMatchObject({ serviceTier: { type: tier } });
       }
     });
 
@@ -828,7 +780,7 @@ describe("amazon-bedrock provider plugin", () => {
         { serviceTier: "flex" },
         { serviceTier: { type: "priority" } },
       );
-      expectPayloadServiceTier(result, "priority");
+      expect(result._capturedPayload).toMatchObject({ serviceTier: { type: "priority" } });
     });
 
     it("skips injection for non-converse API models", async () => {

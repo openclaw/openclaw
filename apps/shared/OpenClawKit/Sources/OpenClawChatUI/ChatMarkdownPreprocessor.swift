@@ -27,6 +27,7 @@ enum ChatMarkdownPreprocessor {
         "Matrix",
         "Zalo",
         "Zalo Personal",
+        "BlueBubbles",
     ]
 
     private static let markdownImagePattern = #"!\[([^\]]*)\]\(([^)]+)\)"#

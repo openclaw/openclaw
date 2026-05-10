@@ -382,17 +382,14 @@ describe("buildInboundUserContextPrefix", () => {
   });
 
   it("includes formatted timestamp in conversation info when provided", () => {
-    const text = buildInboundUserContextPrefix(
-      {
-        ChatType: "group",
-        MessageSid: "msg-with-ts",
-        Timestamp: Date.UTC(2026, 1, 15, 13, 35),
-      } as TemplateContext,
-      { timezone: "utc" },
-    );
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      MessageSid: "msg-with-ts",
+      Timestamp: Date.UTC(2026, 1, 15, 13, 35),
+    } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["timestamp"]).toBe("Sun 2026-02-15T13:35Z");
+    expect(conversationInfo["timestamp"]).toMatch(/^Sun 2026-02-15 13:35 (?:GMT|UTC)$/);
   });
 
   it("honors envelope user timezone for conversation timestamps", () => {

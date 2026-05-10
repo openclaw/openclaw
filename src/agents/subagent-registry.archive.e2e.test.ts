@@ -58,16 +58,6 @@ describe("subagent registry archive behavior", () => {
     mod = await import("./subagent-registry.js");
   });
 
-  const setRegistryTestDeps = (
-    overrides: NonNullable<Parameters<typeof mod.__testing.setDepsForTest>[0]> = {},
-  ) => {
-    mod.__testing.setDepsForTest({
-      callGateway,
-      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
-      ...overrides,
-    });
-  };
-
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
@@ -84,7 +74,7 @@ describe("subagent registry archive behavior", () => {
       return {};
     });
     loadConfigMock.mockClear();
-    setRegistryTestDeps();
+    mod.__testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
@@ -155,7 +145,7 @@ describe("subagent registry archive behavior", () => {
       }
       return {};
     });
-    setRegistryTestDeps({
+    mod.__testing.setDepsForTest({
       ensureContextEnginesInitialized: vi.fn(),
       ensureRuntimePluginsLoaded: vi.fn(),
       resolveContextEngine: vi.fn(async () => ({ onSubagentEnded }) as never),

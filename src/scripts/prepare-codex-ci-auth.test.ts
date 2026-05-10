@@ -32,9 +32,10 @@ describe("prepare-codex-ci-auth", () => {
     });
 
     expect(result.changed).toBe(true);
-    const payload = decodeJwtPayload(String(result.auth.tokens?.id_token));
-    expect(payload.email).toBe("peter@example.com");
-    expect(payload.chatgpt_account_id).toBe("acct_123");
+    expect(decodeJwtPayload(String(result.auth.tokens?.id_token))).toMatchObject({
+      email: "peter@example.com",
+      chatgpt_account_id: "acct_123",
+    });
   });
 
   it("leaves current auth metadata unchanged", () => {
@@ -76,9 +77,10 @@ describe("prepare-codex-ci-auth", () => {
       const updated = JSON.parse(await fs.readFile(authPath, "utf-8")) as {
         tokens?: { id_token?: string };
       };
-      const payload = decodeJwtPayload(String(updated.tokens?.id_token));
-      expect(payload.sub).toBe("user");
-      expect(payload.chatgpt_account_id).toBe("acct_123");
+      expect(decodeJwtPayload(String(updated.tokens?.id_token))).toMatchObject({
+        sub: "user",
+        chatgpt_account_id: "acct_123",
+      });
     });
   });
 });

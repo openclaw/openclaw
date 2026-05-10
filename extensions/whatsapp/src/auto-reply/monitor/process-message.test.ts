@@ -161,7 +161,10 @@ function makePolicy(account: ReturnType<typeof makeAccount>) {
     groupAllowFrom: [],
     isSelfChat: false,
     providerMissingFallbackApplied: false,
+    shouldReadStorePairingApprovals: true,
     isSamePhone: () => false,
+    isDmSenderAllowed: () => false,
+    isGroupSenderAllowed: () => false,
     resolveConversationGroupPolicy: () => "allowlist",
     resolveConversationRequireMention: () => false,
   };

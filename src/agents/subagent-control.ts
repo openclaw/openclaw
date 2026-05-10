@@ -714,7 +714,6 @@ export function resolveControlledSubagentTarget(
     token,
     recentWindowMinutes: options?.recentMinutes ?? DEFAULT_RECENT_MINUTES,
     label: (entry) => resolveSubagentLabel(entry),
-    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
     isActive: options?.isActive,
     errors: {
       missingTarget: "Missing subagent target.",

@@ -797,7 +797,7 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
       resolveGatewayLiveModelThinkingLevel({
         cfg: {},
         model: {
-          ...createGatewayLiveTestModel("example", "reasoning-model"),
+          ...createGatewayLiveTestModel("xai", "grok-4.3"),
           reasoning: true,
           thinkingLevelMap: {
             off: null,

@@ -141,8 +141,9 @@ describe("loadChannelConfigSurfaceModule", () => {
           typeof import("../../scripts/load-channel-config-surface.ts")
         >(import.meta.url, "../../scripts/load-channel-config-surface.ts?scope=prefer-jiti");
 
-        const surface = await imported.loadChannelConfigSurfaceModule(modulePath, { repoRoot });
-        expect(surface).toStrictEqual(expectedOkSchema("string"));
+        await expect(
+          imported.loadChannelConfigSurfaceModule(modulePath, { repoRoot }),
+        ).resolves.toMatchObject(expectedOkSchema("string"));
         expect(spawnSync).not.toHaveBeenCalled();
       } finally {
         vi.doUnmock("node:child_process");
@@ -157,8 +158,9 @@ describe("loadChannelConfigSurfaceModule", () => {
       const { loadChannelConfigSurfaceModule: loadWithMissingBun, spawnSync } =
         await importLoaderWithMissingBun();
 
-      const surface = await loadWithMissingBun(modulePath, { repoRoot });
-      expect(surface).toStrictEqual(expectedOkSchema("string"));
+      await expect(loadWithMissingBun(modulePath, { repoRoot })).resolves.toMatchObject(
+        expectedOkSchema("string"),
+      );
       expect(spawnSync).not.toHaveBeenCalled();
     });
   });
@@ -170,16 +172,10 @@ describe("loadChannelConfigSurfaceModule", () => {
       const { loadChannelConfigSurfaceModule: loadWithFailingJiti, spawnSync } =
         await importLoaderWithFailingJitiAndWorkingBun();
 
-      const surface = await loadWithFailingJiti(modulePath, { repoRoot });
-      expect(surface).toStrictEqual(expectedOkSchema("number"));
-
-      const spawnCalls = spawnSync.mock.calls as unknown as Array<
-        [string, string[], Record<string, unknown>]
-      >;
-      const spawnCall = spawnCalls[0];
-      expect(spawnCall?.[0]).toBe("bun");
-      expect(Array.isArray(spawnCall?.[1])).toBe(true);
-      expect(typeof spawnCall?.[2]).toBe("object");
+      await expect(loadWithFailingJiti(modulePath, { repoRoot })).resolves.toMatchObject(
+        expectedOkSchema("number"),
+      );
+      expect(spawnSync).toHaveBeenCalledWith("bun", expect.any(Array), expect.any(Object));
     });
   });
 });

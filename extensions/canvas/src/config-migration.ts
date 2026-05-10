@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 
 type MutableRecord = Record<string, unknown>;
 

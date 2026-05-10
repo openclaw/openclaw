@@ -3,7 +3,7 @@ import type {
   MiscMessageGenerationOptions,
   WAMessage,
   WAPresence,
-} from "baileys";
+} from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { isWhatsAppNewsletterJid } from "../normalize.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";

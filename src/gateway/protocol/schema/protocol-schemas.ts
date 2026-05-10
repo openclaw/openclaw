@@ -38,9 +38,6 @@ import {
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
   SkillsStatusParamsSchema,
-  SkillsUploadBeginParamsSchema,
-  SkillsUploadChunkParamsSchema,
-  SkillsUploadCommitParamsSchema,
   SkillsUpdateParamsSchema,
   ToolCatalogEntrySchema,
   ToolCatalogGroupSchema,
@@ -442,9 +439,6 @@ export const ProtocolSchemas = {
   SkillsSearchResult: SkillsSearchResultSchema,
   SkillsDetailParams: SkillsDetailParamsSchema,
   SkillsDetailResult: SkillsDetailResultSchema,
-  SkillsUploadBeginParams: SkillsUploadBeginParamsSchema,
-  SkillsUploadChunkParams: SkillsUploadChunkParamsSchema,
-  SkillsUploadCommitParams: SkillsUploadCommitParamsSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,
   SkillsUpdateParams: SkillsUpdateParamsSchema,
   CronJob: CronJobSchema,
@@ -490,4 +484,4 @@ export const ProtocolSchemas = {
   ShutdownEvent: ShutdownEventSchema,
 } satisfies Record<string, TSchema>;
 
-export { MIN_PROBE_PROTOCOL_VERSION, PROTOCOL_VERSION } from "../version.js";
+export { PROTOCOL_VERSION } from "../version.js";

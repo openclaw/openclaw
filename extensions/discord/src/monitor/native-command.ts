@@ -1,6 +1,6 @@
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
@@ -16,7 +16,7 @@ import {
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveDiscordAccountAllowFrom,
   resolveDiscordAccountDmPolicy,
@@ -435,13 +435,14 @@ async function dispatchDiscordCommandInteraction(params: {
         tag: sender.tag,
       },
       allowNameMatching,
+      useAccessGroups,
       cfg,
       rest: interaction.client.rest,
     });
-    commandAuthorized = dmAccess.senderAccess.allowed ? dmAccess.commandAccess.authorized : false;
-    if (dmAccess.senderAccess.decision !== "allow") {
+    commandAuthorized = dmAccess.commandAuthorized;
+    if (dmAccess.decision !== "allow") {
       await handleDiscordDmCommandDecision({
-        senderAccess: dmAccess.senderAccess,
+        dmAccess,
         accountId,
         sender: {
           id: user.id,
@@ -482,9 +483,8 @@ async function dispatchDiscordCommandInteraction(params: {
     return { accepted: false };
   }
   if (!isDirectMessage) {
-    commandAuthorized = await resolveDiscordGuildNativeCommandAuthorized({
+    commandAuthorized = resolveDiscordGuildNativeCommandAuthorized({
       cfg,
-      accountId,
       discordConfig,
       useAccessGroups,
       commandsAllowFromAccess,

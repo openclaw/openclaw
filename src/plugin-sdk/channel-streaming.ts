@@ -235,13 +235,7 @@ function buildNamedProgressLine(
   });
   const display = resolveToolDisplay({ name: normalizedName });
   const prefix = `${display.emoji} ${display.label}`;
-  const compactCommandPrefix =
-    (display.name === "exec" || display.name === "bash") && text.startsWith(`${display.emoji} `)
-      ? text.slice(display.emoji.length + 1).trim()
-      : undefined;
-  const detail = text.startsWith(`${prefix}: `)
-    ? text.slice(prefix.length + 2).trim()
-    : compactCommandPrefix;
+  const detail = text.startsWith(`${prefix}: `) ? text.slice(prefix.length + 2).trim() : undefined;
   return {
     kind,
     text,
@@ -734,32 +728,15 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     return "…";
   }
 
-  const compactWithPrefix = (prefix: string, detail: string): string | undefined => {
-    const prefixChars = Array.from(prefix).length;
-    const detailLimit = maxChars - prefixChars;
-    if (detailLimit < 8) {
-      return undefined;
-    }
-    return removeUnbalancedInlineBackticks(
-      `${prefix}${compactProgressLineDetail(detail, detailLimit)}`,
-    );
-  };
-
   const splitIndex = normalized.indexOf(": ");
   if (splitIndex > 0) {
     const prefix = normalized.slice(0, splitIndex + 2);
-    const compact = compactWithPrefix(prefix, normalized.slice(splitIndex + 2));
-    if (compact) {
-      return compact;
-    }
-  }
-
-  const compactCommandPrefixMatch = normalized.match(/^🛠️\s+/u);
-  if (compactCommandPrefixMatch) {
-    const prefix = compactCommandPrefixMatch[0];
-    const compact = compactWithPrefix(prefix, normalized.slice(prefix.length));
-    if (compact) {
-      return compact;
+    const prefixChars = Array.from(prefix).length;
+    const detailLimit = maxChars - prefixChars;
+    if (detailLimit >= 8) {
+      return removeUnbalancedInlineBackticks(
+        `${prefix}${compactProgressLineDetail(normalized.slice(splitIndex + 2), detailLimit)}`,
+      );
     }
   }
 
@@ -777,9 +754,7 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
   const label = line.label.trim();
   const detail = line.detail?.trim();
   if (detail) {
-    const compactCommandLine =
-      line.toolName === "exec" || line.toolName === "bash" || line.toolName === "shell";
-    if (line.kind !== "patch" && label && !compactCommandLine) {
+    if (line.kind !== "patch" && label) {
       return `${prefix}${label}: ${detail}`;
     }
     return `${prefix}${detail}`;

@@ -274,8 +274,11 @@ function createAnthropicFastModeWrapper(baseStreamFn: StreamFn | undefined, fast
   return createAnthropicServiceTierWrapper(baseStreamFn, fastMode ? "auto" : "standard_only");
 }
 
-import { isAnthropicBedrockModel } from "./pi-embedded-runner/anthropic-family-cache-semantics.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "./pi-embedded-runner/anthropic-family-tool-payload-compat.js";
+import {
+  createBedrockNoCacheWrapper,
+  isAnthropicBedrockModel,
+} from "./pi-embedded-runner/bedrock-stream-wrappers.js";
 import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
@@ -288,7 +291,6 @@ import { createMinimaxFastModeWrapper } from "./pi-embedded-runner/minimax-strea
 import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
-  createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIReasoningCompatibilityWrapper,
@@ -335,7 +337,7 @@ function installFullProviderRuntimeDepsForTest() {
       if (params.provider === "amazon-bedrock") {
         return isAnthropicBedrockModel(params.context.modelId)
           ? params.context.streamFn
-          : createTestBedrockNoCacheWrapper(params.context.streamFn);
+          : createBedrockNoCacheWrapper(params.context.streamFn);
       }
       if (params.provider === "google") {
         return createGoogleThinkingPayloadWrapper(
@@ -393,15 +395,6 @@ function installFullProviderRuntimeDepsForTest() {
   });
 }
 
-function createTestBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
-  return (model, context, options) =>
-    underlying(model, context, {
-      ...options,
-      cacheRetention: "none",
-    });
-}
-
 function withMinimalProviderRuntimeDepsForTest<T>(run: () => T): T {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: () => undefined,
@@ -444,7 +437,6 @@ function createTestOpenAIProviderWrapper(
     agentDir: params.context.agentDir,
   });
   streamFn = createOpenAIStringContentWrapper(streamFn);
-  streamFn = createOpenAICompletionsStrictMessageKeysWrapper(streamFn);
   return createOpenAIResponsesContextManagementWrapper(
     createOpenAIReasoningCompatibilityWrapper(
       createOpenAIThinkingLevelWrapper(streamFn, params.context.thinkingLevel),
@@ -684,33 +676,6 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
-  });
-
-  it("fills DeepSeek V4 reasoning_content for unowned OpenAI-compatible proxy models", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "opencode",
-      applyModelId: "deepseek-v4-pro",
-      thinkingLevel: "high",
-      model: {
-        api: "openai-completions",
-        provider: "opencode",
-        id: "deepseek-v4-pro",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [
-          { role: "user", content: "continue" },
-          { role: "assistant", content: "I used a tool" },
-          { role: "tool", content: "ok" },
-        ],
-      },
-    });
-
-    const messages = payload.messages as Array<Record<string, unknown>>;
-    expect(payload.thinking).toEqual({ type: "enabled" });
-    expect(payload.reasoning_effort).toBe("high");
-    expect(messages[0]).not.toHaveProperty("reasoning_content");
-    expect(messages[1]).toHaveProperty("reasoning_content", "");
-    expect(messages[2]).not.toHaveProperty("reasoning_content");
   });
 
   it("strips xai Responses reasoning payload fields", () => {
@@ -1129,55 +1094,6 @@ describe("applyExtraParamsToAgent", () => {
       {
         role: "user",
         content: "Line one\nLine two",
-      },
-    ]);
-  });
-
-  it("strips extra OpenAI completions message keys for strict-key compat models", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "infomaniak",
-      applyModelId: "mistral3",
-      model: {
-        api: "openai-completions",
-        provider: "infomaniak",
-        id: "mistral3",
-        name: "mistral3",
-        baseUrl: "https://api.infomaniak.com/1/ai/example/openai",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 32768,
-        maxTokens: 4096,
-        compat: {
-          strictMessageKeys: true,
-        } as Record<string, unknown>,
-      } as unknown as Model<"openai-completions">,
-      payload: {
-        messages: [
-          {
-            role: "assistant",
-            content: "calling tool",
-            name: "agent",
-            tool_calls: [{ id: "call_1", type: "function", function: { name: "noop" } }],
-            cache_control: { type: "ephemeral" },
-          },
-          {
-            role: "tool",
-            content: "tool result",
-            tool_call_id: "call_1",
-          },
-        ],
-      },
-    });
-
-    expect(payload.messages).toEqual([
-      {
-        role: "assistant",
-        content: "calling tool",
-      },
-      {
-        role: "tool",
-        content: "tool result",
       },
     ]);
   });
@@ -2261,25 +2177,21 @@ describe("applyExtraParamsToAgent", () => {
       model,
     });
 
-    expect(effectiveExtraParams.transport).toBe("websocket");
-    expect(effectiveExtraParams.hookApplied).toBe(true);
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
-    const hookCall = resolveProviderExtraParamsForTransport.mock.calls[0]?.[0] as
-      | {
-          provider?: string;
-          context?: {
-            model?: unknown;
-            transport?: string;
-            agentDir?: string;
-            workspaceDir?: string;
-          };
-        }
-      | undefined;
-    expect(hookCall?.provider).toBe("openai");
-    expect(hookCall?.context?.model).toBe(model);
-    expect(hookCall?.context?.transport).toBe("websocket");
-    expect(hookCall?.context?.agentDir).toBe("/tmp/agent");
-    expect(hookCall?.context?.workspaceDir).toBe("/tmp/workspace");
+    expect(effectiveExtraParams).toMatchObject({
+      transport: "websocket",
+      hookApplied: true,
+    });
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        context: expect.objectContaining({
+          model,
+          transport: "websocket",
+          agentDir: "/tmp/agent",
+          workspaceDir: "/tmp/workspace",
+        }),
+      }),
+    );
   });
 
   it("keys prepared extra-param memoization by resolved model transport inputs", () => {
@@ -2387,13 +2299,17 @@ describe("applyExtraParamsToAgent", () => {
       resolvedTransport,
     });
 
-    expect(effectiveExtraParams.transport).toBe("auto");
-    expect(effectiveExtraParams.hookApplied).toBe(true);
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
-    const hookCall = resolveProviderExtraParamsForTransport.mock.calls[0]?.[0] as
-      | { context?: { transport?: string } }
-      | undefined;
-    expect(hookCall?.context?.transport).toBe("websocket");
+    expect(effectiveExtraParams).toMatchObject({
+      transport: "auto",
+      hookApplied: true,
+    });
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          transport: "websocket",
+        }),
+      }),
+    );
   });
 
   it("applies transport hook parallel_tool_calls patches to request payloads", () => {

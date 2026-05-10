@@ -3,7 +3,6 @@ import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { formatPortRangeHint } from "../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -61,14 +60,6 @@ const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 const setupPluginConfigModuleLoader = createLazyImportLoader<SetupPluginConfigModule>(
   () => import("../wizard/setup.plugin-config.js"),
 );
-
-function validateGatewayPortInput(value: unknown): string | undefined {
-  const port = Number(typeof value === "string" ? value.trim() : value);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    return formatPortRangeHint();
-  }
-  return undefined;
-}
 
 function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
   return setupPluginConfigModuleLoader.load();
@@ -166,12 +157,13 @@ async function promptConfigureSection(
 ): Promise<ConfigureSectionChoice> {
   return guardCancel(
     await select<ConfigureSectionChoice>({
-      message: "What do you want to configure?",
+      message: "Select sections to configure",
       options: [
         ...CONFIGURE_SECTION_OPTIONS,
         {
           value: "__continue",
-          label: hasSelection ? "Done" : "Skip for now",
+          label: "Continue",
+          hint: hasSelection ? "Done" : "Skip for now",
         },
       ],
       initialValue: CONFIGURE_SECTION_OPTIONS[0]?.value,
@@ -183,12 +175,12 @@ async function promptConfigureSection(
 async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMode> {
   return guardCancel(
     await select({
-      message: "Channel setup",
+      message: "Channels",
       options: [
         {
           value: "configure",
-          label: "Add or update channels",
-          hint: "Configure accounts and disable unselected accounts",
+          label: "Configure/link",
+          hint: "Add/update channels; disable unselected accounts",
         },
         {
           value: "remove",
@@ -623,7 +615,7 @@ export async function runConfigureWizard(
         await text({
           message: "Gateway port for service install",
           initialValue: String(gatewayPort),
-          validate: validateGatewayPortInput,
+          validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
         }),
         runtime,
       );
@@ -633,7 +625,7 @@ export async function runConfigureWizard(
     if (opts.sections) {
       const selected = opts.sections;
       if (!selected || selected.length === 0) {
-        outro("No configuration changes selected.");
+        outro("No changes selected.");
         return;
       }
 
@@ -762,7 +754,7 @@ export async function runConfigureWizard(
           outro("Gateway mode set to local.");
           return;
         }
-        outro("No configuration changes selected.");
+        outro("No changes selected.");
         return;
       }
     }
@@ -828,7 +820,7 @@ export async function runConfigureWizard(
       "Control UI",
     );
 
-    outro("Configuration updated.");
+    outro("Configure complete.");
   } catch (err) {
     if (err instanceof WizardCancelledError) {
       runtime.exit(1);

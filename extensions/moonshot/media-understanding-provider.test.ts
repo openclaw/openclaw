@@ -54,12 +54,10 @@ describe("describeMoonshotVideo", () => {
     if (!content) {
       throw new Error("expected Moonshot user content");
     }
-    const [textContent] = content;
-    if (!textContent) {
-      throw new Error("expected Moonshot text content");
-    }
-    expect(textContent.type).toBe("text");
-    expect(textContent.text).toBe("Describe the video.");
+    expect(content[0]).toMatchObject({
+      type: "text",
+      text: "Describe the video.",
+    });
     const videoContent = content[1];
     if (!videoContent) {
       throw new Error("expected Moonshot video content");

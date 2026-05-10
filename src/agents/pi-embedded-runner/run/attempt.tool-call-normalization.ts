@@ -15,8 +15,6 @@ import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
-const BLANK_TOOL_CALL_NAME_DESCRIPTION = "blank tool name";
-
 type UnknownToolLoopGuardState = {
   lastUnknownToolName?: string;
   count: number;
@@ -643,9 +641,8 @@ function classifyToolCallMessage(
   | { kind: "none" }
   | { kind: "allowed" }
   | { kind: "incomplete" }
-  | { kind: "malformed"; toolName: string }
   | { kind: "unknown"; toolName: string } {
-  if (!message || typeof message !== "object") {
+  if (!message || typeof message !== "object" || !allowedToolNames || allowedToolNames.size === 0) {
     return { kind: "none" };
   }
   const content = (message as { content?: unknown }).content;
@@ -657,8 +654,6 @@ function classifyToolCallMessage(
   let sawToolCall = false;
   let sawAllowedToolCall = false;
   let sawIncompleteToolCall = false;
-  let sawBlankStringToolCall = false;
-  const hasAllowedToolNames = Boolean(allowedToolNames && allowedToolNames.size > 0);
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
@@ -668,18 +663,9 @@ function classifyToolCallMessage(
       continue;
     }
     sawToolCall = true;
-    const rawBlockName = typedBlock.name;
-    const hasStringName = typeof rawBlockName === "string";
-    const rawName = hasStringName ? rawBlockName.trim() : "";
+    const rawName = typeof typedBlock.name === "string" ? typedBlock.name.trim() : "";
     if (!rawName) {
-      if (hasStringName) {
-        sawBlankStringToolCall = true;
-      } else {
-        sawIncompleteToolCall = true;
-      }
-      continue;
-    }
-    if (!hasAllowedToolNames) {
+      sawIncompleteToolCall = true;
       continue;
     }
     if (resolveExactAllowedToolName(rawName, allowedToolNames)) {
@@ -699,16 +685,8 @@ function classifyToolCallMessage(
   if (!sawToolCall) {
     return { kind: "none" };
   }
-  if (!hasAllowedToolNames) {
-    return sawBlankStringToolCall
-      ? { kind: "malformed", toolName: BLANK_TOOL_CALL_NAME_DESCRIPTION }
-      : { kind: "none" };
-  }
   if (sawAllowedToolCall) {
     return { kind: "allowed" };
-  }
-  if (sawBlankStringToolCall && !sawIncompleteToolCall && unknownToolName === undefined) {
-    return { kind: "malformed", toolName: BLANK_TOOL_CALL_NAME_DESCRIPTION };
   }
   if (sawIncompleteToolCall) {
     return { kind: "incomplete" };
@@ -737,30 +715,19 @@ function guardUnknownToolLoopInMessage(
     countAttempt: boolean;
     resetOnAllowedTool?: boolean;
     resetOnMissingUnknownTool?: boolean;
-    rewriteMalformedBlankToolName?: boolean;
   },
 ): boolean {
+  const threshold = params.threshold;
+  if (threshold === undefined || threshold <= 0) {
+    return false;
+  }
+
   const toolCallState = classifyToolCallMessage(message, params.allowedToolNames);
   if (toolCallState.kind === "allowed") {
     if (params.resetOnAllowedTool === true) {
       state.lastUnknownToolName = undefined;
       state.count = 0;
     }
-    return false;
-  }
-  if (toolCallState.kind === "malformed") {
-    if (params.rewriteMalformedBlankToolName === true) {
-      rewriteUnknownToolLoopMessage(message, toolCallState.toolName);
-      return true;
-    }
-    if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
-      state.lastUnknownToolName = undefined;
-      state.count = 0;
-    }
-    return false;
-  }
-  const threshold = params.threshold;
-  if (threshold === undefined || threshold <= 0) {
     return false;
   }
   if (toolCallState.kind !== "unknown") {
@@ -821,7 +788,6 @@ function wrapStreamTrimToolCallNames(
       threshold: options?.unknownToolThreshold,
       countAttempt: !streamAttemptAlreadyCounted,
       resetOnAllowedTool: true,
-      rewriteMalformedBlankToolName: true,
     });
     return message;
   };

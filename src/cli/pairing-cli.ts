@@ -46,9 +46,7 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
   if (/^[a-z][a-z0-9_-]{0,63}$/.test(value)) {
     return value as PairingChannel;
   }
-  throw new Error(
-    `Invalid channel "${value}". Use lowercase letters, numbers, "_" or "-", for example "telegram".`,
-  );
+  throw new Error(`Invalid channel "${value}". Use lowercase letters, numbers, "_" or "-".`);
 }
 
 async function notifyApproved(channel: PairingChannel, id: string) {

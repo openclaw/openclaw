@@ -23,12 +23,7 @@ function expectStateDirVars(snapshot: EnvSnapshot) {
 }
 
 async function expectPathMissing(filePath: string) {
-  try {
-    await fs.stat(filePath);
-    throw new Error(`Expected ${filePath} to be missing`);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-  }
+  await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 async function expectStateDirEnvRestored(params: {

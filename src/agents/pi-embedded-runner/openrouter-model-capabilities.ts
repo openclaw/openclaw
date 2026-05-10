@@ -31,7 +31,6 @@ const log = createSubsystemLogger("openrouter-model-capabilities");
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
 const DISK_CACHE_FILENAME = "openrouter-models.json";
-const DISK_CACHE_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,7 +62,6 @@ export interface OpenRouterModelCapabilities {
   name: string;
   input: Array<"text" | "image">;
   reasoning: boolean;
-  supportsTools?: boolean;
   contextWindow: number;
   maxTokens: number;
   cost: {
@@ -75,7 +73,6 @@ export interface OpenRouterModelCapabilities {
 }
 
 interface DiskCachePayload {
-  version?: number;
   models: Record<string, OpenRouterModelCapabilities>;
 }
 
@@ -95,7 +92,6 @@ function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
   try {
     const cachePath = resolveDiskCachePath();
     const payload: DiskCachePayload = {
-      version: DISK_CACHE_VERSION,
       models: Object.fromEntries(map),
     };
     privateFileStoreSync(dirname(cachePath)).writeJson(basename(cachePath), payload);
@@ -130,11 +126,7 @@ function readDiskCache(): Map<string, OpenRouterModelCapabilities> | undefined {
     if (!payload || typeof payload !== "object") {
       return undefined;
     }
-    const cachePayload = payload as DiskCachePayload;
-    if (cachePayload.version !== DISK_CACHE_VERSION) {
-      return undefined;
-    }
-    const models = cachePayload.models;
+    const models = (payload as DiskCachePayload).models;
     if (!models || typeof models !== "object") {
       return undefined;
     }
@@ -165,15 +157,11 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   if (inputModalities.includes("image")) {
     input.push("image");
   }
-  const supportedParameters = Array.isArray(model.supported_parameters)
-    ? model.supported_parameters
-    : undefined;
 
   return {
     name: model.name || model.id,
     input,
-    reasoning: supportedParameters?.includes("reasoning") ?? false,
-    ...(supportedParameters ? { supportsTools: supportedParameters.includes("tools") } : {}),
+    reasoning: model.supported_parameters?.includes("reasoning") ?? false,
     contextWindow: model.context_length || 128_000,
     maxTokens:
       model.top_provider?.max_completion_tokens ??
@@ -270,8 +258,6 @@ function ensureOpenRouterModelCache(): void {
  * Known cached entries return immediately. Unknown entries wait for at most
  * one catalog fetch, then leave sync resolution to read from the populated
  * cache on the same request.
- *
- * @deprecated OpenRouter provider-owned catalog helper; do not use from third-party plugins.
  */
 export async function loadOpenRouterModelCapabilities(modelId: string): Promise<void> {
   ensureOpenRouterModelCache();
@@ -294,8 +280,6 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
  *
  * If a model is not found but the cache exists, a background refresh is
  * triggered in case it's a newly added model not yet in the cache.
- *
- * @deprecated OpenRouter provider-owned catalog helper; do not use from third-party plugins.
  */
 export function getOpenRouterModelCapabilities(
   modelId: string,

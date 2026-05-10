@@ -127,11 +127,13 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.workingDirectory).toBe("/Users/me");
     expect(plan.environment).toEqual({ OPENCLAW_PORT: "3000" });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    const serviceEnvRequest = mocks.buildServiceEnvironment.mock.calls[0]?.[0];
-    expect(serviceEnvRequest?.env).toStrictEqual({ HOME: isolatedHome });
-    expect(serviceEnvRequest?.port).toBe(3000);
-    expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: { HOME: isolatedHome },
+        port: 3000,
+        extraPathDirs: ["/custom"],
+      }),
+    );
   });
 
   it("does not prepend '.' when nodePath is a bare executable name", async () => {
@@ -144,8 +146,11 @@ describe("buildGatewayInstallPlan", () => {
       nodePath: "node",
     });
 
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.extraPathDirs).toBeUndefined();
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extraPathDirs: undefined,
+      }),
+    );
   });
 
   it("emits warnings when renderSystemNodeWarning returns one", async () => {
@@ -183,8 +188,11 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(plan.workingDirectory).toBe(path.join(isolatedHome, ".openclaw"));
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.platform).toBe("darwin");
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: "darwin",
+      }),
+    );
   });
 
   it("does not invent a working directory for non-macOS service installs", async () => {
@@ -220,11 +228,17 @@ describe("buildGatewayInstallPlan", () => {
       runtime: "node",
     });
 
-    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledOnce();
-    expect(mocks.resolveGatewayProgramArguments.mock.calls[0]?.[0]?.wrapperPath).toBe(wrapperPath);
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.env?.OPENCLAW_WRAPPER).toBe(
-      wrapperPath,
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wrapperPath,
+      }),
+    );
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_WRAPPER: wrapperPath,
+        }),
+      }),
     );
     expect(plan.environment.OPENCLAW_WRAPPER).toBe(wrapperPath);
   });
@@ -395,19 +409,25 @@ describe("buildGatewayInstallPlan", () => {
       'Exec SecretRef passEnv ref "HOME" blocked by host-env security policy',
       "Config SecretRef",
     );
-    const warningMessages = warn.mock.calls.map(([message]) => message);
-    for (const blockedName of [
-      "XDG_CONFIG_HOME",
-      "XDG_CONFIG_DIRS",
-      "BASH_ENV",
-      "GH_TOKEN",
-      "AWS_ACCESS_KEY_ID",
-      "DOCKER_HOST",
-      "NODE_TLS_REJECT_UNAUTHORIZED",
-    ]) {
-      expect(warningMessages.some((message) => message.includes(blockedName))).toBe(true);
-    }
-    expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("XDG_CONFIG_HOME"),
+      "Config SecretRef",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("XDG_CONFIG_DIRS"),
+      "Config SecretRef",
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("BASH_ENV"), "Config SecretRef");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("GH_TOKEN"), "Config SecretRef");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("AWS_ACCESS_KEY_ID"),
+      "Config SecretRef",
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("DOCKER_HOST"), "Config SecretRef");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("NODE_TLS_REJECT_UNAUTHORIZED"),
+      "Config SecretRef",
+    );
   });
 
   it("does not include passEnv values for unused exec SecretRef providers", async () => {

@@ -22,7 +22,6 @@ export type RealtimeTranscriptionSessionCallbacks = {
 };
 
 export type RealtimeTranscriptionSessionCreateRequest = RealtimeTranscriptionSessionCallbacks & {
-  cfg?: OpenClawConfig;
   providerConfig: RealtimeTranscriptionProviderConfig;
 };
 

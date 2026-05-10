@@ -160,7 +160,6 @@ export function createTalkTranscriptionRelaySession(
     return relay ? ensureTranscriptionTurn(relay) : "turn-1";
   };
   const sttSession = params.provider.createSession({
-    cfg: params.context.getRuntimeConfig(),
     providerConfig: params.providerConfig,
     onSpeechStart: () => {
       ensureTurnId();

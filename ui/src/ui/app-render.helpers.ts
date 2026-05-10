@@ -647,7 +647,6 @@ export async function createChatSession(state: AppViewState) {
       includeGlobal: true,
       includeUnknown: true,
       showArchived: state.sessionsShowArchived,
-      agentId: resolveAgentIdFromSessionKey(previousSessionKey),
     },
   );
   if (
@@ -679,7 +678,6 @@ async function refreshSessionOptions(state: AppViewState) {
     includeGlobal: true,
     includeUnknown: true,
     showArchived: state.sessionsShowArchived,
-    agentId: parseAgentSessionKey(state.sessionKey)?.agentId,
   });
 }
 

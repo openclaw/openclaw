@@ -79,25 +79,6 @@ type CompletionFixtureParams = {
   taskLabel: string;
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireMockFirstParam(mock: unknown, label: string): Record<string, unknown> {
-  const first = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[0]?.[0];
-  return requireRecord(first, label);
-}
-
-function requireRecordArray(value: unknown, label: string): Record<string, unknown>[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value.map((entry, index) => requireRecord(entry, `${label}[${index}]`));
-}
-
 export function createMediaCompletionFixture({
   directSend,
   mediaUrls,
@@ -144,13 +125,13 @@ export function expectQueuedTaskRun({
   sourceId,
   progressSummary,
 }: QueuedTaskExpectation): void {
-  const params = requireMockFirstParam(
-    taskExecutorMocks.createRunningTaskRun,
-    "createRunningTaskRun params",
+  expect(taskExecutorMocks.createRunningTaskRun).toHaveBeenCalledWith(
+    expect.objectContaining({
+      taskKind,
+      sourceId,
+      progressSummary,
+    }),
   );
-  expect(params.taskKind).toBe(taskKind);
-  expect(params.sourceId).toBe(sourceId);
-  expect(params.progressSummary).toBe(progressSummary);
 }
 
 export function expectRecordedTaskProgress({
@@ -158,12 +139,12 @@ export function expectRecordedTaskProgress({
   runId,
   progressSummary,
 }: ProgressExpectation): void {
-  const params = requireMockFirstParam(
-    taskExecutorMocks.recordTaskRunProgressByRunId,
-    "recordTaskRunProgressByRunId params",
+  expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
+    expect.objectContaining({
+      runId,
+      progressSummary,
+    }),
   );
-  expect(params.runId).toBe(runId);
-  expect(params.progressSummary).toBe(progressSummary);
 }
 
 export function expectDirectMediaSend({
@@ -174,12 +155,15 @@ export function expectDirectMediaSend({
   content,
   mediaUrls,
 }: DirectSendExpectation): void {
-  const params = requireMockFirstParam(sendMessageMock, "sendMessage params");
-  expect(params.channel).toBe(channel);
-  expect(params.to).toBe(to);
-  expect(params.threadId).toBe(threadId);
-  expect(params.content).toBe(content);
-  expect(params.mediaUrls).toEqual(mediaUrls);
+  expect(sendMessageMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      channel,
+      to,
+      threadId,
+      content,
+      mediaUrls,
+    }),
+  );
 }
 
 export function expectFallbackMediaAnnouncement({
@@ -192,24 +176,24 @@ export function expectFallbackMediaAnnouncement({
   resultMediaPath,
   mediaUrls,
 }: FallbackAnnouncementExpectation): void {
-  const params = requireMockFirstParam(
-    deliverAnnouncementMock,
-    "deliverSubagentAnnouncement params",
+  expect(deliverAnnouncementMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      requesterSessionKey,
+      requesterOrigin: expect.objectContaining({
+        channel,
+        to,
+      }),
+      expectsCompletionMessage: true,
+      internalEvents: expect.arrayContaining([
+        expect.objectContaining({
+          source,
+          announceType,
+          status: "ok",
+          result: expect.stringContaining(resultMediaPath),
+          mediaUrls,
+          replyInstruction: expect.stringContaining("Tell the user"),
+        }),
+      ]),
+    }),
   );
-  expect(params.requesterSessionKey).toBe(requesterSessionKey);
-  const requesterOrigin = requireRecord(params.requesterOrigin, "requesterOrigin");
-  expect(requesterOrigin.channel).toBe(channel);
-  expect(requesterOrigin.to).toBe(to);
-  expect(params.expectsCompletionMessage).toBe(true);
-
-  const event = requireRecordArray(params.internalEvents, "internalEvents").find(
-    (candidate) => candidate.source === source && candidate.announceType === announceType,
-  );
-  if (!event) {
-    throw new Error(`expected internal event ${source}/${announceType}`);
-  }
-  expect(event.status).toBe("ok");
-  expect(String(event.result)).toContain(resultMediaPath);
-  expect(event.mediaUrls).toEqual(mediaUrls);
-  expect(String(event.replyInstruction)).toContain("Tell the user");
 }

@@ -1,7 +1,5 @@
-import {
-  createEnvPatchedAccountSetupAdapter,
-  type ChannelSetupAdapter,
-} from "openclaw/plugin-sdk/setup-runtime";
+import { createEnvPatchedAccountSetupAdapter } from "openclaw/plugin-sdk/setup-adapter-runtime";
+import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/setup-runtime";
 
 const channel = "discord" as const;
 

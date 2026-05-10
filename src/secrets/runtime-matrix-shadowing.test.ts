@@ -16,17 +16,6 @@ function requireMatrixConfig(snapshot: Awaited<ReturnType<typeof prepareSecretsR
   return config;
 }
 
-function expectInactiveSurfaceWarning(
-  snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
-  path: string,
-): void {
-  const warning = snapshot.warnings.find(
-    (entry) => entry.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE" && entry.path === path,
-  );
-  expect(warning?.code).toBe("SECRETS_REF_IGNORED_INACTIVE_SURFACE");
-  expect(warning?.path).toBe(path);
-}
-
 describe("secrets runtime snapshot matrix shadowing", () => {
   it("ignores Matrix password refs that are shadowed by scoped env access tokens", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -60,7 +49,12 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       provider: "default",
       id: "MATRIX_OPS_PASSWORD",
     });
-    expectInactiveSurfaceWarning(snapshot, "channels.matrix.accounts.ops.password");
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.matrix.accounts.ops.password",
+      }),
+    );
   });
 
   it.each([
@@ -140,7 +134,12 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       provider: "default",
       id: "MATRIX_PASSWORD",
     });
-    expectInactiveSurfaceWarning(snapshot, "channels.matrix.password");
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.matrix.password",
+      }),
+    );
   });
 
   it.each([
@@ -227,6 +226,11 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       provider: "default",
       id: "MATRIX_DEFAULT_PASSWORD",
     });
-    expectInactiveSurfaceWarning(snapshot, "channels.matrix.accounts.default.password");
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.matrix.accounts.default.password",
+      }),
+    );
   });
 });

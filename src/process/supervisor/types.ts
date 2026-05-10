@@ -52,9 +52,6 @@ export type ManagedRunStdin = {
   end: () => void;
   destroy?: () => void;
   destroyed?: boolean;
-  writable?: boolean;
-  writableEnded?: boolean;
-  writableFinished?: boolean;
 };
 
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {

@@ -6,52 +6,8 @@ import {
   ensureCodexComputerUse,
   installCodexComputerUse,
   readCodexComputerUseStatus,
-  type CodexComputerUseStatus,
   type CodexComputerUseRequest,
 } from "./computer-use.js";
-
-function expectStatusFields(
-  status: CodexComputerUseStatus,
-  fields: Partial<CodexComputerUseStatus>,
-): void {
-  for (const key of Object.keys(fields) as Array<keyof CodexComputerUseStatus>) {
-    expect(status[key]).toEqual(fields[key]);
-  }
-}
-
-async function expectSetupErrorStatus(
-  promise: Promise<CodexComputerUseStatus>,
-  fields: Partial<CodexComputerUseStatus>,
-): Promise<void> {
-  let caught: unknown;
-  try {
-    await promise;
-  } catch (error) {
-    caught = error;
-  }
-  const error = requireRecord(caught, "setup error");
-  const status = requireRecord(error.status, "setup error status") as CodexComputerUseStatus;
-  expectStatusFields(status, fields);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requestCalls(
-  request: CodexComputerUseRequest,
-): ReadonlyArray<readonly [method: string, params?: unknown]> {
-  return vi.mocked(request).mock.calls as ReadonlyArray<readonly [string, unknown?]>;
-}
-
-function expectRequestMethodNotCalled(request: CodexComputerUseRequest, method: string): void {
-  expect(requestCalls(request).some(([calledMethod]) => calledMethod === method)).toBe(false);
-}
 
 describe("Codex Computer Use setup", () => {
   const cleanupPaths: string[] = [];
@@ -64,117 +20,136 @@ describe("Codex Computer Use setup", () => {
   });
 
   it("stays disabled until configured", async () => {
-    const status = await readCodexComputerUseStatus({ pluginConfig: {}, request: vi.fn() });
-    expectStatusFields(status, {
-      enabled: false,
-      ready: false,
-      reason: "disabled",
-      message: "Computer Use is disabled.",
-    });
+    await expect(
+      readCodexComputerUseStatus({ pluginConfig: {}, request: vi.fn() }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        enabled: false,
+        ready: false,
+        reason: "disabled",
+        message: "Computer Use is disabled.",
+      }),
+    );
   });
 
   it("reports an installed Computer Use MCP server from a registered marketplace", async () => {
     const request = createComputerUseRequest({ installed: true });
 
-    const status = await readCodexComputerUseStatus({
-      pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
-      request,
-    });
-
-    expectStatusFields(status, {
-      enabled: true,
-      ready: true,
-      reason: "ready",
-      installed: true,
-      pluginEnabled: true,
-      mcpServerAvailable: true,
-      marketplaceName: "desktop-tools",
-      tools: ["list_apps"],
-      message: "Computer Use is ready.",
-    });
-    expectRequestMethodNotCalled(request, "marketplace/add");
-    expectRequestMethodNotCalled(request, "experimentalFeature/enablement/set");
-    expectRequestMethodNotCalled(request, "plugin/install");
+    await expect(
+      readCodexComputerUseStatus({
+        pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        enabled: true,
+        ready: true,
+        reason: "ready",
+        installed: true,
+        pluginEnabled: true,
+        mcpServerAvailable: true,
+        marketplaceName: "desktop-tools",
+        tools: ["list_apps"],
+        message: "Computer Use is ready.",
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("marketplace/add", expect.anything());
+    expect(request).not.toHaveBeenCalledWith(
+      "experimentalFeature/enablement/set",
+      expect.anything(),
+    );
+    expect(request).not.toHaveBeenCalledWith("plugin/install", expect.anything());
   });
 
   it("reports an installed but disabled Computer Use plugin separately", async () => {
     const request = createComputerUseRequest({ installed: true, enabled: false });
 
-    const status = await readCodexComputerUseStatus({
-      pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
-      request,
-    });
-
-    expectStatusFields(status, {
-      ready: false,
-      reason: "plugin_disabled",
-      installed: true,
-      pluginEnabled: false,
-      mcpServerAvailable: false,
-      message:
-        "Computer Use is installed, but the computer-use plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.",
-    });
-    expectRequestMethodNotCalled(request, "plugin/install");
+    await expect(
+      readCodexComputerUseStatus({
+        pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: false,
+        reason: "plugin_disabled",
+        installed: true,
+        pluginEnabled: false,
+        mcpServerAvailable: false,
+        message:
+          "Computer Use is installed, but the computer-use plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.",
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("plugin/install", expect.anything());
   });
 
   it("does not register marketplace sources during status checks", async () => {
     const request = createComputerUseRequest({ installed: true });
 
-    const status = await readCodexComputerUseStatus({
-      pluginConfig: {
-        computerUse: {
-          enabled: true,
-          marketplaceSource: "github:example/desktop-tools",
+    await expect(
+      readCodexComputerUseStatus({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            marketplaceSource: "github:example/desktop-tools",
+          },
         },
-      },
-      request,
-    });
-
-    expectStatusFields(status, {
-      ready: true,
-      reason: "ready",
-      message: "Computer Use is ready.",
-    });
-    expectRequestMethodNotCalled(request, "marketplace/add");
-    expectRequestMethodNotCalled(request, "experimentalFeature/enablement/set");
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        reason: "ready",
+        message: "Computer Use is ready.",
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("marketplace/add", expect.anything());
+    expect(request).not.toHaveBeenCalledWith(
+      "experimentalFeature/enablement/set",
+      expect.anything(),
+    );
   });
 
   it("fails closed when multiple marketplaces contain Computer Use", async () => {
     const request = createAmbiguousComputerUseRequest();
 
-    const status = await readCodexComputerUseStatus({
-      pluginConfig: { computerUse: { enabled: true } },
-      request,
-    });
-
-    expectStatusFields(status, {
-      ready: false,
-      reason: "marketplace_missing",
-      message:
-        "Multiple Codex marketplaces contain computer-use. Configure computerUse.marketplaceName or computerUse.marketplacePath to choose one.",
-    });
-    expectRequestMethodNotCalled(request, "plugin/read");
+    await expect(
+      readCodexComputerUseStatus({
+        pluginConfig: { computerUse: { enabled: true } },
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: false,
+        reason: "marketplace_missing",
+        message:
+          "Multiple Codex marketplaces contain computer-use. Configure computerUse.marketplaceName or computerUse.marketplacePath to choose one.",
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("plugin/read", expect.anything());
   });
 
   it("installs Computer Use from a configured marketplace source", async () => {
     const request = createComputerUseRequest({ installed: false });
 
-    const status = await installCodexComputerUse({
-      pluginConfig: {
-        computerUse: {
-          marketplaceSource: "github:example/desktop-tools",
+    await expect(
+      installCodexComputerUse({
+        pluginConfig: {
+          computerUse: {
+            marketplaceSource: "github:example/desktop-tools",
+          },
         },
-      },
-      request,
-    });
-
-    expectStatusFields(status, {
-      ready: true,
-      reason: "ready",
-      installed: true,
-      pluginEnabled: true,
-      tools: ["list_apps"],
-    });
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        reason: "ready",
+        installed: true,
+        pluginEnabled: true,
+        tools: ["list_apps"],
+      }),
+    );
     expect(request).toHaveBeenCalledWith("experimentalFeature/enablement/set", {
       enablement: { plugins: true },
     });
@@ -191,18 +166,20 @@ describe("Codex Computer Use setup", () => {
   it("re-enables an installed but disabled Computer Use plugin during install", async () => {
     const request = createComputerUseRequest({ installed: true, enabled: false });
 
-    const status = await installCodexComputerUse({
-      pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
-      request,
-    });
-
-    expectStatusFields(status, {
-      ready: true,
-      reason: "ready",
-      installed: true,
-      pluginEnabled: true,
-      message: "Computer Use is ready.",
-    });
+    await expect(
+      installCodexComputerUse({
+        pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        reason: "ready",
+        installed: true,
+        pluginEnabled: true,
+        message: "Computer Use is ready.",
+      }),
+    );
     expect(request).toHaveBeenCalledWith("plugin/install", {
       marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
       pluginName: "computer-use",
@@ -212,64 +189,72 @@ describe("Codex Computer Use setup", () => {
   it("fails closed when Computer Use is required but not installed", async () => {
     const request = createComputerUseRequest({ installed: false });
 
-    await expectSetupErrorStatus(
+    await expect(
       ensureCodexComputerUse({
         pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
         request,
       }),
-      {
+    ).rejects.toMatchObject({
+      status: expect.objectContaining({
         reason: "plugin_not_installed",
-      },
-    );
-    expectRequestMethodNotCalled(request, "plugin/install");
+      }),
+    });
+    expect(request).not.toHaveBeenCalledWith("plugin/install", expect.anything());
   });
 
   it("skips setup writes when auto-install is already ready", async () => {
     const request = createComputerUseRequest({ installed: true });
 
-    const status = await ensureCodexComputerUse({
-      pluginConfig: {
-        computerUse: {
-          enabled: true,
-          autoInstall: true,
-          marketplaceName: "desktop-tools",
+    await expect(
+      ensureCodexComputerUse({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            autoInstall: true,
+            marketplaceName: "desktop-tools",
+          },
         },
-      },
-      request,
-    });
-
-    expectStatusFields(status, {
-      ready: true,
-      reason: "ready",
-      message: "Computer Use is ready.",
-    });
-    expectRequestMethodNotCalled(request, "marketplace/add");
-    expectRequestMethodNotCalled(request, "experimentalFeature/enablement/set");
-    expectRequestMethodNotCalled(request, "plugin/install");
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        reason: "ready",
+        message: "Computer Use is ready.",
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("marketplace/add", expect.anything());
+    expect(request).not.toHaveBeenCalledWith(
+      "experimentalFeature/enablement/set",
+      expect.anything(),
+    );
+    expect(request).not.toHaveBeenCalledWith("plugin/install", expect.anything());
   });
 
   it("uses setup writes when auto-install needs to install", async () => {
     const request = createComputerUseRequest({ installed: false });
 
-    const status = await ensureCodexComputerUse({
-      pluginConfig: {
-        computerUse: {
-          enabled: true,
-          autoInstall: true,
+    await expect(
+      ensureCodexComputerUse({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            autoInstall: true,
+          },
         },
-      },
-      request,
-    });
-
-    expectStatusFields(status, {
-      ready: true,
-      reason: "ready",
-      message: "Computer Use is ready.",
-    });
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        reason: "ready",
+        message: "Computer Use is ready.",
+      }),
+    );
     expect(request).toHaveBeenCalledWith("experimentalFeature/enablement/set", {
       enablement: { plugins: true },
     });
-    expectRequestMethodNotCalled(request, "marketplace/add");
+    expect(request).not.toHaveBeenCalledWith("marketplace/add", expect.anything());
     expect(request).toHaveBeenCalledWith("plugin/install", {
       marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
       pluginName: "computer-use",
@@ -283,23 +268,25 @@ describe("Codex Computer Use setup", () => {
     cleanupPaths.push(bundledMarketplacePath);
     const request = createBundledMarketplaceComputerUseRequest(bundledMarketplacePath);
 
-    const status = await ensureCodexComputerUse({
-      pluginConfig: {
-        computerUse: {
-          enabled: true,
-          autoInstall: true,
+    await expect(
+      ensureCodexComputerUse({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            autoInstall: true,
+          },
         },
-      },
-      request,
-      defaultBundledMarketplacePath: bundledMarketplacePath,
-    });
-
-    expectStatusFields(status, {
-      ready: true,
-      reason: "ready",
-      marketplaceName: "openai-bundled",
-      message: "Computer Use is ready.",
-    });
+        request,
+        defaultBundledMarketplacePath: bundledMarketplacePath,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        reason: "ready",
+        marketplaceName: "openai-bundled",
+        message: "Computer Use is ready.",
+      }),
+    );
     expect(request).toHaveBeenCalledWith("marketplace/add", {
       source: bundledMarketplacePath,
     });
@@ -312,23 +299,25 @@ describe("Codex Computer Use setup", () => {
   it("allows auto-install from a configured local marketplace path", async () => {
     const request = createComputerUseRequest({ installed: false });
 
-    const status = await ensureCodexComputerUse({
-      pluginConfig: {
-        computerUse: {
-          enabled: true,
-          autoInstall: true,
-          marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+    await expect(
+      ensureCodexComputerUse({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            autoInstall: true,
+            marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+          },
         },
-      },
-      request,
-    });
-
-    expectStatusFields(status, {
-      ready: true,
-      reason: "ready",
-      message: "Computer Use is ready.",
-    });
-    expectRequestMethodNotCalled(request, "marketplace/add");
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        reason: "ready",
+        message: "Computer Use is ready.",
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("marketplace/add", expect.anything());
     expect(request).toHaveBeenCalledWith("plugin/install", {
       marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
       pluginName: "computer-use",
@@ -338,7 +327,7 @@ describe("Codex Computer Use setup", () => {
   it("requires an explicit install command for configured marketplace sources", async () => {
     const request = createComputerUseRequest({ installed: false });
 
-    await expectSetupErrorStatus(
+    await expect(
       ensureCodexComputerUse({
         pluginConfig: {
           computerUse: {
@@ -349,45 +338,49 @@ describe("Codex Computer Use setup", () => {
         },
         request,
       }),
-      {
+    ).rejects.toMatchObject({
+      status: expect.objectContaining({
         reason: "auto_install_blocked",
-      },
-    );
-    expectRequestMethodNotCalled(request, "marketplace/add");
-    expectRequestMethodNotCalled(request, "plugin/install");
+      }),
+    });
+    expect(request).not.toHaveBeenCalledWith("marketplace/add", expect.anything());
+    expect(request).not.toHaveBeenCalledWith("plugin/install", expect.anything());
   });
 
   it("fails closed when a configured marketplace name is not discovered", async () => {
     const request = createEmptyMarketplaceComputerUseRequest();
 
-    const status = await readCodexComputerUseStatus({
-      pluginConfig: {
-        computerUse: {
-          enabled: true,
-          marketplaceName: "missing-marketplace",
+    await expect(
+      readCodexComputerUseStatus({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            marketplaceName: "missing-marketplace",
+          },
         },
-      },
-      request,
-    });
-
-    expectStatusFields(status, {
-      ready: false,
-      reason: "marketplace_missing",
-      message:
-        "Configured Codex marketplace missing-marketplace was not found or does not contain computer-use. Run /codex computer-use install with a source or path to install from a new marketplace.",
-    });
-    expectRequestMethodNotCalled(request, "plugin/read");
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: false,
+        reason: "marketplace_missing",
+        message:
+          "Configured Codex marketplace missing-marketplace was not found or does not contain computer-use. Run /codex computer-use install with a source or path to install from a new marketplace.",
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("plugin/read", expect.anything());
   });
 
   it("fails closed instead of installing from a remote-only Codex marketplace", async () => {
     const request = createRemoteOnlyComputerUseRequest();
 
-    await expectSetupErrorStatus(
+    await expect(
       installCodexComputerUse({
         pluginConfig: { computerUse: { marketplaceName: "openai-curated" } },
         request,
       }),
-      {
+    ).rejects.toMatchObject({
+      status: expect.objectContaining({
         ready: false,
         reason: "remote_install_unsupported",
         installed: false,
@@ -395,9 +388,9 @@ describe("Codex Computer Use setup", () => {
         marketplaceName: "openai-curated",
         message:
           "Computer Use is available in remote Codex marketplace openai-curated, but Codex app-server does not support remote plugin install yet. Configure computerUse.marketplaceSource or computerUse.marketplacePath for a local marketplace, then run /codex computer-use install.",
-      },
-    );
-    expectRequestMethodNotCalled(request, "plugin/install");
+      }),
+    });
+    expect(request).not.toHaveBeenCalledWith("plugin/install", expect.anything());
   });
 
   it("waits for the default Codex marketplace during install", async () => {
@@ -413,12 +406,13 @@ describe("Codex Computer Use setup", () => {
 
     await vi.advanceTimersByTimeAsync(4_000);
 
-    const status = await installed;
-    expectStatusFields(status, {
-      ready: true,
-      reason: "ready",
-      message: "Computer Use is ready.",
-    });
+    await expect(installed).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        reason: "ready",
+        message: "Computer Use is ready.",
+      }),
+    );
     expect(request).toHaveBeenCalledWith("plugin/install", {
       marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
       pluginName: "computer-use",
@@ -431,16 +425,18 @@ describe("Codex Computer Use setup", () => {
   it("prefers the official Computer Use marketplace when multiple matches are present", async () => {
     const request = createMultiMarketplaceComputerUseRequest();
 
-    const status = await installCodexComputerUse({
-      pluginConfig: { computerUse: {} },
-      request,
-    });
-
-    expectStatusFields(status, {
-      ready: true,
-      reason: "ready",
-      marketplaceName: "openai-curated",
-    });
+    await expect(
+      installCodexComputerUse({
+        pluginConfig: { computerUse: {} },
+        request,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ready: true,
+        reason: "ready",
+        marketplaceName: "openai-curated",
+      }),
+    );
     expect(request).toHaveBeenCalledWith("plugin/install", {
       marketplacePath: "/marketplaces/openai-curated/.agents/plugins/marketplace.json",
       pluginName: "computer-use",
@@ -487,7 +483,11 @@ function createComputerUseRequest(params: {
       };
     }
     if (method === "plugin/read") {
-      expect(requireRecord(requestParams, "plugin read params").pluginName).toBe("computer-use");
+      expect(requestParams).toEqual(
+        expect.objectContaining({
+          pluginName: "computer-use",
+        }),
+      );
       return {
         plugin: {
           marketplaceName: "desktop-tools",

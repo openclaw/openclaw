@@ -16,25 +16,16 @@ function expectBindMountsToThrow(binds: string[], expected: RegExp, label: strin
   expect(() => validateBindMounts(binds), label).toThrow(expected);
 }
 
-function expectBlockedTargetReason(
-  bind: string,
-): Extract<NonNullable<ReturnType<typeof getBlockedBindReason>>, { kind: "targets" }> {
-  const reason = getBlockedBindReason(bind);
-  expect(reason?.kind).toBe("targets");
-  if (reason?.kind !== "targets") {
-    throw new Error(`expected blocked target reason for ${bind}`);
-  }
-  return reason;
-}
-
 describe("getBlockedBindReason", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
   it("blocks common Docker socket directories", () => {
-    expectBlockedTargetReason("/run:/run");
-    expectBlockedTargetReason("/var/run:/var/run:ro");
+    expect(getBlockedBindReason("/run:/run")).toEqual(expect.objectContaining({ kind: "targets" }));
+    expect(getBlockedBindReason("/var/run:/var/run:ro")).toEqual(
+      expect.objectContaining({ kind: "targets" }),
+    );
   });
 
   it("does not block /var by default", () => {
@@ -56,7 +47,9 @@ describe("getBlockedBindReason", () => {
     ] as const;
 
     for (const source of cases) {
-      expectBlockedTargetReason(`${source}:/mnt/test:ro`);
+      expect(getBlockedBindReason(`${source}:/mnt/test:ro`)).toEqual(
+        expect.objectContaining({ kind: "targets" }),
+      );
     }
   });
 
@@ -64,8 +57,12 @@ describe("getBlockedBindReason", () => {
     vi.stubEnv("HOME", "/home/tester");
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
 
-    const reason = expectBlockedTargetReason("/home/tester/.gnupg/secring.gpg:/mnt/gnupg:ro");
-    expect(reason?.blockedPath).toBe("/home/tester/.gnupg");
+    expect(getBlockedBindReason("/home/tester/.gnupg/secring.gpg:/mnt/gnupg:ro")).toEqual(
+      expect.objectContaining({
+        kind: "targets",
+        blockedPath: "/home/tester/.gnupg",
+      }),
+    );
   });
 
   it("blocks canonical OS-home aliases for credential paths", () => {
@@ -80,8 +77,12 @@ describe("getBlockedBindReason", () => {
     symlinkSync(realHome, aliasHome);
     vi.stubEnv("HOME", aliasHome);
 
-    const reason = expectBlockedTargetReason(`${join(realHome, ".ssh", "config")}:/mnt/ssh:ro`);
-    expect(reason?.blockedPath).toBe(normalizePathForSnapshot(join(realHome, ".ssh")));
+    expect(getBlockedBindReason(`${join(realHome, ".ssh", "config")}:/mnt/ssh:ro`)).toEqual(
+      expect.objectContaining({
+        kind: "targets",
+        blockedPath: normalizePathForSnapshot(join(realHome, ".ssh")),
+      }),
+    );
   });
 });
 

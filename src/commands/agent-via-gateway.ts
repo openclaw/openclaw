@@ -7,7 +7,6 @@ import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError, randomIdempotencyKey } from "../gateway/call.js";
-import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -23,7 +22,6 @@ type AgentGatewayResult = {
     mediaUrl?: string | null;
     mediaUrls?: string[];
   }>;
-  deliveryStatus?: unknown;
   meta?: unknown;
 };
 
@@ -32,7 +30,6 @@ type GatewayAgentResponse = {
   status?: string;
   summary?: string;
   result?: AgentGatewayResult;
-  deliveryStatus?: unknown;
 };
 
 const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
@@ -129,17 +126,6 @@ function createGatewayTimeoutFallbackSession(agentId?: string): {
   };
 }
 
-function buildGatewayJsonResponse(response: GatewayAgentResponse): GatewayAgentResponse {
-  const deliveryStatus = response.result?.deliveryStatus;
-  if (deliveryStatus === undefined) {
-    return response;
-  }
-  return {
-    ...response,
-    deliveryStatus,
-  };
-}
-
 async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   protectJsonStdout(opts);
   const body = (opts.message ?? "").trim();
@@ -180,8 +166,6 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
 
   const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
-  const modelOverride = normalizeOptionalString(opts.model);
-  const hasModelOverride = Boolean(modelOverride);
 
   const response: GatewayAgentResponse = await withProgress(
     {
@@ -195,7 +179,7 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
         params: {
           message: body,
           agentId,
-          model: modelOverride,
+          model: opts.model,
           to: opts.to,
           replyTo: opts.replyTo,
           sessionId: opts.sessionId,
@@ -213,16 +197,13 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
         },
         expectFinal: true,
         timeoutMs: gatewayTimeoutMs,
-        clientName: hasModelOverride
-          ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
-          : GATEWAY_CLIENT_NAMES.CLI,
-        mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
-        ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
       }),
   );
 
   if (opts.json) {
-    writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
+    writeRuntimeJson(runtime, response);
     return response;
   }
 

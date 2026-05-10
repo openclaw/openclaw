@@ -15,8 +15,6 @@ function loadFacadeModule(): FacadeModule {
     artifactBasename: "api.js",
   });
 }
-
-/** @deprecated GitHub Copilot provider-owned login helper; use provider auth hooks instead. */
 export const githubCopilotLoginCommand: FacadeModule["githubCopilotLoginCommand"] = ((...args) =>
   loadFacadeModule()["githubCopilotLoginCommand"](
     ...args,

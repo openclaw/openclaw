@@ -9,12 +9,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { isLocalDirectRequest, type ResolvedGatewayAuth } from "./auth.js";
-import {
-  sendInvalidRequest,
-  sendJson,
-  sendMethodNotAllowed,
-  sendMissingScopeForbidden,
-} from "./http-common.js";
+import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   resolveTrustedHttpOperatorScopes,
@@ -24,24 +19,16 @@ import { loadSessionEntry } from "./session-utils.js";
 
 const REQUESTER_SESSION_KEY_HEADER = "x-openclaw-requester-session-key";
 
-type SessionKeyPathResolution =
-  | { matched: false }
-  | { matched: true; sessionKey: string }
-  | { error: "invalid-session-key"; matched: true };
-
-function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
+function resolveSessionKeyFromPath(pathname: string): string | null {
   const match = pathname.match(/^\/sessions\/([^/]+)\/kill$/);
   if (!match) {
-    return { matched: false };
+    return null;
   }
   try {
     const decoded = decodeURIComponent(match[1] ?? "").trim();
-    if (!decoded) {
-      return { error: "invalid-session-key", matched: true };
-    }
-    return { matched: true, sessionKey: decoded };
+    return decoded || null;
   } catch {
-    return { error: "invalid-session-key", matched: true };
+    return null;
   }
 }
 
@@ -57,15 +44,10 @@ export async function handleSessionKillHttpRequest(
 ): Promise<boolean> {
   const cfg = getRuntimeConfig();
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-  const sessionKeyResolution = resolveSessionKeyFromPath(url.pathname);
-  if (!sessionKeyResolution.matched) {
+  const sessionKey = resolveSessionKeyFromPath(url.pathname);
+  if (!sessionKey) {
     return false;
   }
-  if ("error" in sessionKeyResolution) {
-    sendInvalidRequest(res, "invalid session key");
-    return true;
-  }
-  const { sessionKey } = sessionKeyResolution;
 
   if (req.method !== "POST") {
     sendMethodNotAllowed(res, "POST");
@@ -107,7 +89,13 @@ export async function handleSessionKillHttpRequest(
     requesterSessionKey && !allowLocalAdminKill ? "sessions.abort" : "sessions.delete";
   const scopeAuth = authorizeOperatorScopesForMethod(requiredOperatorMethod, requestedScopes);
   if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(res, scopeAuth.missingScope);
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: `missing scope: ${scopeAuth.missingScope}`,
+      },
+    });
     return true;
   }
 

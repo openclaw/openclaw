@@ -124,7 +124,6 @@ function normalizeOpenAiStringModeAnthropicToolChoice(toolChoice: unknown): unkn
   return toolChoice;
 }
 
-/** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
 export function createAnthropicToolPayloadCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
   options?: AnthropicToolPayloadCompatibilityOptions,
@@ -161,7 +160,6 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
   };
 }
 
-/** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
 export function createOpenAIAnthropicToolPayloadCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {

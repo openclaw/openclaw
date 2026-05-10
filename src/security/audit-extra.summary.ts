@@ -1,5 +1,3 @@
-import { parseModelRef } from "../agents/model-selection-normalize.js";
-import { resolveProviderToolPolicy } from "../agents/pi-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
@@ -62,8 +60,6 @@ function resolveToolPolicies(params: {
   agentTools?: AgentToolsConfig;
   sandboxMode?: "off" | "non-main" | "all";
   agentId?: string | null;
-  modelProvider?: string;
-  modelId?: string;
 }): SandboxToolPolicy[] {
   const policies: SandboxToolPolicy[] = [];
   const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
@@ -80,24 +76,6 @@ function resolveToolPolicies(params: {
   const agentPolicy = pickSandboxToolPolicy(params.agentTools);
   if (agentPolicy) {
     policies.push(agentPolicy);
-  }
-
-  const globalProviderPolicy = resolveProviderToolPolicy({
-    byProvider: params.cfg.tools?.byProvider,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
-  if (globalProviderPolicy) {
-    policies.push(globalProviderPolicy);
-  }
-
-  const agentProviderPolicy = resolveProviderToolPolicy({
-    byProvider: params.agentTools?.byProvider,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
-  if (agentProviderPolicy) {
-    policies.push(agentProviderPolicy);
   }
 
   if (params.sandboxMode === "all") {
@@ -200,9 +178,6 @@ export function collectSmallModelRiskFindings(params: {
   const exposureSet = new Set<string>();
   for (const entry of smallModels) {
     const agentId = extractAgentIdFromSource(entry.source);
-    const modelRef = parseModelRef(entry.id, "openai", {
-      allowPluginNormalization: false,
-    });
     const sandboxMode = resolveSandboxConfigForAgent(params.cfg, agentId ?? undefined).mode;
     const agentTools =
       agentId && params.cfg.agents?.list
@@ -213,8 +188,6 @@ export function collectSmallModelRiskFindings(params: {
       agentTools,
       sandboxMode,
       agentId,
-      modelProvider: modelRef?.provider,
-      modelId: modelRef?.model,
     });
     const exposed: string[] = [];
     if (
@@ -234,7 +207,7 @@ export function collectSmallModelRiskFindings(params: {
     }
     const sandboxLabel = sandboxMode === "all" ? "sandbox=all" : `sandbox=${sandboxMode}`;
     const exposureLabel = exposed.length > 0 ? ` web=[${exposed.join(", ")}]` : " web=[off]";
-    const safe = exposed.length === 0;
+    const safe = sandboxMode === "all" && exposed.length === 0;
     if (!safe) {
       hasUnsafe = true;
     }
@@ -262,7 +235,7 @@ export function collectSmallModelRiskFindings(params: {
       `\n` +
       "Small models are not recommended for untrusted inputs.",
     remediation:
-      'If you must use small models, disable web_search/web_fetch/browser globally or for each small model with tools.byProvider["provider/model"].deny=["group:web","browser"]; use agents.defaults.sandbox.mode="all" for defense in depth.',
+      'If you must use small models, enable sandboxing for all sessions (agents.defaults.sandbox.mode="all") and disable web_search/web_fetch/browser (tools.deny=["group:web","browser"]).',
   });
 
   return findings;

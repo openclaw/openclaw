@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { Duplex } from "node:stream";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
@@ -310,7 +309,6 @@ export class RealtimeCallHandler {
     private readonly realtimeProvider: RealtimeVoiceProviderPlugin,
     private readonly providerConfig: RealtimeVoiceProviderConfig,
     private readonly servePath: string,
-    private readonly coreConfig?: OpenClawConfig,
   ) {}
 
   setPublicUrl(url: string): void {
@@ -605,7 +603,6 @@ export class RealtimeCallHandler {
     });
     const session = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
-      cfg: this.coreConfig,
       providerConfig: this.providerConfig,
       instructions: this.config.instructions,
       tools: this.config.tools,

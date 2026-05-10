@@ -83,10 +83,6 @@ function useToolStreamFakeTimers(): void {
 }
 
 describe("app-tool-stream fallback lifecycle handling", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
   beforeAll(() => {
     const globalWithWindow = globalThis as typeof globalThis & {
       window?: Window & typeof globalThis;

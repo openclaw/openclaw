@@ -253,7 +253,7 @@ export async function resolveAuthorizedComponentInteraction(params: {
     return null;
   }
 
-  const commandAuthorized = await resolveComponentCommandAuthorized({
+  const commandAuthorized = resolveComponentCommandAuthorized({
     ctx: params.ctx,
     interactionCtx,
     channelConfig,
@@ -273,7 +273,7 @@ export async function resolveAuthorizedComponentInteraction(params: {
   };
 }
 
-export async function resolveComponentCommandAuthorized(params: {
+export function resolveComponentCommandAuthorized(params: {
   ctx: AgentComponentContext;
   interactionCtx: ComponentInteractionContext;
   channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;

@@ -1,9 +1,7 @@
 {
   "id": "memory-lancedb",
-  "commandAliases": [{ "name": "ltm" }],
   "activation": {
-    "onStartup": false,
-    "onCommands": ["ltm"]
+    "onStartup": false
   },
   "kind": "memory",
   "contracts": {

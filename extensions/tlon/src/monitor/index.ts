@@ -38,11 +38,10 @@ import {
   extractMessageText,
   formatModelName,
   isBotMentioned,
-  isDmAllowedWithIngress,
+  isDmAllowed,
   isGroupInviteAllowed,
   isSummarizationRequest,
   resolveAuthorizedMessageText,
-  resolveTlonCommandAuthorizationWithIngress,
   stripBotMention,
 } from "./utils.js";
 
@@ -432,6 +431,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       },
     });
 
+    // Warn if multiple users share a DM session (insecure dmScope configuration)
     if (!isGroup) {
       const sessionKey = route.sessionKey;
       if (!dmSendersBySession.has(sessionKey)) {
@@ -439,11 +439,13 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
       const senders = dmSendersBySession.get(sessionKey)!;
       if (senders.size > 0 && !senders.has(senderShip)) {
+        // Log warning
         runtime.log?.(
           `[tlon] ⚠️ SECURITY: Multiple users sharing DM session. ` +
             `Configure "session.dmScope: per-channel-peer" in OpenClaw config.`,
         );
 
+        // Notify owner via DM (once per monitor session)
         if (!sharedSessionWarningSent && effectiveOwnerShip) {
           sharedSessionWarningSent = true;
           const warningMsg =
@@ -453,6 +455,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             `session:\n  dmScope: "per-channel-peer"\n\n` +
             `Docs: https://docs.openclaw.ai/concepts/session#secure-dm-mode`;
 
+          // Send async, don't block message processing
           sendDm({
             api,
             fromShip: botShipName,
@@ -471,6 +474,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       ? `${senderShip} [${senderRole}] in ${channelNest}`
       : `${senderShip} [${senderRole}]`;
 
+    // Compute command authorization for slash commands (owner-only)
     const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(
       messageText,
       cfg,
@@ -479,13 +483,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     if (shouldComputeAuth) {
       const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-      const commandAccess = await resolveTlonCommandAuthorizationWithIngress({
-        senderShip,
-        ownerShip: effectiveOwnerShip,
-        useAccessGroups,
-      });
-      commandAuthorized = commandAccess.commandAccess.authorized;
+      const senderIsOwner = isOwner(senderShip);
 
+      commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups,
+        authorizers: [{ configured: Boolean(effectiveOwnerShip), allowed: senderIsOwner }],
+      });
+
+      // Log when non-owner attempts a slash command (will be silently ignored by Gateway)
       if (!commandAuthorized) {
         console.log(
           `[tlon] Command attempt denied: ${senderShip} is not owner (owner=${effectiveOwnerShip ?? "not configured"})`,
@@ -493,6 +498,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
     }
 
+    // Prepend attachment annotations to message body (similar to Signal format)
     let bodyWithAttachments = messageText;
     if (attachments.length > 0) {
       const mediaLines = attachments
@@ -508,6 +514,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       body: bodyWithAttachments,
     });
 
+    // Strip bot ship mention for CommandBody so "/status" is recognized as command-only
     const commandBody = isGroup ? stripBotMention(messageText, botShipName) : messageText;
     const tlonConversationId = isGroup ? (groupChannel ?? channelNest ?? senderShip) : senderShip;
     const rawTurnMessage = {
@@ -606,74 +613,89 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
     };
 
-    await core.channel.turn.runAssembled({
+    await core.channel.turn.run({
       channel: "tlon",
       accountId: route.accountId,
-      cfg,
-      agentId: route.agentId,
-      routeSessionKey: route.sessionKey,
-      storePath,
-      ctxPayload,
-      recordInboundSession: core.channel.session.recordInboundSession,
-      dispatchReplyWithBufferedBlockDispatcher:
-        core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-      delivery: {
-        preparePayload: prepareReplyPayload,
-        durable: deliveryTarget
-          ? () => ({
-              to: deliveryTarget,
-              replyToId: parentId ?? undefined,
-              threadId: parentId ?? undefined,
-            })
-          : false,
-        deliver: async (payload: ReplyPayload) => {
-          const replyText = payload.text;
-          if (!replyText) {
-            return { visibleReplySent: false };
-          }
+      raw: rawTurnMessage,
+      adapter: {
+        ingest: (raw) => ({
+          id: raw.messageId,
+          timestamp: raw.timestamp,
+          rawText: raw.messageText,
+          textForAgent: commandBody,
+          textForCommands: commandBody,
+          raw,
+        }),
+        resolveTurn: () => ({
+          cfg,
+          channel: "tlon",
+          accountId: route.accountId,
+          agentId: route.agentId,
+          routeSessionKey: route.sessionKey,
+          storePath,
+          ctxPayload,
+          recordInboundSession: core.channel.session.recordInboundSession,
+          dispatchReplyWithBufferedBlockDispatcher:
+            core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+          delivery: {
+            preparePayload: prepareReplyPayload,
+            durable: deliveryTarget
+              ? () => ({
+                  to: deliveryTarget,
+                  replyToId: parentId ?? undefined,
+                  threadId: parentId ?? undefined,
+                })
+              : false,
+            deliver: async (payload: ReplyPayload) => {
+              const replyText = payload.text;
+              if (!replyText) {
+                return { visibleReplySent: false };
+              }
 
-          if (isGroup && groupChannel) {
-            const parsed = parseChannelNest(groupChannel);
-            if (!parsed) {
-              return { visibleReplySent: false };
-            }
-            await sendGroupMessage({
-              api: api,
-              fromShip: botShipName,
-              hostShip: parsed.hostShip,
-              channelName: parsed.channelName,
-              text: replyText,
-              replyToId: parentId ?? undefined,
-            });
-            return { visibleReplySent: true, replyToId: parentId ?? undefined };
-          }
+              if (isGroup && groupChannel) {
+                const parsed = parseChannelNest(groupChannel);
+                if (!parsed) {
+                  return { visibleReplySent: false };
+                }
+                await sendGroupMessage({
+                  api: api,
+                  fromShip: botShipName,
+                  hostShip: parsed.hostShip,
+                  channelName: parsed.channelName,
+                  text: replyText,
+                  replyToId: parentId ?? undefined,
+                });
+                return { visibleReplySent: true, replyToId: parentId ?? undefined };
+              }
 
-          await sendDm({
-            api: api,
-            fromShip: botShipName,
-            toShip: senderShip,
-            text: replyText,
-          });
-          return { visibleReplySent: true };
-        },
-        onDelivered: (_payload, _info, result) => {
-          rememberThreadParticipation(result);
-        },
-        onError: (err, info) => {
-          const dispatchDuration = Date.now() - dispatchStartTime;
-          runtime.error?.(
-            `[tlon] ${info.kind} reply failed after ${dispatchDuration}ms: ${String(err)}`,
-          );
-        },
-      },
-      dispatcherOptions: {
-        responsePrefix,
-        humanDelay,
-      },
-      record: {
-        onRecordError: (err) => {
-          runtime.error?.(`[tlon] failed updating session meta: ${String(err)}`);
-        },
+              await sendDm({
+                api: api,
+                fromShip: botShipName,
+                toShip: senderShip,
+                text: replyText,
+              });
+              return { visibleReplySent: true };
+            },
+            onDelivered: (_payload, _info, result) => {
+              rememberThreadParticipation(result);
+            },
+            onError: (err, info) => {
+              const dispatchDuration = Date.now() - dispatchStartTime;
+              runtime.error?.(
+                `[tlon] ${info.kind} reply failed after ${dispatchDuration}ms: ${String(err)}`,
+              );
+            },
+          },
+          dispatcherOptions: {
+            responsePrefix,
+            humanDelay,
+          },
+          record: {
+            onRecordError: (err) => {
+              runtime.error?.(`[tlon] failed updating session meta: ${String(err)}`);
+            },
+          },
+        }),
       },
     });
   };
@@ -939,10 +961,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           }
 
           // Auto-accept if on allowlist and auto-accept is enabled
-          if (
-            effectiveAutoAcceptDmInvites &&
-            (await isDmAllowedWithIngress(ship, effectiveDmAllowlist))
-          ) {
+          if (effectiveAutoAcceptDmInvites && isDmAllowed(ship, effectiveDmAllowlist)) {
             try {
               await api.poke({
                 app: "chat",
@@ -958,7 +977,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           }
 
           // If owner is configured and ship is not on allowlist, queue approval
-          if (effectiveOwnerShip && !(await isDmAllowedWithIngress(ship, effectiveDmAllowlist))) {
+          if (effectiveOwnerShip && !isDmAllowed(ship, effectiveDmAllowlist)) {
             const approval = createPendingApproval({
               type: "dm",
               requestingShip: ship,
@@ -1056,7 +1075,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           }
 
           // For DMs from others, check allowlist
-          if (!(await isDmAllowedWithIngress(senderShip, effectiveDmAllowlist))) {
+          if (!isDmAllowed(senderShip, effectiveDmAllowlist)) {
             // If owner is configured, queue approval request
             if (effectiveOwnerShip) {
               const approval = createPendingApproval({

@@ -127,17 +127,20 @@ describe("agents delete command", () => {
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
-      const gatewayCall = gatewayMocks.callGateway.mock.calls[0]?.[0];
-      expect(gatewayCall?.method).toBe("agents.delete");
-      expect(gatewayCall?.params).toEqual({ agentId: "ops", deleteFiles: true });
-      expect(gatewayCall?.requiredMethods).toEqual(["agents.delete"]);
+      expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "agents.delete",
+          params: { agentId: "ops", deleteFiles: true },
+          requiredMethods: ["agents.delete"],
+        }),
+      );
       expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
       expectSessionStore(storePath, sessions);
-      const output = readJsonLogs()[0];
-      expect(output?.agentId).toBe("ops");
-      expect(output?.removedBindings).toBe(0);
-      expect(output?.transport).toBe("gateway");
+      expect(readJsonLogs()[0]).toMatchObject({
+        agentId: "ops",
+        removedBindings: 0,
+        transport: "gateway",
+      });
     });
   });
 
@@ -165,13 +168,13 @@ describe("agents delete command", () => {
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
       expect(runtime.exit).not.toHaveBeenCalled();
-      expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
-      const replaceConfigFileCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
-        [{ nextConfig: OpenClawConfig }]
-      >;
-      expect(replaceConfigFileCalls[0]?.[0].nextConfig).toEqual({
-        agents: { list: [{ id: "main", workspace: path.join(stateDir, "workspace-main") }] },
-      });
+      expect(configMocks.replaceConfigFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nextConfig: {
+            agents: { list: [{ id: "main", workspace: path.join(stateDir, "workspace-main") }] },
+          },
+        }),
+      );
       expectSessionStore(storePath, {
         "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
       });
@@ -279,9 +282,11 @@ describe("agents delete command", () => {
       // The JSON output should report why the workspace was retained.
       const jsonOutput = readJsonLogs();
       expect(jsonOutput).toHaveLength(1);
-      expect(jsonOutput[0]?.workspaceRetained).toBe(true);
-      expect(jsonOutput[0]?.workspaceRetainedReason).toBe("shared");
-      expect(jsonOutput[0]?.workspaceSharedWith).toEqual(["main"]);
+      expect(jsonOutput[0]).toMatchObject({
+        workspaceRetained: true,
+        workspaceRetainedReason: "shared",
+        workspaceSharedWith: ["main"],
+      });
       expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
         ["trash", sharedWorkspace],
         { timeoutMs: 5000 },
@@ -316,9 +321,10 @@ describe("agents delete command", () => {
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      const output = readJsonLogs()[0];
-      expect(output?.workspaceRetained).toBe(true);
-      expect(output?.workspaceSharedWith).toEqual(["main"]);
+      expect(readJsonLogs()[0]).toMatchObject({
+        workspaceRetained: true,
+        workspaceSharedWith: ["main"],
+      });
       expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
         ["trash", childWorkspace],
         { timeoutMs: 5000 },
@@ -353,9 +359,10 @@ describe("agents delete command", () => {
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      const output = readJsonLogs()[0];
-      expect(output?.workspaceRetained).toBe(true);
-      expect(output?.workspaceSharedWith).toEqual(["main"]);
+      expect(readJsonLogs()[0]).toMatchObject({
+        workspaceRetained: true,
+        workspaceSharedWith: ["main"],
+      });
       expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
         ["trash", sharedWorkspace],
         { timeoutMs: 5000 },
@@ -393,9 +400,10 @@ describe("agents delete command", () => {
 
         await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-        const output = readJsonLogs()[0];
-        expect(output?.workspaceRetained).toBe(true);
-        expect(output?.workspaceSharedWith).toEqual(["main"]);
+        expect(readJsonLogs()[0]).toMatchObject({
+          workspaceRetained: true,
+          workspaceSharedWith: ["main"],
+        });
         expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
           ["trash", aliasWorkspace],
           { timeoutMs: 5000 },

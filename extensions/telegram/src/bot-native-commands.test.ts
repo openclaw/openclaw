@@ -1,4 +1,4 @@
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -263,7 +263,7 @@ describe("registerTelegramNativeCommands", () => {
     const { bot, commandHandlers, sendMessage } = createCommandBot();
 
     registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}, { bot, allowFrom: [200] }),
+      ...createNativeCommandTestParams({}, { bot }),
     });
 
     const handler = commandHandlers.get("fast");

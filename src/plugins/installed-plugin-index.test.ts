@@ -49,36 +49,6 @@ function writeRuntimeEntry(rootDir: string) {
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value;
-}
-
-function readRecordField(record: Record<string, unknown>, key: string, label: string) {
-  const value = record[key];
-  if (!isRecord(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value;
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function expectSha256(value: unknown) {
-  expect(typeof value).toBe("string");
-  expect(value).toMatch(/^[a-f0-9]{64}$/u);
-}
-
 function writeManifestlessClaudeBundle(rootDir: string, entries: readonly string[] = ["skills"]) {
   for (const entry of entries) {
     fs.mkdirSync(path.join(rootDir, entry), { recursive: true });
@@ -208,58 +178,58 @@ describe("installed plugin index", () => {
       now: () => new Date("2026-04-25T12:00:00.000Z"),
     });
 
-    expectRecordFields(index as unknown as Record<string, unknown>, {
+    expect(index).toMatchObject({
       version: 1,
       migrationVersion: 1,
       generatedAtMs: 1777118400000,
-    });
-    const plugin = requireRecord(index.plugins[0], "installed plugin record");
-    expectRecordFields(plugin, {
-      pluginId: "demo",
-      packageName: "@vendor/demo-plugin",
-      packageVersion: "1.2.3",
-      origin: "global",
-      rootDir: fixture.rootDir,
-      source: path.join(fixture.rootDir, "index.ts"),
-      enabled: true,
-      syntheticAuthRefs: ["demo", "demo-cli"],
-      compat: [
-        "activation-agent-harness-hint",
-        "activation-channel-hint",
-        "activation-provider-hint",
-        "channel-env-vars",
-        "provider-auth-env-vars",
+      plugins: [
+        {
+          pluginId: "demo",
+          packageName: "@vendor/demo-plugin",
+          packageVersion: "1.2.3",
+          origin: "global",
+          rootDir: fixture.rootDir,
+          source: path.join(fixture.rootDir, "index.ts"),
+          enabled: true,
+          syntheticAuthRefs: ["demo", "demo-cli"],
+          packageInstall: {
+            defaultChoice: "npm",
+            npm: {
+              spec: "@vendor/demo-plugin@1.2.3",
+              packageName: "@vendor/demo-plugin",
+              selector: "1.2.3",
+              selectorKind: "exact-version",
+              exactVersion: true,
+              expectedIntegrity: "sha512-demo",
+              pinState: "exact-with-integrity",
+            },
+            warnings: [],
+          },
+          packageChannel: {
+            id: "demo",
+            label: "Demo",
+            blurb: "Demo channel",
+            preferOver: ["legacy-demo"],
+            commands: {
+              nativeCommandsAutoEnabled: true,
+              nativeSkillsAutoEnabled: false,
+            },
+          },
+          compat: [
+            "activation-agent-harness-hint",
+            "activation-channel-hint",
+            "activation-provider-hint",
+            "channel-env-vars",
+            "provider-auth-env-vars",
+          ],
+        },
       ],
     });
-    expectRecordFields(readRecordField(plugin, "packageInstall", "package install"), {
-      defaultChoice: "npm",
-      npm: {
-        spec: "@vendor/demo-plugin@1.2.3",
-        packageName: "@vendor/demo-plugin",
-        selector: "1.2.3",
-        selectorKind: "exact-version",
-        exactVersion: true,
-        expectedIntegrity: "sha512-demo",
-        pinState: "exact-with-integrity",
-      },
-      warnings: [],
-    });
-    expectRecordFields(readRecordField(plugin, "packageChannel", "package channel"), {
-      id: "demo",
-      label: "Demo",
-      blurb: "Demo channel",
-      preferOver: ["legacy-demo"],
-      commands: {
-        nativeCommandsAutoEnabled: true,
-        nativeSkillsAutoEnabled: false,
-      },
-    });
-    expectSha256(plugin.manifestHash);
-    const packageJson = requireRecord(index.plugins[0]?.packageJson, "package json");
-    expectRecordFields(packageJson, {
+    expect(index.plugins[0]?.manifestHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(index.plugins[0]?.packageJson).toMatchObject({
       path: "package.json",
+      hash: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    expectSha256(packageJson.hash);
     expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toBeUndefined();
   });
@@ -292,11 +262,13 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "migration-plugin",
       enabledByDefault: true,
+      startup: {
+        sidecar: false,
+      },
     });
-    expect(index.plugins[0]?.startup.sidecar).toBe(false);
   });
 
   it("does not classify legacy plugins as startup sidecars", () => {
@@ -316,11 +288,13 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "legacy-sidecar",
+      startup: {
+        sidecar: false,
+      },
       compat: [],
     });
-    expect(index.plugins[0]?.startup.sidecar).toBe(false);
   });
 
   it("tolerates stale manifest records without normalized channels", () => {
@@ -350,11 +324,13 @@ describe("installed plugin index", () => {
       installRecords: {},
     });
 
-    expectRecordFields(requireRecord(records[0], "installed plugin record"), {
+    expect(records[0]).toMatchObject({
       pluginId: "stale-record",
+      startup: {
+        sidecar: false,
+      },
       compat: [],
     });
-    expect(records[0]?.startup.sidecar).toBe(false);
   });
 
   it("indexes manifestless Claude bundles without missing-manifest diagnostics", () => {
@@ -375,15 +351,14 @@ describe("installed plugin index", () => {
     });
 
     expect(index.diagnostics).toStrictEqual([]);
-    const plugin = requireRecord(index.plugins[0], "installed plugin record");
-    expectRecordFields(plugin, {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "workspace",
       manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
+      manifestHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
       source: rootDir,
       format: "bundle",
       bundleFormat: "claude",
     });
-    expectSha256(plugin.manifestHash);
   });
 
   it("changes manifestless Claude bundle hashes when derived metadata changes", () => {
@@ -440,11 +415,13 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "modern-inert",
+      startup: {
+        sidecar: false,
+      },
       compat: [],
     });
-    expect(index.plugins[0]?.startup.sidecar).toBe(false);
   });
 
   it("classifies explicit startup activation as a gateway startup sidecar", () => {
@@ -468,10 +445,12 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "explicit-startup-provider",
+      startup: {
+        sidecar: true,
+      },
     });
-    expect(index.plugins[0]?.startup.sidecar).toBe(true);
   });
 
   it("keeps bundle format metadata needed for manifest reconstruction", () => {
@@ -499,7 +478,7 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "claude-bundle",
       format: "bundle",
       bundleFormat: "claude",
@@ -529,7 +508,9 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expect(index.plugins[0]?.packageJson?.path).toBe("package.json");
+    expect(index.plugins[0]?.packageJson).toMatchObject({
+      path: "package.json",
+    });
   });
 
   it("exposes cold registry records for existing plugins without plugin runtimes", () => {
@@ -544,7 +525,7 @@ describe("installed plugin index", () => {
       "demo",
     ]);
     const record = getInstalledPluginRecord(index, "demo");
-    expectRecordFields(requireRecord(record, "installed plugin record"), {
+    expect(record).toMatchObject({
       pluginId: "demo",
       enabled: true,
     });
@@ -579,13 +560,10 @@ describe("installed plugin index", () => {
       },
     };
     expect(listEnabledInstalledPluginRecords(index, config)).toStrictEqual([]);
-    expectRecordFields(
-      requireRecord(getInstalledPluginRecord(index, "demo"), "installed plugin record"),
-      {
-        pluginId: "demo",
-        enabled: false,
-      },
-    );
+    expect(getInstalledPluginRecord(index, "demo")).toMatchObject({
+      pluginId: "demo",
+      enabled: false,
+    });
     expect(isInstalledPluginEnabled(index, "demo", config)).toBe(false);
   });
 
@@ -652,7 +630,7 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expectRecordFields(requireRecord(index.plugins[0], "installed plugin record"), {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "openai",
       enabled: false,
     });
@@ -681,7 +659,7 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expect(index.installRecords).toEqual({
+    expect(index.installRecords).toMatchObject({
       demo: {
         source: "npm",
         spec: "@vendor/demo-plugin@latest",
@@ -695,22 +673,15 @@ describe("installed plugin index", () => {
         installedAt: "2026-04-25T11:01:00.000Z",
       },
     });
-    expectRecordFields(
-      readRecordField(
-        readRecordField(
-          requireRecord(index.plugins[0], "installed plugin record"),
-          "packageInstall",
-          "package install",
-        ),
-        "npm",
-        "npm package install",
-      ),
-      {
-        spec: "@vendor/demo-plugin@1.2.3",
-        expectedIntegrity: "sha512-demo",
-        pinState: "exact-with-integrity",
+    expect(index.plugins[0]).toMatchObject({
+      packageInstall: {
+        npm: {
+          spec: "@vendor/demo-plugin@1.2.3",
+          expectedIntegrity: "sha512-demo",
+          pinState: "exact-with-integrity",
+        },
       },
-    );
+    });
     expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
   });
@@ -751,20 +722,19 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expect(index.installRecords).toEqual({
+    expect(index.installRecords).toMatchObject({
       "duplicate-demo": {
         source: "npm",
         installPath: globalDir,
       },
     });
     expect(index.plugins).toHaveLength(1);
-    const plugin = requireRecord(index.plugins[0], "installed plugin record");
-    expectRecordFields(plugin, {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "duplicate-demo",
       origin: "global",
       rootDir: globalDir,
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    expectSha256(plugin.installRecordHash);
   });
 
   it("indexes npm plugin index records written before a process reload", () => {
@@ -794,12 +764,11 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    const plugin = requireRecord(index.plugins[0], "installed plugin record");
-    expectRecordFields(plugin, {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "demo",
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    expectSha256(plugin.installRecordHash);
-    expect(index.installRecords).toEqual({
+    expect(index.installRecords).toMatchObject({
       demo: {
         source: "npm",
         spec: "@vendor/demo-plugin@latest",
@@ -840,12 +809,11 @@ describe("installed plugin index", () => {
       installRecords: loadInstalledPluginIndexInstallRecordsSync({ stateDir }),
     });
 
-    const plugin = requireRecord(index.plugins[0], "installed plugin record");
-    expectRecordFields(plugin, {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "demo",
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    expectSha256(plugin.installRecordHash);
-    expect(index.installRecords).toEqual({
+    expect(index.installRecords).toMatchObject({
       demo: {
         source: "npm",
         spec: "@vendor/demo-plugin@1.2.3",
@@ -881,19 +849,16 @@ describe("installed plugin index", () => {
     });
 
     expect(index.plugins).toHaveLength(1);
-    const plugin = requireRecord(index.plugins[0], "installed plugin record");
-    expectRecordFields(plugin, {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "demo",
       origin: "global",
       rootDir: fs.realpathSync.native(fixture.rootDir),
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    expectSha256(plugin.installRecordHash);
-    expect(index.installRecords).toEqual({
+    expect(index.installRecords).toMatchObject({
       demo: {
         source: "git",
-        spec: "git:file:///tmp/demo.git@abc123",
         installPath: fixture.rootDir,
-        gitUrl: "file:///tmp/demo.git",
         gitCommit: "abc123",
       },
     });
@@ -919,12 +884,11 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    const plugin = requireRecord(index.plugins[0], "installed plugin record");
-    expectRecordFields(plugin, {
+    expect(index.plugins[0]).toMatchObject({
       pluginId: "demo",
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    expectSha256(plugin.installRecordHash);
-    expect(index.installRecords).toEqual({
+    expect(index.installRecords).toMatchObject({
       demo: {
         source: "path",
         sourcePath: "./plugins/demo",

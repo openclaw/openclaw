@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -680,10 +680,7 @@ export class DiscordVoiceManager {
       logVoiceVerbose(
         `realtime barge-in: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
-      logger.info(
-        `discord voice: realtime barge-in detected source=speaker-start guild=${entry.guildId} channel=${entry.channelId} user=${userId} playerStatus=${entry.player.state.status}`,
-      );
-      realtime.handleBargeIn("speaker-start");
+      realtime.handleBargeIn();
     }
     this.enableDaveReceivePassthrough(
       entry,

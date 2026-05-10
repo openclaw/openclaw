@@ -332,12 +332,12 @@ export async function noteChannelPrimer(
   );
   await prompter.note(
     [
-      "Inbound DM safety defaults to pairing: unknown senders get a pairing code first.",
+      "DM security: default is pairing; unknown DMs get a pairing code.",
       `Approve with: ${formatCliCommand("openclaw pairing approve <channel> <code>")}`,
-      'Open/public DMs require dmPolicy="open" plus allowFrom=["*"].',
-      "For multi-user DMs, isolate sessions with: " +
+      'Public DMs require dmPolicy="open" + allowFrom=["*"].',
+      "Multi-user DMs: run: " +
         formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
-        ' (or "per-account-channel-peer" for multi-account channels).',
+        ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
       `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
       "",
       ...channelLines,

@@ -25,9 +25,6 @@ export type SessionStdin = {
   // When backed by a real Node stream (child.stdin), this exists; for PTY wrappers it may not.
   destroy?: () => void;
   destroyed?: boolean;
-  writable?: boolean;
-  writableEnded?: boolean;
-  writableFinished?: boolean;
 };
 
 export interface ProcessSession {

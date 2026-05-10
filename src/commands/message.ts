@@ -2,7 +2,6 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
@@ -59,11 +58,7 @@ export async function messageCommand(
     (name) => normalizeLowercaseStringOrEmpty(name) === normalizedActionInput,
   );
   if (!actionMatch) {
-    throw new Error(
-      `Unknown message action "${actionInput}". Use one of ${CHANNEL_MESSAGE_ACTION_NAMES.join(
-        ", ",
-      )}. Example: ${formatCliCommand("openclaw message send --channel <channel> --target <id> --text <message>")}.`,
-    );
+    throw new Error(`Unknown message action: ${actionInput}`);
   }
   const action = actionMatch as ChannelMessageActionName;
 

@@ -5,8 +5,7 @@ import {
   type SourceReplyDeliveryModeContext,
 } from "../../auto-reply/reply/source-reply-delivery-mode.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getLoadedChannelPluginForRead } from "../plugins/registry-loaded-read.js";
-import { normalizeAnyChannelId } from "../registry-normalize.js";
+import { getChannelPlugin, normalizeChannelId } from "../plugins/index.js";
 import {
   createReplyPrefixContext,
   createReplyPrefixOptions,
@@ -53,16 +52,16 @@ export function createChannelReplyPipeline(
   params: CreateChannelReplyPipelineParams,
 ): ChannelReplyPipeline {
   const channelId = params.channel
-    ? (normalizeAnyChannelId(params.channel) ?? params.channel)
+    ? (normalizeChannelId(params.channel) ?? params.channel)
     : undefined;
-  let plugin: ReturnType<typeof getLoadedChannelPluginForRead> | undefined;
+  let plugin: ReturnType<typeof getChannelPlugin> | undefined;
   let pluginTransformResolved = false;
   const resolvePluginTransform = () => {
     if (pluginTransformResolved) {
       return plugin?.messaging?.transformReplyPayload;
     }
     pluginTransformResolved = true;
-    plugin = channelId ? getLoadedChannelPluginForRead(channelId) : undefined;
+    plugin = channelId ? getChannelPlugin(channelId) : undefined;
     return plugin?.messaging?.transformReplyPayload;
   };
   const transformReplyPayload = params.transformReplyPayload

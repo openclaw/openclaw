@@ -5,13 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { __testing, cleanupLegacyPluginDependencyState } from "./plugin-dependency-cleanup.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected path to be missing: ${targetPath}`);
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 describe("cleanupLegacyPluginDependencyState", () => {
@@ -75,13 +69,17 @@ describe("cleanupLegacyPluginDependencyState", () => {
       STATE_DIRECTORY: stateDirectory,
     };
     const targets = await __testing.collectLegacyPluginDependencyTargets(env, { packageRoot });
-    expect(targets).toContain(legacyRuntimeRoot);
-    expect(targets).toContain(legacyLocalRoot);
-    expect(targets).toContain(legacyExtensionNodeModules);
-    expect(targets).toContain(legacyExtensionStamp);
-    expect(targets).toContain(legacyManifest);
-    expect(targets).toContain(explicitStageDir);
-    expect(targets).toContain(path.join(stateDirectory, "plugin-runtime-deps"));
+    expect(targets).toEqual(
+      expect.arrayContaining([
+        legacyRuntimeRoot,
+        legacyLocalRoot,
+        legacyExtensionNodeModules,
+        legacyExtensionStamp,
+        legacyManifest,
+        explicitStageDir,
+        path.join(stateDirectory, "plugin-runtime-deps"),
+      ]),
+    );
     expect(targets).not.toContain(thirdPartyNodeModules);
 
     const result = await cleanupLegacyPluginDependencyState({ env, packageRoot });

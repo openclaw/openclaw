@@ -147,7 +147,6 @@ export async function executeNodeHostCommand(
       const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
         approvalId,
         sessionKey: params.notifySessionKey ?? params.sessionKey,
-        bashElevated: params.bashElevated,
         turnSourceChannel: params.turnSourceChannel,
         turnSourceTo: params.turnSourceTo,
         turnSourceAccountId: params.turnSourceAccountId,
@@ -219,10 +218,6 @@ export async function executeNodeHostCommand(
               cwd: prepared.cwd,
               agentId: prepared.agentId,
               sessionKey: prepared.sessionKey,
-              turnSourceChannel: params.turnSourceChannel,
-              turnSourceTo: params.turnSourceTo,
-              turnSourceAccountId: params.turnSourceAccountId,
-              turnSourceThreadId: params.turnSourceThreadId,
               approved: approvedByAsk,
               approvalDecision:
                 approvalDecision === "allow-always" && inlineEvalHit !== null

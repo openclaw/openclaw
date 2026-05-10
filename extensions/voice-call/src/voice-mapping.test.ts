@@ -27,6 +27,8 @@ describe("voice mapping", () => {
     expect(isOpenAiVoice("nova")).toBe(true);
     expect(isOpenAiVoice("NOVA")).toBe(true);
     expect(isOpenAiVoice("Polly.Joanna")).toBe(false);
-    expect(getOpenAiVoiceNames()).toEqual(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]);
+    expect(getOpenAiVoiceNames()).toEqual(
+      expect.arrayContaining(["alloy", "echo", "fable", "nova", "onyx", "shimmer"]),
+    );
   });
 });

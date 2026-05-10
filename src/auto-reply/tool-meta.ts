@@ -24,12 +24,9 @@ export function formatToolAggregate(
 ): string {
   const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
   const display = resolveToolDisplay({ name: toolName });
-  const normalizedToolName = normalizeLowercaseStringOrEmpty(toolName);
-  const compactCommandSummary =
-    filtered.length > 0 && (normalizedToolName === "exec" || normalizedToolName === "bash");
-  const prefix = compactCommandSummary ? display.emoji : `${display.emoji} ${display.label}`;
+  const prefix = `${display.emoji} ${display.label}`;
   if (!filtered.length) {
-    return `${display.emoji} ${display.label}`;
+    return prefix;
   }
 
   const rawSegments: string[] = [];
@@ -70,8 +67,7 @@ export function formatToolAggregate(
 
   const allSegments = [...rawSegments, ...segments];
   const meta = allSegments.join("; ");
-  const formattedMeta = formatMetaForDisplay(toolName, meta, options?.markdown);
-  return compactCommandSummary ? `${prefix} ${formattedMeta}` : `${prefix}: ${formattedMeta}`;
+  return `${prefix}: ${formatMetaForDisplay(toolName, meta, options?.markdown)}`;
 }
 
 export function formatToolPrefix(toolName?: string, meta?: string) {

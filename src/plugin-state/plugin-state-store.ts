@@ -1,5 +1,4 @@
 import {
-  clearPluginStateSqliteStoreForTests,
   closePluginStateSqliteStore,
   MAX_PLUGIN_STATE_VALUE_BYTES,
   pluginStateClear,
@@ -296,14 +295,7 @@ export function createCorePluginStateKeyedStore<T>(
   return createKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
-export function clearPluginStateStoreForTests(): void {
-  clearPluginStateSqliteStoreForTests();
-  namespaceOptionSignatures.clear();
-}
-
-export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean } = {}): void {
-  if (options.closeDatabase !== false) {
-    closePluginStateSqliteStore();
-  }
+export function resetPluginStateStoreForTests(): void {
+  closePluginStateSqliteStore();
   namespaceOptionSignatures.clear();
 }

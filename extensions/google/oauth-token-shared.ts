@@ -1,4 +1,4 @@
-import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 
 type GoogleOauthApiKeyCredential = {
   type?: string;

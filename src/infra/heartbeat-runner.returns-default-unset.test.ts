@@ -163,60 +163,6 @@ const createCaseDir = async (prefix: string) => {
   return dir;
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function expectWhatsAppSendCall(
-  sendWhatsApp: ReturnType<typeof vi.fn>,
-  index: number,
-  fields: { to: string; text: string },
-) {
-  const call = sendWhatsApp.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected WhatsApp send call ${index}`);
-  }
-  expect(call[0]).toBe(fields.to);
-  expect(call[1]).toBe(fields.text);
-  requireRecord(call[2], `WhatsApp send call ${index} options`);
-}
-
-function expectReplyCall(
-  replySpy: ReturnType<typeof vi.fn>,
-  index: number,
-  bodyFields: Record<string, unknown>,
-  optionsFields?: Record<string, unknown>,
-  cfg?: OpenClawConfig,
-) {
-  const call = replySpy.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected reply call ${index}`);
-  }
-  const body = requireRecord(call[0], `reply call ${index} body`);
-  for (const [key, value] of Object.entries(bodyFields)) {
-    if (value instanceof RegExp) {
-      expect(String(body[key])).toMatch(value);
-    } else {
-      expect(body[key]).toEqual(value);
-    }
-  }
-  if (optionsFields) {
-    expectRecordFields(requireRecord(call[1], `reply call ${index} options`), optionsFields);
-  }
-  if (cfg) {
-    expect(call[2]).toBe(cfg);
-  }
-}
-
 beforeAll(async () => {
   previousRegistry = getActivePluginRegistry();
 
@@ -763,10 +709,11 @@ describe("runHeartbeatOnce", () => {
       });
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expectWhatsAppSendCall(sendWhatsApp, 0, {
-        to: "120363401234567890@g.us",
-        text: "Final alert",
-      });
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Final alert",
+        expect.any(Object),
+      );
     } finally {
       replySpy.mockReset();
     }
@@ -826,14 +773,13 @@ describe("runHeartbeatOnce", () => {
         deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
       });
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expectWhatsAppSendCall(sendWhatsApp, 0, {
-        to: "120363401234567890@g.us",
-        text: "Final alert",
-      });
-      expectReplyCall(
-        replySpy,
-        0,
-        {
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Final alert",
+        expect.any(Object),
+      );
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
           Body: expect.stringMatching(/Ops check[\s\S]*Current time: /),
           SessionKey: sessionKey,
           From: "120363401234567890@g.us",
@@ -841,8 +787,8 @@ describe("runHeartbeatOnce", () => {
           OriginatingChannel: "whatsapp",
           OriginatingTo: "120363401234567890@g.us",
           Provider: "heartbeat",
-        },
-        { isHeartbeat: true, suppressToolErrorWarnings: false },
+        }),
+        expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
         cfg,
       );
     } finally {
@@ -915,20 +861,19 @@ describe("runHeartbeatOnce", () => {
 
       expect(result.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expectWhatsAppSendCall(sendWhatsApp, 0, {
-        to: "120363401234567890@g.us",
-        text: "Final alert",
-      });
-      expectReplyCall(
-        replySpy,
-        0,
-        {
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Final alert",
+        expect.any(Object),
+      );
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
           SessionKey: sessionKey,
           From: "120363401234567890@g.us",
           To: "120363401234567890@g.us",
           Provider: "heartbeat",
-        },
-        { isHeartbeat: true, suppressToolErrorWarnings: false },
+        }),
+        expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
         cfg,
       );
     } finally {
@@ -1028,17 +973,15 @@ describe("runHeartbeatOnce", () => {
         });
 
         expect(sendWhatsApp, name).toHaveBeenCalledTimes(1);
-        expectWhatsAppSendCall(sendWhatsApp, 0, { to: peerId, text: message });
-        expectReplyCall(
-          replySpy,
-          0,
-          {
+        expect(sendWhatsApp, name).toHaveBeenCalledWith(peerId, message, expect.any(Object));
+        expect(replySpy, name).toHaveBeenCalledWith(
+          expect.objectContaining({
             SessionKey: overrideSessionKey,
             From: peerId,
             To: peerId,
             Provider: "heartbeat",
-          },
-          { isHeartbeat: true, suppressToolErrorWarnings: false },
+          }),
+          expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
           cfg,
         );
       } finally {
@@ -1119,13 +1062,21 @@ describe("runHeartbeatOnce", () => {
       });
 
       // The heartbeat must use the main session, not the subagent session.
-      expectReplyCall(replySpy, 0, { SessionKey: mainSessionKey });
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: mainSessionKey,
+        }),
+        expect.anything(),
+        expect.anything(),
+      );
       // Must NOT use the subagent session key.
-      expect(
-        replySpy.mock.calls.some(
-          ([body]) => requireRecord(body, "reply body").SessionKey === subagentKey,
-        ),
-      ).toBe(false);
+      expect(replySpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: subagentKey,
+        }),
+        expect.anything(),
+        expect.anything(),
+      );
     } finally {
       replySpy.mockReset();
     }
@@ -1268,10 +1219,12 @@ describe("runHeartbeatOnce", () => {
 
         expect(sendWhatsApp, name).toHaveBeenCalledTimes(expectedTexts.length);
         for (const [index, text] of expectedTexts.entries()) {
-          expectWhatsAppSendCall(sendWhatsApp, index, {
-            to: "120363401234567890@g.us",
+          expect(sendWhatsApp, name).toHaveBeenNthCalledWith(
+            index + 1,
+            "120363401234567890@g.us",
             text,
-          });
+            expect.any(Object),
+          );
         }
       } finally {
         replySpy.mockReset();
@@ -1330,10 +1283,11 @@ describe("runHeartbeatOnce", () => {
       });
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expectWhatsAppSendCall(sendWhatsApp, 0, {
-        to: "120363401234567890@g.us",
-        text: "Hello from heartbeat",
-      });
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Hello from heartbeat",
+        expect.any(Object),
+      );
     } finally {
       replySpy.mockReset();
     }

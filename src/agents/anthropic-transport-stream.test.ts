@@ -74,30 +74,6 @@ function latestAnthropicRequestHeaders() {
   return new Headers(latestAnthropicRequest().init?.headers);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value;
-}
-
-function findRecord(items: unknown, predicate: (record: Record<string, unknown>) => boolean) {
-  for (const item of requireArray(items, "items")) {
-    const record = requireRecord(item, "item");
-    if (predicate(record)) {
-      return record;
-    }
-  }
-  throw new Error("Expected matching record");
-}
-
 function makeAnthropicTransportModel(
   params: {
     id?: string;
@@ -178,19 +154,25 @@ describe("anthropic transport stream", () => {
     );
 
     expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model);
-    const [url, init] = guardedFetchMock.mock.calls[0] ?? [];
-    expect(url).toBe("https://api.anthropic.com/v1/messages");
-    expect(init?.method).toBe("POST");
-    const headers = new Headers(init?.headers);
-    expect(headers.get("x-api-key")).toBe("sk-ant-api");
-    expect(headers.get("anthropic-version")).toBe("2023-06-01");
-    expect(headers.get("content-type")).toBe("application/json");
-    expect(headers.get("accept")).toBe("application/json");
-    expect(headers.get("anthropic-dangerous-direct-browser-access")).toBe("true");
-    expect(headers.get("X-Provider")).toBe("anthropic");
-    expect(headers.get("X-Call")).toBe("1");
-    expect(latestAnthropicRequest().payload.model).toBe("claude-sonnet-4-6");
-    expect(latestAnthropicRequest().payload.stream).toBe(true);
+    expect(guardedFetchMock).toHaveBeenCalledWith(
+      "https://api.anthropic.com/v1/messages",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "x-api-key": "sk-ant-api",
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+          accept: "application/json",
+          "anthropic-dangerous-direct-browser-access": "true",
+          "X-Provider": "anthropic",
+          "X-Call": "1",
+        }),
+      }),
+    );
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      model: "claude-sonnet-4-6",
+      stream: true,
+    });
     expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
       "fine-grained-tool-streaming-2025-05-14",
     );
@@ -212,8 +194,10 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    expect(guardedFetchMock.mock.calls[0]?.[0]).toBe("https://custom-proxy.example/v1/messages");
-    expect(guardedFetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(guardedFetchMock).toHaveBeenCalledWith(
+      "https://custom-proxy.example/v1/messages",
+      expect.objectContaining({ method: "POST" }),
+    );
     expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
   });
 
@@ -294,9 +278,11 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    expect(latestAnthropicRequest().payload.model).toBe("claude-sonnet-4-6");
-    expect(latestAnthropicRequest().payload.max_tokens).toBe(8192);
-    expect(latestAnthropicRequest().payload.stream).toBe(true);
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8192,
+      stream: true,
+    });
   });
 
   it("ignores fractional runtime maxTokens overrides that floor to zero", async () => {
@@ -311,9 +297,11 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    expect(latestAnthropicRequest().payload.model).toBe("claude-sonnet-4-6");
-    expect(latestAnthropicRequest().payload.max_tokens).toBe(8192);
-    expect(latestAnthropicRequest().payload.stream).toBe(true);
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8192,
+      stream: true,
+    });
   });
 
   it("fails locally when Anthropic maxTokens is non-positive after resolution", async () => {
@@ -439,31 +427,33 @@ describe("anthropic transport stream", () => {
     );
     const result = await stream.result();
 
-    expect(guardedFetchMock.mock.calls[0]?.[0]).toBe("https://api.anthropic.com/v1/messages");
-    const headers = new Headers(guardedFetchMock.mock.calls[0]?.[1]?.headers);
-    expect(headers.get("authorization")).toBe("Bearer sk-ant-oat-example");
-    expect(headers.get("x-app")).toBe("cli");
-    expect(headers.get("user-agent")).toContain("claude-cli/");
+    expect(guardedFetchMock).toHaveBeenCalledWith(
+      "https://api.anthropic.com/v1/messages",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          authorization: "Bearer sk-ant-oat-example",
+          "x-app": "cli",
+          "user-agent": expect.stringContaining("claude-cli/"),
+        }),
+      }),
+    );
     const firstCallParams = latestAnthropicRequest().payload;
-    const system = requireArray(firstCallParams.system, "system");
-    expect(
-      system.some(
-        (item) =>
-          requireRecord(item, "system item").text ===
-          "You are Claude Code, Anthropic's official CLI for Claude.",
-      ),
-    ).toBe(true);
-    expect(
-      system.some((item) => requireRecord(item, "system item").text === "Follow policy."),
-    ).toBe(true);
-    expect(
-      requireArray(firstCallParams.tools, "tools").some(
-        (item) => requireRecord(item, "tool").name === "Read",
-      ),
-    ).toBe(true);
+    expect(firstCallParams.system).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          text: "You are Claude Code, Anthropic's official CLI for Claude.",
+        }),
+        expect.objectContaining({
+          text: "Follow policy.",
+        }),
+      ]),
+    );
+    expect(firstCallParams.tools).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "Read" })]),
+    );
     expect(result.stopReason).toBe("toolUse");
-    expect(result.content.some((item) => item.type === "toolCall" && item.name === "read")).toBe(
-      true,
+    expect(result.content).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "toolCall", name: "read" })]),
     );
   });
 
@@ -526,16 +516,19 @@ describe("anthropic transport stream", () => {
     }
     const result = await stream.result();
 
-    const thinkingContent = requireRecord(result.content[0], "thinking content");
-    expect(thinkingContent.type).toBe("thinking");
-    expect(thinkingContent.thinking).toBe("checking");
-    expect(thinkingContent.thinkingSignature).toBe("sig_2");
-    expect(result.content[1]).toEqual({ type: "text", text: "NO_REPLY" });
-    expect(events.some((event) => event.type === "text_delta" && event.delta === "NO_REPLY")).toBe(
-      true,
-    );
-    expect(events.some((event) => event.type === "text_end" && event.content === "NO_REPLY")).toBe(
-      true,
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "thinking",
+        thinking: "checking",
+        thinkingSignature: "sig_2",
+      }),
+      { type: "text", text: "NO_REPLY" },
+    ]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "text_delta", delta: "NO_REPLY" }),
+        expect.objectContaining({ type: "text_end", content: "NO_REPLY" }),
+      ]),
     );
     expect(result.usage.output).toBe(9);
   });
@@ -590,12 +583,12 @@ describe("anthropic transport stream", () => {
 
     expect(result.content).toEqual([{ type: "text", text: "你好" }]);
     expect(result.stopReason).toBe("stop");
-    expect(events.some((event) => event.type === "text_start")).toBe(true);
-    expect(events.some((event) => event.type === "text_delta" && event.delta === "你好")).toBe(
-      true,
-    );
-    expect(events.some((event) => event.type === "text_end" && event.content === "你好")).toBe(
-      true,
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "text_start" }),
+        expect.objectContaining({ type: "text_delta", delta: "你好" }),
+        expect.objectContaining({ type: "text_end", content: "你好" }),
+      ]),
     );
   });
 
@@ -628,13 +621,16 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    const tools = requireArray(latestAnthropicRequest().payload.tools, "tools");
-    expect(tools).toHaveLength(1);
-    const tool = requireRecord(tools[0], "tool");
-    expect(tool.name).toBe("good_plugin_tool");
-    expect(requireRecord(tool.input_schema, "input schema").properties).toEqual({
-      query: { type: "string" },
-    });
+    expect(latestAnthropicRequest().payload.tools).toEqual([
+      expect.objectContaining({
+        name: "good_plugin_tool",
+        input_schema: expect.objectContaining({
+          properties: {
+            query: { type: "string" },
+          },
+        }),
+      }),
+    ]);
   });
 
   it("coerces replayed malformed tool-call args to an object for Anthropic payloads", async () => {
@@ -678,15 +674,20 @@ describe("anthropic transport stream", () => {
     await stream.result();
 
     const firstCallParams = latestAnthropicRequest().payload;
-    const assistantMessage = findRecord(
-      firstCallParams.messages,
-      (record) => record.role === "assistant",
+    expect(firstCallParams.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_use",
+              name: "lookup",
+              input: {},
+            }),
+          ]),
+        }),
+      ]),
     );
-    const toolUse = findRecord(
-      assistantMessage.content,
-      (record) => record.type === "tool_use" && record.name === "lookup",
-    );
-    expect(toolUse.input).toEqual({});
   });
 
   it.each([
@@ -720,16 +721,21 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    const userMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "user",
+    expect(latestAnthropicRequest().payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_result",
+              tool_use_id: "tool_1",
+              content: "(no output)",
+              is_error: false,
+            }),
+          ]),
+        }),
+      ]),
     );
-    const toolResult = findRecord(
-      userMessage.content,
-      (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
-    );
-    expect(toolResult.content).toBe("(no output)");
-    expect(toolResult.is_error).toBe(false);
   });
 
   it("drops empty text blocks from image tool results before Anthropic payloads", async () => {
@@ -764,26 +770,31 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    const userMessage = findRecord(
-      latestAnthropicRequest().payload.messages,
-      (record) => record.role === "user",
+    expect(latestAnthropicRequest().payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_result",
+              tool_use_id: "tool_1",
+              content: [
+                { type: "text", text: "(see attached image)" },
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: imageData,
+                  },
+                },
+              ],
+              is_error: false,
+            }),
+          ]),
+        }),
+      ]),
     );
-    const toolResult = findRecord(
-      userMessage.content,
-      (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
-    );
-    expect(toolResult.content).toEqual([
-      { type: "text", text: "(see attached image)" },
-      {
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: "image/png",
-          data: imageData,
-        },
-      },
-    ]);
-    expect(toolResult.is_error).toBe(false);
   });
 
   it("cancels stalled SSE body reads when the abort signal fires mid-stream", async () => {
@@ -862,9 +873,10 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive" });
-    expect(payload.output_config).toEqual({ effort: "max" });
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "max" },
+    });
   });
 
   it("maps xhigh thinking effort for Claude Opus 4.7 transport runs", async () => {
@@ -885,8 +897,9 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive" });
-    expect(payload.output_config).toEqual({ effort: "xhigh" });
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "xhigh" },
+    });
   });
 });

@@ -271,10 +271,6 @@ describe("executeNodeHostCommand", () => {
       warnings: [],
       agentId: "requested-agent",
       sessionKey: "requested-session",
-      turnSourceChannel: "telegram",
-      turnSourceTo: "telegram:12345",
-      turnSourceAccountId: "work",
-      turnSourceThreadId: "42",
     });
 
     expect(result.details?.status).toBe("approval-pending");
@@ -299,10 +295,6 @@ describe("executeNodeHostCommand", () => {
           approvalDecision: "allow-once",
           systemRunPlan: preparedPlan,
           timeoutMs: 30_000,
-          turnSourceChannel: "telegram",
-          turnSourceTo: "telegram:12345",
-          turnSourceAccountId: "work",
-          turnSourceThreadId: "42",
         }),
       }),
       { scopes: ["operator.write", "operator.approvals"] },

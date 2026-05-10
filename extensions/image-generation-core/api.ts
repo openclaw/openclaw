@@ -9,6 +9,7 @@ export {
   listImageGenerationProviders,
   normalizeGoogleModelId,
   OPENAI_DEFAULT_IMAGE_MODEL,
+  parseGeminiAuth,
   parseImageGenerationModelRef,
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,

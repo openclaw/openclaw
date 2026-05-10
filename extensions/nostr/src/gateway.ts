@@ -1,11 +1,12 @@
-import {
-  resolveStableChannelMessageIngress,
-  type StableChannelIngressIdentityParams,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { type ChannelOutboundAdapter, type ChannelPlugin } from "./channel-api.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  createPreCryptoDirectDmAuthorizer,
+  type ChannelOutboundAdapter,
+  resolveInboundDirectDmAccessWithRuntime,
+  type ChannelPlugin,
+} from "./channel-api.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
@@ -24,16 +25,6 @@ type NostrOutboundAdapter = Pick<
 
 const activeBuses = new Map<string, NostrBusHandle>();
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
-const ACCESS_GROUP_PREFIX = "accessGroup:";
-
-function parseNostrAccessGroupAllowFromEntry(entry: string): string | null {
-  const trimmed = entry.trim();
-  if (!trimmed.startsWith(ACCESS_GROUP_PREFIX)) {
-    return null;
-  }
-  const name = trimmed.slice(ACCESS_GROUP_PREFIX.length).trim();
-  return name || null;
-}
 
 function normalizeNostrAllowEntry(entry: string): string | null {
   const trimmed = entry.trim();
@@ -43,10 +34,6 @@ function normalizeNostrAllowEntry(entry: string): string | null {
   if (trimmed === "*") {
     return "*";
   }
-  const accessGroup = parseNostrAccessGroupAllowFromEntry(trimmed);
-  if (accessGroup) {
-    return `accessGroup:${accessGroup}`;
-  }
   try {
     return normalizePubkey(trimmed.replace(/^nostr:/i, ""));
   } catch {
@@ -54,21 +41,39 @@ function normalizeNostrAllowEntry(entry: string): string | null {
   }
 }
 
-function normalizeNostrSenderPubkey(value: string): string | null {
-  try {
-    return normalizePubkey(value);
-  } catch {
-    return null;
+function isNostrSenderAllowed(senderPubkey: string, allowFrom: string[]): boolean {
+  const normalizedSender = normalizePubkey(senderPubkey);
+  for (const entry of allowFrom) {
+    const normalized = normalizeNostrAllowEntry(entry);
+    if (normalized === "*" || normalized === normalizedSender) {
+      return true;
+    }
   }
+  return false;
 }
 
-const nostrIngressIdentity = {
-  key: "nostr-pubkey",
-  normalizeEntry: normalizeNostrAllowEntry,
-  normalizeSubject: normalizeNostrSenderPubkey,
-  sensitivity: "pii",
-  entryIdPrefix: "nostr-entry",
-} satisfies StableChannelIngressIdentityParams;
+async function resolveNostrDirectAccess(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  dmPolicy: "pairing" | "allowlist" | "open" | "disabled";
+  allowFrom: Array<string | number> | undefined;
+  senderPubkey: string;
+  rawBody: string;
+  runtime: Parameters<typeof resolveInboundDirectDmAccessWithRuntime>[0]["runtime"];
+}) {
+  return resolveInboundDirectDmAccessWithRuntime({
+    cfg: params.cfg,
+    channel: "nostr",
+    accountId: params.accountId,
+    dmPolicy: params.dmPolicy,
+    allowFrom: params.allowFrom,
+    senderId: params.senderPubkey,
+    rawBody: params.rawBody,
+    isSenderAllowed: isNostrSenderAllowed,
+    runtime: params.runtime,
+    modeWhenAccessGroupsOff: "configured",
+  });
+}
 
 export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
   const account = ctx.account;
@@ -89,59 +94,43 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     accountId: account.accountId,
   });
   const resolveInboundAccess = async (senderPubkey: string, rawBody: string) =>
-    await resolveStableChannelMessageIngress({
-      channelId: "nostr",
-      accountId: account.accountId,
-      identity: nostrIngressIdentity,
+    await resolveNostrDirectAccess({
       cfg: ctx.cfg,
-      useDefaultPairingStore: true,
-      subject: { stableId: senderPubkey },
-      conversation: {
-        kind: "direct",
-        id: senderPubkey,
-      },
+      accountId: account.accountId,
       dmPolicy: account.config.dmPolicy ?? "pairing",
       allowFrom: account.config.allowFrom,
-      command: runtime.channel.commands.shouldComputeCommandAuthorized(rawBody, ctx.cfg)
-        ? {
-            modeWhenAccessGroupsOff: "configured",
-          }
-        : undefined,
+      senderPubkey,
+      rawBody,
+      runtime: {
+        shouldComputeCommandAuthorized: runtime.channel.commands.shouldComputeCommandAuthorized,
+        resolveCommandAuthorizedFromAuthorizers:
+          runtime.channel.commands.resolveCommandAuthorizedFromAuthorizers,
+      },
     });
 
   let busHandle: NostrBusHandle | null = null;
 
-  const authorizeSender = async (input: {
-    senderId: string;
-    reply: (text: string) => Promise<void>;
-  }): Promise<"allow" | "block" | "pairing"> => {
-    const resolved = await resolveInboundAccess(input.senderId, "");
-    if (resolved.senderAccess.decision === "allow") {
-      return "allow";
-    }
-    if (resolved.senderAccess.decision === "pairing") {
+  const authorizeSender = createPreCryptoDirectDmAuthorizer({
+    resolveAccess: async (senderPubkey) => await resolveInboundAccess(senderPubkey, ""),
+    issuePairingChallenge: async ({ senderId, reply }) => {
       await pairing.issueChallenge({
-        senderId: input.senderId,
-        senderIdLine: `Your Nostr pubkey: ${input.senderId}`,
-        sendPairingReply: input.reply,
+        senderId,
+        senderIdLine: `Your Nostr pubkey: ${senderId}`,
+        sendPairingReply: reply,
         onCreated: () => {
-          ctx.log?.debug?.(`[${account.accountId}] nostr pairing request sender=${input.senderId}`);
+          ctx.log?.debug?.(`[${account.accountId}] nostr pairing request sender=${senderId}`);
         },
         onReplyError: (err) => {
           ctx.log?.warn?.(
-            `[${account.accountId}] nostr pairing reply failed for ${input.senderId}: ${String(
-              err,
-            )}`,
+            `[${account.accountId}] nostr pairing reply failed for ${senderId}: ${String(err)}`,
           );
         },
       });
-      return "pairing";
-    }
-    ctx.log?.debug?.(
-      `[${account.accountId}] blocked Nostr sender ${input.senderId} (${resolved.senderAccess.reasonCode})`,
-    );
-    return "block";
-  };
+    },
+    onBlocked: ({ senderId, reason }) => {
+      ctx.log?.debug?.(`[${account.accountId}] blocked Nostr sender ${senderId} (${reason})`);
+    },
+  });
 
   const bus = await startNostrBus({
     accountId: account.accountId,
@@ -151,9 +140,9 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
       await authorizeSender({ senderId: senderPubkey, reply }),
     onMessage: async (senderPubkey, text, reply, meta) => {
       const resolvedAccess = await resolveInboundAccess(senderPubkey, text);
-      if (resolvedAccess.senderAccess.decision !== "allow") {
+      if (resolvedAccess.access.decision !== "allow") {
         ctx.log?.warn?.(
-          `[${account.accountId}] dropping Nostr DM after preflight drift (${senderPubkey}, ${resolvedAccess.senderAccess.reasonCode})`,
+          `[${account.accountId}] dropping Nostr DM after preflight drift (${senderPubkey}, ${resolvedAccess.access.reason})`,
         );
         return;
       }
@@ -176,9 +165,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         rawBody: text,
         messageId: meta.eventId,
         timestamp: meta.createdAt * 1000,
-        commandAuthorized: resolvedAccess.commandAccess.requested
-          ? resolvedAccess.commandAccess.authorized
-          : undefined,
+        commandAuthorized: resolvedAccess.commandAuthorized,
         deliver: async (payload) => {
           const outboundText =
             payload && typeof payload === "object" && "text" in payload

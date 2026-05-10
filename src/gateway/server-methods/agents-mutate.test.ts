@@ -250,53 +250,6 @@ function makeCall(method: keyof typeof agentsHandlers, params: Record<string, un
   return { respond, promise };
 }
 
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
-function expectRespondOk(respond: ReturnType<typeof vi.fn>, expected: Record<string, unknown>) {
-  expect(mockCallArg(respond)).toBe(true);
-  const payload = expectRecordFields(mockCallArg(respond, 0, 1), expected);
-  expect(mockCallArg(respond, 0, 2)).toBeUndefined();
-  return payload;
-}
-
-function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: string) {
-  expect(mockCallArg(respond)).toBe(false);
-  expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-  const error = expectRecordFields(mockCallArg(respond, 0, 2), {});
-  expect(error.message).toEqual(expect.stringContaining(text));
-  return error;
-}
-
-function findMockCallArg(
-  mock: ReturnType<typeof vi.fn>,
-  predicate: (arg: Record<string, unknown>) => boolean,
-  argIndex = 0,
-) {
-  const call = mock.mock.calls.find((candidate) => {
-    const arg = candidate[argIndex];
-    return typeof arg === "object" && arg !== null && predicate(arg as Record<string, unknown>);
-  });
-  if (!call) {
-    throw new Error("Expected matching mock call");
-  }
-  return call[argIndex];
-}
-
 function createEnoentError() {
   const err = new Error("ENOENT") as NodeJS.ErrnoException;
   err.code = "ENOENT";
@@ -438,7 +391,11 @@ async function listAgentFileNames(agentId = "main") {
 }
 
 function expectNotFoundResponseAndNoWrite(respond: ReturnType<typeof vi.fn>) {
-  expectRespondErrorContaining(respond, "not found");
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ message: expect.stringContaining("not found") }),
+  );
   expect(mocks.writeConfigFile).not.toHaveBeenCalled();
 }
 
@@ -449,7 +406,11 @@ async function expectUnsafeWorkspaceFile(method: "agents.files.get" | "agents.fi
       : { agentId: "main", name: "AGENTS.md" };
   const { respond, promise } = makeCall(method, params);
   await promise;
-  expectRespondErrorContaining(respond, "unsafe workspace file");
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+  );
 }
 
 beforeEach(() => {
@@ -493,11 +454,15 @@ describe("agents.create", () => {
     });
     await promise;
 
-    expectRespondOk(respond, {
-      ok: true,
-      agentId: "test-agent",
-      name: "Test Agent",
-    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        agentId: "test-agent",
+        name: "Test Agent",
+      }),
+      undefined,
+    );
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalled();
     expect(mocks.writeConfigFile).toHaveBeenCalled();
   });
@@ -530,7 +495,11 @@ describe("agents.create", () => {
     });
     await promise;
 
-    expectRespondErrorContaining(respond, "reserved");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("reserved") }),
+    );
   });
 
   it("rejects creating a duplicate agent", async () => {
@@ -542,7 +511,11 @@ describe("agents.create", () => {
     });
     await promise;
 
-    expectRespondErrorContaining(respond, "already exists");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("already exists") }),
+    );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -552,7 +525,11 @@ describe("agents.create", () => {
     });
     await promise;
 
-    expectRespondErrorContaining(respond, "invalid");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("invalid") }),
+    );
   });
 
   it("writes identity to both config and IDENTITY.md", async () => {
@@ -562,13 +539,19 @@ describe("agents.create", () => {
     });
     await promise;
 
-    const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {});
-    expectRecordFields(configOptions.identity, { name: "Plain Agent" });
-    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
-      rootDir: "/resolved/tmp/ws",
-      relativePath: "IDENTITY.md",
-    });
-    expect(write.data).toEqual(expect.stringContaining("- Name: Plain Agent"));
+    expect(mocks.applyAgentConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        identity: expect.objectContaining({ name: "Plain Agent" }),
+      }),
+    );
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/resolved/tmp/ws",
+        relativePath: "IDENTITY.md",
+        data: expect.stringContaining("- Name: Plain Agent"),
+      }),
+    );
   });
 
   it("writes emoji and avatar to both config and IDENTITY.md", async () => {
@@ -580,18 +563,22 @@ describe("agents.create", () => {
     });
     await promise;
 
-    const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {});
-    expectRecordFields(configOptions.identity, {
-      name: "Fancy Agent",
-      emoji: "🤖",
-      avatar: "https://example.com/avatar.png",
-    });
-    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
-      rootDir: "/resolved/tmp/ws",
-      relativePath: "IDENTITY.md",
-    });
-    expect(write.data).toEqual(
-      expect.stringMatching(/- Name: Fancy Agent[\s\S]*- Emoji: 🤖[\s\S]*- Avatar:/),
+    expect(mocks.applyAgentConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        identity: expect.objectContaining({
+          name: "Fancy Agent",
+          emoji: "🤖",
+          avatar: "https://example.com/avatar.png",
+        }),
+      }),
+    );
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/resolved/tmp/ws",
+        relativePath: "IDENTITY.md",
+        data: expect.stringMatching(/- Name: Fancy Agent[\s\S]*- Emoji: 🤖[\s\S]*- Avatar:/),
+      }),
     );
   });
 
@@ -606,7 +593,11 @@ describe("agents.create", () => {
     });
     await promise;
 
-    expectRespondErrorContaining(respond, "unsafe workspace file");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -628,7 +619,7 @@ describe("agents.create", () => {
       workspace: "/tmp/ws",
     });
 
-    await expect(promise).rejects.toHaveProperty("code", "EACCES");
+    await expect(promise).rejects.toMatchObject({ code: "EACCES" });
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.rootWrite).not.toHaveBeenCalled();
   });
@@ -648,7 +639,13 @@ describe("agents.create", () => {
     });
     await promise;
 
-    expectRespondErrorContaining(respond, 'unsafe workspace file "IDENTITY.md"');
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining('unsafe workspace file "IDENTITY.md"'),
+      }),
+    );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.rootWrite).not.toHaveBeenCalled();
   });
@@ -665,10 +662,12 @@ describe("agents.create", () => {
     });
     await promise;
 
-    expectRecordFields(mockCallArg(rootRead), {
-      relativePath: "IDENTITY.md",
-      nonBlockingRead: true,
-    });
+    expect(rootRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relativePath: "IDENTITY.md",
+        nonBlockingRead: true,
+      }),
+    );
   });
 
   it("passes model to applyAgentConfig when provided", async () => {
@@ -679,8 +678,15 @@ describe("agents.create", () => {
     });
     await promise;
 
-    expectRespondOk(respond, { ok: true, model: "sonnet-4.6" });
-    expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), { model: "sonnet-4.6" });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, model: "sonnet-4.6" }),
+      undefined,
+    );
+    expect(mocks.applyAgentConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ model: "sonnet-4.6" }),
+    );
   });
 });
 
@@ -753,19 +759,23 @@ describe("agents.update", () => {
     });
     await promise;
 
-    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-    const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {});
-    expectRecordFields(configOptions.identity, {
-      avatar: "https://example.com/avatar.png",
-    });
-    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
-      rootDir: "/workspace/test-agent",
-      relativePath: "IDENTITY.md",
-    });
-    expect(write.data).toEqual(
-      expect.stringMatching(
-        /- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🐢[\s\S]*- Avatar: https:\/\/example\.com\/avatar\.png/,
-      ),
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
+    expect(mocks.applyAgentConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        identity: expect.objectContaining({
+          avatar: "https://example.com/avatar.png",
+        }),
+      }),
+    );
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/workspace/test-agent",
+        relativePath: "IDENTITY.md",
+        data: expect.stringMatching(
+          /- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🐢[\s\S]*- Avatar: https:\/\/example\.com\/avatar\.png/,
+        ),
+      }),
     );
   });
 
@@ -776,15 +786,21 @@ describe("agents.update", () => {
     });
     await promise;
 
-    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-    const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {});
-    expectRecordFields(configOptions.identity, { emoji: "🦀" });
-    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
-      rootDir: "/workspace/test-agent",
-      relativePath: "IDENTITY.md",
-    });
-    expect(write.data).toEqual(
-      expect.stringMatching(/- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🦀/),
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
+    expect(mocks.applyAgentConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        identity: expect.objectContaining({ emoji: "🦀" }),
+      }),
+    );
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/workspace/test-agent",
+        relativePath: "IDENTITY.md",
+        data: expect.stringMatching(
+          /- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🦀/,
+        ),
+      }),
     );
   });
 
@@ -797,23 +813,26 @@ describe("agents.update", () => {
     });
     await promise;
 
-    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-    const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
-      name: "New Name",
-    });
-    expectRecordFields(configOptions.identity, {
-      name: "New Name",
-      emoji: "🤖",
-      avatar: "https://example.com/new.png",
-    });
-    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
-      rootDir: "/workspace/test-agent",
-      relativePath: "IDENTITY.md",
-    });
-    expect(write.data).toEqual(
-      expect.stringMatching(
-        /- Name: New Name[\s\S]*- Theme: steady[\s\S]*- Emoji: 🤖[\s\S]*- Avatar: https:\/\/example\.com\/new\.png/,
-      ),
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
+    expect(mocks.applyAgentConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        name: "New Name",
+        identity: expect.objectContaining({
+          name: "New Name",
+          emoji: "🤖",
+          avatar: "https://example.com/new.png",
+        }),
+      }),
+    );
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/workspace/test-agent",
+        relativePath: "IDENTITY.md",
+        data: expect.stringMatching(
+          /- Name: New Name[\s\S]*- Theme: steady[\s\S]*- Emoji: 🤖[\s\S]*- Avatar: https:\/\/example\.com\/new\.png/,
+        ),
+      }),
     );
   });
 
@@ -877,14 +896,24 @@ describe("agents.update", () => {
     });
     await promise;
 
-    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
-      rootDir: "/resolved/new/workspace",
-      relativePath: "IDENTITY.md",
-    });
-    expect(write.data).toEqual(expect.stringContaining("- **Creature:** Steady Turtle"));
-    expect(write.data).toEqual(expect.stringContaining("## Role"));
-    expect(write.data).not.toEqual(expect.stringContaining("Flustered Protocol Droid"));
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/resolved/new/workspace",
+        relativePath: "IDENTITY.md",
+        data: expect.stringContaining("- **Creature:** Steady Turtle"),
+      }),
+    );
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining("## Role"),
+      }),
+    );
+    expect(mocks.rootWrite).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining("Flustered Protocol Droid"),
+      }),
+    );
   });
 
   it("preserves an existing destination identity file when workspace changes", async () => {
@@ -945,14 +974,24 @@ describe("agents.update", () => {
     });
     await promise;
 
-    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
-      rootDir: "/resolved/new/workspace",
-      relativePath: "IDENTITY.md",
-    });
-    expect(write.data).toEqual(expect.stringContaining("- **Creature:** Destination Fox"));
-    expect(write.data).toEqual(expect.stringContaining("Destination workspace role."));
-    expect(write.data).not.toEqual(expect.stringContaining("Old workspace role."));
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/resolved/new/workspace",
+        relativePath: "IDENTITY.md",
+        data: expect.stringContaining("- **Creature:** Destination Fox"),
+      }),
+    );
+    expect(mocks.rootWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining("Destination workspace role."),
+      }),
+    );
+    expect(mocks.rootWrite).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining("Old workspace role."),
+      }),
+    );
   });
 
   it("does not persist config when IDENTITY.md write fails on update", async () => {
@@ -967,7 +1006,11 @@ describe("agents.update", () => {
     });
     await promise;
 
-    expectRespondErrorContaining(respond, "unsafe workspace file");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -986,7 +1029,13 @@ describe("agents.update", () => {
     });
     await promise;
 
-    expectRespondErrorContaining(respond, 'unsafe workspace file "IDENTITY.md"');
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining('unsafe workspace file "IDENTITY.md"'),
+      }),
+    );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.rootWrite).not.toHaveBeenCalled();
   });
@@ -1003,10 +1052,12 @@ describe("agents.update", () => {
     });
     await promise;
 
-    expectRecordFields(mockCallArg(rootRead), {
-      relativePath: "IDENTITY.md",
-      nonBlockingRead: true,
-    });
+    expect(rootRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relativePath: "IDENTITY.md",
+        nonBlockingRead: true,
+      }),
+    );
   });
 });
 
@@ -1043,7 +1094,7 @@ describe("agents.delete", () => {
     });
     await promise;
 
-    expectRespondOk(respond, { ok: true });
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     // moveToTrashBestEffort should not be called at all
     expect(mocks.fsAccess).not.toHaveBeenCalled();
   });
@@ -1054,7 +1105,11 @@ describe("agents.delete", () => {
     });
     await promise;
 
-    expectRespondErrorContaining(respond, "cannot be deleted");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("cannot be deleted") }),
+    );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -1073,7 +1128,11 @@ describe("agents.delete", () => {
     const { respond, promise } = makeCall("agents.delete", {});
     await promise;
 
-    expectRespondErrorContaining(respond, "invalid");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("invalid") }),
+    );
   });
 });
 
@@ -1135,12 +1194,13 @@ describe("agents.files.list", () => {
     const [, result] = respond.mock.calls[0] ?? [];
     const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
       .files;
-    const file = files.find((entry) => entry.name === "AGENTS.md");
-    expectRecordFields(file, {
-      name: "AGENTS.md",
-      missing: false,
-      size: 17,
-    });
+    expect(files).toContainEqual(
+      expect.objectContaining({
+        name: "AGENTS.md",
+        missing: false,
+        size: 17,
+      }),
+    );
     expect(rootOpen).not.toHaveBeenCalled();
   });
 });
@@ -1251,16 +1311,23 @@ describe("agents.files.get/set symlink safety", () => {
     });
     await promise;
 
-    expectRecordFields(mockCallArg(rootRead), {
-      rootDir: "/workspace/test-agent",
-      relativePath: "AGENTS.md",
-      hardlinks: "reject",
-      nonBlockingRead: true,
-    });
-    const payload = expectRespondOk(respond, {});
-    expectRecordFields(payload.file, {
-      name: "AGENTS.md",
-      content: "hello",
-    });
+    expect(rootRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/workspace/test-agent",
+        relativePath: "AGENTS.md",
+        hardlinks: "reject",
+        nonBlockingRead: true,
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: expect.objectContaining({
+          name: "AGENTS.md",
+          content: "hello",
+        }),
+      }),
+      undefined,
+    );
   });
 });

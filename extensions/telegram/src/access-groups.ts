@@ -1,4 +1,4 @@
-import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   expandAllowFromWithAccessGroups,
   parseAccessGroupAllowFromEntry,

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -20,7 +21,6 @@ import type {
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 type ModelRef = { provider: string; model: string };
-type EmbeddedPiPayloadResult = { payloads?: Array<{ text?: string }> };
 
 type CommitmentExtractionEnqueueInput = CommitmentScope & {
   cfg?: OpenClawConfig;
@@ -191,7 +191,7 @@ function resolveExtractionSessionFile(agentId: string, runId: string): string {
   );
 }
 
-function joinPayloadText(result: EmbeddedPiPayloadResult): string {
+function joinPayloadText(result: EmbeddedPiRunResult): string {
   return (
     result.payloads
       ?.map((payload) => payload.text)
@@ -224,7 +224,6 @@ async function defaultExtractBatch(params: {
   const resolved = resolveCommitmentsConfig(cfg);
   const runId = `commitments-${randomUUID()}`;
   const modelRef = await resolveDefaultModel({ cfg, agentId: first.agentId });
-  const { runEmbeddedPiAgent } = await import("../agents/pi-embedded.js");
   const result = await runEmbeddedPiAgent({
     sessionId: runId,
     sessionKey: `agent:${first.agentId}:commitments:${runId}`,

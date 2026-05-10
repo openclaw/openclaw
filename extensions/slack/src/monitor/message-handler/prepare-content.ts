@@ -1,7 +1,6 @@
-import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { formatSlackFileReference } from "../../file-reference.js";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "../media-types.js";
@@ -278,7 +277,6 @@ export async function resolveSlackMessageContent(params: {
   threadStarter: SlackThreadStarter | null;
   isBotMessage: boolean;
   botToken: string;
-  client?: SlackWebClient;
   mediaMaxBytes: number;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
 }): Promise<SlackResolvedMessageContent | null> {
@@ -293,7 +291,6 @@ export async function resolveSlackMessageContent(params: {
       ? loadSlackMediaModule().then(({ resolveSlackMedia }) =>
           resolveSlackMedia({
             files: ownFiles,
-            client: params.client,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
           }),
@@ -305,7 +302,6 @@ export async function resolveSlackMessageContent(params: {
       ? loadSlackMediaModule().then(({ resolveSlackAttachmentContent }) =>
           resolveSlackAttachmentContent({
             attachments: params.message.attachments,
-            client: params.client,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
           }),

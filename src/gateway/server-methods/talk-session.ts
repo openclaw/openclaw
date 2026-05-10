@@ -52,7 +52,6 @@ import { formatForLog } from "../ws-log.js";
 import {
   broadcastTalkRoomEvents,
   buildRealtimeInstructions,
-  buildRealtimeVoiceLaunchOptions,
   buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
   canUseTalkDirectTools,
@@ -236,20 +235,17 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           cfgForResolve: runtimeConfig,
           noRegisteredProviderMessage: "No realtime voice provider registered",
         });
-        const launchOptions = buildRealtimeVoiceLaunchOptions({
-          requested: params,
-          defaults: realtimeConfig,
-        });
+        const model = normalizeOptionalString(params.model) ?? realtimeConfig.model;
+        const voice = normalizeOptionalString(params.voice) ?? realtimeConfig.voice;
         const session = createTalkRealtimeRelaySession({
           context,
           connId,
-          cfg: runtimeConfig,
           provider: resolution.provider,
-          providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, launchOptions),
-          instructions: buildRealtimeInstructions(realtimeConfig.instructions),
+          providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, { model, voice }),
+          instructions: buildRealtimeInstructions(),
           tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
-          model: launchOptions.model,
-          voice: launchOptions.voice,
+          model,
+          voice,
         });
         rememberUnifiedTalkSession(session.relaySessionId, {
           kind: "realtime-relay",

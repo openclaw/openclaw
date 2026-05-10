@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
-import { executeCrestodianOperation, parseCrestodianOperation } from "./operations.js";
+import {
+  executeCrestodianOperation,
+  parseCrestodianOperation,
+  type CrestodianOperationResult,
+} from "./operations.js";
 
 type TestConfig = Record<string, unknown>;
 
@@ -14,45 +18,6 @@ function parseLastJsonLine(raw: string): unknown {
     throw new Error("Expected audit log to contain at least one JSON line");
   }
   return JSON.parse(lastLine) as unknown;
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function expectAuditRecord(
-  audit: unknown,
-  fields: Record<string, unknown>,
-  detailFields: Record<string, unknown>,
-) {
-  const auditRecord = requireRecord(audit, "audit record");
-  expectRecordFields(auditRecord, fields);
-  expectRecordFields(requireRecord(auditRecord.details, "audit details"), detailFields);
-}
-
-function requireFirstMockCall(mock: unknown, label: string): unknown[] {
-  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[0];
-  expect(call).toBeDefined();
-  if (!call) {
-    throw new Error(`missing ${label} call`);
-  }
-  return call;
-}
-
-function expectRuntimeArg(value: unknown) {
-  const runtime = requireRecord(value, "runtime argument");
-  expect(typeof runtime.log).toBe("function");
 }
 
 const mockConfig = vi.hoisted(() => {
@@ -302,7 +267,7 @@ describe("parseCrestodianOperation", () => {
       deps: { runGatewayRestart },
     });
 
-    expectRecordFields(result as unknown as Record<string, unknown>, {
+    expect(result).toMatchObject<CrestodianOperationResult>({
       applied: false,
       message: "Plan: restart the Gateway. Say yes to apply.",
     });
@@ -314,8 +279,9 @@ describe("parseCrestodianOperation", () => {
     mockConfig.missing("/tmp/openclaw.json");
     const { runtime, lines } = createCrestodianTestRuntime();
 
-    const result = await executeCrestodianOperation({ kind: "config-validate" }, runtime);
-    expect(result.applied).toBe(false);
+    await expect(
+      executeCrestodianOperation({ kind: "config-validate" }, runtime),
+    ).resolves.toMatchObject({ applied: false });
 
     expect(lines.join("\n")).toContain("Config missing:");
   });
@@ -326,16 +292,17 @@ describe("parseCrestodianOperation", () => {
     const { runtime, lines } = createCrestodianTestRuntime();
     const runConfigSet = vi.fn(async () => {});
 
-    const result = await executeCrestodianOperation(
-      { kind: "config-set", path: "gateway.port", value: "19001" },
-      runtime,
-      {
-        approved: true,
-        deps: { runConfigSet },
-        auditDetails: { rescue: true, channel: "whatsapp" },
-      },
-    );
-    expect(result.applied).toBe(true);
+    await expect(
+      executeCrestodianOperation(
+        { kind: "config-set", path: "gateway.port", value: "19001" },
+        runtime,
+        {
+          approved: true,
+          deps: { runConfigSet },
+          auditDetails: { rescue: true, channel: "whatsapp" },
+        },
+      ),
+    ).resolves.toMatchObject({ applied: true });
 
     expect(runConfigSet).toHaveBeenCalledWith({
       path: "gateway.port",
@@ -345,15 +312,15 @@ describe("parseCrestodianOperation", () => {
     expect(lines.join("\n")).toContain("[crestodian] done: config.set");
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
-    expectAuditRecord(
-      audit,
-      { operation: "config.set", summary: "Set config gateway.port" },
-      {
+    expect(audit).toMatchObject({
+      operation: "config.set",
+      summary: "Set config gateway.port",
+      details: {
         rescue: true,
         channel: "whatsapp",
         path: "gateway.port",
       },
-    );
+    });
   });
 
   it("applies SecretRef config set through typed deps and writes an audit entry", async () => {
@@ -362,21 +329,22 @@ describe("parseCrestodianOperation", () => {
     const { runtime, lines } = createCrestodianTestRuntime();
     const runConfigSet = vi.fn(async () => {});
 
-    const result = await executeCrestodianOperation(
-      {
-        kind: "config-set-ref",
-        path: "gateway.auth.token",
-        source: "env",
-        id: "OPENCLAW_GATEWAY_TOKEN",
-      },
-      runtime,
-      {
-        approved: true,
-        deps: { runConfigSet },
-        auditDetails: { rescue: true, channel: "whatsapp" },
-      },
-    );
-    expect(result.applied).toBe(true);
+    await expect(
+      executeCrestodianOperation(
+        {
+          kind: "config-set-ref",
+          path: "gateway.auth.token",
+          source: "env",
+          id: "OPENCLAW_GATEWAY_TOKEN",
+        },
+        runtime,
+        {
+          approved: true,
+          deps: { runConfigSet },
+          auditDetails: { rescue: true, channel: "whatsapp" },
+        },
+      ),
+    ).resolves.toMatchObject({ applied: true });
 
     expect(runConfigSet).toHaveBeenCalledWith({
       path: "gateway.auth.token",
@@ -389,20 +357,17 @@ describe("parseCrestodianOperation", () => {
     expect(lines.join("\n")).toContain("[crestodian] done: config.setRef");
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
-    expectAuditRecord(
-      audit,
-      {
-        operation: "config.setRef",
-        summary: "Set config gateway.auth.token SecretRef",
-      },
-      {
+    expect(audit).toMatchObject({
+      operation: "config.setRef",
+      summary: "Set config gateway.auth.token SecretRef",
+      details: {
         rescue: true,
         channel: "whatsapp",
         path: "gateway.auth.token",
         source: "env",
         provider: "default",
       },
-    );
+    });
   });
 
   it("runs plugin list and search as read-only operations", async () => {
@@ -414,18 +379,16 @@ describe("parseCrestodianOperation", () => {
       pluginRuntime.log(`search rows: ${query}`);
     });
 
-    const listResult = await executeCrestodianOperation({ kind: "plugin-list" }, runtime, {
-      deps: { runPluginsList, runPluginsSearch },
-    });
-    expect(listResult.applied).toBe(false);
-    const searchResult = await executeCrestodianOperation(
-      { kind: "plugin-search", query: "calendar" },
-      runtime,
-      {
+    await expect(
+      executeCrestodianOperation({ kind: "plugin-list" }, runtime, {
         deps: { runPluginsList, runPluginsSearch },
-      },
-    );
-    expect(searchResult.applied).toBe(false);
+      }),
+    ).resolves.toMatchObject({ applied: false });
+    await expect(
+      executeCrestodianOperation({ kind: "plugin-search", query: "calendar" }, runtime, {
+        deps: { runPluginsList, runPluginsSearch },
+      }),
+    ).resolves.toMatchObject({ applied: false });
 
     expect(runPluginsList).toHaveBeenCalledWith(runtime);
     expect(runPluginsSearch).toHaveBeenCalledWith("calendar", runtime);
@@ -447,37 +410,36 @@ describe("parseCrestodianOperation", () => {
       runtime,
       { deps: { runPluginInstall } },
     );
-    expectRecordFields(plan as unknown as Record<string, unknown>, {
+    expect(plan).toMatchObject({
       applied: false,
       message: "Plan: install plugin clawhub:openclaw-demo. Say yes to apply.",
     });
     expect(runPluginInstall).not.toHaveBeenCalled();
 
-    const result = await executeCrestodianOperation(
-      { kind: "plugin-install", spec: "clawhub:openclaw-demo" },
-      runtime,
-      {
-        approved: true,
-        deps: { runPluginInstall },
-        auditDetails: { rescue: true },
-      },
-    );
-    expect(result.applied).toBe(true);
+    await expect(
+      executeCrestodianOperation(
+        { kind: "plugin-install", spec: "clawhub:openclaw-demo" },
+        runtime,
+        {
+          approved: true,
+          deps: { runPluginInstall },
+          auditDetails: { rescue: true },
+        },
+      ),
+    ).resolves.toMatchObject({ applied: true });
 
-    const installCall = requireFirstMockCall(runPluginInstall, "runPluginInstall");
-    expect(installCall[0]).toBe("clawhub:openclaw-demo");
-    expectRuntimeArg(installCall[1]);
+    expect(runPluginInstall).toHaveBeenCalledWith("clawhub:openclaw-demo", expect.any(Object));
     expect(lines.join("\n")).toContain("[crestodian] done: plugin.install");
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
-    expectAuditRecord(
-      audit,
-      {
-        operation: "plugin.install",
-        summary: "Installed plugin clawhub:openclaw-demo",
+    expect(audit).toMatchObject({
+      operation: "plugin.install",
+      summary: "Installed plugin clawhub:openclaw-demo",
+      details: {
+        rescue: true,
+        spec: "clawhub:openclaw-demo",
       },
-      { rescue: true, spec: "clawhub:openclaw-demo" },
-    );
+    });
   });
 
   it("uninstalls plugins only after approval and audits the write", async () => {
@@ -493,37 +455,32 @@ describe("parseCrestodianOperation", () => {
       runtime,
       { deps: { runPluginUninstall } },
     );
-    expectRecordFields(plan as unknown as Record<string, unknown>, {
+    expect(plan).toMatchObject({
       applied: false,
       message: "Plan: uninstall plugin openclaw-demo. Say yes to apply.",
     });
     expect(runPluginUninstall).not.toHaveBeenCalled();
 
-    const result = await executeCrestodianOperation(
-      { kind: "plugin-uninstall", pluginId: "openclaw-demo" },
-      runtime,
-      {
+    await expect(
+      executeCrestodianOperation({ kind: "plugin-uninstall", pluginId: "openclaw-demo" }, runtime, {
         approved: true,
         deps: { runPluginUninstall },
         auditDetails: { rescue: true },
-      },
-    );
-    expect(result.applied).toBe(true);
+      }),
+    ).resolves.toMatchObject({ applied: true });
 
-    const uninstallCall = requireFirstMockCall(runPluginUninstall, "runPluginUninstall");
-    expect(uninstallCall[0]).toBe("openclaw-demo");
-    expectRuntimeArg(uninstallCall[1]);
+    expect(runPluginUninstall).toHaveBeenCalledWith("openclaw-demo", expect.any(Object));
     expect(lines.join("\n")).toContain("[crestodian] done: plugin.uninstall");
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
-    expectAuditRecord(
-      audit,
-      {
-        operation: "plugin.uninstall",
-        summary: "Uninstalled plugin openclaw-demo",
+    expect(audit).toMatchObject({
+      operation: "plugin.uninstall",
+      summary: "Uninstalled plugin openclaw-demo",
+      details: {
+        rescue: true,
+        pluginId: "openclaw-demo",
       },
-      { rescue: true, pluginId: "openclaw-demo" },
-    );
+    });
   });
 
   it("runs setup bootstrap only after approval and audits it", async () => {
@@ -536,43 +493,39 @@ describe("parseCrestodianOperation", () => {
       { kind: "setup", workspace: "/tmp/work" },
       runtime,
     );
-    expectRecordFields(plan as unknown as Record<string, unknown>, {
+    expect(plan).toMatchObject({
       applied: false,
     });
     expect(lines.join("\n")).toContain("Model choice: openai/gpt-5.5 (OPENAI_API_KEY).");
 
-    const result = await executeCrestodianOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      {
+    await expect(
+      executeCrestodianOperation({ kind: "setup", workspace: "/tmp/work" }, runtime, {
         approved: true,
         auditDetails: { rescue: true },
-      },
-    );
-    expect(result.applied).toBe(true);
+      }),
+    ).resolves.toMatchObject({ applied: true });
 
     expect(lines.join("\n")).toContain("[crestodian] done: crestodian.setup");
-    const config = requireRecord(mockConfig.currentConfig(), "current config");
-    const agents = requireRecord(config.agents, "agents config");
-    expectRecordFields(requireRecord(agents.defaults, "agent defaults"), {
-      workspace: "/tmp/work",
-      model: { primary: "openai/gpt-5.5" },
+    expect(mockConfig.currentConfig()).toMatchObject({
+      agents: {
+        defaults: {
+          workspace: "/tmp/work",
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
     });
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
-    expectAuditRecord(
-      audit,
-      {
-        operation: "crestodian.setup",
-        summary: "Bootstrapped setup with openai/gpt-5.5",
-      },
-      {
+    expect(audit).toMatchObject({
+      operation: "crestodian.setup",
+      summary: "Bootstrapped setup with openai/gpt-5.5",
+      details: {
         rescue: true,
         workspace: "/tmp/work",
         model: "openai/gpt-5.5",
         modelSource: "OPENAI_API_KEY",
       },
-    );
+    });
   });
 
   it("runs doctor repairs only after approval and audits them", async () => {
@@ -584,18 +537,19 @@ describe("parseCrestodianOperation", () => {
     const plan = await executeCrestodianOperation({ kind: "doctor-fix" }, runtime, {
       deps: { runDoctor },
     });
-    expectRecordFields(plan as unknown as Record<string, unknown>, {
+    expect(plan).toMatchObject({
       applied: false,
       message: "Plan: run doctor repairs. Say yes to apply.",
     });
     expect(runDoctor).not.toHaveBeenCalled();
 
-    const result = await executeCrestodianOperation({ kind: "doctor-fix" }, runtime, {
-      approved: true,
-      deps: { runDoctor },
-      auditDetails: { rescue: true },
-    });
-    expect(result.applied).toBe(true);
+    await expect(
+      executeCrestodianOperation({ kind: "doctor-fix" }, runtime, {
+        approved: true,
+        deps: { runDoctor },
+        auditDetails: { rescue: true },
+      }),
+    ).resolves.toMatchObject({ applied: true });
 
     expect(runDoctor).toHaveBeenCalledWith(runtime, {
       nonInteractive: true,
@@ -605,11 +559,11 @@ describe("parseCrestodianOperation", () => {
     expect(lines.join("\n")).toContain("[crestodian] done: doctor.fix");
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const audit = parseLastJsonLine(await fs.readFile(auditPath, "utf8"));
-    expectAuditRecord(
-      audit,
-      { operation: "doctor.fix", summary: "Ran doctor repairs" },
-      { rescue: true },
-    );
+    expect(audit).toMatchObject({
+      operation: "doctor.fix",
+      summary: "Ran doctor repairs",
+      details: { rescue: true },
+    });
   });
 
   it("returns from the agent TUI back to Crestodian", async () => {
@@ -633,7 +587,7 @@ describe("parseCrestodianOperation", () => {
       deliver: false,
       historyLimit: 200,
     });
-    expectRecordFields(result as unknown as Record<string, unknown>, {
+    expect(result).toMatchObject({
       applied: false,
       nextInput: "restart gateway",
     });

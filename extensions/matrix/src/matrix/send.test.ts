@@ -128,31 +128,6 @@ function makeEncryptedMediaClient() {
   return result;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
-  return value as Record<string, unknown>;
-}
-
-function requireArray(value: unknown, label: string): Array<unknown> {
-  expect(Array.isArray(value), label).toBe(true);
-  return value as Array<unknown>;
-}
-
-function sentContent(sendMessage: { mock: { calls: Array<Array<unknown>> } }, index = 0) {
-  return requireRecord(sendMessage.mock.calls[index]?.[1], `sent content ${index}`);
-}
-
-function newContent(content: Record<string, unknown>) {
-  return requireRecord(content["m.new_content"], "new content");
-}
-
-function expectTextReceiptPart(value: unknown, platformMessageId: string) {
-  const part = requireRecord(value, "receipt part");
-  expect(part.platformMessageId).toBe(platformMessageId);
-  expect(part.kind).toBe("text");
-}
-
 function resetMatrixSendRuntimeMocks() {
   setMatrixRuntime(runtimeStub);
   loadOutboundMediaFromUrlMock.mockReset().mockImplementation(
@@ -331,8 +306,8 @@ describe("sendMessageMatrix media", () => {
     };
 
     expect(transcriptContent.body).toBe("voice caption");
-    expect(requireRecord(transcriptContent["m.relates_to"], "relation")["m.in_reply_to"]).toEqual({
-      event_id: "$reply",
+    expect(transcriptContent["m.relates_to"]).toMatchObject({
+      "m.in_reply_to": { event_id: "$reply" },
     });
   });
 
@@ -393,7 +368,7 @@ describe("sendMessageMatrix media", () => {
     };
     expect(content.info?.thumbnail_url).toBe("mxc://example/file");
     expect(content.info?.thumbnail_file).toBeUndefined();
-    expect(content.info?.thumbnail_info).toEqual({
+    expect(content.info?.thumbnail_info).toMatchObject({
       w: 800,
       h: 600,
       mimetype: "image/jpeg",
@@ -427,10 +402,13 @@ describe("sendMessageMatrix media", () => {
     });
 
     expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(loadWebMediaMock.mock.calls[0]?.[0]).toBe("file:///tmp/photo.png");
-    const mediaOptions = requireRecord(loadWebMediaMock.mock.calls[0]?.[1], "media options");
-    expect(mediaOptions.maxBytes).toBe(1024 * 1024);
-    expect(mediaOptions.localRoots).toBeUndefined();
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "file:///tmp/photo.png",
+      expect.objectContaining({
+        maxBytes: 1024 * 1024,
+        localRoots: undefined,
+      }),
+    );
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
 
@@ -444,10 +422,13 @@ describe("sendMessageMatrix media", () => {
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
     });
 
-    expect(loadWebMediaMock.mock.calls[0]?.[0]).toBe("file:///tmp/photo.png");
-    const mediaOptions = requireRecord(loadWebMediaMock.mock.calls[0]?.[1], "media options");
-    expect(mediaOptions.maxBytes).toBeUndefined();
-    expect(mediaOptions.localRoots).toEqual(["/tmp/openclaw-matrix-test"]);
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "file:///tmp/photo.png",
+      expect.objectContaining({
+        maxBytes: undefined,
+        localRoots: ["/tmp/openclaw-matrix-test"],
+      }),
+    );
   });
 });
 
@@ -465,8 +446,10 @@ describe("sendMessageMatrix mentions", () => {
       cfg: {} as never,
     });
 
-    expect(sentContent(sendMessage).body).toBe("hello");
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "hello",
+      "m.mentions": {},
+    });
   });
 
   it("emits m.mentions and matrix.to anchors for qualified user mentions", async () => {
@@ -477,9 +460,9 @@ describe("sendMessageMatrix mentions", () => {
       cfg: {} as never,
     });
 
-    expect(sentContent(sendMessage).body).toBe("hello @alice:example.org");
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({
-      user_ids: ["@alice:example.org"],
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "hello @alice:example.org",
+      "m.mentions": { user_ids: ["@alice:example.org"] },
     });
     expect(
       (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
@@ -494,7 +477,9 @@ describe("sendMessageMatrix mentions", () => {
       cfg: {} as never,
     });
 
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": {},
+    });
     expect(
       (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
     ).not.toContain("matrix.to/#/@alice:example.org");
@@ -508,7 +493,9 @@ describe("sendMessageMatrix mentions", () => {
       cfg: {} as never,
     });
 
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": {},
+    });
     expect(
       (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
     ).not.toContain("matrix.to/#/@alice:example.org");
@@ -522,7 +509,9 @@ describe("sendMessageMatrix mentions", () => {
       cfg: {} as never,
     });
 
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": {},
+    });
   });
 
   it("marks room mentions via m.mentions.room", async () => {
@@ -533,7 +522,9 @@ describe("sendMessageMatrix mentions", () => {
       cfg: {} as never,
     });
 
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({ room: true });
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": { room: true },
+    });
   });
 
   it("adds mention metadata to media captions", async () => {
@@ -545,8 +536,8 @@ describe("sendMessageMatrix mentions", () => {
       mediaUrl: "file:///tmp/photo.png",
     });
 
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({
-      user_ids: ["@alice:example.org"],
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": { user_ids: ["@alice:example.org"] },
     });
   });
 
@@ -565,8 +556,10 @@ describe("sendMessageMatrix mentions", () => {
       mediaUrl: "file:///tmp/room.png",
     });
 
-    expect(sentContent(sendMessage).body).toBe("@room.png");
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "@room.png",
+      "m.mentions": {},
+    });
     expect(
       (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
     ).toBeUndefined();
@@ -596,10 +589,9 @@ describe("sendMessageMatrix threads", () => {
       };
     };
 
-    expect(content["m.relates_to"]).toEqual({
+    expect(content["m.relates_to"]).toMatchObject({
       rel_type: "m.thread",
       event_id: "$thread",
-      is_falling_back: true,
       "m.in_reply_to": { event_id: "$thread" },
     });
   });
@@ -631,15 +623,20 @@ describe("sendMessageMatrix threads", () => {
       cfg: {} as never,
     });
 
-    expect(result.roomId).toBe("!room:example");
-    expect(result.primaryMessageId).toBe("$m1");
-    expect(result.messageId).toBe("$m3");
-    expect(result.receipt.primaryPlatformMessageId).toBe("$m1");
-    expect(result.receipt.platformMessageIds).toEqual(["$m1", "$m2", "$m3"]);
-    const parts = requireArray(result.receipt.parts, "receipt parts");
-    expectTextReceiptPart(parts[0], "$m1");
-    expectTextReceiptPart(parts[1], "$m2");
-    expectTextReceiptPart(parts[2], "$m3");
+    expect(result).toMatchObject({
+      roomId: "!room:example",
+      primaryMessageId: "$m1",
+      messageId: "$m3",
+      receipt: {
+        primaryPlatformMessageId: "$m1",
+        platformMessageIds: ["$m1", "$m2", "$m3"],
+        parts: [
+          expect.objectContaining({ platformMessageId: "$m1", kind: "text" }),
+          expect.objectContaining({ platformMessageId: "$m2", kind: "text" }),
+          expect.objectContaining({ platformMessageId: "$m3", kind: "text" }),
+        ],
+      },
+    });
   });
 
   it("merges extra content into only the first chunked text event", async () => {
@@ -654,11 +651,13 @@ describe("sendMessageMatrix threads", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(3);
-    expect(sentContent(sendMessage, 0).body).toBe("first");
-    expect(sentContent(sendMessage, 0)["com.openclaw.approval"]).toEqual({ id: "req-1" });
-    expect(sentContent(sendMessage, 1).body).toBe("second");
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "first",
+      "com.openclaw.approval": { id: "req-1" },
+    });
+    expect(sendMessage.mock.calls[1]?.[1]).toMatchObject({ body: "second" });
     expect(sendMessage.mock.calls[1]?.[1]).not.toHaveProperty("com.openclaw.approval");
-    expect(sentContent(sendMessage, 2).body).toBe("third");
+    expect(sendMessage.mock.calls[2]?.[1]).toMatchObject({ body: "third" });
     expect(sendMessage.mock.calls[2]?.[1]).not.toHaveProperty("com.openclaw.approval");
   });
 });
@@ -694,8 +693,10 @@ describe("sendSingleTextMessageMatrix", () => {
       includeMentions: false,
     });
 
-    expect(sentContent(sendMessage).msgtype).toBe("m.notice");
-    expect(sentContent(sendMessage).body).toBe("@room hi @alice:example.org");
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      msgtype: "m.notice",
+      body: "@room hi @alice:example.org",
+    });
     expect(sendMessage.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
     expect(
       (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
@@ -714,10 +715,10 @@ describe("sendSingleTextMessageMatrix", () => {
       },
     );
 
-    expect(sentContent(sendMessage).body).toBe(
-      "Working...\n- `@room ping @alice:example.org !room:example.org`",
-    );
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "Working...\n- `@room ping @alice:example.org !room:example.org`",
+      "m.mentions": {},
+    });
     const formattedBody = (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string })
       .formatted_body;
     expect(formattedBody).toContain("<code>@room ping @alice:example.org !room:example.org</code>");
@@ -733,11 +734,15 @@ describe("sendSingleTextMessageMatrix", () => {
       extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
     });
 
-    expect(sentContent(sendMessage).body).toBe("done");
-    expect(sentContent(sendMessage)[MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]).toBe(true);
-    expect(result.receipt.primaryPlatformMessageId).toBe("evt1");
-    expect(result.receipt.platformMessageIds).toEqual(["evt1"]);
-    expectTextReceiptPart(result.receipt.parts[0], "evt1");
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "done",
+      [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
+    });
+    expect(result.receipt).toMatchObject({
+      primaryPlatformMessageId: "evt1",
+      platformMessageIds: ["evt1"],
+      parts: [expect.objectContaining({ platformMessageId: "evt1", kind: "text" })],
+    });
   });
 });
 
@@ -766,10 +771,11 @@ describe("editMessageMatrix mentions", () => {
       },
     );
 
-    const content = sentContent(sendMessage);
-    expect(content["m.mentions"]).toEqual({ user_ids: ["@bob:example.org"] });
-    expect(newContent(content)["m.mentions"]).toEqual({
-      user_ids: ["@alice:example.org", "@bob:example.org"],
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": { user_ids: ["@bob:example.org"] },
+      "m.new_content": {
+        "m.mentions": { user_ids: ["@alice:example.org", "@bob:example.org"] },
+      },
     });
   });
 
@@ -786,11 +792,13 @@ describe("editMessageMatrix mentions", () => {
       cfg: {} as never,
     });
 
-    const content = sentContent(sendMessage);
-    expect(content["m.mentions"]).toEqual({});
-    const replacement = newContent(content);
-    expect(replacement.body).toBe("hello again @alice:example.org");
-    expect(replacement["m.mentions"]).toEqual({ user_ids: ["@alice:example.org"] });
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": {},
+      "m.new_content": {
+        body: "hello again @alice:example.org",
+        "m.mentions": { user_ids: ["@alice:example.org"] },
+      },
+    });
   });
 
   it("keeps explicit empty prior m.mentions authoritative", async () => {
@@ -807,9 +815,12 @@ describe("editMessageMatrix mentions", () => {
       cfg: {} as never,
     });
 
-    const content = sentContent(sendMessage);
-    expect(content["m.mentions"]).toEqual({ user_ids: ["@alice:example.org"] });
-    expect(newContent(content)["m.mentions"]).toEqual({ user_ids: ["@alice:example.org"] });
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": { user_ids: ["@alice:example.org"] },
+      "m.new_content": {
+        "m.mentions": { user_ids: ["@alice:example.org"] },
+      },
+    });
   });
 
   it("supports quiet draft preview edits without mention metadata", async () => {
@@ -828,11 +839,14 @@ describe("editMessageMatrix mentions", () => {
       includeMentions: false,
     });
 
-    const content = sentContent(sendMessage);
-    expect(content.msgtype).toBe("m.notice");
-    expect(newContent(content).msgtype).toBe("m.notice");
-    expect(content).not.toHaveProperty("m.mentions");
-    expect(newContent(content)).not.toHaveProperty("m.mentions");
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      msgtype: "m.notice",
+      "m.new_content": {
+        msgtype: "m.notice",
+      },
+    });
+    expect(sendMessage.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
+    expect(sendMessage.mock.calls[0]?.[1]?.["m.new_content"]).not.toHaveProperty("m.mentions");
     expect(
       (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
     ).not.toContain("matrix.to");
@@ -854,9 +868,12 @@ describe("editMessageMatrix mentions", () => {
       extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
     });
 
-    const content = sentContent(sendMessage);
-    expect(content[MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]).toBe(true);
-    expect(newContent(content)[MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]).toBe(true);
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
+      "m.new_content": {
+        [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
+      },
+    });
   });
 });
 
@@ -881,13 +898,16 @@ describe("sendPollMatrix mentions", () => {
       },
     );
 
-    expect(sendEvent.mock.calls[0]?.[0]).toBe("!room:example");
-    expect(sendEvent.mock.calls[0]?.[1]).toBe("m.poll.start");
-    const content = requireRecord(sendEvent.mock.calls[0]?.[2], "poll start content");
-    expect(content["m.mentions"]).toEqual({
-      room: true,
-      user_ids: ["@alice:example.org"],
-    });
+    expect(sendEvent).toHaveBeenCalledWith(
+      "!room:example",
+      "m.poll.start",
+      expect.objectContaining({
+        "m.mentions": {
+          room: true,
+          user_ids: ["@alice:example.org"],
+        },
+      }),
+    );
   });
 });
 
@@ -927,11 +947,13 @@ describe("voteMatrixPoll", () => {
         event_id: "$poll",
       },
     });
-    expect(result.eventId).toBe("evt-poll-vote");
-    expect(result.roomId).toBe("!room:example");
-    expect(result.pollId).toBe("$poll");
-    expect(result.answerIds).toEqual(["a2"]);
-    expect(result.labels).toEqual(["Sushi"]);
+    expect(result).toMatchObject({
+      eventId: "evt-poll-vote",
+      roomId: "!room:example",
+      pollId: "$poll",
+      answerIds: ["a2"],
+      labels: ["Sushi"],
+    });
   });
 
   it("rejects out-of-range option indexes", async () => {
@@ -1011,13 +1033,16 @@ describe("voteMatrixPoll", () => {
       },
     });
 
-    const result = await voteMatrixPoll("room:!room:example", "$poll", {
-      client,
-      cfg: {} as never,
-      optionIndex: 1,
+    await expect(
+      voteMatrixPoll("room:!room:example", "$poll", {
+        client,
+        cfg: {} as never,
+        optionIndex: 1,
+      }),
+    ).resolves.toMatchObject({
+      pollId: "$poll",
+      answerIds: ["a1"],
     });
-    expect(result.pollId).toBe("$poll");
-    expect(result.answerIds).toEqual(["a1"]);
     expect(sendEvent).toHaveBeenCalledWith("!room:example", "m.poll.response", {
       "m.poll.response": { answers: ["a1"] },
       "org.matrix.msc3381.poll.response": { answers: ["a1"] },
@@ -1061,10 +1086,12 @@ describe("sendTypingMatrix", () => {
         opts: Record<string, unknown>,
         run: (resolved: import("./sdk.js").MatrixClient) => Promise<void>,
       ) => {
-        expect(opts.cfg).toBe(cfg);
-        expect(opts.accountId).toBe("work");
-        expect(opts.timeoutMs).toBe(12_345);
-        expect(opts.readiness).toBe("none");
+        expect(opts).toMatchObject({
+          cfg,
+          accountId: "work",
+          timeoutMs: 12_345,
+          readiness: "none",
+        });
         return await run(client);
       },
     );

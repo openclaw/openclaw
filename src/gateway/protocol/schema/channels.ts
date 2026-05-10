@@ -163,10 +163,6 @@ export const TalkClientCreateParamsSchema = Type.Object(
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
-    vadThreshold: Type.Optional(Type.Number()),
-    silenceDurationMs: Type.Optional(Type.Integer({ minimum: 1 })),
-    prefixPaddingMs: Type.Optional(Type.Integer({ minimum: 0 })),
-    reasoningEffort: Type.Optional(Type.String()),
     mode: Type.Optional(TalkModeSchema),
     transport: Type.Optional(TalkTransportSchema),
     brain: Type.Optional(TalkBrainSchema),
@@ -207,10 +203,6 @@ export const TalkSessionCreateParamsSchema = Type.Object(
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
-    vadThreshold: Type.Optional(Type.Number()),
-    silenceDurationMs: Type.Optional(Type.Integer({ minimum: 1 })),
-    prefixPaddingMs: Type.Optional(Type.Integer({ minimum: 0 })),
-    reasoningEffort: Type.Optional(Type.String()),
     mode: Type.Optional(TalkModeSchema),
     transport: Type.Optional(TalkTransportSchema),
     brain: Type.Optional(TalkBrainSchema),
@@ -262,7 +254,6 @@ export const TalkSessionSubmitToolResultParamsSchema = Type.Object(
     options: Type.Optional(
       Type.Object(
         {
-          suppressResponse: Type.Optional(Type.Boolean()),
           willContinue: Type.Optional(Type.Boolean()),
         },
         { additionalProperties: false },
@@ -502,7 +493,6 @@ const TalkRealtimeConfigSchema = Type.Object(
     providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
-    instructions: Type.Optional(Type.String()),
     mode: Type.Optional(TalkModeSchema),
     transport: Type.Optional(TalkTransportSchema),
     brain: Type.Optional(TalkBrainSchema),

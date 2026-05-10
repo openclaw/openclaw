@@ -86,7 +86,10 @@ describe("nextcloud-talk inbound authz", () => {
       runtime: createTestRuntimeEnv(),
     });
 
-    expect(readAllowFromStore).not.toHaveBeenCalled();
+    expect(readAllowFromStore).toHaveBeenCalledWith({
+      channel: "nextcloud-talk",
+      accountId: "default",
+    });
     expect(buildMentionRegexes).not.toHaveBeenCalled();
   });
 

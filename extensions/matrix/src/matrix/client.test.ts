@@ -46,52 +46,6 @@ class MockMatrixClient {
   }
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function expectAuthFields(auth: unknown, fields: Record<string, unknown>) {
-  expectRecordFields(requireRecord(auth, "Matrix auth"), fields);
-}
-
-function expectSavedCredentials(
-  mock: ReturnType<typeof vi.fn>,
-  fields: Record<string, unknown>,
-  accountId: string,
-) {
-  const call = mock.mock.calls[0] as unknown[] | undefined;
-  expect(call).toBeDefined();
-  if (!call) {
-    throw new Error("missing save credentials call");
-  }
-  expectRecordFields(requireRecord(call[0], "Matrix credentials"), fields);
-  requireRecord(call[1], "Matrix credential save options");
-  expect(call[2]).toBe(accountId);
-}
-
-function expectMatrixLoginCall(fields: Record<string, unknown>) {
-  const call = matrixDoRequestMock.mock.calls[0] as unknown[] | undefined;
-  expect(call).toBeDefined();
-  if (!call) {
-    throw new Error("missing Matrix login call");
-  }
-  expect(call[0]).toBe("POST");
-  expect(call[1]).toBe("/_matrix/client/v3/login");
-  expect(call[2]).toBeUndefined();
-  expectRecordFields(requireRecord(call[3], "Matrix login body"), fields);
-}
-
 describe("resolveMatrixAuth", () => {
   beforeEach(() => {
     vi.mocked(credentialsReadModule.loadMatrixCredentials).mockReset();
@@ -141,12 +95,15 @@ describe("resolveMatrixAuth", () => {
       env: {} as NodeJS.ProcessEnv,
     });
 
-    expectMatrixLoginCall({
-      type: "m.login.password",
-      identifier: { type: "m.id.user", user: "@bot:example.org" },
-      password: "secret",
-    });
-    expectAuthFields(auth, {
+    expect(matrixDoRequestMock).toHaveBeenCalledWith(
+      "POST",
+      "/_matrix/client/v3/login",
+      undefined,
+      expect.objectContaining({
+        type: "m.login.password",
+      }),
+    );
+    expect(auth).toMatchObject({
       accountId: "default",
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
@@ -154,14 +111,14 @@ describe("resolveMatrixAuth", () => {
       deviceId: "DEVICE123",
       encryption: true,
     });
-    expectSavedCredentials(
-      saveMatrixCredentialsMock,
-      {
+    expect(saveMatrixCredentialsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         accessToken: "tok-123",
         deviceId: "DEVICE123",
-      },
+      }),
+      expect.any(Object),
       "default",
     );
   });
@@ -186,11 +143,14 @@ describe("resolveMatrixAuth", () => {
       }),
     ).rejects.toThrow("Invalid username or password");
 
-    expectMatrixLoginCall({
-      type: "m.login.password",
-      identifier: { type: "m.id.user", user: "@bot:example.org" },
-      password: "secret",
-    });
+    expect(matrixDoRequestMock).toHaveBeenCalledWith(
+      "POST",
+      "/_matrix/client/v3/login",
+      undefined,
+      expect.objectContaining({
+        type: "m.login.password",
+      }),
+    );
     expect(saveMatrixCredentialsMock).not.toHaveBeenCalled();
   });
 
@@ -219,7 +179,7 @@ describe("resolveMatrixAuth", () => {
       env: {} as NodeJS.ProcessEnv,
     });
 
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       accountId: "default",
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
@@ -256,7 +216,7 @@ describe("resolveMatrixAuth", () => {
       accountId: "ops",
     });
 
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       accountId: "ops",
       homeserver: "https://matrix.example.org",
       userId: "@ops:example.org",
@@ -306,14 +266,14 @@ describe("resolveMatrixAuth", () => {
 
     expect(auth.deviceId).toBe("DEVICE123");
     expect(auth.accountId).toBe("default");
-    expectSavedCredentials(
-      saveMatrixCredentialsMock,
-      {
+    expect(saveMatrixCredentialsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         accessToken: "tok-123",
         deviceId: "DEVICE123",
-      },
+      }),
+      expect.any(Object),
       "default",
     );
   });
@@ -333,7 +293,7 @@ describe("resolveMatrixAuth", () => {
 
     const auth = await resolveMatrixAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       homeserver: "http://127.0.0.1:8008",
       allowPrivateNetwork: true,
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -403,12 +363,17 @@ describe("resolveMatrixAuth", () => {
       accountId: "ops",
     });
 
-    expectMatrixLoginCall({
-      type: "m.login.password",
-      identifier: { type: "m.id.user", user: "@ops:example.org" },
-      password: "ops-pass",
-    });
-    expectAuthFields(auth, {
+    expect(matrixDoRequestMock).toHaveBeenCalledWith(
+      "POST",
+      "/_matrix/client/v3/login",
+      undefined,
+      expect.objectContaining({
+        type: "m.login.password",
+        identifier: { type: "m.id.user", user: "@ops:example.org" },
+        password: "ops-pass",
+      }),
+    );
+    expect(auth).toMatchObject({
       accountId: "ops",
       homeserver: "https://matrix.example.org",
       userId: "@ops:example.org",
@@ -439,7 +404,7 @@ describe("resolveMatrixAuth", () => {
     });
 
     expect(matrixDoRequestMock).toHaveBeenCalledWith("GET", "/_matrix/client/v3/account/whoami");
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       accountId: "default",
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
@@ -478,7 +443,7 @@ describe("resolveMatrixAuth", () => {
     });
 
     expect(matrixDoRequestMock).toHaveBeenCalledTimes(2);
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       userId: "@bot:example.org",
       deviceId: "DEVICE123",
     });
@@ -504,7 +469,7 @@ describe("resolveMatrixAuth", () => {
     });
 
     expect(matrixDoRequestMock).not.toHaveBeenCalled();
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       accountId: "default",
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
@@ -545,7 +510,7 @@ describe("resolveMatrixAuth", () => {
     });
 
     expect(matrixDoRequestMock).toHaveBeenCalledTimes(2);
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       accessToken: "tok-123",
       deviceId: "DEVICE123",
     });
@@ -568,28 +533,24 @@ describe("resolveMatrixAuth", () => {
     });
 
     expect(matrixDoRequestMock).toHaveBeenCalledWith("GET", "/_matrix/client/v3/account/whoami");
-    expectSavedCredentials(
-      saveBackfilledMatrixDeviceIdMock,
+    expect(saveBackfilledMatrixDeviceIdMock).toHaveBeenCalledWith(
       {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         accessToken: "tok-123",
         deviceId: "DEVICE123",
       },
+      expect.any(Object),
       "default",
     );
-    const repairMeta = requireRecord(
-      repairCurrentTokenStorageMetaDeviceIdMock.mock.calls[0]?.[0],
-      "repair metadata",
-    );
-    expectRecordFields(repairMeta, {
+    expect(repairCurrentTokenStorageMetaDeviceIdMock).toHaveBeenCalledWith({
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
       accessToken: "tok-123",
       accountId: "default",
       deviceId: "DEVICE123",
+      env: expect.any(Object),
     });
-    requireRecord(repairMeta.env, "repair env");
     expect(repairCurrentTokenStorageMetaDeviceIdMock.mock.invocationCallOrder[0]).toBeLessThan(
       saveBackfilledMatrixDeviceIdMock.mock.invocationCallOrder[0],
     );
@@ -728,16 +689,15 @@ describe("resolveMatrixAuth", () => {
       env: {} as NodeJS.ProcessEnv,
     });
 
-    expectRecordFields(
-      requireRecord(resolveConfiguredSecretInputStringMock.mock.calls[0]?.[0], "secret request"),
-      {
+    expect(resolveConfiguredSecretInputStringMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         config: cfg,
         value: { source: "file", provider: "matrix-file", id: "value" },
         path: "channels.matrix.accessToken",
-      },
+      }),
     );
     expect(matrixDoRequestMock).toHaveBeenCalledWith("GET", "/_matrix/client/v3/account/whoami");
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       accountId: "default",
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
@@ -781,7 +741,7 @@ describe("resolveMatrixAuth", () => {
     });
 
     expect(matrixDoRequestMock).toHaveBeenCalledWith("GET", "/_matrix/client/v3/account/whoami");
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       accountId: "ops",
       homeserver: "https://matrix.example.org",
       userId: "@ops:example.org",
@@ -813,7 +773,7 @@ describe("resolveMatrixAuth", () => {
 
     const auth = await resolveMatrixAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       accountId: "default",
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
@@ -842,7 +802,7 @@ describe("resolveMatrixAuth", () => {
 
     const auth = await resolveMatrixAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       accountId: "ops",
       homeserver: "https://ops.example.org",
       userId: "@ops:example.org",
@@ -850,14 +810,14 @@ describe("resolveMatrixAuth", () => {
       deviceId: "OPSDEVICE",
       encryption: true,
     });
-    expectSavedCredentials(
-      saveMatrixCredentialsMock,
-      {
+    expect(saveMatrixCredentialsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         homeserver: "https://ops.example.org",
         userId: "@ops:example.org",
         accessToken: "ops-token",
         deviceId: "OPSDEVICE",
-      },
+      }),
+      expect.any(Object),
       "ops",
     );
   });

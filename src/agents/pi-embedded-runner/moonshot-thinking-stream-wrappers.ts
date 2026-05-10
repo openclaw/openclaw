@@ -67,7 +67,6 @@ function isPinnedToolChoice(toolChoice: unknown): boolean {
   return typeValue === "tool" || typeValue === "function";
 }
 
-/** @deprecated Moonshot provider-owned stream helper; do not use from third-party plugins. */
 export function resolveMoonshotThinkingType(params: {
   configuredThinking: unknown;
   thinkingLevel?: ThinkLevel;
@@ -82,14 +81,12 @@ export function resolveMoonshotThinkingType(params: {
   return params.thinkingLevel === "off" ? "disabled" : "enabled";
 }
 
-/** @deprecated Moonshot provider-owned stream helper; do not use from third-party plugins. */
 export function resolveMoonshotThinkingKeep(params: {
   configuredThinking: unknown;
 }): MoonshotThinkingKeep | undefined {
   return normalizeMoonshotThinkingKeep(params.configuredThinking);
 }
 
-/** @deprecated Moonshot provider-owned stream helper; do not use from third-party plugins. */
 export function createMoonshotThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingType?: MoonshotThinkingType,

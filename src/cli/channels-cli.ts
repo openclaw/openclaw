@@ -100,9 +100,7 @@ export async function registerChannelsCli(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw channels list", "List configured channels."],
-          ["openclaw channels list --all", "Show configured, bundled, and installable channels."],
-          ["openclaw channels add", "Open guided channel setup."],
+          ["openclaw channels list", "List configured channels and auth profiles."],
           ["openclaw channels status --probe", "Run channel status checks and probes."],
           [
             "openclaw channels add --channel telegram --token <token>",
@@ -195,18 +193,6 @@ export async function registerChannelsCli(
   const addCommand = channels
     .command("add")
     .description("Add or update a channel account")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw channels add", "Open guided setup for available chat channels."],
-          [
-            "openclaw channels add --channel telegram --token <token>",
-            "Add or update Telegram non-interactively.",
-          ],
-          ["openclaw channels list --all", "Find channel ids before using --channel."],
-        ])}\n`,
-    )
     .option("--channel <name>", `Channel (${channelNames})`)
     .option("--account <id>", "Account id (default when omitted)")
     .option("--name <name>", "Display name for this account")

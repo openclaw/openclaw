@@ -14,7 +14,6 @@ import {
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
-  formatAcpErrorChain,
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
@@ -76,7 +75,6 @@ import {
   mergeRuntimeOptions,
   normalizeRuntimeOptions,
   normalizeText,
-  resolveRuntimeConfigOptionKey,
   resolveRuntimeOptionsFromMeta,
   runtimeOptionsEqual,
   validateRuntimeConfigOptionInput,
@@ -590,11 +588,7 @@ export class AcpSessionManager {
         meta: resolvedMeta,
       });
       const inferredPatch = inferRuntimeOptionPatchFromConfigOption(key, value);
-      const capabilities = await this.resolveRuntimeCapabilities({
-        runtime,
-        handle,
-        includeStatusConfigOptionKeys: true,
-      });
+      const capabilities = await this.resolveRuntimeCapabilities({ runtime, handle });
       if (
         !capabilities.controls.includes("session/set_config_option") ||
         !runtime.setConfigOption
@@ -607,17 +601,13 @@ export class AcpSessionManager {
 
       const advertisedKeys = new Set(
         (capabilities.configOptionKeys ?? [])
-          .map((entry) => normalizeLowercaseStringOrEmpty(entry))
-          .filter(Boolean),
+          .map((entry) => normalizeText(entry))
+          .filter(Boolean) as string[],
       );
-      const wireKey = resolveRuntimeConfigOptionKey(key, capabilities.configOptionKeys);
-      if (
-        advertisedKeys.size > 0 &&
-        !advertisedKeys.has(normalizeLowercaseStringOrEmpty(wireKey))
-      ) {
+      if (advertisedKeys.size > 0 && !advertisedKeys.has(key)) {
         throw new AcpRuntimeError(
           "ACP_BACKEND_UNSUPPORTED_CONTROL",
-          `ACP backend "${handle.backend || meta.backend}" does not accept config key "${wireKey}".`,
+          `ACP backend "${handle.backend || meta.backend}" does not accept config key "${key}".`,
         );
       }
 
@@ -625,7 +615,7 @@ export class AcpSessionManager {
         run: async () =>
           await runtime.setConfigOption!({
             handle,
-            key: wireKey,
+            key,
             value,
           }),
         fallbackCode: "ACP_TURN_FAILED",
@@ -915,7 +905,7 @@ export class AcpSessionManager {
                 status: resolveBackgroundTaskFailureStatus(acpError),
                 endedAt: Date.now(),
                 lastEventAt: Date.now(),
-                error: formatAcpErrorChain(acpError),
+                error: acpError.message,
                 progressSummary: taskProgressSummary || null,
                 terminalSummary: null,
               });
@@ -924,7 +914,7 @@ export class AcpSessionManager {
               cfg: input.cfg,
               sessionKey,
               state: "error",
-              lastError: formatAcpErrorChain(acpError),
+              lastError: acpError.message,
             });
             throw acpError;
           } finally {
@@ -1889,7 +1879,6 @@ export class AcpSessionManager {
   private async resolveRuntimeCapabilities(params: {
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
-    includeStatusConfigOptionKeys?: boolean;
   }): Promise<AcpRuntimeCapabilities> {
     return await resolveManagerRuntimeCapabilities(params);
   }

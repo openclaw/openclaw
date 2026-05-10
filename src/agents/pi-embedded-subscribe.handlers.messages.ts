@@ -871,8 +871,6 @@ export function handleMessageEnd(
           );
         } else {
           ctx.state.lastBlockReplyText = text;
-          ctx.state.lastDeliveredBlockReplyText = text;
-          ctx.state.toolExecutionSinceLastBlockReply = false;
           emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
         }
       }

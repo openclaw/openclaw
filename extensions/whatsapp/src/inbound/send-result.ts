@@ -1,4 +1,4 @@
-import type { WAMessage, WAMessageKey } from "baileys";
+import type { WAMessage, WAMessageKey } from "@whiskeysockets/baileys";
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,

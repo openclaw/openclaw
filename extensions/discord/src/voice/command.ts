@@ -3,8 +3,8 @@ import {
   ChannelType as DiscordChannelType,
   type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveDiscordAccountAllowFrom } from "../accounts.js";
 import {
   Command,
@@ -75,7 +75,6 @@ async function authorizeVoiceCommand(
   const access = await authorizeDiscordVoiceIngress({
     cfg: params.cfg,
     discordConfig: params.discordConfig,
-    accountId: params.accountId,
     groupPolicy: params.groupPolicy,
     useAccessGroups: params.useAccessGroups,
     guild: interaction.guild,

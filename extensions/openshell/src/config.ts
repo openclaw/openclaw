@@ -4,7 +4,7 @@ import {
   formatPluginConfigIssue,
   mapPluginConfigIssues,
 } from "openclaw/plugin-sdk/extension-shared";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 
 type OpenShellPluginConfig = {
   mode?: "mirror" | "remote";

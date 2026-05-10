@@ -1,4 +1,4 @@
-export { resolveZaloRuntimeGroupPolicy } from "./src/group-access.js";
+export { evaluateZaloGroupAccess, resolveZaloRuntimeGroupPolicy } from "./src/group-access.js";
 export {
   collectRuntimeConfigAssignments,
   secretTargetRegistryEntries,

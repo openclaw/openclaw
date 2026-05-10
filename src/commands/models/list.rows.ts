@@ -174,25 +174,13 @@ function toConfiguredProviderListModel(params: {
   };
 }
 
-function toListRowInput(input: readonly string[] | undefined): ListRowModel["input"] {
-  const parsed = input?.filter(
-    (item): item is ListRowModel["input"][number] =>
-      item === "text" || item === "image" || item === "document",
-  );
-  return parsed?.length ? parsed : ["text"];
-}
-
-function toManifestCatalogListModel(
-  row: Pick<NormalizedModelCatalogRow, "provider" | "id" | "name" | "baseUrl" | "contextWindow"> & {
-    input?: readonly string[];
-  },
-): ListRowModel {
+function toManifestCatalogListModel(row: NormalizedModelCatalogRow): ListRowModel {
   return {
     provider: row.provider,
     id: row.id,
     name: row.name,
     baseUrl: row.baseUrl,
-    input: toListRowInput(row.input),
+    input: [...row.input],
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
   };
 }
@@ -314,29 +302,6 @@ export async function appendConfiguredProviderRows(params: {
         allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
       });
     }
-  }
-}
-
-export async function appendAuthenticatedCatalogRows(params: {
-  rows: ModelRow[];
-  context: RowBuilderContext;
-  seenKeys: Set<string>;
-}): Promise<void> {
-  const { loadModelCatalog } = await loadModelCatalogModule();
-  const catalog = await loadModelCatalog({ config: params.context.cfg, readOnly: true });
-  for (const entry of catalog) {
-    if (!params.context.authIndex.hasProviderAuth(entry.provider)) {
-      continue;
-    }
-    const key = modelKey(entry.provider, entry.id);
-    await appendVisibleRow({
-      rows: params.rows,
-      model: toManifestCatalogListModel(entry),
-      key,
-      context: params.context,
-      seenKeys: params.seenKeys,
-      allowProviderAvailabilityFallback: true,
-    });
   }
 }
 

@@ -416,11 +416,12 @@ export async function finalizeSetupWizard(
     if (hasBootstrap) {
       await prompter.note(
         [
-          "Your workspace is ready.",
-          'The first Terminal chat run will send: "Wake up, my friend!"',
-          "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
+          "This is the defining action that makes your agent you.",
+          "Please take your time.",
+          "The more you tell it, the better the experience will be.",
+          'We will send: "Wake up, my friend!"',
         ].join("\n"),
-        "Hatch your agent",
+        "Start TUI (best option!)",
       );
     }
 
@@ -441,12 +442,12 @@ export async function finalizeSetupWizard(
 
     const hatchOptions: { value: "tui" | "web" | "later"; label: string }[] = [
       { value: "tui", label: "Hatch in Terminal (recommended)" },
-      ...(gatewayProbe.ok ? [{ value: "web" as const, label: "Hatch in Browser" }] : []),
-      { value: "later", label: "Hatch later" },
+      ...(gatewayProbe.ok ? [{ value: "web" as const, label: "Open the Web UI" }] : []),
+      { value: "later", label: "Do this later" },
     ];
 
     hatchChoice = await prompter.select({
-      message: "How do you want to hatch your agent?",
+      message: "How do you want to hatch your bot?",
       options: hatchOptions,
       initialValue: "tui",
     });

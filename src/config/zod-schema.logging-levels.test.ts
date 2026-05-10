@@ -3,14 +3,14 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 describe("OpenClawSchema logging levels", () => {
   it("accepts valid logging level values for level and consoleLevel", () => {
-    const result = OpenClawSchema.safeParse({
-      logging: {
-        level: "debug",
-        consoleLevel: "warn",
-      },
-    });
-
-    expect(result.success).toBe(true);
+    expect(
+      OpenClawSchema.safeParse({
+        logging: {
+          level: "debug",
+          consoleLevel: "warn",
+        },
+      }),
+    ).toMatchObject({ success: true });
   });
 
   it("rejects invalid logging level values", () => {
@@ -25,19 +25,21 @@ describe("OpenClawSchema logging levels", () => {
       },
     });
 
-    expect(invalidLevel.success).toBe(false);
+    expect(invalidLevel).toMatchObject({ success: false });
     if (!invalidLevel.success) {
-      expect(
-        invalidLevel.error.issues.some((issue) => issue.path.join(".") === "logging.level"),
-      ).toBe(true);
+      expect(invalidLevel.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["logging", "level"],
+        }),
+      );
     }
-    expect(invalidConsoleLevel.success).toBe(false);
+    expect(invalidConsoleLevel).toMatchObject({ success: false });
     if (!invalidConsoleLevel.success) {
-      expect(
-        invalidConsoleLevel.error.issues.some(
-          (issue) => issue.path.join(".") === "logging.consoleLevel",
-        ),
-      ).toBe(true);
+      expect(invalidConsoleLevel.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["logging", "consoleLevel"],
+        }),
+      );
     }
   });
 });

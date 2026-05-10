@@ -1,5 +1,4 @@
 import { formatCliCommand } from "../../../cli/command-format.js";
-import { formatInvalidPortOption } from "../../../cli/error-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isValidEnvSecretRefId, resolveSecretInputRef } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
@@ -23,17 +22,14 @@ export function applyNonInteractiveGatewayConfig(params: {
 } | null {
   const { opts, runtime } = params;
 
-  const gatewayPort = opts.gatewayPort;
-  if (
-    gatewayPort !== undefined &&
-    (!Number.isFinite(gatewayPort) || gatewayPort <= 0 || gatewayPort > 65_535)
-  ) {
-    runtime.error(formatInvalidPortOption("--gateway-port"));
+  const hasGatewayPort = opts.gatewayPort !== undefined;
+  if (hasGatewayPort && (!Number.isFinite(opts.gatewayPort) || (opts.gatewayPort ?? 0) <= 0)) {
+    runtime.error("Invalid --gateway-port. Use a positive port number, for example 3000.");
     runtime.exit(1);
     return null;
   }
 
-  const port = gatewayPort ?? params.defaultPort;
+  const port = hasGatewayPort ? (opts.gatewayPort as number) : params.defaultPort;
   let bind = opts.gatewayBind ?? "loopback";
   const authModeRaw = opts.gatewayAuth ?? "token";
   if (authModeRaw !== "token" && authModeRaw !== "password") {

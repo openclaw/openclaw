@@ -1,6 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
+} from "openclaw/plugin-sdk/security-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   ChannelType,
@@ -11,14 +15,15 @@ import {
 } from "../internal/discord.js";
 import {
   isDiscordGroupAllowedByPolicy,
+  normalizeDiscordAllowList,
   normalizeDiscordSlug,
+  resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./allow-list.js";
-import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { runDiscordListenerWithSlowLog, type DiscordListenerLogger } from "./listeners.queue.js";
 import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
@@ -123,7 +128,6 @@ async function runDiscordReactionHandler(params: {
 }
 
 type DiscordReactionIngressAuthorizationParams = {
-  cfg: LoadedConfig;
   accountId: string;
   user: User;
   memberRoleIds: string[];
@@ -154,21 +158,36 @@ async function authorizeDiscordReactionIngress(
     return { allowed: false, reason: "group-dm-disabled" };
   }
   if (params.isDirectMessage) {
-    const access = await resolveDiscordDmCommandAccess({
-      cfg: params.cfg,
+    const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+      provider: "discord",
       accountId: params.accountId,
       dmPolicy: params.dmPolicy,
-      configuredAllowFrom: params.allowFrom,
-      sender: {
-        id: params.user.id,
-        name: params.user.username,
-        tag: formatDiscordUserTag(params.user),
-      },
-      allowNameMatching: params.allowNameMatching,
-      eventKind: "reaction",
     });
-    if (access.senderAccess.decision !== "allow") {
-      return { allowed: false, reason: access.senderAccess.reasonCode };
+    const access = resolveDmGroupAccessWithLists({
+      isGroup: false,
+      dmPolicy: params.dmPolicy,
+      groupPolicy: params.groupPolicy,
+      allowFrom: params.allowFrom,
+      groupAllowFrom: [],
+      storeAllowFrom,
+      isSenderAllowed: (allowEntries) => {
+        const allowList = normalizeDiscordAllowList(allowEntries, ["discord:", "user:", "pk:"]);
+        const allowMatch = allowList
+          ? resolveDiscordAllowListMatch({
+              allowList,
+              candidate: {
+                id: params.user.id,
+                name: params.user.username,
+                tag: formatDiscordUserTag(params.user),
+              },
+              allowNameMatching: params.allowNameMatching,
+            })
+          : { allowed: false };
+        return allowMatch.allowed;
+      },
+    });
+    if (access.decision !== "allow") {
+      return { allowed: false, reason: access.reason };
     }
   }
   if (
@@ -433,7 +452,6 @@ async function handleDiscordReactionEvent(
     const isGroupDm = channelType === ChannelType.GroupDM;
     const isThreadChannel = channelContext.isThreadChannel;
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
-      cfg: params.cfg,
       accountId: params.accountId,
       user,
       memberRoleIds,
@@ -501,7 +519,6 @@ async function handleDiscordReactionEvent(
       enqueueSystemEvent(text, {
         sessionKey: route.sessionKey,
         contextKey,
-        trusted: false,
       });
     };
     const shouldNotifyReaction = (options: {

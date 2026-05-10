@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
 import {
   canStartSchedulerLane,
   describeDockerSchedulerLimits,
@@ -159,10 +158,6 @@ describe("scripts/test-docker-all scheduler", () => {
         limits,
       ),
     ).toBe(false);
-  });
-
-  it("serializes live OpenAI Docker lanes by default", () => {
-    expect(DEFAULT_RESOURCE_LIMITS["live:openai"]).toBe(1);
   });
 
   it("describes effective scheduler limits for operator errors", () => {

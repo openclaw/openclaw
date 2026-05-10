@@ -3,7 +3,7 @@ import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+} from "openclaw/plugin-sdk/text-runtime";
 
 type TelegramMediaMessage = Pick<
   Message,

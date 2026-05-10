@@ -149,14 +149,6 @@ describe("version resolution", () => {
     ).toBe("9.9.9");
   });
 
-  function restoreEnvValue(key: string, value: string | undefined) {
-    if (value === undefined) {
-      delete process.env[key];
-      return;
-    }
-    process.env[key] = value;
-  }
-
   it("prefers runtime VERSION over stale OPENCLAW_VERSION for compatibility checks", () => {
     const previous = process.env.OPENCLAW_VERSION;
     const previousService = process.env.OPENCLAW_SERVICE_VERSION;
@@ -167,9 +159,9 @@ describe("version resolution", () => {
       process.env.npm_package_version = "2026.3.25-package";
       expect(resolveCompatibilityHostVersion()).toBe(VERSION);
     } finally {
-      restoreEnvValue("OPENCLAW_VERSION", previous);
-      restoreEnvValue("OPENCLAW_SERVICE_VERSION", previousService);
-      restoreEnvValue("npm_package_version", previousPackage);
+      process.env.OPENCLAW_VERSION = previous;
+      process.env.OPENCLAW_SERVICE_VERSION = previousService;
+      process.env.npm_package_version = previousPackage;
     }
   });
 
@@ -204,7 +196,7 @@ describe("version resolution", () => {
     expect(resolveUsableRuntimeVersion(" 2026.3.2 ")).toBe("2026.3.2");
   });
 
-  it("prefers runtime VERSION over service/package markers and ignores unusable env values", () => {
+  it("prefers runtime VERSION over service/package markers and ignores blank env values", () => {
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: "   ",
@@ -230,14 +222,6 @@ describe("version resolution", () => {
         },
         "fallback",
       ),
-    ).toBe(VERSION);
-
-    expect(
-      resolveRuntimeServiceVersion({
-        OPENCLAW_VERSION: "undefined",
-        OPENCLAW_SERVICE_VERSION: "null",
-        npm_package_version: "1.0.0-package",
-      }),
     ).toBe(VERSION);
   });
 });

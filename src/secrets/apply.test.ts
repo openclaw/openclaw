@@ -374,12 +374,7 @@ describe("secrets apply", () => {
     expect(dryRunSkipped.mode).toBe("dry-run");
     expect(dryRunSkipped.skippedExecRefs).toBe(1);
     expect(dryRunSkipped.checks.resolvabilityComplete).toBe(false);
-    try {
-      await fs.stat(execLogPath);
-      throw new Error("Expected exec log stat to fail");
-    } catch (error) {
-      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    }
+    await expect(fs.stat(execLogPath)).rejects.toMatchObject({ code: "ENOENT" });
 
     const dryRunAllowed = await runSecretsApply({
       plan,
@@ -412,10 +407,13 @@ describe("secrets apply", () => {
 
     const plan = createOpenAiExecProviderPlan();
 
-    const result = await runSecretsApply({ plan, env: fixture.env, write: false, allowExec: true });
-    expect(result.mode).toBe("dry-run");
-    expect(result.skippedExecRefs).toBe(0);
-    expect(result.checks.resolvabilityComplete).toBe(true);
+    await expect(
+      runSecretsApply({ plan, env: fixture.env, write: false, allowExec: true }),
+    ).resolves.toMatchObject({
+      mode: "dry-run",
+      skippedExecRefs: 0,
+      checks: { resolvabilityComplete: true },
+    });
   });
 
   it("ignores unrelated auth-profile store refs during no-op write apply", async () => {
@@ -449,11 +447,12 @@ describe("secrets apply", () => {
       },
     });
 
-    const result = await runSecretsApply({ plan, env: fixture.env, write: true });
-    expect(result.mode).toBe("write");
-    expect(result.changed).toBe(false);
-    expect(result.changedFiles).toStrictEqual([]);
-    expect(result.checks.resolvabilityComplete).toBe(true);
+    await expect(runSecretsApply({ plan, env: fixture.env, write: true })).resolves.toMatchObject({
+      mode: "write",
+      changed: false,
+      changedFiles: [],
+      checks: { resolvabilityComplete: true },
+    });
   });
 
   it("rejects write mode for exec plans unless allowExec is set", async () => {

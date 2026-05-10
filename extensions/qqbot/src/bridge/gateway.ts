@@ -7,7 +7,7 @@
  */
 
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { EngineAdapters } from "../engine/adapter/index.js";
 import {
   startGateway as coreStartGateway,
@@ -25,11 +25,7 @@ import { setBridgeLogger } from "./logger.js";
 import { toGatewayAccount } from "./narrowing.js";
 import { resolveQQBotPluginVersion } from "./plugin-version.js";
 import { getQQBotRuntime, getQQBotRuntimeForEngine } from "./runtime.js";
-import {
-  createSdkAccessAdapter,
-  createSdkHistoryAdapter,
-  createSdkMentionGateAdapter,
-} from "./sdk-adapter.js";
+import { createSdkHistoryAdapter, createSdkMentionGateAdapter } from "./sdk-adapter.js";
 
 // ---- One-time startup initialization (module-level) ----
 
@@ -79,7 +75,6 @@ function createEngineAdapters(_runtime: GatewayPluginRuntime): EngineAdapters {
   return {
     history: createSdkHistoryAdapter(),
     mentionGate: createSdkMentionGateAdapter(),
-    access: createSdkAccessAdapter(),
     audioConvert: {
       convertSilkToWav: _audioModule.convertSilkToWav,
       isVoiceAttachment: _audioModule.isVoiceAttachment,

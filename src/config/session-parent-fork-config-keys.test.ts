@@ -13,11 +13,11 @@ describe("session parent fork config keys", () => {
     if (result.ok) {
       return;
     }
-    const issue = result.issues.find(
-      (candidate) =>
-        candidate.path === "session" &&
-        candidate.message.includes('Unrecognized key: "parentForkMaxTokens"'),
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        path: "session",
+        message: expect.stringContaining('Unrecognized key: "parentForkMaxTokens"'),
+      }),
     );
-    expect(issue).toBeDefined();
   });
 });

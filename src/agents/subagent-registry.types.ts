@@ -29,7 +29,6 @@ export type SubagentRunRecord = {
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
-  taskName?: string;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;

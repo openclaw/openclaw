@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetIMessageShortIdState } from "../monitor-reply-cache.js";
@@ -64,12 +64,12 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     return resolveIMessageInboundDecision(createInboundDecisionParams(overrides));
   }
 
-  it("drops inbound messages when outbound message id matches echo cache", async () => {
+  it("drops inbound messages when outbound message id matches echo cache", () => {
     const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
       return lookup.messageId === "42";
     });
 
-    const decision = await resolveDecision({
+    const decision = resolveDecision({
       message: {
         id: 42,
         text: "Reasoning:\n_step_",
@@ -86,12 +86,12 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(echoHas).toHaveBeenCalledTimes(1);
   });
 
-  it("matches attachment-only echoes by bodyText placeholder", async () => {
+  it("matches attachment-only echoes by bodyText placeholder", () => {
     const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
       return lookup.text === "<media:image>" && lookup.messageId === "42";
     });
 
-    const decision = await resolveDecision({
+    const decision = resolveDecision({
       message: {
         id: 42,
         text: "",
@@ -116,12 +116,12 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     );
   });
 
-  it("drops reflected self-chat duplicates after seeing the from-me copy", async () => {
+  it("drops reflected self-chat duplicates after seeing the from-me copy", () => {
     const selfChatCache = createSelfChatCache();
     const createdAt = "2026-03-02T20:58:10.649Z";
 
     expect(
-      await resolveDecision({
+      resolveDecision({
         message: {
           id: 9641,
           sender: "+15555550123",
@@ -138,7 +138,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     ).toMatchObject({ kind: "dispatch" });
 
     expect(
-      await resolveDecision({
+      resolveDecision({
         message: {
           id: 9642,
           sender: "+15555550123",
@@ -153,10 +153,10 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     ).toEqual({ kind: "drop", reason: "self-chat echo" });
   });
 
-  it("does not drop same-text messages when created_at differs", async () => {
+  it("does not drop same-text messages when created_at differs", () => {
     const selfChatCache = createSelfChatCache();
 
-    await resolveDecision({
+    resolveDecision({
       message: {
         id: 9641,
         text: "ok",
@@ -166,7 +166,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       selfChatCache,
     });
 
-    const decision = await resolveDecision({
+    const decision = resolveDecision({
       message: {
         id: 9642,
         text: "ok",
@@ -178,7 +178,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
-  it("keeps self-chat cache scoped to configured group threads", async () => {
+  it("keeps self-chat cache scoped to configured group threads", () => {
     const selfChatCache = createSelfChatCache();
     const groupedCfg = {
       channels: {
@@ -193,7 +193,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     const createdAt = "2026-03-02T20:58:10.649Z";
 
     expect(
-      await resolveDecision({
+      resolveDecision({
         cfg: groupedCfg,
         message: {
           id: 9701,
@@ -206,7 +206,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       }),
     ).toEqual({ kind: "drop", reason: "from me" });
 
-    const decision = await resolveDecision({
+    const decision = resolveDecision({
       cfg: groupedCfg,
       message: {
         id: 9702,
@@ -220,12 +220,12 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
-  it("does not drop other participants in the same group thread", async () => {
+  it("does not drop other participants in the same group thread", () => {
     const selfChatCache = createSelfChatCache();
     const createdAt = "2026-03-02T20:58:10.649Z";
 
     expect(
-      await resolveDecision({
+      resolveDecision({
         message: {
           id: 9751,
           chat_id: 123,
@@ -238,7 +238,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       }),
     ).toEqual({ kind: "drop", reason: "from me" });
 
-    const decision = await resolveDecision({
+    const decision = resolveDecision({
       message: {
         id: 9752,
         chat_id: 123,
@@ -253,7 +253,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
-  it("drops group echoes persisted under chat_guid scope", async () => {
+  it("drops group echoes persisted under chat_guid scope", () => {
     // Outbound `send` to a group keyed by chat_guid persists the echo scope
     // as `${accountId}:chat_guid:${chatGuid}` (see send.ts:resolveOutboundEchoScope).
     // The inbound side has chat_id, chat_guid, and chat_identifier all
@@ -264,7 +264,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       return scope === "default:chat_guid:iMessage;+;chat0000" && lookup.messageId === "9001";
     });
 
-    const decision = await resolveDecision({
+    const decision = resolveDecision({
       message: {
         id: 9001,
         chat_id: 42,
@@ -285,12 +285,12 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(calls).toContain("default:chat_guid:iMessage;+;chat0000");
   });
 
-  it("drops group echoes persisted under chat_identifier scope", async () => {
+  it("drops group echoes persisted under chat_identifier scope", () => {
     const echoHas = vi.fn((scope: string, lookup: { text?: string; messageId?: string }) => {
       return scope === "default:chat_identifier:chat0000" && lookup.messageId === "9001";
     });
 
-    const decision = await resolveDecision({
+    const decision = resolveDecision({
       message: {
         id: 9001,
         chat_id: 42,
@@ -310,12 +310,12 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(calls).toContain("default:chat_identifier:chat0000");
   });
 
-  it("drops group echoes persisted under chat_id scope (baseline)", async () => {
+  it("drops group echoes persisted under chat_id scope (baseline)", () => {
     const echoHas = vi.fn((scope: string, lookup: { text?: string; messageId?: string }) => {
       return scope === "default:chat_id:42" && lookup.messageId === "9001";
     });
 
-    const decision = await resolveDecision({
+    const decision = resolveDecision({
       message: {
         id: 9001,
         chat_id: 42,
@@ -335,13 +335,13 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(calls).toContain("default:chat_id:42");
   });
 
-  it("does not drop a group inbound when echo cache holds an unrelated chat_guid", async () => {
+  it("does not drop a group inbound when echo cache holds an unrelated chat_guid", () => {
     const echoHas = vi.fn(
       (scope: string, lookup: { text?: string; messageId?: string }) =>
         scope === "default:chat_guid:iMessage;+;OTHER" && lookup.messageId === "9001",
     );
 
-    const decision = await resolveDecision({
+    const decision = resolveDecision({
       message: {
         id: 9001,
         chat_id: 42,
@@ -359,13 +359,13 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
-  it("sanitizes reflected duplicate previews before logging", async () => {
+  it("sanitizes reflected duplicate previews before logging", () => {
     const selfChatCache = createSelfChatCache();
     const logVerbose = vi.fn();
     const createdAt = "2026-03-02T20:58:10.649Z";
     const bodyText = "line-1\nline-2\t\u001b[31mred";
 
-    await resolveDecision({
+    resolveDecision({
       message: {
         id: 9801,
         sender: "+15555550123",
@@ -381,7 +381,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       logVerbose,
     });
 
-    await resolveDecision({
+    resolveDecision({
       message: {
         id: 9802,
         sender: "+15555550123",
@@ -413,8 +413,8 @@ describe("describeIMessageEchoDropLog", () => {
 });
 
 describe("buildIMessageInboundContext", () => {
-  it("keeps numeric row id and provider GUID separately for action tooling", async () => {
-    const decision = await resolveIMessageInboundDecision({
+  it("keeps numeric row id and provider GUID separately for action tooling", () => {
+    const decision = resolveIMessageInboundDecision({
       cfg: {} as OpenClawConfig,
       accountId: "default",
       message: {
@@ -496,8 +496,8 @@ describe("resolveIMessageInboundDecision command auth", () => {
       logVerbose: undefined,
     });
 
-  it("does not auto-authorize DM commands in open mode without allowlists", async () => {
-    const decision = await resolveDmCommandDecision({
+  it("does not auto-authorize DM commands in open mode without allowlists", () => {
+    const decision = resolveDmCommandDecision({
       messageId: 100,
       storeAllowFrom: [],
     });
@@ -505,8 +505,8 @@ describe("resolveIMessageInboundDecision command auth", () => {
     expect(decision).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
   });
 
-  it("authorizes DM commands for senders in pairing-mode store allowlist", async () => {
-    const decision = await resolveDmCommandDecision({
+  it("authorizes DM commands for senders in pairing-mode store allowlist", () => {
+    const decision = resolveDmCommandDecision({
       messageId: 101,
       dmPolicy: "pairing",
       storeAllowFrom: ["+15555550123"],

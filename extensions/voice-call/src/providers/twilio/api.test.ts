@@ -41,11 +41,15 @@ describe("twilioApiRequest", () => {
     expect(auditContext).toBe("voice-call.twilio.api");
     expect(policy).toEqual({ allowedHostnames: ["api.twilio.com"] });
     expect(timeoutMs).toBe(30_000);
-    expect(init?.method).toBe("POST");
-    expect(init?.headers).toEqual({
-      Authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    });
+    expect(init).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }),
+    );
     const requestBody = init?.body;
     if (!(requestBody instanceof URLSearchParams)) {
       throw new Error("expected URLSearchParams request body");
@@ -122,25 +126,20 @@ describe("twilioApiRequest", () => {
       release,
     });
 
-    try {
-      await twilioApiRequest({
+    await expect(
+      twilioApiRequest({
         baseUrl: "https://api.twilio.com",
         accountSid: "AC123",
         authToken: "secret",
         endpoint: "/Calls/CA123.json",
         body: {},
-      });
-      throw new Error("expected Twilio API request to reject");
-    } catch (error) {
-      expect(error).toBeInstanceOf(TwilioApiError);
-      const twilioError = error as TwilioApiError;
-      expect(twilioError.name).toBe("TwilioApiError");
-      expect(twilioError.httpStatus).toBe(400);
-      expect(twilioError.twilioCode).toBe(21220);
-      expect(twilioError.message).toBe(
-        "Twilio API error: 400 Call is not in-progress. Cannot redirect.",
-      );
-    }
+      }),
+    ).rejects.toMatchObject({
+      name: "TwilioApiError",
+      httpStatus: 400,
+      twilioCode: 21220,
+      message: "Twilio API error: 400 Call is not in-progress. Cannot redirect.",
+    } satisfies Partial<TwilioApiError>);
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

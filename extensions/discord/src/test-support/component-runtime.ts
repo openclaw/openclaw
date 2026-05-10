@@ -53,17 +53,13 @@ const resolvePluginConversationBindingApprovalMock: AsyncUnknownMock =
 const buildPluginBindingResolvedTextMock: UnknownMock =
   runtimeMocks.buildPluginBindingResolvedTextMock;
 
-async function readChannelIngressStoreAllowFromForDmPolicy(params: {
+async function readStoreAllowFromForDmPolicy(params: {
   provider: string;
   accountId: string;
   dmPolicy?: string | null;
   shouldRead?: boolean | null;
 }) {
-  if (
-    params.shouldRead === false ||
-    params.dmPolicy === "allowlist" ||
-    params.dmPolicy === "open"
-  ) {
+  if (params.shouldRead === false || params.dmPolicy === "allowlist") {
     return [];
   }
   return await readAllowFromStoreMock(params.provider, params.accountId);
@@ -71,7 +67,7 @@ async function readChannelIngressStoreAllowFromForDmPolicy(params: {
 
 vi.mock("../monitor/agent-components-helpers.runtime.js", () => {
   return {
-    readChannelIngressStoreAllowFromForDmPolicy,
+    readStoreAllowFromForDmPolicy,
     resolvePinnedMainDmOwnerFromAllowlist,
     upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
   };

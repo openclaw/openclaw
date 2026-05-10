@@ -82,10 +82,7 @@ type CodexPromptSnapshotApi = {
   };
   createCodexDynamicToolSpecsForPromptSnapshot: (params: {
     tools: AnyAgentTool[];
-    pluginConfig?: {
-      codexDynamicToolsLoading?: "searchable" | "direct";
-      codexDynamicToolsExclude?: string[];
-    };
+    pluginConfig?: { codexDynamicToolsProfile?: "native-first" | "openclaw-compat" };
     directToolNames?: string[];
   }) => CodexDynamicToolSpec[];
 };
@@ -362,6 +359,7 @@ function createDynamicTools(params: {
   });
   return codexApi.createCodexDynamicToolSpecsForPromptSnapshot({
     tools: normalized.filter((tool) => HAPPY_PATH_TOOL_NAMES.has(tool.name)),
+    pluginConfig: { codexDynamicToolsProfile: "native-first" },
     directToolNames: ["message"],
   });
 }
@@ -672,7 +670,9 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     scenario,
     sessionKey: scenario.ctx.SessionKey ?? `agent:main:${scenario.id}`,
   });
-  const appServer = codexApi.resolveCodexPromptSnapshotAppServerOptions();
+  const appServer = codexApi.resolveCodexPromptSnapshotAppServerOptions({
+    codexDynamicToolsProfile: "native-first",
+  });
   const codexSnapshot = codexApi.buildCodexHarnessPromptSnapshot({
     attempt,
     cwd: WORKSPACE_DIR,

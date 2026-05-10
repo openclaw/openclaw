@@ -12,15 +12,13 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
           models: {
             providers: {
               openai: {
+                apiKey: "sk-config",
                 baseUrl: "https://proxy.example.test/openai/v1",
               },
             },
           },
         } as never,
         model: "text-embedding-3-small",
-        remote: {
-          apiKey: "sk-test",
-        },
       },
     });
 

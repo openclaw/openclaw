@@ -13,6 +13,10 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => memberMocks.enqueue(...args),
 }));
+vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
+  readStoreAllowFromForDmPolicy: async () => [],
+}));
+
 type MemberHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
 type MemberCaseArgs = {

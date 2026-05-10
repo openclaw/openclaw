@@ -106,9 +106,8 @@ export function expectResolvedOpenAIRuntime(agentDir: string) {
   const activeAuthStore = getActiveSecretsRuntimeSnapshot()?.authStores.find(
     (entry) => entry.agentDir === agentDir,
   )?.store;
-  const openaiProfile = activeAuthStore?.profiles["openai:default"];
-  expect(openaiProfile?.type).toBe("api_key");
-  if (openaiProfile?.type === "api_key") {
-    expect(openaiProfile.key).toBe("sk-file-runtime");
-  }
+  expect(activeAuthStore?.profiles["openai:default"]).toMatchObject({
+    type: "api_key",
+    key: "sk-file-runtime",
+  });
 }

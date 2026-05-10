@@ -1,8 +1,6 @@
 import { z } from "zod";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString as toText,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalString as toText } from "../shared/string-coerce.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 export type ClaudeChannelMode = "off" | "on" | "auto";
 
@@ -162,7 +160,7 @@ export function summarizeStructuredResult(
 }
 
 function resolveConversationChannel(row: SessionRow): string | undefined {
-  return normalizeOptionalLowercaseString(
+  return normalizeMessageChannel(
     toText(row.deliveryContext?.channel) ??
       toText(row.lastChannel) ??
       toText(row.channel) ??

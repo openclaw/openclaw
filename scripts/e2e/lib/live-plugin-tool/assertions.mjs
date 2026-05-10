@@ -3,10 +3,6 @@ import path from "node:path";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
-const agentTurnTimeoutSeconds = Number.parseInt(
-  process.env.OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS ?? "900",
-  10,
-);
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -150,7 +146,7 @@ function configure() {
         baseUrl: (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim(),
         apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         agentRuntime: { id: "pi" },
-        timeoutSeconds: agentTurnTimeoutSeconds,
+        timeoutSeconds: 300,
         models: [
           {
             id: modelId,
@@ -182,7 +178,7 @@ function configure() {
       },
       workspace: path.join(stateDir(), "workspace"),
       skipBootstrap: true,
-      timeoutSeconds: agentTurnTimeoutSeconds,
+      timeoutSeconds: 420,
     },
   };
   writeJson(cfgPath, cfg);

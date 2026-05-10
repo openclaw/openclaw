@@ -264,8 +264,8 @@ describe("promptRemoteGatewayConfig", () => {
     const next = await promptRemoteGatewayConfig({} as OpenClawConfig, prompter);
 
     expect(next.gateway?.remote?.url).toBe("ws://127.0.0.1:18789");
-    expect(vi.mocked(select).mock.calls.map(([params]) => params.message)).not.toContain(
-      "Connection method",
+    expect(select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Connection method" }),
     );
   });
 
@@ -391,9 +391,7 @@ describe("promptRemoteGatewayConfig", () => {
     const next = await promptRemoteGatewayConfig(cfg, prompter);
 
     expect(next.gateway?.remote?.token).toBe("preexisting-remote-token");
-    expect(vi.mocked(text).mock.calls.map(([params]) => params.message)).not.toContain(
-      "Gateway token",
-    );
+    expect(text).not.toHaveBeenCalledWith(expect.objectContaining({ message: "Gateway token" }));
   });
 
   it("keeps an existing remote gateway password when user confirms via masked-preview prompt", async () => {
@@ -429,8 +427,6 @@ describe("promptRemoteGatewayConfig", () => {
     const next = await promptRemoteGatewayConfig(cfg, prompter);
 
     expect(next.gateway?.remote?.password).toBe("preexisting-remote-password");
-    expect(vi.mocked(text).mock.calls.map(([params]) => params.message)).not.toContain(
-      "Gateway password",
-    );
+    expect(text).not.toHaveBeenCalledWith(expect.objectContaining({ message: "Gateway password" }));
   });
 });

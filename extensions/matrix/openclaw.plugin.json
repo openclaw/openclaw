@@ -1,9 +1,7 @@
 {
   "id": "matrix",
-  "commandAliases": [{ "name": "matrix" }],
   "activation": {
-    "onStartup": false,
-    "onCommands": ["matrix"]
+    "onStartup": false
   },
   "channels": ["matrix"],
   "channelEnvVars": {

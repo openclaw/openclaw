@@ -197,16 +197,6 @@ export type ConfigWriteOptions = {
    */
   unsetPaths?: string[][];
   /**
-   * Paths that were explicitly set by the caller. Values at these paths are
-   * persisted even when they equal runtime-injected defaults.
-   */
-  explicitSetPaths?: readonly (readonly string[])[];
-  /**
-   * Internal companion for explicitSetPaths after a wrapper has projected a
-   * runtime-shaped config back onto the authored source shape.
-   */
-  explicitSetValueSource?: OpenClawConfig;
-  /**
    * Internal fast path for callers that already hold a fresh config snapshot.
    * Avoids rereading the full config just to prepare an immediate write.
    */
@@ -2005,8 +1995,6 @@ export function createConfigIO(
         nextConfig: cfg,
         rootAuthoredConfig: snapshot.parsed,
         unsetPaths,
-        explicitSetPaths: options.explicitSetPaths,
-        explicitSetValueSource: options.explicitSetValueSource,
       });
       try {
         const resolvedIncludes = resolveConfigIncludes(
@@ -2435,10 +2423,6 @@ export async function writeConfigFile(
       envSnapshotForRestore: options.envSnapshotForRestore,
     }),
     unsetPaths: resolveManagedUnsetPathsForWrite(options.unsetPaths),
-    explicitSetPaths: options.explicitSetPaths,
-    explicitSetValueSource: options.explicitSetPaths
-      ? (options.explicitSetValueSource ?? cfg)
-      : undefined,
     allowDestructiveWrite: options.allowDestructiveWrite,
     allowConfigSizeDrop: options.allowConfigSizeDrop,
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,

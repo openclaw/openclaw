@@ -1,7 +1,4 @@
-/**
- * @deprecated Broad public SDK barrel. Prefer focused plugin runtime subpaths
- * and avoid adding new imports here.
- */
+// Public plugin-command/hook helpers for plugins that extend shared command or hook flows.
 
 export * from "../plugins/commands.js";
 export * from "../plugins/hook-runner-global.js";

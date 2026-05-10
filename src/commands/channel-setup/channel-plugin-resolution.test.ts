@@ -109,12 +109,13 @@ describe("resolveInstallableChannelPlugin", () => {
 
     expect(result.catalogEntry?.pluginId).toBe("telegram");
     expect(result.plugin?.id).toBe("telegram");
-    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
-    const snapshotRequest =
-      mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mock.calls[0]?.[0];
-    expect(snapshotRequest?.channel).toBe("telegram");
-    expect(snapshotRequest?.pluginId).toBe("telegram");
-    expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
+    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        pluginId: "telegram",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
   });
 
   it("keeps trusted workspace channel plugins eligible for setup resolution", async () => {
@@ -147,12 +148,13 @@ describe("resolveInstallableChannelPlugin", () => {
 
     expect(result.catalogEntry?.pluginId).toBe("evil-telegram-shadow");
     expect(result.plugin?.id).toBe("telegram");
-    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
-    const snapshotRequest =
-      mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mock.calls[0]?.[0];
-    expect(snapshotRequest?.channel).toBe("telegram");
-    expect(snapshotRequest?.pluginId).toBe("evil-telegram-shadow");
-    expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
+    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        pluginId: "evil-telegram-shadow",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
   });
 
   it("returns an existing plugin that lacks the requested capability without reinstalling", async () => {
@@ -236,9 +238,11 @@ describe("resolveInstallableChannelPlugin", () => {
       supports: (plugin) => Boolean(plugin.directory),
     });
 
-    expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
-    const installRequest = mocks.ensureChannelSetupPluginInstalled.mock.calls[0]?.[0];
-    expect(installRequest?.entry).toBe(catalogEntry);
+    expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: catalogEntry,
+      }),
+    );
     expect(result.pluginInstalled).toBe(true);
   });
 });

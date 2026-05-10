@@ -45,7 +45,7 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
 
-    expect(logs.some((line) => line.includes("Tokens (ctx %"))).toBe(true);
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("Tokens (ctx %")]));
 
     const row = logs.find((line) => line.includes("+15555550123")) ?? "";
     expect(row).toContain("2.0k/32k (6%)");
@@ -82,7 +82,7 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
 
-    expect(logs.some((line) => line.includes("Runtime"))).toBe(true);
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("Runtime")]));
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toContain("claude-opus-4-7");
@@ -316,7 +316,7 @@ describe("sessionsCommand", () => {
     const { runtime, errors } = makeRuntime();
 
     await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors[0]).toContain("--active must be a positive number of minutes");
+    expect(errors[0]).toContain("--active must be a positive integer");
 
     fs.rmSync(store);
   });
@@ -334,7 +334,7 @@ describe("sessionsCommand", () => {
     const { runtime, errors } = makeRuntime();
 
     await expect(sessionsCommand({ store, limit: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors[0]).toContain('--limit must be a positive integer or "all", for example');
+    expect(errors[0]).toContain('--limit must be a positive integer or "all"');
 
     fs.rmSync(store);
   });

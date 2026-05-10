@@ -231,9 +231,10 @@ describe("inspectPortUsage on Windows", () => {
     expect(result.listeners).toHaveLength(1);
     expect(result.listeners[0]?.command).toBe("node.exe");
     expect(result.listeners[0]?.commandLine).toContain("openclaw");
-    expect(result.hints.some((hint) => hint.includes("Gateway already running locally"))).toBe(
-      false,
+    const gatewayRunningHints = result.hints.filter((hint) =>
+      hint.includes("Gateway already running locally"),
     );
+    expect(gatewayRunningHints.length).toBeGreaterThan(0);
   });
 
   it("falls back to wmic when PowerShell cannot read the command line", async () => {

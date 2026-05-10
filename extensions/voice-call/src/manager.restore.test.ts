@@ -19,18 +19,6 @@ function requireSingleActiveCall(manager: CallManager) {
   return activeCall;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireSingleHangupCall(provider: FakeProvider) {
-  expect(provider.hangupCalls).toHaveLength(1);
-  return requireRecord(provider.hangupCalls[0], "hangup call");
-}
-
 describe("CallManager verification on restore", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -102,8 +90,11 @@ describe("CallManager verification on restore", () => {
     });
 
     expect(manager.getActiveCalls()).toHaveLength(0);
-    const hangupCall = requireSingleHangupCall(provider);
-    expect(hangupCall.reason).toBe("timeout");
+    expect(provider.hangupCalls).toEqual([
+      expect.objectContaining({
+        reason: "timeout",
+      }),
+    ]);
 
     await flushPendingCallRecordWritesForTest();
     expect(loadActiveCallsFromStore(storePath).activeCalls.size).toBe(0);
@@ -224,10 +215,13 @@ describe("CallManager verification on restore", () => {
         .map((call) => call.callId)
         .toSorted(),
     ).toEqual(["active-a", "failure-a", "unknown-a"]);
-    const hangupCall = requireSingleHangupCall(provider);
-    expect(hangupCall.callId).toBe("expired-a");
-    expect(hangupCall.providerCallId).toBe("expired-provider-a");
-    expect(hangupCall.reason).toBe("timeout");
+    expect(provider.hangupCalls).toEqual([
+      expect.objectContaining({
+        callId: "expired-a",
+        providerCallId: "expired-provider-a",
+        reason: "timeout",
+      }),
+    ]);
     expect(logSpy).toHaveBeenCalledWith(
       "[voice-call] Skipped 2 restored call(s) with no providerCallId",
     );
@@ -271,8 +265,11 @@ describe("CallManager verification on restore", () => {
 
     await vi.advanceTimersByTimeAsync(1_100);
     expect(manager.getActiveCalls()).toHaveLength(0);
-    const hangupCall = requireSingleHangupCall(provider);
-    expect(hangupCall.reason).toBe("timeout");
+    expect(provider.hangupCalls).toEqual([
+      expect.objectContaining({
+        reason: "timeout",
+      }),
+    ]);
   });
 
   it("restores dedupe keys from terminal persisted calls so replayed webhooks stay ignored", async () => {

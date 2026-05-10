@@ -1,4 +1,4 @@
-import { normalizeGoogleApiBaseUrl } from "../provider-policy.js";
+import { normalizeGoogleApiBaseUrl } from "../api.js";
 
 const DEFAULT_GEMINI_WEB_SEARCH_MODEL = "gemini-2.5-flash";
 

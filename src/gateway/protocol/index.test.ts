@@ -153,7 +153,6 @@ describe("validateTalkConfigResult", () => {
               },
               model: "gpt-realtime",
               voice: "alloy",
-              instructions: "Speak with crisp diction.",
               mode: "realtime",
               transport: "gateway-relay",
               brain: "agent-consult",
@@ -409,7 +408,7 @@ describe("validateTalkSessionRelayParams", () => {
         sessionId: "session-1",
         callId: "call-1",
         result: { ok: true },
-        options: { suppressResponse: true, willContinue: true },
+        options: { willContinue: true },
       }),
     ).toBe(true);
   });

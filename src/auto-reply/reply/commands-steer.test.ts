@@ -3,9 +3,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const steerRuntimeMocks = vi.hoisted(() => ({
-  formatEmbeddedPiQueueFailureSummary: vi.fn(),
   isEmbeddedPiRunActive: vi.fn(),
-  queueEmbeddedPiMessageWithOutcome: vi.fn(),
+  queueEmbeddedPiMessage: vi.fn(),
   resolveActiveEmbeddedRunSessionId: vi.fn(),
 }));
 
@@ -24,18 +23,8 @@ function buildParams(commandBody: string) {
 
 describe("handleSteerCommand", () => {
   beforeEach(() => {
-    steerRuntimeMocks.formatEmbeddedPiQueueFailureSummary
-      .mockReset()
-      .mockReturnValue(
-        "queue_message_failed reason=not_streaming sessionId=session-active gatewayHealth=live",
-      );
     steerRuntimeMocks.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
-    steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome.mockReset().mockReturnValue({
-      queued: true,
-      sessionId: "session-active",
-      target: "embedded_run",
-      gatewayHealth: "live",
-    });
+    steerRuntimeMocks.queueEmbeddedPiMessage.mockReset().mockReturnValue(true);
     steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReset().mockReturnValue(undefined);
   });
 
@@ -51,7 +40,7 @@ describe("handleSteerCommand", () => {
     expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(
       "agent:main:main",
     );
-    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
+    expect(steerRuntimeMocks.queueEmbeddedPiMessage).toHaveBeenCalledWith(
       "session-active",
       "keep going",
       {
@@ -74,7 +63,7 @@ describe("handleSteerCommand", () => {
     expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(
       "agent:main:discord:direct:target",
     );
-    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
+    expect(steerRuntimeMocks.queueEmbeddedPiMessage).toHaveBeenCalledWith(
       "session-target",
       "check the target",
       {
@@ -96,7 +85,7 @@ describe("handleSteerCommand", () => {
       "agent:main:main",
     );
     expect(steerRuntimeMocks.isEmbeddedPiRunActive).toHaveBeenCalledWith("stored-session-id");
-    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
+    expect(steerRuntimeMocks.queueEmbeddedPiMessage).toHaveBeenCalledWith(
       "stored-session-id",
       "continue from state",
       {
@@ -113,7 +102,7 @@ describe("handleSteerCommand", () => {
       shouldContinue: false,
       reply: { text: "Usage: /steer <message>" },
     });
-    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expect(steerRuntimeMocks.queueEmbeddedPiMessage).not.toHaveBeenCalled();
   });
 
   it("does not start a new run when no current session run is active", async () => {
@@ -123,46 +112,18 @@ describe("handleSteerCommand", () => {
       shouldContinue: false,
       reply: { text: "⚠️ No active run to steer in this session." },
     });
-    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expect(steerRuntimeMocks.queueEmbeddedPiMessage).not.toHaveBeenCalled();
   });
 
   it("reports when the active run rejects steering injection", async () => {
     steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
-    steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome.mockReturnValue({
-      queued: false,
-      sessionId: "session-active",
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    });
+    steerRuntimeMocks.queueEmbeddedPiMessage.mockReturnValue(false);
 
     const result = await handleSteerCommand(buildParams("/steer keep going"), true);
 
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "⚠️ Current run is active but not accepting steering right now." },
-    });
-    expect(steerRuntimeMocks.formatEmbeddedPiQueueFailureSummary).toHaveBeenCalledWith({
-      queued: false,
-      sessionId: "session-active",
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    });
-  });
-
-  it("reports compacting runs distinctly", async () => {
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
-    steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome.mockReturnValue({
-      queued: false,
-      sessionId: "session-active",
-      reason: "compacting",
-      gatewayHealth: "live",
-    });
-
-    const result = await handleSteerCommand(buildParams("/steer keep going"), true);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "⚠️ Current run is compacting; retry after compaction finishes." },
     });
   });
 });

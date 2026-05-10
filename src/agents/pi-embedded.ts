@@ -20,7 +20,6 @@ export {
   isEmbeddedPiRunStreaming,
   queueEmbeddedAgentMessage,
   queueEmbeddedPiMessage,
-  queueEmbeddedPiMessageWithOutcome,
   resolveActiveEmbeddedAgentRunSessionId,
   resolveActiveEmbeddedRunSessionId,
   resolveEmbeddedSessionLane,

@@ -74,6 +74,11 @@ export function createSignalToolResultConfig(
   };
 }
 
+export async function flush() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 export function createMockSignalDaemonHandle(
   overrides: {
     stop?: MockFn;
@@ -183,14 +188,8 @@ vi.mock("./client.js", () => ({
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
 }));
 
-vi.mock("./client-adapter.js", () => ({
-  streamSignalEvents: (...args: unknown[]) => streamMock(...args),
-  signalCheck: (...args: unknown[]) => signalCheckMock(...args),
-  signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
-}));
-
-vi.mock("./daemon.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./daemon.js")>();
+vi.mock("./daemon.js", async () => {
+  const actual = await vi.importActual<typeof import("./daemon.js")>("./daemon.js");
   return {
     ...actual,
     spawnSignalDaemon: (...args: unknown[]) => spawnSignalDaemonMock(...args),

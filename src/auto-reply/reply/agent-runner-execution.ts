@@ -130,8 +130,6 @@ type FallbackSelectionState = Pick<
   | "providerOverride"
   | "modelOverride"
   | "modelOverrideSource"
-  | "modelOverrideFallbackOriginProvider"
-  | "modelOverrideFallbackOriginModel"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -141,8 +139,6 @@ const FALLBACK_SELECTION_STATE_KEYS = [
   "providerOverride",
   "modelOverride",
   "modelOverrideSource",
-  "modelOverrideFallbackOriginProvider",
-  "modelOverrideFallbackOriginModel",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -169,20 +165,6 @@ function setFallbackSelectionStateField(
     case "modelOverrideSource":
       if (entry.modelOverrideSource !== value) {
         entry.modelOverrideSource = value as SessionEntry["modelOverrideSource"];
-        return true;
-      }
-      return false;
-    case "modelOverrideFallbackOriginProvider":
-      if (entry.modelOverrideFallbackOriginProvider !== value) {
-        entry.modelOverrideFallbackOriginProvider =
-          value as SessionEntry["modelOverrideFallbackOriginProvider"];
-        return true;
-      }
-      return false;
-    case "modelOverrideFallbackOriginModel":
-      if (entry.modelOverrideFallbackOriginModel !== value) {
-        entry.modelOverrideFallbackOriginModel =
-          value as SessionEntry["modelOverrideFallbackOriginModel"];
         return true;
       }
       return false;
@@ -214,8 +196,6 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
     providerOverride: entry.providerOverride,
     modelOverride: entry.modelOverride,
     modelOverrideSource: entry.modelOverrideSource,
-    modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
-    modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
     authProfileOverride: entry.authProfileOverride,
     authProfileOverrideSource: entry.authProfileOverrideSource,
     authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
@@ -225,8 +205,6 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
 function buildFallbackSelectionState(params: {
   provider: string;
   model: string;
-  originProvider: string;
-  originModel: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 }): FallbackSelectionState {
@@ -234,30 +212,10 @@ function buildFallbackSelectionState(params: {
     providerOverride: params.provider,
     modelOverride: params.model,
     modelOverrideSource: "auto",
-    modelOverrideFallbackOriginProvider: params.originProvider,
-    modelOverrideFallbackOriginModel: params.originModel,
     authProfileOverride: params.authProfileId,
     authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
     authProfileOverrideCompactionCount: undefined,
   };
-}
-
-function resolveFallbackSelectionOrigin(params: { entry: SessionEntry; run: FollowupRun["run"] }): {
-  provider: string;
-  model: string;
-} {
-  if (params.entry.modelOverrideSource === "auto") {
-    const persistedOriginProvider = normalizeOptionalString(
-      params.entry.modelOverrideFallbackOriginProvider,
-    );
-    const persistedOriginModel = normalizeOptionalString(
-      params.entry.modelOverrideFallbackOriginModel,
-    );
-    if (persistedOriginProvider && persistedOriginModel) {
-      return { provider: persistedOriginProvider, model: persistedOriginModel };
-    }
-  }
-  return { provider: params.run.provider, model: params.run.model };
 }
 
 export function applyFallbackCandidateSelectionToEntry(params: {
@@ -271,12 +229,9 @@ export function applyFallbackCandidateSelectionToEntry(params: {
     return { updated: false };
   }
   const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
-  const origin = resolveFallbackSelectionOrigin({ entry: params.entry, run: params.run });
   const nextState = buildFallbackSelectionState({
     provider: params.provider,
     model: params.model,
-    originProvider: origin.provider,
-    originModel: origin.model,
     authProfileId: scopedAuthProfile.authProfileId,
     authProfileIdSource: scopedAuthProfile.authProfileIdSource,
   });
@@ -512,7 +467,7 @@ function buildMissingApiKeyFailureText(message: string): string | null {
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5`, or set `OPENAI_API_KEY`, then try again.";
   }
   if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
@@ -1055,22 +1010,6 @@ function createEmbeddedLifecycleTerminalBackstop(params: { runId: string; sessio
   return { emit, note };
 }
 
-function emitModelFallbackStepLifecycle(params: {
-  runId: string;
-  sessionKey?: string;
-  step: Record<string, unknown>;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    stream: "lifecycle",
-    data: {
-      phase: "fallback_step",
-      ...params.step,
-    },
-  });
-}
-
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -1423,13 +1362,6 @@ export async function runAgentTurnWithFallback(params: {
         runId,
         sessionId: params.followupRun.run.sessionId,
         lane: runLane,
-        onFallbackStep: (step) => {
-          emitModelFallbackStepLifecycle({
-            runId,
-            sessionKey: params.sessionKey,
-            step,
-          });
-        },
         classifyResult: async ({ result, provider, model }) => {
           const classification = outcomePlan.classifyRunResult({
             result,

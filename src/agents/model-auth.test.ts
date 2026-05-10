@@ -227,21 +227,6 @@ async function resolveCustomProviderAuth(
   });
 }
 
-function expectAuthFields(
-  auth: Awaited<ReturnType<typeof resolveApiKeyForProvider>>,
-  expected: {
-    apiKey: string;
-    mode: "api-key" | "oauth";
-    source?: string;
-  },
-) {
-  expect(auth.apiKey).toBe(expected.apiKey);
-  expect(auth.mode).toBe(expected.mode);
-  if (expected.source !== undefined) {
-    expect(auth.source).toBe(expected.source);
-  }
-}
-
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
     const env = {
@@ -750,7 +735,7 @@ describe("resolveApiKeyForProvider", () => {
       }),
     );
 
-    expectAuthFields(resolved, {
+    expect(resolved).toMatchObject({
       apiKey: "plugin-web-fallback-key",
       source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
@@ -794,7 +779,7 @@ describe("resolveApiKeyForProvider", () => {
       }),
     );
 
-    expectAuthFields(resolved, {
+    expect(resolved).toMatchObject({
       apiKey: "plugin-web-runtime-key",
       source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
@@ -876,7 +861,7 @@ describe("resolveApiKeyForProvider", () => {
       },
     });
 
-    expectAuthFields(resolved, {
+    expect(resolved).toMatchObject({
       apiKey: "sk-config-live",
       source: "models.json",
       mode: "api-key",
@@ -900,7 +885,7 @@ describe("resolveApiKeyForProvider", () => {
       }),
     );
 
-    expectAuthFields(resolved, {
+    expect(resolved).toMatchObject({
       apiKey: "ollama-local",
       mode: "api-key",
     });
@@ -1017,7 +1002,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       store: { version: 1, profiles: {} },
     });
 
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       apiKey: "ollama-local",
       source: "models.json (local marker)",
       mode: "api-key",
@@ -1051,7 +1036,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       store: { version: 1, profiles: {} },
     });
 
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       apiKey: "ollama-local",
       source: "models.providers.ollama-gpu1 (synthetic local key)",
       mode: "api-key",
@@ -1086,7 +1071,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       store: { version: 1, profiles: {} },
     });
 
-    expectAuthFields(auth, {
+    expect(auth).toMatchObject({
       apiKey: CUSTOM_LOCAL_AUTH_MARKER,
       source: "models.json (local marker)",
       mode: "api-key",
@@ -1241,8 +1226,10 @@ describe("applyLocalNoAuthHeaderOverride", () => {
       },
     );
 
-    expect(model.headers?.Authorization).toBeNull();
-    expect(model.headers?.["X-Test"]).toBe("1");
+    expect(model.headers).toMatchObject({
+      Authorization: null,
+      "X-Test": "1",
+    });
   });
 });
 

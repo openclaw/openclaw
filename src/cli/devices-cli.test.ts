@@ -118,42 +118,6 @@ function mockLocalPairingFallback(message?: string) {
   summarizeDeviceTokens.mockReturnValue(undefined);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function requireGatewayCall(index: number): Record<string, unknown> {
-  const call = (callGateway.mock.calls as unknown[][])[index]?.[0];
-  return requireRecord(call, `gateway call ${index + 1}`);
-}
-
-function expectGatewayCall(index: number, fields: Record<string, unknown>) {
-  expectRecordFields(requireGatewayCall(index), fields);
-}
-
-function hasGatewayMethod(method: string): boolean {
-  return (callGateway.mock.calls as unknown[][]).some((call) => {
-    const params = call[0];
-    return (
-      typeof params === "object" &&
-      params !== null &&
-      "method" in params &&
-      params.method === method
-    );
-  });
-}
-
 describe("devices cli approve", () => {
   it("uses admin scope when approving an admin-scope request", async () => {
     callGateway
@@ -166,12 +130,20 @@ describe("devices cli approve", () => {
     await runDevicesApprove(["req-123"]);
 
     expect(callGateway).toHaveBeenCalledTimes(2);
-    expectGatewayCall(0, { method: "device.pair.list" });
-    expectGatewayCall(1, {
-      method: "device.pair.approve",
-      params: { requestId: "req-123" },
-      scopes: ["operator.admin"],
-    });
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "device.pair.list",
+      }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-123" },
+        scopes: ["operator.admin"],
+      }),
+    );
   });
 
   it("keeps pairing scope for non-admin device approvals", async () => {
@@ -189,11 +161,14 @@ describe("devices cli approve", () => {
 
     await runDevicesApprove(["req-pairing"]);
 
-    expectGatewayCall(1, {
-      method: "device.pair.approve",
-      params: { requestId: "req-pairing" },
-      scopes: ["operator.pairing"],
-    });
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-pairing" },
+        scopes: ["operator.pairing"],
+      }),
+    );
   });
 
   it("retries explicit approval with admin scope when a paired-device session is ownership-denied", async () => {
@@ -208,16 +183,22 @@ describe("devices cli approve", () => {
     await runDevicesApprove(["req-cross-device"]);
 
     expect(callGateway).toHaveBeenCalledTimes(3);
-    expectGatewayCall(1, {
-      method: "device.pair.approve",
-      params: { requestId: "req-cross-device" },
-      scopes: undefined,
-    });
-    expectGatewayCall(2, {
-      method: "device.pair.approve",
-      params: { requestId: "req-cross-device" },
-      scopes: ["operator.admin"],
-    });
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-cross-device" },
+        scopes: undefined,
+      }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-cross-device" },
+        scopes: ["operator.admin"],
+      }),
+    );
   });
 
   it("uses admin scope when a repair approval would inherit an admin token", async () => {
@@ -239,11 +220,14 @@ describe("devices cli approve", () => {
 
     await runDevicesApprove(["req-repair"]);
 
-    expectGatewayCall(1, {
-      method: "device.pair.approve",
-      params: { requestId: "req-repair" },
-      scopes: ["operator.admin"],
-    });
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.approve",
+        params: { requestId: "req-repair" },
+        scopes: ["operator.admin"],
+      }),
+    );
   });
 
   it("prints selected details and exits when implicit approval is used", async () => {
@@ -272,7 +256,9 @@ describe("devices cli approve", () => {
     await runDevicesApprove([]);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expectGatewayCall(0, { method: "device.pair.list" });
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.list" }),
+    );
     const logOutput = runtime.log.mock.calls.map((c) => readRuntimeCallText(c)).join("\n");
     expect(logOutput).toContain("req-abc");
     expect(logOutput).toContain("Device Nine");
@@ -282,7 +268,9 @@ describe("devices cli approve", () => {
       expect.stringContaining("openclaw devices approve req-abc"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(hasGatewayMethod("device.pair.approve")).toBe(false);
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.approve" }),
+    );
   });
 
   it("sanitizes preview ip output for implicit approval", async () => {
@@ -341,8 +329,13 @@ describe("devices cli approve", () => {
 
     await runDevicesApprove(args);
 
-    expectGatewayCall(0, { method: "device.pair.list" });
-    expect(hasGatewayMethod("device.pair.approve")).toBe(false);
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "device.pair.list" }),
+    );
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.approve" }),
+    );
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(`openclaw devices approve ${expectedRequestId}`),
     );
@@ -367,7 +360,9 @@ describe("devices cli approve", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("openclaw devices approve req-blank"),
     );
-    expect(hasGatewayMethod("device.pair.approve")).toBe(false);
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.approve" }),
+    );
   });
 
   it("includes explicit gateway flags in the rerun approval command", async () => {
@@ -391,7 +386,9 @@ describe("devices cli approve", () => {
     );
     expect(errorOutput).toContain("Reuse the same --token option when rerunning.");
     expect(errorOutput).not.toContain("secret-token");
-    expect(hasGatewayMethod("device.pair.approve")).toBe(false);
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.approve" }),
+    );
   });
 
   it("returns JSON for implicit approval preview in JSON mode", async () => {
@@ -418,7 +415,9 @@ describe("devices cli approve", () => {
       },
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(hasGatewayMethod("device.pair.approve")).toBe(false);
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.approve" }),
+    );
   });
 
   it("prints an error and exits when no pending requests are available", async () => {
@@ -427,10 +426,14 @@ describe("devices cli approve", () => {
     await runDevicesApprove([]);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expectGatewayCall(0, { method: "device.pair.list" });
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.list" }),
+    );
     expect(runtime.error).toHaveBeenCalledWith("No pending device pairing requests to approve");
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(hasGatewayMethod("device.pair.approve")).toBe(false);
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.approve" }),
+    );
   });
 });
 
@@ -441,10 +444,12 @@ describe("devices cli remove", () => {
     await runDevicesCommand(["remove", "device-1"]);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expectGatewayCall(0, {
-      method: "device.pair.remove",
-      params: { deviceId: "device-1" },
-    });
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "device.pair.remove",
+        params: { deviceId: "device-1" },
+      }),
+    );
   });
 });
 
@@ -469,10 +474,22 @@ describe("devices cli clear", () => {
 
     await runDevicesCommand(["clear", "--yes", "--pending"]);
 
-    expectGatewayCall(0, { method: "device.pair.list" });
-    expectGatewayCall(1, { method: "device.pair.remove", params: { deviceId: "device-1" } });
-    expectGatewayCall(2, { method: "device.pair.remove", params: { deviceId: "device-2" } });
-    expectGatewayCall(3, { method: "device.pair.reject", params: { requestId: "req-1" } });
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "device.pair.list" }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ method: "device.pair.remove", params: { deviceId: "device-1" } }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ method: "device.pair.remove", params: { deviceId: "device-2" } }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({ method: "device.pair.reject", params: { requestId: "req-1" } }),
+    );
   });
 });
 
@@ -514,7 +531,7 @@ describe("devices cli tokens", () => {
   ])("$label", async ({ argv, expectedCall }) => {
     callGateway.mockResolvedValueOnce({ ok: true });
     await runDevicesCommand(argv);
-    expectGatewayCall(0, expectedCall);
+    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining(expectedCall));
   });
 
   it("rejects blank device or role values", async () => {
@@ -536,7 +553,9 @@ describe("devices cli local fallback", () => {
 
     await runDevicesCommand(["list"]);
 
-    expectGatewayCall(0, { method: "device.pair.list" });
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.list" }),
+    );
     expect(listDevicePairing).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
   });

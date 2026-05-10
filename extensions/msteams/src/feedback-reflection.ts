@@ -1,4 +1,16 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+/**
+ * Background reflection triggered by negative user feedback (thumbs-down).
+ *
+ * Flow:
+ * 1. User thumbs-down -> invoke handler acks immediately
+ * 2. This module runs in the background (fire-and-forget)
+ * 3. Reads recent session context
+ * 4. Sends a synthetic reflection prompt to the agent
+ * 5. Stores the derived learning in session
+ * 6. Optionally sends a proactive follow-up to the user
+ */
+
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   dispatchReplyFromConfigWithSettledDispatcher,
   type OpenClawConfig,

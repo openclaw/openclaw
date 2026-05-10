@@ -9,7 +9,7 @@ import { WebSocket } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
-import type { CallRecord, NormalizedEvent } from "../types.js";
+import type { CallRecord } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
@@ -128,13 +128,6 @@ const startRealtimeServer = async (
   });
 };
 
-async function waitForRealtimeTest(
-  callback: () => void | Promise<void>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  await vi.waitFor(callback, { interval: 1, ...options });
-}
-
 describe("RealtimeCallHandler path routing", () => {
   it("uses the request host and stream path in TwiML", () => {
     const handler = makeHandler();
@@ -220,18 +213,18 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-outbound", callSid: "CA-outbound" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
         callbacks?.onReady?.();
-        const event = processEvent.mock.calls[0]?.[0] as NormalizedEvent | undefined;
-        expect(event?.type).toBe("call.initiated");
-        if (event?.type !== "call.initiated") {
-          throw new Error("expected outbound realtime stream to emit call.initiated");
-        }
-        expect(event.direction).toBe("outbound");
-        expect(event.from).toBe("+15550001234");
-        expect(event.to).toBe("+15550009999");
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.initiated",
+            direction: "outbound",
+            from: "+15550001234",
+            to: "+15550009999",
+          }),
+        );
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
@@ -287,7 +280,7 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-silent", callSid: "CA-silent" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
 
@@ -339,7 +332,7 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-speak", callSid: "CA-speak" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
 
@@ -407,22 +400,21 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-complete", callSid: "CA-complete" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
 
         ws.send(JSON.stringify({ event: "stop" }));
 
-        await waitForRealtimeTest(() => {
-          const events = processEvent.mock.calls.map(([event]) => event as NormalizedEvent);
-          const ended = events.find((event) => event.type === "call.ended");
-          expect(ended).toBeDefined();
-          if (ended?.type !== "call.ended") {
-            throw new Error("expected realtime stop to emit call.ended");
-          }
-          expect(ended.callId).toBe("call-1");
-          expect(ended.providerCallId).toBe("CA-complete");
-          expect(ended.reason).toBe("completed");
+        await vi.waitFor(() => {
+          expect(processEvent).toHaveBeenCalledWith(
+            expect.objectContaining({
+              type: "call.ended",
+              callId: "call-1",
+              providerCallId: "CA-complete",
+              reason: "completed",
+            }),
+          );
         });
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
@@ -484,7 +476,7 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-talk-events", callSid: "CA-talk-events" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
 
@@ -495,7 +487,7 @@ describe("RealtimeCallHandler path routing", () => {
             media: { payload: Buffer.from([0xff, 0xff]).toString("base64") },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(sendAudio).toHaveBeenCalledWith(Buffer.from([0xff, 0xff]));
         });
         callbacks?.onTranscript?.("user", "hello", true);
@@ -525,9 +517,11 @@ describe("RealtimeCallHandler path routing", () => {
           "output.audio.done",
           "turn.ended",
         ]);
-        expect(recent?.[0]?.provider).toBe("openai");
-        expect(recent?.[0]?.sessionId).toBe("voice-call:call-1:realtime");
-        expect(recent?.[0]?.transport).toBe("gateway-relay");
+        expect(recent?.[0]).toMatchObject({
+          provider: "openai",
+          sessionId: "voice-call:call-1:realtime",
+          transport: "gateway-relay",
+        });
         expect(call.metadata?.lastTalkEventType).toBe("turn.ended");
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
@@ -582,7 +576,7 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-barge-in", callSid: "CA-barge-in" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
 
@@ -591,7 +585,7 @@ describe("RealtimeCallHandler path routing", () => {
         ws.send(JSON.stringify({ event: "media", media: { payload: speechPayload } }));
         ws.send(JSON.stringify({ event: "media", media: { payload: speechPayload } }));
 
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(sendAudio).toHaveBeenCalledTimes(2);
         });
 
@@ -602,12 +596,11 @@ describe("RealtimeCallHandler path routing", () => {
             }>
           | undefined;
         const cancelled = recent?.find((event) => event.type === "turn.cancelled");
-        if (!cancelled) {
-          throw new Error("expected barge-in to cancel the active turn");
-        }
-        expect(cancelled.turnId).toMatch(/^turn-\d+$/);
+        expect(cancelled).toMatchObject({
+          turnId: expect.stringMatching(/^turn-\d+$/),
+        });
         expect(recent?.findLast((event) => event.type === "input.audio.delta")?.turnId).not.toBe(
-          cancelled.turnId,
+          cancelled?.turnId,
         );
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
@@ -683,7 +676,7 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-tool", callSid: "CA-tool" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
 
@@ -696,26 +689,25 @@ describe("RealtimeCallHandler path routing", () => {
           args: { question: "Are the basement lights on?" },
         });
         await vi.advanceTimersByTimeAsync(350);
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(receivedPartialTranscript).toBe("Are the basement");
         });
 
-        await waitForRealtimeTest(() => {
-          const workingCall = submitToolResult.mock.calls.find(
-            ([callId]) => callId === "consult-call",
+        await vi.waitFor(() => {
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "consult-call",
+            expect.objectContaining({
+              status: "working",
+              tool: "openclaw_agent_consult",
+            }),
+            { willContinue: true },
           );
-          expect(workingCall).toBeDefined();
-          const payload = workingCall?.[1] as Record<string, unknown> | undefined;
-          expect(payload?.status).toBe("working");
-          expect(payload?.tool).toBe("openclaw_agent_consult");
-          expect(typeof payload?.message).toBe("string");
-          expect(workingCall?.[2]).toEqual({ willContinue: true });
         });
         expect(submitToolResult).toHaveBeenCalledTimes(1);
 
         resolveConsult?.({ text: "The basement lights are on." });
 
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(submitToolResult).toHaveBeenLastCalledWith(
             "consult-call",
             {
@@ -733,7 +725,7 @@ describe("RealtimeCallHandler path routing", () => {
           args: {},
         });
 
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(submitToolResult).toHaveBeenCalledWith("custom-call", { ok: true }, undefined);
         });
         expect(submitToolResult).not.toHaveBeenCalledWith("custom-call", expect.anything(), {
@@ -787,9 +779,7 @@ describe("RealtimeCallHandler path routing", () => {
         realtimeProvider: makeRealtimeProvider(createBridge),
       },
     );
-    const consult = vi.fn<
-      (args: unknown, callId: string, context: Record<string, unknown>) => Promise<{ text: string }>
-    >(async () => ({ text: "I created the smoke test file." }));
+    const consult = vi.fn(async () => ({ text: "I created the smoke test file." }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
     const server = await startRealtimeServer(handler);
 
@@ -802,7 +792,7 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-force", callSid: "CA-force" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
 
@@ -810,18 +800,16 @@ describe("RealtimeCallHandler path routing", () => {
         callbacks?.onTranscript?.("user", "Create a smoke test file for me.", true);
         await vi.advanceTimersByTimeAsync(200);
 
-        await waitForRealtimeTest(() => {
-          expect(consult).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => {
+          expect(consult).toHaveBeenCalledWith(
+            expect.objectContaining({
+              question: "Create a smoke test file for me.",
+            }),
+            "call-1",
+            {},
+          );
         });
-        const [args, callId, context] = consult.mock.calls[0] ?? [];
-        expect(args).toEqual({
-          question: "Create a smoke test file for me.",
-          context:
-            "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult because consultPolicy is always.",
-        });
-        expect(callId).toBe("call-1");
-        expect(context).toEqual({});
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(sendUserMessage).toHaveBeenCalledWith(
             expect.stringContaining("I created the smoke test file."),
           );
@@ -882,23 +870,31 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-direct-turns", callSid: "CA-direct-turns" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
 
         callbacks?.onTranscript?.("user", "Hello there.", true);
         callbacks?.onTranscript?.("user", "How are you?", true);
 
-        const speechTranscripts = processEvent.mock.calls
-          .map(([event]) => event as NormalizedEvent)
-          .filter(
-            (event): event is Extract<NormalizedEvent, { type: "call.speech" }> =>
-              event.type === "call.speech",
-          )
-          .map((event) => event.transcript);
-        expect(speechTranscripts).toContain("Hello there.");
-        expect(speechTranscripts).toContain("How are you?");
-        expect(speechTranscripts).not.toContain("Hello there. How are you?");
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.speech",
+            transcript: "Hello there.",
+          }),
+        );
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.speech",
+            transcript: "How are you?",
+          }),
+        );
+        expect(processEvent).not.toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.speech",
+            transcript: "Hello there. How are you?",
+          }),
+        );
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
@@ -947,9 +943,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const consult = vi.fn<
-      (args: unknown, callId: string, context: Record<string, unknown>) => Promise<{ text: string }>
-    >(async () => ({ text: "I sent it." }));
+    const consult = vi.fn(async () => ({ text: "I sent it." }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
     const server = await startRealtimeServer(handler);
 
@@ -962,7 +956,7 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-settle", callSid: "CA-settle" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
 
@@ -978,21 +972,20 @@ describe("RealtimeCallHandler path routing", () => {
         callbacks?.onTranscript?.("user", "message.", false);
         await vi.advanceTimersByTimeAsync(350);
 
-        await waitForRealtimeTest(
+        await vi.waitFor(
           () => {
-            expect(consult).toHaveBeenCalledTimes(1);
+            expect(consult).toHaveBeenCalledWith(
+              expect.objectContaining({
+                question: "Send a Discord message.",
+                context: expect.stringContaining("shorter consult question: message"),
+              }),
+              "call-1",
+              { partialUserTranscript: "Send a Discord message." },
+            );
           },
           { timeout: 2_000 },
         );
-        const [args, callId, context] = consult.mock.calls[0] ?? [];
-        const consultArgs = args as { question?: string; context?: string } | undefined;
-        expect(consultArgs?.question).toBe("Send a Discord message.");
-        expect(consultArgs?.context).toBe(
-          "Realtime provider supplied a shorter consult question: message",
-        );
-        expect(callId).toBe("call-1");
-        expect(context).toEqual({ partialUserTranscript: "Send a Discord message." });
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(submitToolResult).toHaveBeenLastCalledWith(
             "consult-call",
             { text: "I sent it." },
@@ -1064,7 +1057,7 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-native", callSid: "CA-native" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
 
@@ -1077,7 +1070,7 @@ describe("RealtimeCallHandler path routing", () => {
           args: { question: "Send me a Discord message." },
         });
 
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(submitToolResult).toHaveBeenLastCalledWith(
             "consult-call",
             { text: "Native consult result." },
@@ -1157,7 +1150,7 @@ describe("RealtimeCallHandler path routing", () => {
             start: { streamSid: "MZ-fast", callSid: "CA-fast" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(createBridge).toHaveBeenCalled();
         });
 
@@ -1168,7 +1161,7 @@ describe("RealtimeCallHandler path routing", () => {
           args: { question: "What do you remember?" },
         });
 
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           expect(submitToolResult).toHaveBeenCalledWith(
             "consult-call",
             { text: "Fast context." },
@@ -1227,7 +1220,7 @@ describe("RealtimeCallHandler websocket hardening", () => {
             start: { streamSid: "MZ-backpressure", callSid: "CA-backpressure" },
           }),
         );
-        await waitForRealtimeTest(() => {
+        await vi.waitFor(() => {
           if (!sendProviderAudio) {
             throw new Error("expected realtime provider audio sender");
           }

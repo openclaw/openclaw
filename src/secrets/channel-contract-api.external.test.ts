@@ -44,12 +44,6 @@ function requireChannelSecretContractApi(
   return api;
 }
 
-function expectDiscordTokenRegistryEntry(contractApi: ChannelSecretContractApi): void {
-  const entries = contractApi.secretTargetRegistryEntries ?? [];
-  const entry = entries.find((record) => record.id === "channels.discord.token");
-  expect(entry?.id).toBe("channels.discord.token");
-}
-
 function channelSecretContractModuleSource(channelId: string) {
   return `
 module.exports = {
@@ -120,7 +114,13 @@ describe("external channel secret contract api", () => {
     });
 
     const contractApi = requireChannelSecretContractApi(api);
-    expectDiscordTokenRegistryEntry(contractApi);
+    expect(contractApi.secretTargetRegistryEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "channels.discord.token",
+        }),
+      ]),
+    );
     expect(contractApi.collectRuntimeConfigAssignments).toBeTypeOf("function");
   });
 
@@ -151,7 +151,13 @@ describe("external channel secret contract api", () => {
     });
 
     const contractApi = requireChannelSecretContractApi(api);
-    expectDiscordTokenRegistryEntry(contractApi);
+    expect(contractApi.secretTargetRegistryEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "channels.discord.token",
+        }),
+      ]),
+    );
     expect(contractApi.collectRuntimeConfigAssignments).toBeTypeOf("function");
   });
 
@@ -193,7 +199,13 @@ describe("external channel secret contract api", () => {
         env,
       });
       const contractApi = requireChannelSecretContractApi(api);
-      expectDiscordTokenRegistryEntry(contractApi);
+      expect(contractApi.secretTargetRegistryEntries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "channels.discord.token",
+          }),
+        ]),
+      );
     },
   );
 

@@ -2,13 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-runtime.js";
 
-function requireSelection(selection: ReturnType<typeof resolveSimpleCompletionSelectionForAgent>) {
-  if (!selection) {
-    throw new Error("expected simple completion selection");
-  }
-  return selection;
-}
-
 describe("resolveSimpleCompletionSelectionForAgent", () => {
   it("preserves multi-segment model ids (openrouter provider models)", () => {
     const cfg = {
@@ -17,11 +10,13 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       },
     } as OpenClawConfig;
 
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
+    const selection = resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" });
+    expect(selection).toEqual(
+      expect.objectContaining({
+        provider: "openrouter",
+        modelId: "anthropic/claude-sonnet-4-6",
+      }),
     );
-    expect(selection.provider).toBe("openrouter");
-    expect(selection.modelId).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it("uses the routed agent model override when present", () => {
@@ -32,11 +27,13 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       },
     } as OpenClawConfig;
 
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "ops" }),
+    const selection = resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "ops" });
+    expect(selection).toEqual(
+      expect.objectContaining({
+        provider: "openrouter",
+        modelId: "openrouter/aurora-alpha",
+      }),
     );
-    expect(selection.provider).toBe("openrouter");
-    expect(selection.modelId).toBe("openrouter/aurora-alpha");
   });
 
   it("keeps trailing auth profile for credential lookup", () => {
@@ -46,12 +43,14 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       },
     } as OpenClawConfig;
 
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
+    const selection = resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" });
+    expect(selection).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+        profileId: "work",
+      }),
     );
-    expect(selection.provider).toBe("anthropic");
-    expect(selection.modelId).toBe("claude-opus-4-6");
-    expect(selection.profileId).toBe("work");
   });
 
   it("resolves alias refs before parsing provider/model", () => {
@@ -66,22 +65,26 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       },
     } as OpenClawConfig;
 
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
+    const selection = resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" });
+    expect(selection).toEqual(
+      expect.objectContaining({
+        provider: "openrouter",
+        modelId: "anthropic/claude-sonnet-4-6",
+        profileId: "work",
+      }),
     );
-    expect(selection.provider).toBe("openrouter");
-    expect(selection.modelId).toBe("anthropic/claude-sonnet-4-6");
-    expect(selection.profileId).toBe("work");
   });
 
   it("falls back to runtime default model when no explicit model is configured", () => {
     const cfg = {} as OpenClawConfig;
 
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
+    const selection = resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" });
+    expect(selection).toEqual(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.5",
+      }),
     );
-    expect(selection.provider).toBe("openai");
-    expect(selection.modelId).toBe("gpt-5.5");
   });
 
   it("uses configured provider fallback when default provider is unavailable", () => {
@@ -111,10 +114,12 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       },
     } as OpenClawConfig;
 
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
+    const selection = resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" });
+    expect(selection).toEqual(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.5",
+      }),
     );
-    expect(selection.provider).toBe("openai");
-    expect(selection.modelId).toBe("gpt-5.5");
   });
 });

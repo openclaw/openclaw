@@ -1,7 +1,4 @@
-/**
- * @deprecated Public SDK subpath has no bundled extension production imports.
- * Prefer vendor-neutral memory-host SDK subpaths for new plugin code.
- */
+// Manual facade. Keep loader boundary explicit.
 import type { OpenClawConfig } from "../config/types.js";
 import {
   createLazyFacadeObjectValue,

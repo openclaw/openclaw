@@ -36,10 +36,13 @@ describe("status daemon summary", () => {
       },
     });
 
-    const summary = await getDaemonStatusSummary();
-    expect(summary.runtimeShort).toContain("running");
-    expect(summary.layout?.execStart).toBe("/usr/bin/node /opt/openclaw/dist/entry.js gateway");
-    expect(summary.layout?.sourceScope).toBe("system");
-    expect(summary.layout?.entrypointSourceCheckout).toBe(false);
+    await expect(getDaemonStatusSummary()).resolves.toMatchObject({
+      runtimeShort: expect.stringContaining("running"),
+      layout: {
+        execStart: "/usr/bin/node /opt/openclaw/dist/entry.js gateway",
+        sourceScope: "system",
+        entrypointSourceCheckout: false,
+      },
+    });
   });
 });

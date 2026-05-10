@@ -73,68 +73,35 @@ export async function createChildAdapter(params: {
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
-  const childStdin = spawned.child.stdin;
-  let stdinDestroyed = childStdin?.destroyed ?? false;
-  let stdinEnded = childStdin?.writableEnded === true || childStdin?.writableFinished === true;
-  if (childStdin) {
-    childStdin.once("finish", () => {
-      stdinEnded = true;
-    });
-    childStdin.once("close", () => {
-      stdinEnded = true;
-      stdinDestroyed = true;
-    });
-    childStdin.once("error", () => {
-      stdinDestroyed = true;
-    });
+  if (child.stdin) {
     if (params.input !== undefined) {
-      childStdin.write(params.input);
-      stdinEnded = true;
-      childStdin.end();
+      child.stdin.write(params.input);
+      child.stdin.end();
     } else if (stdinMode === "pipe-closed") {
-      stdinEnded = true;
-      childStdin.end();
+      child.stdin.end();
     }
   }
 
-  const stdin: ManagedRunStdin | undefined = childStdin
+  const stdin: ManagedRunStdin | undefined = child.stdin
     ? {
-        get destroyed() {
-          return stdinDestroyed || childStdin.destroyed;
-        },
-        get writable() {
-          return !stdinDestroyed && !stdinEnded && childStdin.writable;
-        },
-        get writableEnded() {
-          return stdinEnded || childStdin.writableEnded;
-        },
-        get writableFinished() {
-          return childStdin.writableFinished;
-        },
+        destroyed: false,
         write: (data: string, cb?: (err?: Error | null) => void) => {
-          if (stdinDestroyed || stdinEnded || !childStdin.writable) {
-            cb?.(new Error("stdin is not writable"));
-            return;
-          }
           try {
-            childStdin.write(data, cb);
+            child.stdin.write(data, cb);
           } catch (err) {
             cb?.(err as Error);
           }
         },
         end: () => {
           try {
-            stdinEnded = true;
-            childStdin.end();
+            child.stdin.end();
           } catch {
             // ignore close errors
           }
         },
         destroy: () => {
           try {
-            stdinDestroyed = true;
-            stdinEnded = true;
-            childStdin.destroy();
+            child.stdin.destroy();
           } catch {
             // ignore destroy errors
           }

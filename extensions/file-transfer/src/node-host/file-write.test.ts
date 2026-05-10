@@ -20,59 +20,32 @@ function b64(s: string): string {
   return Buffer.from(s, "utf-8").toString("base64");
 }
 
-function expectFailure(result: Awaited<ReturnType<typeof handleFileWrite>>, code: string) {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("expected file write failure");
-  }
-  expect(result.code).toBe(code);
-}
-
-function expectSuccessFields(
-  result: Awaited<ReturnType<typeof handleFileWrite>>,
-  fields: Record<string, unknown>,
-) {
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(`expected ok, got ${result.code}: ${result.message}`);
-  }
-  for (const [key, value] of Object.entries(fields)) {
-    expect(result[key as keyof typeof result]).toEqual(value);
-  }
-}
-
-async function expectAccessMissing(target: string) {
-  try {
-    await fs.access(target);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected ${target} to be missing`);
-}
-
 describe("handleFileWrite — input validation", () => {
   it("rejects empty / non-string path", async () => {
-    expectFailure(await handleFileWrite({ path: "", contentBase64: b64("x") }), "INVALID_PATH");
+    expect(await handleFileWrite({ path: "", contentBase64: b64("x") })).toMatchObject({
+      ok: false,
+      code: "INVALID_PATH",
+    });
   });
 
   it("rejects relative paths", async () => {
     const r = await handleFileWrite({ path: "relative.txt", contentBase64: b64("x") });
-    expectFailure(r, "INVALID_PATH");
+    expect(r).toMatchObject({ ok: false, code: "INVALID_PATH" });
   });
 
   it("rejects paths with NUL bytes", async () => {
     const r = await handleFileWrite({ path: "/tmp/foo\0bar", contentBase64: b64("x") });
-    expectFailure(r, "INVALID_PATH");
+    expect(r).toMatchObject({ ok: false, code: "INVALID_PATH" });
   });
 
   it("requires contentBase64 but allows an empty encoded payload", async () => {
     const missing = await handleFileWrite({ path: path.join(tmpRoot, "missing.bin") });
-    expectFailure(missing, "INVALID_BASE64");
+    expect(missing).toMatchObject({ ok: false, code: "INVALID_BASE64" });
 
     const target = path.join(tmpRoot, "empty.bin");
     const empty = await handleFileWrite({ path: target, contentBase64: "" });
-    expectSuccessFields(empty, {
+    expect(empty).toMatchObject({
+      ok: true,
       size: 0,
       sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     });
@@ -118,7 +91,7 @@ describe("handleFileWrite — overwrite policy", () => {
       contentBase64: b64("after"),
       overwrite: false,
     });
-    expectFailure(r, "EXISTS_NO_OVERWRITE");
+    expect(r).toMatchObject({ ok: false, code: "EXISTS_NO_OVERWRITE" });
     expect(await fs.readFile(target, "utf-8")).toBe("before");
   });
 
@@ -147,7 +120,7 @@ describe("handleFileWrite — parent directory handling", () => {
       contentBase64: b64("x"),
       createParents: false,
     });
-    expectFailure(r, "PARENT_NOT_FOUND");
+    expect(r).toMatchObject({ ok: false, code: "PARENT_NOT_FOUND" });
   });
 
   it("creates missing parents when createParents=true", async () => {
@@ -174,7 +147,7 @@ describe("handleFileWrite — symlink protection", () => {
       contentBase64: b64("evil"),
       overwrite: true,
     });
-    expectFailure(r, "SYMLINK_TARGET_DENIED");
+    expect(r).toMatchObject({ ok: false, code: "SYMLINK_TARGET_DENIED" });
     // The original file must be unchanged.
     expect(await fs.readFile(real, "utf-8")).toBe("untouched");
   });
@@ -196,12 +169,14 @@ describe("handleFileWrite — symlink protection", () => {
       path: path.join(allowed, "new-file.txt"),
       contentBase64: b64("payload"),
     });
-    expectFailure(r, "SYMLINK_REDIRECT");
+    expect(r).toMatchObject({ ok: false, code: "SYMLINK_REDIRECT" });
     // The error includes the canonical target so the operator can
     // either update allowWritePaths or set followSymlinks=true.
     expect(r.ok ? null : r.canonicalPath).toBe(path.join(realDir, "new-file.txt"));
     // No file was created at the canonical target.
-    await expectAccessMissing(path.join(realDir, "new-file.txt"));
+    await expect(fs.access(path.join(realDir, "new-file.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     // Sentinel must be untouched.
     expect(await fs.readFile(sentinel, "utf-8")).toBe("DO_NOT_TOUCH");
   });
@@ -218,9 +193,11 @@ describe("handleFileWrite — symlink protection", () => {
       createParents: true,
     });
 
-    expectFailure(r, "SYMLINK_REDIRECT");
+    expect(r).toMatchObject({ ok: false, code: "SYMLINK_REDIRECT" });
     expect(r.ok ? null : r.canonicalPath).toBe(path.join(realDir, "new", "child.txt"));
-    await expectAccessMissing(path.join(realDir, "new"));
+    await expect(fs.access(path.join(realDir, "new"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("follows the parent symlink when followSymlinks=true", async () => {
@@ -253,11 +230,14 @@ describe("handleFileWrite — symlink protection", () => {
       preflightOnly: true,
     });
 
-    expectSuccessFields(r, {
+    expect(r).toMatchObject({
+      ok: true,
       path: path.join(realDir, "new", "child.txt"),
       size: "payload".length,
     });
-    await expectAccessMissing(path.join(realDir, "new"));
+    await expect(fs.access(path.join(realDir, "new"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("refuses to overwrite a directory", async () => {
@@ -269,7 +249,7 @@ describe("handleFileWrite — symlink protection", () => {
       contentBase64: b64("x"),
       overwrite: true,
     });
-    expectFailure(r, "IS_DIRECTORY");
+    expect(r).toMatchObject({ ok: false, code: "IS_DIRECTORY" });
   });
 });
 
@@ -281,9 +261,9 @@ describe("handleFileWrite — integrity check", () => {
       contentBase64: b64("real-content"),
       expectedSha256: "0".repeat(64),
     });
-    expectFailure(r, "INTEGRITY_FAILURE");
+    expect(r).toMatchObject({ ok: false, code: "INTEGRITY_FAILURE" });
     // The file must never be created on a mismatch.
-    await expectAccessMissing(target);
+    await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("does NOT replace or delete an existing file when overwrite=true and expectedSha256 mismatches", async () => {
@@ -296,7 +276,7 @@ describe("handleFileWrite — integrity check", () => {
       overwrite: true,
       expectedSha256: "0".repeat(64),
     });
-    expectFailure(r, "INTEGRITY_FAILURE");
+    expect(r).toMatchObject({ ok: false, code: "INTEGRITY_FAILURE" });
     // Critical: the original must survive. A bad caller hash must not
     // be a primitive for replacing-then-deleting an existing file.
     expect(await fs.readFile(target, "utf-8")).toBe("ORIGINAL_CONTENT_DO_NOT_TOUCH");
@@ -339,8 +319,8 @@ describe("handleFileWrite — base64 round-trip validation", () => {
       path: target,
       contentBase64: "AAA@@@",
     });
-    expectFailure(r, "INVALID_BASE64");
-    await expectAccessMissing(target);
+    expect(r).toMatchObject({ ok: false, code: "INVALID_BASE64" });
+    await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("accepts standard base64 with and without padding", async () => {
@@ -372,6 +352,6 @@ describe("handleFileWrite — size cap", () => {
       path: target,
       contentBase64: big.toString("base64"),
     });
-    expectFailure(r, "FILE_TOO_LARGE");
+    expect(r).toMatchObject({ ok: false, code: "FILE_TOO_LARGE" });
   });
 });

@@ -126,13 +126,15 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
       "custom-models-custom-local/local-large",
     );
-    expect(resolveNonInteractiveApiKey).toHaveBeenCalledOnce();
-    const [apiKeyParams] = resolveNonInteractiveApiKey.mock.calls[0] ?? [];
-    expect(apiKeyParams?.provider).toBe("custom-models-custom-local");
-    expect(apiKeyParams?.flagName).toBe("--custom-api-key");
-    expect(apiKeyParams?.envVar).toBe("CUSTOM_API_KEY");
-    expect(apiKeyParams?.envVarName).toBe("CUSTOM_API_KEY");
-    expect(apiKeyParams?.secretInputMode).toBe("ref");
+    expect(resolveNonInteractiveApiKey).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "custom-models-custom-local",
+        flagName: "--custom-api-key",
+        envVar: "CUSTOM_API_KEY",
+        envVarName: "CUSTOM_API_KEY",
+        secretInputMode: "ref",
+      }),
+    );
   });
 
   it("marks non-interactive custom provider models as image-capable when requested", async () => {

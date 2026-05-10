@@ -1,7 +1,4 @@
-/**
- * @deprecated Broad public SDK barrel. Prefer focused text/chunking/logging
- * subpaths and avoid adding new imports here.
- */
+// Public shared text/formatting helpers for plugins that parse or rewrite message text.
 
 export * from "../logger.js";
 export * from "../logging/diagnostic.js";

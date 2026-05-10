@@ -37,7 +37,6 @@ export type DiffFileDefaults = {
 export type DiffToolDefaults = DiffPresentationDefaults &
   DiffFileDefaults & {
     mode: DiffMode;
-    ttlSeconds: number;
   };
 
 type BeforeAfterDiffInput = {

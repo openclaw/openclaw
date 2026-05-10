@@ -179,48 +179,19 @@ async function runMessageActionRequest(
   return { respond };
 }
 
-function deliveryCall(index = 0): Record<string, any> | undefined {
-  const calls = mocks.deliverOutboundPayloads.mock.calls as unknown as Array<[Record<string, any>]>;
-  return calls[index]?.[0];
-}
-
-function firstRespondCall(respond: ReturnType<typeof vi.fn>) {
-  const calls = respond.mock.calls as unknown as Array<
-    [
-      boolean,
-      Record<string, any> | undefined,
-      Record<string, any> | undefined,
-      Record<string, any> | undefined,
-    ]
-  >;
-  return calls[0];
-}
-
-function pollCall(index = 0): Record<string, any> | undefined {
-  const calls = mocks.sendPoll.mock.calls as unknown as Array<[Record<string, any>]>;
-  return calls[index]?.[0];
-}
-
-function outboundRouteCall(index = 0): Record<string, any> | undefined {
-  const calls = mocks.resolveOutboundSessionRoute.mock.calls as unknown as Array<
-    [Record<string, any>]
-  >;
-  return calls[index]?.[0];
-}
-
-function ensureSessionEntryCall(index = 0): Record<string, any> | undefined {
-  const calls = mocks.ensureOutboundSessionEntry.mock.calls as unknown as Array<
-    [Record<string, any>]
-  >;
-  return calls[index]?.[0];
-}
-
 function expectDeliverySessionMirror(params: { agentId: string; sessionKey: string }) {
-  const call = deliveryCall();
-  expect(call?.session?.agentId).toBe(params.agentId);
-  expect(call?.session?.key).toBe(params.sessionKey);
-  expect(call?.mirror?.sessionKey).toBe(params.sessionKey);
-  expect(call?.mirror?.agentId).toBe(params.agentId);
+  expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect.objectContaining({
+      session: expect.objectContaining({
+        agentId: params.agentId,
+        key: params.sessionKey,
+      }),
+      mirror: expect.objectContaining({
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+      }),
+    }),
+  );
 }
 
 function mockDeliverySuccess(messageId: string) {
@@ -270,14 +241,17 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-media-only",
     });
 
-    expect(deliveryCall()?.payloads).toEqual([
-      { text: "", mediaUrl: "https://example.com/a.png", mediaUrls: undefined },
-    ]);
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]?.messageId).toBe("m-media");
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]?.channel).toBe("slack");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "", mediaUrl: "https://example.com/a.png", mediaUrls: undefined }],
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-media" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
   });
 
   it("passes outbound session context for gateway media sends", async () => {
@@ -292,16 +266,22 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-whatsapp-media",
     });
 
-    expect(deliveryCall()?.channel).toBe("whatsapp");
-    expect(deliveryCall()?.payloads).toEqual([
-      {
-        text: "caption",
-        mediaUrl: "file:///tmp/workspace/photo.png",
-        mediaUrls: undefined,
-      },
-    ]);
-    expect(deliveryCall()?.session?.agentId).toBe("work");
-    expect(deliveryCall()?.session?.key).toBe("agent:work:whatsapp:resolved");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        payloads: [
+          {
+            text: "caption",
+            mediaUrl: "file:///tmp/workspace/photo.png",
+            mediaUrls: undefined,
+          },
+        ],
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:whatsapp:resolved",
+        }),
+      }),
+    );
   });
 
   it("maps gateway asVoice sends onto outbound audioAsVoice payloads", async () => {
@@ -316,14 +296,23 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-voice",
     });
 
-    expect(deliveryCall()?.payloads?.[0]?.text).toBe("voice note");
-    expect(deliveryCall()?.payloads?.[0]?.mediaUrl).toBe("file:///tmp/openclaw-voice.ogg");
-    expect(deliveryCall()?.payloads?.[0]?.audioAsVoice).toBe(true);
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]?.messageId).toBe("m-voice");
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]?.channel).toBe("slack");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            text: "voice note",
+            mediaUrl: "file:///tmp/openclaw-voice.ogg",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-voice" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
   });
 
   it("forwards gateway client scopes into outbound delivery", async () => {
@@ -339,8 +328,12 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: ["operator.write"] } },
     );
 
-    expect(deliveryCall()?.channel).toBe("slack");
-    expect(deliveryCall()?.gatewayClientScopes).toEqual(["operator.write"]);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
   });
 
   it("forwards an empty gateway scope array into outbound delivery", async () => {
@@ -356,8 +349,12 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: [] } },
     );
 
-    expect(deliveryCall()?.channel).toBe("slack");
-    expect(deliveryCall()?.gatewayClientScopes).toEqual([]);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        gatewayClientScopes: [],
+      }),
+    );
   });
 
   it("rejects empty sends when neither text nor media is present", async () => {
@@ -369,10 +366,13 @@ describe("gateway send mirroring", () => {
     });
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(false);
-    expect(response?.[1]).toBeUndefined();
-    expect(response?.[2]?.message).toContain("text or media is required");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("text or media is required"),
+      }),
+    );
   });
 
   it("returns actionable guidance when channel is internal webchat", async () => {
@@ -384,11 +384,20 @@ describe("gateway send mirroring", () => {
     });
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(false);
-    expect(response?.[1]).toBeUndefined();
-    expect(response?.[2]?.message).toContain("unsupported channel: webchat");
-    expect(response?.[2]?.message).toContain("Use `chat.send`");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("unsupported channel: webchat"),
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("Use `chat.send`"),
+      }),
+    );
   });
 
   it("auto-picks the single configured channel for send", async () => {
@@ -402,11 +411,12 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalled();
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]?.messageId).toBe("m-single-send");
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]?.channel).toBe("slack");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-single-send" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
   });
 
   it("auto-picks the single configured channel from the auto-enabled config snapshot for send", async () => {
@@ -431,11 +441,12 @@ describe("gateway send mirroring", () => {
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
       cfg: autoEnabledConfig,
     });
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]?.messageId).toBe("m-single-send-auto");
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]?.channel).toBe("slack");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-single-send-auto" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
   });
 
   it("returns invalid request when send channel selection is ambiguous", async () => {
@@ -450,10 +461,13 @@ describe("gateway send mirroring", () => {
     });
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(false);
-    expect(response?.[1]).toBeUndefined();
-    expect(response?.[2]?.message).toContain("Channel is required");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("Channel is required"),
+      }),
+    );
   });
 
   it("forwards gateway client scopes into outbound poll delivery", async () => {
@@ -468,9 +482,13 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: ["operator.admin"] } },
     );
 
-    expect(pollCall()?.cfg).toBeDefined();
-    expect(pollCall()?.to).toBe("resolved");
-    expect(pollCall()?.gatewayClientScopes).toEqual(["operator.admin"]);
+    expect(mocks.sendPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        to: "resolved",
+        gatewayClientScopes: ["operator.admin"],
+      }),
+    );
   });
 
   it("forwards an empty gateway scope array into outbound poll delivery", async () => {
@@ -485,9 +503,13 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: [] } },
     );
 
-    expect(pollCall()?.cfg).toBeDefined();
-    expect(pollCall()?.to).toBe("resolved");
-    expect(pollCall()?.gatewayClientScopes).toEqual([]);
+    expect(mocks.sendPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        to: "resolved",
+        gatewayClientScopes: [],
+      }),
+    );
   });
 
   it("includes optional poll delivery identifiers in the gateway payload", async () => {
@@ -507,19 +529,20 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-poll-rich",
     });
 
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]).toEqual({
-      runId: "idem-poll-rich",
-      messageId: "poll-rich",
-      channel: "slack",
-      channelId: "C123",
-      conversationId: "conv-1",
-      toJid: "jid-1",
-      pollId: "poll-meta-1",
-    });
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]?.channel).toBe("slack");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "idem-poll-rich",
+        messageId: "poll-rich",
+        channel: "slack",
+        channelId: "C123",
+        conversationId: "conv-1",
+        toJid: "jid-1",
+        pollId: "poll-meta-1",
+      }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
   });
 
   it("auto-picks the single configured channel for poll", async () => {
@@ -531,11 +554,9 @@ describe("gateway send mirroring", () => {
     });
 
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalled();
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]).toBeDefined();
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]).toEqual({ channel: "slack" });
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined, {
+      channel: "slack",
+    });
   });
 
   it("returns invalid request when poll channel selection is ambiguous", async () => {
@@ -550,10 +571,13 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-poll-missing-channel-ambiguous",
     });
 
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(false);
-    expect(response?.[1]).toBeUndefined();
-    expect(response?.[2]?.message).toContain("Channel is required");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("Channel is required"),
+      }),
+    );
   });
 
   it("does not mirror when delivery returns no results", async () => {
@@ -567,7 +591,13 @@ describe("gateway send mirroring", () => {
       sessionKey: "agent:main:main",
     });
 
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:main");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:main",
+        }),
+      }),
+    );
   });
 
   it("mirrors media filenames when delivery succeeds", async () => {
@@ -582,12 +612,16 @@ describe("gateway send mirroring", () => {
       sessionKey: "agent:main:main",
     });
 
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:main");
-    expect(deliveryCall()?.mirror?.text).toBe("caption");
-    expect(deliveryCall()?.mirror?.mediaUrls).toEqual([
-      "https://example.com/files/report.pdf?sig=1",
-    ]);
-    expect(deliveryCall()?.mirror?.idempotencyKey).toBe("idem-2");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:main",
+          text: "caption",
+          mediaUrls: ["https://example.com/files/report.pdf?sig=1"],
+          idempotencyKey: "idem-2",
+        }),
+      }),
+    );
   });
 
   it("mirrors MEDIA tags as attachments", async () => {
@@ -601,9 +635,15 @@ describe("gateway send mirroring", () => {
       sessionKey: "agent:main:main",
     });
 
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:main");
-    expect(deliveryCall()?.mirror?.text).toBe("Here");
-    expect(deliveryCall()?.mirror?.mediaUrls).toEqual(["https://example.com/image.png"]);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:main",
+          text: "Here",
+          mediaUrls: ["https://example.com/image.png"],
+        }),
+      }),
+    );
   });
 
   it("lowercases provided session keys for mirroring", async () => {
@@ -617,7 +657,13 @@ describe("gateway send mirroring", () => {
       sessionKey: "agent:main:slack:channel:C123",
     });
 
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:c123");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c123",
+        }),
+      }),
+    );
   });
 
   it("derives a target session key when none is provided", async () => {
@@ -630,8 +676,14 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-4",
     });
 
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:resolved");
-    expect(deliveryCall()?.mirror?.agentId).toBe("main");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:resolved",
+          agentId: "main",
+        }),
+      }),
+    );
   });
 
   it("uses explicit agentId for delivery when sessionKey is not provided", async () => {
@@ -645,10 +697,18 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-agent-explicit",
     });
 
-    expect(deliveryCall()?.session?.agentId).toBe("work");
-    expect(deliveryCall()?.session?.key).toBe("agent:work:slack:channel:resolved");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:work:slack:channel:resolved");
-    expect(deliveryCall()?.mirror?.agentId).toBe("work");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:slack:channel:resolved",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:work:slack:channel:resolved",
+          agentId: "work",
+        }),
+      }),
+    );
   });
 
   it("uses sessionKey agentId when explicit agentId is omitted", async () => {
@@ -687,18 +747,22 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-matrix-session-route",
     });
 
-    expect(outboundRouteCall()?.channel).toBe("matrix");
-    expect(outboundRouteCall()?.target).toBe("resolved");
-    expect(outboundRouteCall()?.currentSessionKey).toBe(
-      "agent:main:matrix:channel:!dm:example.org",
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "matrix",
+        target: "resolved",
+        currentSessionKey: "agent:main:matrix:channel:!dm:example.org",
+      }),
     );
-    expect(ensureSessionEntryCall()?.route?.sessionKey).toBe(
-      "agent:main:matrix:channel:!dm:example.org",
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining({
+          sessionKey: "agent:main:matrix:channel:!dm:example.org",
+          baseSessionKey: "agent:main:matrix:channel:!dm:example.org",
+          to: "room:!dm:example.org",
+        }),
+      }),
     );
-    expect(ensureSessionEntryCall()?.route?.baseSessionKey).toBe(
-      "agent:main:matrix:channel:!dm:example.org",
-    );
-    expect(ensureSessionEntryCall()?.route?.to).toBe("room:!dm:example.org");
     expectDeliverySessionMirror({
       agentId: "main",
       sessionKey: "agent:main:matrix:channel:!dm:example.org",
@@ -718,10 +782,18 @@ describe("gateway send mirroring", () => {
     });
 
     expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
-    expect(deliveryCall()?.session?.agentId).toBe("work");
-    expect(deliveryCall()?.session?.key).toBe("agent:work:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:work:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.agentId).toBe("work");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:slack:channel:c1",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:work:slack:channel:c1",
+          agentId: "work",
+        }),
+      }),
+    );
   });
 
   it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {
@@ -736,10 +808,18 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-agent-precedence",
     });
 
-    expect(deliveryCall()?.session?.agentId).toBe("work");
-    expect(deliveryCall()?.session?.key).toBe("agent:main:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.agentId).toBe("work");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:main:slack:channel:c1",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c1",
+          agentId: "work",
+        }),
+      }),
+    );
   });
 
   it("ignores blank explicit agentId and falls back to sessionKey agent", async () => {
@@ -771,7 +851,11 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-thread",
     });
 
-    expect(deliveryCall()?.threadId).toBe("1710000000.9999");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1710000000.9999",
+      }),
+    );
   });
 
   it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
@@ -794,14 +878,22 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-thread-derived",
     });
 
-    expect(ensureSessionEntryCall()?.route?.sessionKey).toBe(
-      "agent:main:slack:channel:c1:thread:1710000000.9999",
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+          baseSessionKey: "agent:main:slack:channel:c1",
+          threadId: "1710000000.9999",
+        }),
+      }),
     );
-    expect(ensureSessionEntryCall()?.route?.baseSessionKey).toBe("agent:main:slack:channel:c1");
-    expect(ensureSessionEntryCall()?.route?.threadId).toBe("1710000000.9999");
-    expect(deliveryCall()?.threadId).toBe("1710000000.9999");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe(
-      "agent:main:slack:channel:c1:thread:1710000000.9999",
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1710000000.9999",
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+        }),
+      }),
     );
   });
 
@@ -826,9 +918,17 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-thread-mismatch",
     });
 
-    expect(deliveryCall()?.threadId).toBe("1710000000.9999");
-    expect(deliveryCall()?.session?.key).toBe("agent:main:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:c1");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1710000000.9999",
+        session: expect.objectContaining({
+          key: "agent:main:slack:channel:c1",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c1",
+        }),
+      }),
+    );
   });
 
   it("preserves derived thread delivery for existing thread-scoped Slack session keys", async () => {
@@ -851,8 +951,14 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-thread-session",
     });
 
-    expect(deliveryCall()?.threadId).toBe("1710000000.9999");
-    expect(deliveryCall()?.session?.key).toBe("agent:main:slack:channel:c1:thread:1710000000.9999");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1710000000.9999",
+        session: expect.objectContaining({
+          key: "agent:main:slack:channel:c1:thread:1710000000.9999",
+        }),
+      }),
+    );
   });
 
   it("preserves numeric derived thread ids for non-Slack channels", async () => {
@@ -874,7 +980,11 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-topic-derived",
     });
 
-    expect(deliveryCall()?.threadId).toBe(77);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: 77,
+      }),
+    );
   });
 
   it("returns invalid request when outbound target resolution fails", async () => {
@@ -891,11 +1001,16 @@ describe("gateway send mirroring", () => {
     });
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(false);
-    expect(response?.[1]).toBeUndefined();
-    expect(response?.[2]?.message).toContain("target not found");
-    expect(response?.[3]?.channel).toBe("slack");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("target not found"),
+      }),
+      expect.objectContaining({
+        channel: "slack",
+      }),
+    );
   });
 
   it("recovers cold plugin resolution for threaded sends", async () => {
@@ -917,14 +1032,19 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-cold-thread",
     });
 
-    expect(deliveryCall()?.channel).toBe("slack");
-    expect(deliveryCall()?.to).toBe("123");
-    expect(deliveryCall()?.threadId).toBe("1710000000.9999");
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]?.messageId).toBe("m-threaded");
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]?.channel).toBe("slack");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "123",
+        threadId: "1710000000.9999",
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-threaded" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
   });
 
   it("forwards replyToId on gateway sends", async () => {
@@ -941,17 +1061,26 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-reply-to",
     });
 
-    expect(deliveryCall()?.channel).toBe("slack");
-    expect(deliveryCall()?.to).toBe("123");
-    expect(deliveryCall()?.replyToId).toBe("wamid.42");
-    expect(outboundRouteCall()?.channel).toBe("slack");
-    expect(outboundRouteCall()?.target).toBe("123");
-    expect(outboundRouteCall()?.replyToId).toBe("wamid.42");
-    const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]?.messageId).toBe("m-reply");
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]?.channel).toBe("slack");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "123",
+        replyToId: "wamid.42",
+      }),
+    );
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        target: "123",
+        replyToId: "wamid.42",
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-reply" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
   });
 
   it("dispatches message actions through the gateway for plugin-owned channels", async () => {

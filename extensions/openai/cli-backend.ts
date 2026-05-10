@@ -32,7 +32,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "--sandbox",
         "workspace-write",
         "-c",
-        'service_tier="fast"',
+        'service_tier="priority"',
         "--skip-git-repo-check",
       ],
       resumeArgs: [
@@ -42,7 +42,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "-c",
         'sandbox_mode="workspace-write"',
         "-c",
-        'service_tier="fast"',
+        'service_tier="priority"',
         "--skip-git-repo-check",
       ],
       output: "jsonl",

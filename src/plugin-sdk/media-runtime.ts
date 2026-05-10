@@ -1,7 +1,4 @@
-/**
- * @deprecated Broad public SDK barrel. Prefer focused media-store, media-mime,
- * outbound-media, and capability runtime subpaths.
- */
+// Public media/payload helpers for plugins that fetch, transform, or send attachments.
 
 export * from "../media/audio.js";
 export * from "../media/audio-transcode.js";

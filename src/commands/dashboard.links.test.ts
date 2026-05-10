@@ -154,8 +154,9 @@ describe("dashboardCommand", () => {
     // hint string is written to runtime.log, which flows into the same
     // console-captured log file readable by operator.read-scoped devices.
     expect(formatControlUiSshHintMock).toHaveBeenCalledWith({ port: 18789, basePath: undefined });
-    const [sshHintOptions] = formatControlUiSshHintMock.mock.calls[0] ?? [];
-    expect(sshHintOptions).not.toHaveProperty("token");
+    expect(formatControlUiSshHintMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ token: expect.anything() }),
+    );
 
     // Double-check: no logged line contains the secret.
     for (const call of runtime.log.mock.calls) {

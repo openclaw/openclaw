@@ -83,18 +83,6 @@ describe("skills entries config schema", () => {
     expect(res.success).toBe(true);
   });
 
-  it("accepts uploaded skill archive install policy", () => {
-    const res = OpenClawSchema.safeParse({
-      skills: {
-        install: {
-          allowUploadedArchives: true,
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-  });
-
   it("rejects legacy skills.policy config", () => {
     const res = OpenClawSchema.safeParse({
       skills: {

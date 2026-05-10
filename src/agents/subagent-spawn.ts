@@ -30,7 +30,6 @@ import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
-import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 export {
   SUBAGENT_SPAWN_ACCEPTED_NOTE,
   SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
@@ -119,7 +118,6 @@ export type SpawnSubagentParams = {
   label?: string;
   agentId?: string;
   model?: string;
-  taskName?: string;
   thinking?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
@@ -158,7 +156,6 @@ export type SpawnSubagentResult = {
   childSessionKey?: string;
   runId?: string;
   mode?: SpawnSubagentMode;
-  taskName?: string;
   note?: string;
   modelApplied?: boolean;
   error?: string;
@@ -677,14 +674,6 @@ export async function spawnSubagentDirect(
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
   const task = params.task;
-  const taskNameResult = normalizeSubagentTaskName(params.taskName);
-  if (taskNameResult.error) {
-    return {
-      status: "error",
-      error: taskNameResult.error,
-    };
-  }
-  const taskName = taskNameResult.taskName;
   const label = params.label?.trim() || "";
   const requestedAgentId = params.agentId?.trim();
 
@@ -1227,7 +1216,6 @@ export async function spawnSubagentDirect(
       requesterOrigin,
       requesterDisplayKey,
       task,
-      taskName,
       cleanup,
       label: label || undefined,
       model: resolvedModel,
@@ -1315,7 +1303,6 @@ export async function spawnSubagentDirect(
     childSessionKey,
     runId: childRunId,
     mode: spawnMode,
-    taskName,
     note: preparedSpawnContext.forkFallbackNote
       ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
       : acceptedNote,

@@ -648,11 +648,7 @@ export class GatewayClient {
     storedScopes?: string[];
   }): string[] {
     // Reuse cached scopes only when the client is reusing the cached device token.
-    // Callers that ask for explicit scopes should keep that request so the
-    // server can authorize it or drive the normal scope-upgrade flow.
-    if (Array.isArray(this.opts.scopes)) {
-      return this.opts.scopes;
-    }
+    // Explicit device tokens should keep the caller-requested scope set.
     if (
       params.usingStoredDeviceToken &&
       Array.isArray(params.storedScopes) &&

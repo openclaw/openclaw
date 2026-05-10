@@ -3,5 +3,5 @@ export {
   downloadMediaMessage,
   isJidGroup,
   normalizeMessageContent,
-} from "baileys";
+} from "@whiskeysockets/baileys";
 export { saveMediaBuffer } from "./save-media.runtime.js";

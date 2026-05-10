@@ -186,10 +186,6 @@ function createPrompter(params: {
   return { prompter, notes };
 }
 
-function mockCalls<T extends unknown[]>(fn: unknown): T[] {
-  return (fn as { mock: { calls: T[] } }).mock.calls;
-}
-
 function createPerplexityConfig(apiKey: string, enabled?: boolean): OpenClawConfig {
   return {
     tools: {
@@ -341,10 +337,9 @@ describe("setupSearch", () => {
       expect(pluginWebSearchApiKey(result, entry.pluginId)).toBe(entry.key);
       expect(result.plugins?.entries?.[entry.pluginId]?.enabled).toBe(true);
       if (entry.textMessage) {
-        const textCall = mockCalls<[Record<string, unknown>]>(prompter.text).find(
-          ([options]) => options.message === entry.textMessage,
+        expect(prompter.text).toHaveBeenCalledWith(
+          expect.objectContaining({ message: entry.textMessage, sensitive: true }),
         );
-        expect(textCall?.[0].sensitive).toBe(true);
       }
     }
 
@@ -392,7 +387,9 @@ describe("setupSearch", () => {
       expect(result.tools?.web?.search?.provider).toBe("brave");
       expect(result.tools?.web?.search?.enabled).toBeUndefined();
       const missingNote = notes.find((n) => n.message.includes("No Brave Search API key stored"));
-      expect(missingNote?.message).toContain("No Brave Search API key stored");
+      expect(missingNote).toMatchObject({
+        message: expect.stringContaining("No Brave Search API key stored"),
+      });
     } finally {
       if (original === undefined) {
         delete process.env.BRAVE_API_KEY;
@@ -497,10 +494,11 @@ describe("setupSearch", () => {
       textValue: "",
     });
     await setupSearch(cfg, runtime, prompter);
-    const textCall = mockCalls<[Record<string, unknown>]>(prompter.text).find(
-      ([options]) => options.message === "Moonshot / Kimi API key",
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Moonshot / Kimi API key",
+      }),
     );
-    expect(textCall?.[0].message).toBe("Moonshot / Kimi API key");
   });
 
   it("quickstart skips key prompt when env var is available", async () => {
@@ -664,17 +662,17 @@ describe("setupSearch", () => {
     const providers = listSearchProviderOptions();
     const values = providers.map((e) => e.id);
     expect(values).toEqual([...values].toSorted());
-    for (const providerId of [
-      "brave",
-      "firecrawl",
-      "gemini",
-      "grok",
-      "kimi",
-      "minimax",
-      "perplexity",
-      "tavily",
-    ]) {
-      expect(values).toContain(providerId);
-    }
+    expect(values).toEqual(
+      expect.arrayContaining([
+        "brave",
+        "firecrawl",
+        "gemini",
+        "grok",
+        "kimi",
+        "minimax",
+        "perplexity",
+        "tavily",
+      ]),
+    );
   });
 });

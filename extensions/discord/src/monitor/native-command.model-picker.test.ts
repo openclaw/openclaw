@@ -5,14 +5,14 @@ import { ChannelType } from "discord-api-types/v10";
 import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
 import type { ChatCommandDefinition, CommandArgsParsing } from "openclaw/plugin-sdk/command-auth";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import {
   loadSessionStore,
   resolveStorePath,
   saveSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
+import * as commandTextModule from "openclaw/plugin-sdk/text-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordChannelContext } from "./agent-components-helpers.js";
@@ -44,9 +44,7 @@ type MockInteraction = {
   reply: ReturnType<typeof vi.fn>;
   followUp: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
-  editReply: ReturnType<typeof vi.fn>;
   acknowledge: ReturnType<typeof vi.fn>;
-  acknowledged: boolean;
   client: object;
 };
 
@@ -98,7 +96,7 @@ function createModelPickerContext(): ModelPickerContext {
 
 function createInteraction(params?: { userId?: string; values?: string[] }): MockInteraction {
   const userId = params?.userId ?? "owner";
-  const interaction = {
+  return {
     user: {
       id: userId,
       username: "tester",
@@ -117,16 +115,9 @@ function createInteraction(params?: { userId?: string; values?: string[] }): Moc
     reply: vi.fn().mockResolvedValue({ ok: true }),
     followUp: vi.fn().mockResolvedValue({ ok: true }),
     update: vi.fn().mockResolvedValue({ ok: true }),
-    editReply: vi.fn().mockResolvedValue({ ok: true }),
-    acknowledge: vi.fn(),
-    acknowledged: false,
+    acknowledge: vi.fn().mockResolvedValue({ ok: true }),
     client: {},
   };
-  interaction.acknowledge.mockImplementation(async () => {
-    interaction.acknowledged = true;
-    return { ok: true };
-  });
-  return interaction;
 }
 
 function createDefaultModelPickerData(): ModelsProviderData {
@@ -332,28 +323,6 @@ describe("Discord model picker interactions", () => {
     expect(loadSpy).not.toHaveBeenCalled();
   });
 
-  it("defers owner picker interactions before loading model data", async () => {
-    const context = createModelPickerContext();
-    const pickerData = createDefaultModelPickerData();
-    const loadSpy = vi
-      .spyOn(modelPickerModule, "loadDiscordModelPickerData")
-      .mockImplementation(async () => {
-        expect(interaction.acknowledge).toHaveBeenCalledTimes(1);
-        return pickerData;
-      });
-    const select = createModelPickerFallbackSelect(context);
-    const interaction = createInteraction({ userId: "owner", values: ["gpt-4o"] });
-
-    await select.run(
-      interaction as unknown as PickerSelectInteraction,
-      createModelsViewSelectData(),
-    );
-
-    expect(loadSpy).toHaveBeenCalledTimes(1);
-    expect(interaction.editReply).toHaveBeenCalledTimes(1);
-    expect(interaction.update).not.toHaveBeenCalled();
-  });
-
   it("requires submit click before routing selected model through /model pipeline", async () => {
     const context = createModelPickerContext();
     const pickerData = createDefaultModelPickerData();
@@ -369,7 +338,7 @@ describe("Discord model picker interactions", () => {
       dispatchCommandInteraction: dispatchSpy,
     });
 
-    expect(selectInteraction.editReply).toHaveBeenCalledTimes(1);
+    expect(selectInteraction.update).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).not.toHaveBeenCalled();
 
     const submitInteraction = await runSubmitButton({
@@ -378,7 +347,7 @@ describe("Discord model picker interactions", () => {
       dispatchCommandInteraction: dispatchSpy,
     });
 
-    expect(submitInteraction.editReply).toHaveBeenCalledTimes(1);
+    expect(submitInteraction.update).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     expectDispatchedModelSelection({
       dispatchSpy,
@@ -578,8 +547,8 @@ describe("Discord model picker interactions", () => {
 
     await button.run(interaction as unknown as PickerButtonInteraction, data);
 
-    expect(interaction.editReply).toHaveBeenCalledTimes(1);
-    const updatePayload = interaction.editReply.mock.calls[0]?.[0];
+    expect(interaction.update).toHaveBeenCalledTimes(1);
+    const updatePayload = interaction.update.mock.calls[0]?.[0];
     if (!updatePayload) {
       throw new Error("recents button did not emit an update payload");
     }
@@ -616,7 +585,7 @@ describe("Discord model picker interactions", () => {
       dispatchCommandInteraction: dispatchSpy,
     });
 
-    expect(submitInteraction.editReply).toHaveBeenCalledTimes(1);
+    expect(submitInteraction.update).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     expectDispatchedModelSelection({ dispatchSpy, model: "openai/gpt-4o" });
   });
@@ -794,49 +763,5 @@ describe("Discord model picker interactions", () => {
     });
 
     expect(loadSpy).toHaveBeenCalledWith(context.cfg, "worker");
-  });
-
-  it("opens the first visible provider when the current model provider is filtered out", async () => {
-    const context = createModelPickerContext();
-    const pickerData = createModelsProviderData({
-      "openai-codex": ["gpt-5.5-codex"],
-      vllm: ["qwen3-local"],
-    });
-    pickerData.resolvedDefault = {
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-    };
-    const loadSpy = vi
-      .spyOn(modelPickerModule, "loadDiscordModelPickerData")
-      .mockResolvedValue(pickerData);
-    const interaction = createInteraction({ userId: "owner" });
-
-    await replyWithDiscordModelPickerProviders({
-      interaction: interaction as never,
-      cfg: {
-        ...context.cfg,
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-5" },
-            models: {
-              "openai-codex/*": {},
-              "vllm/*": {},
-            },
-          },
-        },
-      } as OpenClawConfig,
-      command: "model",
-      userId: "owner",
-      accountId: context.accountId,
-      threadBindings: context.threadBindings,
-      preferFollowUp: false,
-      safeInteractionCall: async (_label, fn) => await fn(),
-    });
-
-    expect(loadSpy).toHaveBeenCalledWith(expect.any(Object), "main");
-    const payload = JSON.stringify(interaction.reply.mock.calls[0]?.[0]);
-    expect(payload).toContain("openai-codex");
-    expect(payload).toContain("gpt-5.5-codex");
-    expect(payload).not.toContain("Provider not found");
   });
 });

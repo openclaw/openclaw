@@ -21,11 +21,6 @@ type ActiveTool = {
   lastProgressAt: number;
 };
 
-type DiagnosticToolStartedActivityEvent = Pick<
-  Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
-  "runId" | "sessionId" | "sessionKey" | "toolName" | "toolCallId"
->;
-
 export type DiagnosticSessionActivitySnapshot = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
   activeToolName?: string;
@@ -163,7 +158,9 @@ function modelCallKey(event: { runId?: string; provider?: string; model?: string
   return `${event.runId ?? "unknown"}:${event.provider ?? "provider"}:${event.model ?? "model"}`;
 }
 
-function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
+function recordToolStarted(
+  event: Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
+): void {
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity) {
     return;
@@ -308,16 +305,6 @@ export function markDiagnosticRunProgressForTest(params: {
     return;
   }
   touchSessionActivity(activity, params.reason);
-}
-
-export function markDiagnosticToolStartedForTest(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  toolName: string;
-  toolCallId?: string;
-}): void {
-  recordToolStarted(params);
 }
 
 export function resetDiagnosticRunActivityForTest(): void {

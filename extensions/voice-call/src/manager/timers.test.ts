@@ -101,9 +101,11 @@ describe("voice-call manager timers", () => {
 
     const timedOut = waitForFinalTranscript(ctx as never, "call-3").catch((error) => error);
     await vi.advanceTimersByTimeAsync(1_000);
-    const timeoutError = await timedOut;
-    expect(timeoutError).toBeInstanceOf(Error);
-    expect((timeoutError as Error).message).toBe("Timed out waiting for transcript after 1000ms");
+    await expect(timedOut).resolves.toEqual(
+      expect.objectContaining({
+        message: "Timed out waiting for transcript after 1000ms",
+      }),
+    );
 
     const toClear = waitForFinalTranscript(ctx as never, "call-4");
     clearTranscriptWaiter(ctx as never, "call-4");

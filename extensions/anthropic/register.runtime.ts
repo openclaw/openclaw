@@ -21,11 +21,12 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   cloneFirstTemplateModel,
+  isClaudeOpus47ModelId,
   type ProviderPlugin,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
@@ -278,11 +279,7 @@ function resolveAnthropicForwardCompatModel(
 }
 
 function isAnthropicOpus47Model(modelId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return (
-    normalized.startsWith(ANTHROPIC_OPUS_47_MODEL_ID) ||
-    normalized.startsWith(ANTHROPIC_OPUS_47_DOT_MODEL_ID)
-  );
+  return isClaudeOpus47ModelId(modelId);
 }
 
 function hasConfiguredModelContextOverride(

@@ -34,32 +34,22 @@ describe("voice-call config compatibility", () => {
       },
     });
 
-    const streaming = normalized.streaming as
-      | {
-          enabled?: boolean;
-          provider?: string;
-          providers?: {
-            openai?: {
-              apiKey?: string;
-              model?: string;
-              silenceDurationMs?: number;
-              vadThreshold?: number;
-            };
-          };
-          openaiApiKey?: unknown;
-          sttModel?: unknown;
-        }
-      | undefined;
-    expect(streaming?.enabled).toBe(true);
-    expect(streaming?.provider).toBe("openai");
-    expect(streaming?.providers?.openai).toEqual({
-      apiKey: "sk-test",
-      model: "gpt-4o-transcribe",
-      silenceDurationMs: 700,
-      vadThreshold: 0.4,
+    expect(normalized).toMatchObject({
+      streaming: {
+        enabled: true,
+        provider: "openai",
+        providers: {
+          openai: {
+            apiKey: "sk-test",
+            model: "gpt-4o-transcribe",
+            silenceDurationMs: 700,
+            vadThreshold: 0.4,
+          },
+        },
+      },
     });
-    expect(streaming?.openaiApiKey).toBeUndefined();
-    expect(streaming?.sttModel).toBeUndefined();
+    expect((normalized.streaming as Record<string, unknown>).openaiApiKey).toBeUndefined();
+    expect((normalized.streaming as Record<string, unknown>).sttModel).toBeUndefined();
   });
 
   it("reports doctor-oriented legacy issues and warnings", () => {

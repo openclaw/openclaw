@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("baileys", () => {
+vi.mock("@whiskeysockets/baileys", () => {
   throw new Error("setup plugin load must not load Baileys");
 });
 

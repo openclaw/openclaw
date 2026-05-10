@@ -1,4 +1,4 @@
-import type { AnyMessageContent } from "baileys";
+import type { AnyMessageContent } from "@whiskeysockets/baileys";
 
 export type WhatsAppOutboundMentionParticipant =
   | string

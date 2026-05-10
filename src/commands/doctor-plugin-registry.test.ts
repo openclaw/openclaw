@@ -27,17 +27,6 @@ function makeTempDir() {
   return makeTrackedTempDir("openclaw-doctor-plugin-registry", tempDirs);
 }
 
-async function readRequiredPersistedInstalledPluginIndex(
-  stateDir: string,
-): Promise<InstalledPluginIndex> {
-  const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-  expect(persisted).not.toBeNull();
-  if (!persisted) {
-    throw new Error("Expected persisted installed plugin index");
-  }
-  return persisted;
-}
-
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
@@ -237,10 +226,14 @@ describe("maybeRepairPluginRegistryState", () => {
     });
 
     expect(nextConfig).toStrictEqual({});
-    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
-    expect(persisted.refreshReason).toBe("migration");
-    expect(persisted.plugins).toHaveLength(1);
-    expect(persisted.plugins[0]?.pluginId).toBe("demo");
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      refreshReason: "migration",
+      plugins: [
+        expect.objectContaining({
+          pluginId: "demo",
+        }),
+      ],
+    });
   });
 
   it("does not repair when registry migration is disabled", async () => {
@@ -348,12 +341,16 @@ describe("maybeRepairPluginRegistryState", () => {
     expect(
       JSON.parse(fs.readFileSync(path.join(stateDir, "npm", "package.json"), "utf8")),
     ).not.toHaveProperty("dependencies");
-    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
-    expect(persisted.refreshReason).toBe("migration");
-    expect(persisted.plugins).toHaveLength(1);
-    expect(persisted.plugins[0]?.pluginId).toBe("google-meet");
-    expect(persisted.plugins[0]?.origin).toBe("bundled");
-    expect(persisted.plugins[0]?.rootDir).toBe(bundledDir);
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      refreshReason: "migration",
+      plugins: [
+        expect.objectContaining({
+          pluginId: "google-meet",
+          origin: "bundled",
+          rootDir: bundledDir,
+        }),
+      ],
+    });
     expect(vi.mocked(note).mock.calls.join("\n")).toContain(
       "Removed stale managed npm plugin package",
     );
@@ -405,13 +402,17 @@ describe("maybeRepairPluginRegistryState", () => {
     });
 
     expect(fs.existsSync(managed.packageDir)).toBe(false);
-    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
-    expect(persisted.installRecords).toStrictEqual({});
-    expect(persisted.refreshReason).toBe("migration");
-    expect(persisted.plugins).toHaveLength(1);
-    expect(persisted.plugins[0]?.pluginId).toBe("google-meet");
-    expect(persisted.plugins[0]?.origin).toBe("bundled");
-    expect(persisted.plugins[0]?.rootDir).toBe(bundledDir);
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      installRecords: {},
+      refreshReason: "migration",
+      plugins: [
+        expect.objectContaining({
+          pluginId: "google-meet",
+          origin: "bundled",
+          rootDir: bundledDir,
+        }),
+      ],
+    });
   });
 
   it("removes stale managed npm packages from the package lock during repair", async () => {

@@ -78,16 +78,6 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
-import {
-  createToolSearchTools,
-  resolveToolSearchConfig,
-  TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  type ToolSearchCatalogRef,
-  type ToolSearchCatalogToolExecutor,
-} from "./tool-search.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -152,28 +142,6 @@ function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentTool {
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
       (await loadTool()).execute(...args),
   } as AnyAgentTool;
-}
-
-export function resolveProcessToolScopeKey(params: {
-  scopeKey?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-}): string | undefined {
-  const explicitScopeKey = params.scopeKey?.trim();
-  if (explicitScopeKey) {
-    return explicitScopeKey;
-  }
-  const sessionKey = params.sessionKey?.trim();
-  if (sessionKey) {
-    return sessionKey;
-  }
-  const sessionId = params.sessionId?.trim();
-  if (sessionId) {
-    return sessionId;
-  }
-  const agentId = params.agentId?.trim();
-  return agentId ? `agent:${agentId}` : undefined;
 }
 
 function applyModelProviderToolPolicy(
@@ -386,12 +354,6 @@ export function createOpenClawCodingTools(options?: {
   forceHeartbeatTool?: boolean;
   /** If false, build plugin tools only while preserving the shared policy pipeline. */
   includeCoreTools?: boolean;
-  /** PI-only: expose OpenClaw Tool Search controls for catalog compaction. */
-  includeToolSearchControls?: boolean;
-  /** Executes cataloged tools through the active PI run lifecycle. */
-  toolSearchCatalogExecutor?: ToolSearchCatalogToolExecutor;
-  /** Runtime-local Tool Search catalog ref shared with PI attempt compaction. */
-  toolSearchCatalogRef?: ToolSearchCatalogRef;
   /** Limits which tool families are materialized before the shared policy pipeline runs. */
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
   /** Whether the sender is an owner (required for owner-only tools). */
@@ -466,24 +428,9 @@ export function createOpenClawCodingTools(options?: {
     (options?.trigger === "heartbeat" &&
       options?.config?.messages?.visibleReplies === "message_tool");
   const forceHeartbeatTool = options?.forceHeartbeatTool === true || enableHeartbeatTool;
-  const toolSearchConfig = resolveToolSearchConfig(options?.config);
-  const toolSearchControlsEnabled =
-    options?.includeToolSearchControls === true && toolSearchConfig.enabled;
-  const toolSearchControlAllowlist = toolSearchControlsEnabled
-    ? [
-        TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-        TOOL_SEARCH_RAW_TOOL_NAME,
-        TOOL_DESCRIBE_RAW_TOOL_NAME,
-        TOOL_CALL_RAW_TOOL_NAME,
-      ]
-    : [];
-  const mergeToolSearchControlAllowlist = <TPolicy extends { allow?: string[] }>(
-    policy: TPolicy | undefined,
-  ) => mergeAlsoAllowPolicy(policy, toolSearchControlAllowlist);
   const runtimeProfileAlsoAllow = [
     ...(options?.forceMessageTool ? ["message"] : []),
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
-    ...toolSearchControlAllowlist,
   ];
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
     ...(profileAlsoAllow ?? []),
@@ -495,12 +442,8 @@ export function createOpenClawCodingTools(options?: {
   ]);
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
-  const scopeKey = resolveProcessToolScopeKey({
-    scopeKey: options?.exec?.scopeKey,
-    sessionKey: options?.sessionKey,
-    sessionId: options?.sessionId,
-    agentId,
-  });
+  const scopeKey =
+    options?.exec?.scopeKey ?? options?.sessionKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentStore = resolveSubagentCapabilityStore(options?.sessionKey, {
     cfg: options?.config,
   });
@@ -514,26 +457,16 @@ export function createOpenClawCodingTools(options?: {
           store: subagentStore,
         })
       : undefined;
-  const globalPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(globalPolicy);
-  const globalProviderPolicyWithToolSearchControls =
-    mergeToolSearchControlAllowlist(globalProviderPolicy);
-  const agentPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(agentPolicy);
-  const agentProviderPolicyWithToolSearchControls =
-    mergeToolSearchControlAllowlist(agentProviderPolicy);
-  const groupPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(groupPolicy);
-  const sandboxToolPolicyWithToolSearchControls =
-    mergeToolSearchControlAllowlist(sandboxToolPolicy);
-  const subagentPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(subagentPolicy);
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,
     providerProfilePolicyWithAlsoAllow,
-    globalPolicyWithToolSearchControls,
-    globalProviderPolicyWithToolSearchControls,
-    agentPolicyWithToolSearchControls,
-    agentProviderPolicyWithToolSearchControls,
-    groupPolicyWithToolSearchControls,
-    sandboxToolPolicyWithToolSearchControls,
-    subagentPolicyWithToolSearchControls,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    sandboxToolPolicy,
+    subagentPolicy,
   ]);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
@@ -746,19 +679,6 @@ export function createOpenClawCodingTools(options?: {
           },
           resolvedConfig: options?.config,
         });
-  const toolSearchTools = toolSearchControlsEnabled
-    ? createToolSearchTools({
-        config: options?.config,
-        runtimeConfig: options?.config,
-        agentId,
-        sessionKey: options?.sessionKey,
-        sessionId: options?.sessionId,
-        runId: options?.runId,
-        catalogRef: options?.toolSearchCatalogRef,
-        abortSignal: options?.abortSignal,
-        executeTool: options?.toolSearchCatalogExecutor,
-      })
-    : [];
   const tools: AnyAgentTool[] = [
     ...base,
     ...(includeBaseCodingTools && sandboxRoot
@@ -842,7 +762,6 @@ export function createOpenClawCodingTools(options?: {
           recordToolPrepStage: options?.recordToolPrepStage,
         })
       : pluginToolsOnly),
-    ...toolSearchTools,
   ];
   options?.recordToolPrepStage?.("openclaw-tools");
   const toolsForMemoryFlush: AnyAgentTool[] = isMemoryFlushRun && memoryFlushWritePath ? [] : tools;
@@ -902,15 +821,15 @@ export function createOpenClawCodingTools(options?: {
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
         providerProfile,
         providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
-        globalPolicy: globalPolicyWithToolSearchControls,
-        globalProviderPolicy: globalProviderPolicyWithToolSearchControls,
-        agentPolicy: agentPolicyWithToolSearchControls,
-        agentProviderPolicy: agentProviderPolicyWithToolSearchControls,
-        groupPolicy: groupPolicyWithToolSearchControls,
+        globalPolicy,
+        globalProviderPolicy,
+        agentPolicy,
+        agentProviderPolicy,
+        groupPolicy,
         agentId,
       }),
-      { policy: sandboxToolPolicyWithToolSearchControls, label: "sandbox tools.allow" },
-      { policy: subagentPolicyWithToolSearchControls, label: "subagent tools.allow" },
+      { policy: sandboxToolPolicy, label: "sandbox tools.allow" },
+      { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
   });
   options?.recordToolPrepStage?.("authorization-policy");

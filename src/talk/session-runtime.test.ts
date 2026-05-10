@@ -48,7 +48,6 @@ describe("realtime voice bridge session runtime", () => {
 
     createRealtimeVoiceBridgeSession({
       provider,
-      cfg: { talk: { realtime: { provider: "test" } } } as never,
       providerConfig: {},
       audioSink: {
         isOpen: () => true,
@@ -62,7 +61,6 @@ describe("realtime voice bridge session runtime", () => {
     callbacks?.onClearAudio();
     callbacks?.onMark?.("mark-1");
 
-    expect(callbacks?.cfg).toEqual({ talk: { realtime: { provider: "test" } } });
     expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2]));
     expect(clearAudio).toHaveBeenCalled();
     expect(sendMark).toHaveBeenCalledWith("mark-1");

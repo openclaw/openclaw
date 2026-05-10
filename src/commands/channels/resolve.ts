@@ -6,7 +6,6 @@ import type {
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
-import { formatUnsupportedChannelActionMessage } from "../../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
@@ -198,10 +197,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   if (!plugin?.resolver?.resolveTargets) {
     const channelText = selection.channel ?? explicitChannel ?? "";
     throw new Error(
-      formatUnsupportedChannelActionMessage({
-        channel: channelText,
-        action: "resolve",
-      }),
+      `Channel ${channelText} does not support resolve. Run ${formatCliCommand("openclaw channels capabilities --channel " + channelText)} to inspect supported actions.`,
     );
   }
   const preferredKind = resolvePreferredKind(opts.kind);

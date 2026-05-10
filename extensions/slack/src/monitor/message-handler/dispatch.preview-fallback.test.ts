@@ -122,48 +122,6 @@ function requireCapturedItemEventHandler() {
   return handler;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
-  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[index];
-  expect(call).toBeDefined();
-  if (!call) {
-    throw new Error(`missing ${label} call ${index + 1}`);
-  }
-  return call;
-}
-
-function expectMockCallArgFields(
-  mock: unknown,
-  index: number,
-  label: string,
-  fields: Record<string, unknown>,
-) {
-  expectRecordFields(requireRecord(requireMockCall(mock, index, label)[0], label), fields);
-}
-
-function expectDeliverReplyCall(index: number, text: string, fields?: Record<string, unknown>) {
-  const params = requireRecord(
-    requireMockCall(deliverRepliesMock, index, "deliver replies")[0],
-    "deliver replies params",
-  );
-  expectRecordFields(params, { replyThreadTs: THREAD_TS, ...fields });
-  expect(params.replies).toEqual([{ text }]);
-}
-
 const noop = () => {};
 const noopAsync = async () => {};
 
@@ -517,7 +475,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => undefined,
 }));
 
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
   normalizeOptionalLowercaseString: (value?: string) => value?.toLowerCase(),
 }));
 
@@ -738,7 +696,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: FINAL_REPLY_TEXT })],
+      }),
+    );
   });
 
   it("finalizes fast draft preview text without sending a duplicate normal reply", async () => {
@@ -757,11 +720,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(draftStream.seal).toHaveBeenCalledTimes(1);
-    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "preview edit params", {
-      channelId: "C123",
-      messageId: "171234.567",
-      text: "✅",
-    });
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "C123",
+        messageId: "171234.567",
+        text: "✅",
+      }),
+    );
     expect(deliverRepliesMock).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
@@ -802,17 +767,17 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       threadTs: THREAD_TS,
       status: "",
     });
-    const reactCall = requireMockCall(reactSlackMessageMock, 0, "react Slack message");
-    expect(reactCall[0]).toBe("C123");
-    expect(reactCall[1]).toBe("171234.111");
-    expect(reactCall[2]).toBe("hourglass_flowing_sand");
-    expect(requireRecord(reactCall[3], "react Slack message options").token).toBe("xoxb-test");
-    const removeReactionCall = requireMockCall(removeSlackReactionMock, 0, "remove Slack reaction");
-    expect(removeReactionCall[0]).toBe("C123");
-    expect(removeReactionCall[1]).toBe("171234.111");
-    expect(removeReactionCall[2]).toBe("hourglass_flowing_sand");
-    expect(requireRecord(removeReactionCall[3], "remove Slack reaction options").token).toBe(
-      "xoxb-test",
+    expect(reactSlackMessageMock).toHaveBeenCalledWith(
+      "C123",
+      "171234.111",
+      "hourglass_flowing_sand",
+      expect.objectContaining({ token: "xoxb-test" }),
+    );
+    expect(removeSlackReactionMock).toHaveBeenCalledWith(
+      "C123",
+      "171234.111",
+      "hourglass_flowing_sand",
+      expect.objectContaining({ token: "xoxb-test" }),
     );
   });
 
@@ -832,10 +797,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
-    expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
-      enabled: true,
-      initialEmoji: "eyes",
-    });
+    expect(capturedStatusReactionOptions).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        initialEmoji: "eyes",
+      }),
+    );
     expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
     expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(1);
   });
@@ -1002,11 +969,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expectMockCallArgFields(startSlackStreamMock, 0, "Slack stream start params", {
-      channel: "C123",
-      threadTs: "171234.111",
-      text: FINAL_REPLY_TEXT,
-    });
+    expect(startSlackStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C123",
+        threadTs: "171234.111",
+        text: FINAL_REPLY_TEXT,
+      }),
+    );
     expect(deliverRepliesMock).not.toHaveBeenCalled();
   });
 
@@ -1020,9 +989,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
     expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
-    expectMockCallArgFields(startSlackStreamMock, 0, "Slack stream start params", {
-      text: FINAL_REPLY_TEXT,
-    });
+    expect(startSlackStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: FINAL_REPLY_TEXT,
+      }),
+    );
     expect(appendSlackStreamMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).not.toHaveBeenCalled();
   });
@@ -1037,8 +1008,20 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
-    expectDeliverReplyCall(0, SAME_TEXT);
-    expectDeliverReplyCall(1, SAME_TEXT);
+    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: SAME_TEXT })],
+      }),
+    );
+    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: SAME_TEXT })],
+      }),
+    );
   });
 
   it("keeps multi-part block replies in the first reply thread after the plan is consumed", async () => {
@@ -1055,8 +1038,20 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
-    expectDeliverReplyCall(0, "first block");
-    expectDeliverReplyCall(1, "second block");
+    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: "first block" })],
+      }),
+    );
+    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: "second block" })],
+      }),
+    );
   });
 
   it("does not flush draft previews for media finals before normal delivery", async () => {
@@ -1127,7 +1122,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(postMessageMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: FINAL_REPLY_TEXT })],
+      }),
+    );
     expect(session.stopped).toBe(true);
   });
 
@@ -1154,7 +1154,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(postMessageMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expectDeliverReplyCall(0, "first buffered\nsecond flushes");
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: "first buffered\nsecond flushes" })],
+      }),
+    );
     expect(stopSlackStreamMock).not.toHaveBeenCalled();
   });
 
@@ -1178,7 +1183,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(postMessageMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expectDeliverReplyCall(0, oversized, { textLimit: 4000 });
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        textLimit: 4000,
+        replies: [expect.objectContaining({ text: oversized })],
+      }),
+    );
     expect(session.stopped).toBe(true);
   });
 
@@ -1210,7 +1221,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     // Chunked fallback sent the FULL pendingText, not just the failing
     // payload (so the earlier buffered chunk is not dropped).
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expectDeliverReplyCall(0, "first buffered\nsecond payload");
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: "first buffered\nsecond payload" })],
+      }),
+    );
     // Session was marked fallback-delivered by deliverPendingStreamFallback,
     // so finalize skips stopSlackStream.
     expect(session.pendingText).toBe("");

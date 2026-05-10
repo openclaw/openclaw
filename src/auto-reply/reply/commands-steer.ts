@@ -7,27 +7,13 @@ import { logVerbose } from "../../globals.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
-  formatEmbeddedPiQueueFailureSummary,
   isEmbeddedPiRunActive,
-  queueEmbeddedPiMessageWithOutcome,
+  queueEmbeddedPiMessage,
   resolveActiveEmbeddedRunSessionId,
 } from "./commands-steer.runtime.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const STEER_USAGE = "Usage: /steer <message>";
-
-function formatSteerQueueFailureReply(reason: string): string {
-  if (reason === "no_active_run") {
-    return "⚠️ This session no longer has an active run to steer.";
-  }
-  if (reason === "not_streaming") {
-    return "⚠️ Current run is active but not accepting steering right now.";
-  }
-  if (reason === "compacting") {
-    return "⚠️ Current run is compacting; retry after compaction finishes.";
-  }
-  return "⚠️ Current run is active but not accepting steering right now.";
-}
 
 function parseSteerMessage(raw: string): string | null {
   const match = raw.trim().match(/^\/(?:steer|tell)(?:\s+([\s\S]*))?$/i);
@@ -111,16 +97,15 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
     return { shouldContinue: false, reply: { text: "⚠️ No active run to steer in this session." } };
   }
 
-  const queueOutcome = queueEmbeddedPiMessageWithOutcome(sessionId, message, {
+  const steered = queueEmbeddedPiMessage(sessionId, message, {
     steeringMode: "all",
     debounceMs: 0,
   });
-  if (!queueOutcome.queued) {
-    const summary = formatEmbeddedPiQueueFailureSummary(queueOutcome);
-    logVerbose(`steer: active session ${sessionId} rejected steering injection: ${summary}`);
+  if (!steered) {
+    logVerbose(`steer: active session ${sessionId} rejected steering injection`);
     return {
       shouldContinue: false,
-      reply: { text: formatSteerQueueFailureReply(queueOutcome.reason) },
+      reply: { text: "⚠️ Current run is active but not accepting steering right now." },
     };
   }
 

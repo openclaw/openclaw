@@ -82,7 +82,8 @@ describe("doctor empty allowlist policy scan", () => {
 
     expect(warnings).toEqual(["extra:channels.signal"]);
     expect(extraWarningsForAccount).toHaveBeenCalledTimes(1);
-    const [warningOptions] = extraWarningsForAccount.mock.calls[0] ?? [];
-    expect(warningOptions?.prefix).toBe("channels.signal");
+    expect(extraWarningsForAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ prefix: "channels.signal" }),
+    );
   });
 });

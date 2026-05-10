@@ -1,6 +1,6 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { type SignalApiMode, signalCheck, signalRpcRequest } from "./client-adapter.js";
+import { signalCheck, signalRpcRequest } from "./client.js";
 
 export type SignalProbe = BaseProbeResult & {
   status?: number | null;
@@ -21,11 +21,7 @@ function parseSignalVersion(value: unknown): string | null {
   return null;
 }
 
-export async function probeSignal(
-  baseUrl: string,
-  timeoutMs: number,
-  options: { apiMode?: SignalApiMode } = {},
-): Promise<SignalProbe> {
+export async function probeSignal(baseUrl: string, timeoutMs: number): Promise<SignalProbe> {
   const started = Date.now();
   const result: SignalProbe = {
     ok: false,
@@ -34,8 +30,7 @@ export async function probeSignal(
     elapsedMs: 0,
     version: null,
   };
-  const apiMode = options.apiMode ?? "native";
-  const check = await signalCheck(baseUrl, timeoutMs, { apiMode });
+  const check = await signalCheck(baseUrl, timeoutMs);
   if (!check.ok) {
     return {
       ...result,
@@ -48,7 +43,6 @@ export async function probeSignal(
     const version = await signalRpcRequest("version", undefined, {
       baseUrl,
       timeoutMs,
-      apiMode,
     });
     result.version = parseSignalVersion(version);
   } catch (err) {

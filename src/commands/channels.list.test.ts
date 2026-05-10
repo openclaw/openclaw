@@ -314,12 +314,9 @@ describe("channels list", () => {
     const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
       chat: Record<string, { origin: string; installed: boolean }>;
     };
-    expect(payload.chat.telegram?.origin).toBe("configured");
-    expect(payload.chat.telegram?.installed).toBe(true);
-    expect(payload.chat.discord?.origin).toBe("available");
-    expect(payload.chat.discord?.installed).toBe(true);
-    expect(payload.chat.qqbot?.origin).toBe("installable");
-    expect(payload.chat.qqbot?.installed).toBe(false);
+    expect(payload.chat.telegram).toMatchObject({ origin: "configured", installed: true });
+    expect(payload.chat.discord).toMatchObject({ origin: "available", installed: true });
+    expect(payload.chat.qqbot).toMatchObject({ origin: "installable", installed: false });
   });
 
   it(
@@ -358,8 +355,10 @@ describe("channels list", () => {
       const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
         chat: Record<string, { origin: string; installed: boolean }>;
       };
-      expect(payload.chat.wecom?.origin).toBe("available");
-      expect(payload.chat.wecom?.installed).toBe(true);
+      expect(payload.chat.wecom).toMatchObject({
+        origin: "available",
+        installed: true,
+      });
     },
   );
 });

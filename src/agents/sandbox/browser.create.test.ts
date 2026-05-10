@@ -156,18 +156,6 @@ function requireValue<T>(value: T | null | undefined, label: string): T {
   return value;
 }
 
-function latestBridgeResolved(): Record<string, unknown> {
-  const params = bridgeMocks.startBrowserBridgeServer.mock.calls.at(-1)?.[0];
-  if (!params || typeof params !== "object") {
-    throw new Error("expected browser bridge start params");
-  }
-  const resolved = params.resolved;
-  if (!resolved || typeof resolved !== "object") {
-    throw new Error("expected resolved browser bridge config");
-  }
-  return resolved;
-}
-
 describe("ensureSandboxBrowser create args", () => {
   beforeAll(async () => {
     await loadFreshBrowserModulesForTest();
@@ -299,9 +287,13 @@ describe("ensureSandboxBrowser create args", () => {
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
 
-    expect(latestBridgeResolved().ssrfPolicy).toEqual({
-      dangerouslyAllowPrivateNetwork: true,
-    });
+    expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolved: expect.objectContaining({
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+        }),
+      }),
+    );
   });
 
   it("recreates a cached bridge when the SSRF policy changes", async () => {
@@ -361,9 +353,13 @@ describe("ensureSandboxBrowser create args", () => {
     });
 
     expect(bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledWith(existingBridge.server);
-    expect(latestBridgeResolved().ssrfPolicy).toEqual({
-      allowedHostnames: ["example.com"],
-    });
+    expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolved: expect.objectContaining({
+          ssrfPolicy: { allowedHostnames: ["example.com"] },
+        }),
+      }),
+    );
   });
 
   it("recreates a cached bridge when evaluate permission changes", async () => {
@@ -422,7 +418,13 @@ describe("ensureSandboxBrowser create args", () => {
     });
 
     expect(bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledWith(existingBridge.server);
-    expect(latestBridgeResolved().evaluateEnabled).toBe(false);
+    expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolved: expect.objectContaining({
+          evaluateEnabled: false,
+        }),
+      }),
+    );
   });
 
   it("mounts the main workspace read-only when workspaceAccess is none", async () => {

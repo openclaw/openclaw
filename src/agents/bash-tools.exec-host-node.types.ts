@@ -1,5 +1,4 @@
 import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
-import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 
 export type ExecuteNodeHostCommandParams = {
   command: string;
@@ -9,7 +8,6 @@ export type ExecuteNodeHostCommandParams = {
   requestedNode?: string;
   boundNode?: string;
   sessionKey?: string;
-  bashElevated?: ExecElevatedDefaults;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;

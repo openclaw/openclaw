@@ -65,32 +65,6 @@ async function executeNodes(
 type NodesToolResult = Awaited<ReturnType<typeof executeNodes>>;
 type GatewayMockResult = Record<string, unknown> | null | undefined;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectInvokeParams(
-  invokeParams: unknown,
-  expected: {
-    command: string;
-    nodeId?: string;
-    params?: Record<string, unknown>;
-  },
-) {
-  const record = requireRecord(invokeParams, "node.invoke params");
-  expect(record.command).toBe(expected.command);
-  if (expected.nodeId !== undefined) {
-    expect(record.nodeId).toBe(expected.nodeId);
-  }
-  const params = requireRecord(record.params, `${expected.command} params`);
-  for (const [key, value] of Object.entries(expected.params ?? {})) {
-    expect(params[key]).toEqual(value);
-  }
-}
-
 function mockNodeList(params?: { commands?: string[]; remoteIp?: string }) {
   return {
     nodes: [
@@ -124,15 +98,15 @@ function expectFirstMediaUrl(result: NodesToolResult): string {
 }
 
 function expectFirstTextContains(result: NodesToolResult, expectedText: string) {
-  const first = result.content?.[0];
-  expect(first?.type).toBe("text");
-  const text = first?.type === "text" ? first.text : "";
-  expect(text).toContain(expectedText);
+  expect(result.content?.[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining(expectedText),
+  });
 }
 
 function parseFirstTextJson(result: NodesToolResult): unknown {
   const first = result.content?.[0];
-  expect(first?.type).toBe("text");
+  expect(first).toMatchObject({ type: "text" });
   const text = first?.type === "text" ? first.text : "";
   return JSON.parse(text);
 }
@@ -164,7 +138,7 @@ function setupPhotosLatestMock(params?: { remoteIp?: string }) {
   setupNodeInvokeMock({
     ...(params?.remoteIp ? { remoteIp: params.remoteIp } : {}),
     onInvoke: (invokeParams) => {
-      expectInvokeParams(invokeParams, {
+      expect(invokeParams).toMatchObject({
         command: "photos.latest",
         params: PHOTOS_LATEST_DEFAULT_PARAMS,
       });
@@ -188,7 +162,7 @@ describe("nodes camera_snap", () => {
   it("uses front/high-quality defaults when params are omitted", async () => {
     setupNodeInvokeMock({
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           command: "camera.snap",
           params: {
             facing: "front",
@@ -250,7 +224,7 @@ describe("nodes camera_snap", () => {
   it("passes deviceId when provided", async () => {
     setupNodeInvokeMock({
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           command: "camera.snap",
           params: { deviceId: "cam-123" },
         });
@@ -369,7 +343,7 @@ describe("nodes photos_latest", () => {
   it("returns empty content/details when no photos are available", async () => {
     setupNodeInvokeMock({
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           command: "photos.latest",
           params: {
             limit: 1,
@@ -406,9 +380,11 @@ describe("nodes photos_latest", () => {
     expect(result.content ?? []).toStrictEqual([]);
     const details =
       (result.details as { photos?: Array<Record<string, unknown>> } | undefined)?.photos ?? [];
-    expect(details[0]?.width).toBe(1);
-    expect(details[0]?.height).toBe(1);
-    expect(details[0]?.createdAt).toBe("2026-03-04T00:00:00Z");
+    expect(details[0]).toMatchObject({
+      width: 1,
+      height: 1,
+      createdAt: "2026-03-04T00:00:00Z",
+    });
     expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-.*\.jpg$/);
   });
 
@@ -427,7 +403,7 @@ describe("nodes notifications_list", () => {
     setupNodeInvokeMock({
       commands: ["notifications.list"],
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           nodeId: NODE_ID,
           command: "notifications.list",
           params: {},
@@ -449,7 +425,7 @@ describe("nodes notifications_list", () => {
     });
 
     expectFirstTextContains(result, '"notifications"');
-    expect(parseFirstTextJson(result)).toStrictEqual({
+    expect(parseFirstTextJson(result)).toMatchObject({
       enabled: true,
       connected: true,
       count: 1,
@@ -463,7 +439,7 @@ describe("nodes notifications_action", () => {
     setupNodeInvokeMock({
       commands: ["notifications.actions"],
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           nodeId: NODE_ID,
           command: "notifications.actions",
           params: {
@@ -483,7 +459,7 @@ describe("nodes notifications_action", () => {
     });
 
     expectFirstTextContains(result, '"dismiss"');
-    expect(parseFirstTextJson(result)).toStrictEqual({
+    expect(parseFirstTextJson(result)).toMatchObject({
       ok: true,
       key: "n1",
       action: "dismiss",
@@ -494,7 +470,7 @@ describe("nodes notifications_action", () => {
     setupNodeInvokeMock({
       commands: ["notifications.actions"],
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           nodeId: NODE_ID,
           command: "notifications.actions",
           params: {
@@ -515,7 +491,7 @@ describe("nodes notifications_action", () => {
       notificationReplyText: " On it ",
     });
 
-    expect(parseFirstTextJson(result)).toStrictEqual({
+    expect(parseFirstTextJson(result)).toMatchObject({
       ok: true,
       key: "n2",
       action: "reply",
@@ -528,7 +504,7 @@ describe("nodes location_get", () => {
     setupNodeInvokeMock({
       commands: ["location.get"],
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           nodeId: NODE_ID,
           command: "location.get",
           params: {
@@ -556,7 +532,7 @@ describe("nodes location_get", () => {
       locationTimeoutMs: 4_500,
     });
 
-    expect(parseFirstTextJson(result)).toStrictEqual({
+    expect(parseFirstTextJson(result)).toMatchObject({
       latitude: 37.3346,
       longitude: -122.009,
       accuracyMeters: 18,
@@ -570,7 +546,7 @@ describe("nodes device_status and device_info", () => {
     setupNodeInvokeMock({
       commands: ["device.status", "device.info"],
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           nodeId: NODE_ID,
           command: "device.status",
           params: {},
@@ -595,7 +571,7 @@ describe("nodes device_status and device_info", () => {
     setupNodeInvokeMock({
       commands: ["device.status", "device.info"],
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           nodeId: NODE_ID,
           command: "device.info",
           params: {},
@@ -621,7 +597,7 @@ describe("nodes device_status and device_info", () => {
     setupNodeInvokeMock({
       commands: ["device.permissions"],
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           nodeId: NODE_ID,
           command: "device.permissions",
           params: {},
@@ -650,21 +626,25 @@ describe("nodes device_status and device_info", () => {
     });
 
     expectFirstTextContains(result, '"permissions"');
-    const parsed = requireRecord(parseFirstTextJson(result), "device permissions payload");
-    const permissions = requireRecord(parsed.permissions, "permissions");
-    const sms = requireRecord(permissions.sms, "sms permissions");
-    expect(sms.status).toBe("denied");
-    expect(sms.promptable).toBe(true);
-    const capabilities = requireRecord(sms.capabilities, "sms capabilities");
-    expect(capabilities.send).toStrictEqual({ status: "denied", promptable: true });
-    expect(capabilities.read).toStrictEqual({ status: "granted", promptable: false });
+    expect(parseFirstTextJson(result)).toMatchObject({
+      permissions: {
+        sms: {
+          status: "denied",
+          promptable: true,
+          capabilities: {
+            send: { status: "denied", promptable: true },
+            read: { status: "granted", promptable: false },
+          },
+        },
+      },
+    });
   });
 
   it("invokes device.health and returns payload", async () => {
     setupNodeInvokeMock({
       commands: ["device.health"],
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           nodeId: NODE_ID,
           command: "device.health",
           params: {},
@@ -691,7 +671,7 @@ describe("nodes invoke", () => {
   it("allows metadata-only camera.list via generic invoke", async () => {
     setupNodeInvokeMock({
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           command: "camera.list",
           params: {},
         });
@@ -709,9 +689,10 @@ describe("nodes invoke", () => {
       invokeCommand: "camera.list",
     });
 
-    const details = requireRecord(result.details, "camera.list details");
-    expect(details.payload).toStrictEqual({
-      devices: [{ id: "cam-back", name: "Back Camera" }],
+    expect(result.details).toMatchObject({
+      payload: {
+        devices: [{ id: "cam-back", name: "Back Camera" }],
+      },
     });
   });
 
@@ -729,7 +710,7 @@ describe("nodes invoke", () => {
   it("allows media invoke commands when explicitly enabled", async () => {
     setupNodeInvokeMock({
       onInvoke: (invokeParams) => {
-        expectInvokeParams(invokeParams, {
+        expect(invokeParams).toMatchObject({
           command: "photos.latest",
           params: { limit: 1 },
         });
@@ -751,9 +732,10 @@ describe("nodes invoke", () => {
       { allowMediaInvokeCommands: true },
     );
 
-    const details = requireRecord(result.details, "photos.latest invoke details");
-    expect(details.payload).toStrictEqual({
-      photos: [{ format: "jpg", base64: "aGVsbG8=", width: 1, height: 1 }],
+    expect(result.details).toMatchObject({
+      payload: {
+        photos: [{ format: "jpg", base64: "aGVsbG8=", width: 1, height: 1 }],
+      },
     });
   });
 });

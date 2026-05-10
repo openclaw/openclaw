@@ -14,7 +14,6 @@ type MSTeamsTestRuntimeOptions = {
   upsertPairingRequest?: ReturnType<typeof vi.fn>;
   recordInboundSession?: ReturnType<typeof vi.fn>;
   resolveAgentRoute?: (params: RuntimeRoutePeer) => unknown;
-  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
   resolveTextChunkLimit?: () => number;
   resolveStorePath?: () => string;
 };
@@ -80,7 +79,7 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         upsertPairingRequest: options.upsertPairingRequest ?? vi.fn(async () => null),
       },
       text: {
-        hasControlCommand: options.hasControlCommand ?? (() => false),
+        hasControlCommand: () => false,
         resolveChunkMode: () => "length",
         resolveMarkdownTableMode: () => "code",
         ...(options.resolveTextChunkLimit

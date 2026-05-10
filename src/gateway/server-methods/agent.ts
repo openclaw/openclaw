@@ -4,10 +4,6 @@ import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
-import {
-  consumeExecApprovalFollowupRuntimeHandoff,
-  parseExecApprovalFollowupApprovalId,
-} from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import {
   resolveAgentAvatar,
@@ -103,11 +99,7 @@ import {
 } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_MODES,
-  hasGatewayClientCap,
-} from "../protocol/client-info.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -181,12 +173,6 @@ function resolveAllowModelOverrideFromClient(
 
 function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   return resolveSenderIsOwnerFromClient(client);
-}
-
-function resolveCanUseInternalRuntimeHandoff(
-  client: GatewayRequestHandlerOptions["client"],
-): boolean {
-  return client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
 }
 
 async function runSessionResetFromAgent(params: {
@@ -487,20 +473,20 @@ function dispatchAgentRunFromGateway(params: {
     })
     .catch((err) => {
       const aborted = isAbortError(err);
-      const renderedErr = formatForLog(err);
       if (shouldTrackTask) {
+        const error = String(err);
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
           status: resolveFailedTrackedAgentTaskStatus(err),
-          error: renderedErr,
-          terminalSummary: renderedErr,
+          error,
+          terminalSummary: error,
         });
       }
-      const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
+      const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: params.runId,
         status: aborted ? ("timeout" as const) : ("error" as const),
-        summary: aborted ? "aborted" : renderedErr,
+        summary: aborted ? "aborted" : String(err),
         ...(aborted ? { stopReason: "rpc" } : {}),
       };
       setGatewayDedupeEntry({
@@ -596,7 +582,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       bootstrapContextMode?: "full" | "lightweight";
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
       acpTurnSource?: "manual_spawn";
-      internalRuntimeHandoffId?: string;
       internalEvents?: AgentInternalEvent[];
       idempotencyKey: string;
       timeout?: number;
@@ -610,7 +595,6 @@ export const agentHandlers: GatewayRequestHandlers = {
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canResetSession = resolveCanResetSessionFromClient(client);
-    const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
     const requestedModelOverride = Boolean(request.provider || request.model);
     const isRawModelRun = request.modelRun === true || request.promptMode === "none";
     if (requestedModelOverride && !allowModelOverride) {
@@ -628,18 +612,6 @@ export const agentHandlers: GatewayRequestHandlers = {
     const modelOverride = allowModelOverride ? request.model : undefined;
     const cfg = context.getRuntimeConfig();
     const idem = request.idempotencyKey;
-    const execApprovalFollowupApprovalId = parseExecApprovalFollowupApprovalId(idem);
-    if (execApprovalFollowupApprovalId && !canUseInternalRuntimeHandoff) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "exec approval followup idempotency keys are reserved for backend callers.",
-        ),
-      );
-      return;
-    }
     const normalizedSpawned = normalizeSpawnedRunMetadata({
       groupId: request.groupId,
       groupChannel: request.groupChannel,
@@ -1231,7 +1203,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedChannel,
         });
         if (!shouldDowngrade) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
           return;
         }
         deliveryDowngradeReason = String(err);
@@ -1419,31 +1391,6 @@ export const agentHandlers: GatewayRequestHandlers = {
           (!resolvedSessionKey || resolveAgentIdFromSessionKey(resolvedSessionKey) === agentId)
             ? agentId
             : undefined;
-        let execApprovalFollowupRuntimeHandoff =
-          canUseInternalRuntimeHandoff && execApprovalFollowupApprovalId
-            ? consumeExecApprovalFollowupRuntimeHandoff({
-                handoffId: request.internalRuntimeHandoffId,
-                approvalId: execApprovalFollowupApprovalId,
-                idempotencyKey: idem,
-                sessionKey: resolvedSessionKey,
-              })
-            : undefined;
-        if (
-          !execApprovalFollowupRuntimeHandoff &&
-          canUseInternalRuntimeHandoff &&
-          execApprovalFollowupApprovalId &&
-          requestedSessionKeyRaw &&
-          requestedSessionKeyRaw !== resolvedSessionKey
-        ) {
-          execApprovalFollowupRuntimeHandoff = consumeExecApprovalFollowupRuntimeHandoff({
-            handoffId: request.internalRuntimeHandoffId,
-            approvalId: execApprovalFollowupApprovalId,
-            idempotencyKey: idem,
-            sessionKey: requestedSessionKeyRaw,
-          });
-        }
-        const execApprovalFollowupElevatedDefaults =
-          execApprovalFollowupRuntimeHandoff?.bashElevated;
 
         dispatchAgentRunFromGateway({
           ingressOpts: {
@@ -1470,9 +1417,6 @@ export const agentHandlers: GatewayRequestHandlers = {
               groupSpace: resolvedGroupSpace,
               currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
             },
-            ...(execApprovalFollowupElevatedDefaults
-              ? { bashElevated: execApprovalFollowupElevatedDefaults }
-              : {}),
             groupId: resolvedGroupId,
             groupChannel: resolvedGroupChannel,
             groupSpace: resolvedGroupSpace,
@@ -1512,11 +1456,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         });
         dispatched = true;
       } catch (err) {
-        const error = errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err));
+        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
         const payload = {
           runId,
           status: "error" as const,
-          summary: formatForLog(err),
+          summary: String(err),
         };
         setGatewayDedupeEntry({
           dedupe: context.dedupe,

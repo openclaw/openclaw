@@ -10,14 +10,9 @@ import type {
   ProviderSanitizeReplayHistoryContext,
 } from "./types.js";
 
-/** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function buildOpenAICompatibleReplayPolicy(
   modelApi: string | null | undefined,
-  options: {
-    sanitizeToolCallIds?: boolean;
-    modelId?: string | null;
-    dropReasoningFromHistory?: boolean;
-  } = {},
+  options: { sanitizeToolCallIds?: boolean; modelId?: string | null } = {},
 ): ProviderReplayPolicy | undefined {
   if (
     modelApi !== "openai-completions" &&
@@ -29,7 +24,6 @@ export function buildOpenAICompatibleReplayPolicy(
   }
 
   const sanitizeToolCallIds = options.sanitizeToolCallIds ?? true;
-  const dropReasoningFromHistory = options.dropReasoningFromHistory ?? true;
 
   return {
     ...(sanitizeToolCallIds
@@ -46,14 +40,12 @@ export function buildOpenAICompatibleReplayPolicy(
           validateGeminiTurns: false,
           validateAnthropicTurns: false,
         }),
-    ...(modelApi === "openai-completions" &&
-    (dropReasoningFromHistory || isGemma4ModelId(options.modelId))
+    ...(modelApi === "openai-completions" && isGemma4ModelId(options.modelId)
       ? { dropReasoningFromHistory: true }
       : {}),
   };
 }
 
-/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
 export function buildStrictAnthropicReplayPolicy(
   options: {
     dropThinkingBlocks?: boolean;
@@ -87,8 +79,6 @@ export function buildStrictAnthropicReplayPolicy(
  * thinking blocks from prior turns breaks prompt cache prefix matching.
  *
  * See: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#differences-in-thinking-across-model-versions
- *
- * @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks.
  */
 export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
   const id = normalizeLowercaseStringOrEmpty(modelId);
@@ -115,7 +105,6 @@ export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
   return false;
 }
 
-/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
 export function buildAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
   const isClaude = normalizeLowercaseStringOrEmpty(modelId).includes("claude");
   return buildStrictAnthropicReplayPolicy({
@@ -123,7 +112,6 @@ export function buildAnthropicReplayPolicyForModel(modelId?: string): ProviderRe
   });
 }
 
-/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
 export function buildNativeAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
   const isClaude = normalizeLowercaseStringOrEmpty(modelId).includes("claude");
   return buildStrictAnthropicReplayPolicy({
@@ -133,7 +121,6 @@ export function buildNativeAnthropicReplayPolicyForModel(modelId?: string): Prov
   });
 }
 
-/** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function buildHybridAnthropicOrOpenAIReplayPolicy(
   ctx: ProviderReplayPolicyContext,
   options: { anthropicModelDropThinkingBlocks?: boolean } = {},
@@ -165,7 +152,6 @@ function markGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionState):
   });
 }
 
-/** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
   return {
     sanitizeMode: "full",
@@ -183,7 +169,6 @@ export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
   };
 }
 
-/** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function buildPassthroughGeminiSanitizingReplayPolicy(
   modelId?: string,
 ): ProviderReplayPolicy {
@@ -203,7 +188,6 @@ export function buildPassthroughGeminiSanitizingReplayPolicy(
   };
 }
 
-/** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function sanitizeGoogleGeminiReplayHistory(
   ctx: ProviderSanitizeReplayHistoryContext,
 ): AgentMessage[] {
@@ -218,7 +202,6 @@ export function sanitizeGoogleGeminiReplayHistory(
   return messages;
 }
 
-/** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function resolveTaggedReasoningOutputMode(): ProviderReasoningOutputMode {
   return "tagged";
 }

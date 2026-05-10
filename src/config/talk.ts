@@ -110,10 +110,6 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   if (voice) {
     normalized.voice = voice;
   }
-  const instructions = normalizeOptionalString(source.instructions);
-  if (instructions) {
-    normalized.instructions = instructions;
-  }
   if (source.mode === "realtime" || source.mode === "stt-tts" || source.mode === "transcription") {
     normalized.mode = source.mode;
   }

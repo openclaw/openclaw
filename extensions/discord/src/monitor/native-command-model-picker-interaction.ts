@@ -4,8 +4,8 @@ import {
   listChatCommands,
   type ChatCommandDefinition,
   type CommandArgs,
-} from "openclaw/plugin-sdk/command-auth-native";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+} from "openclaw/plugin-sdk/command-auth";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   Button,
   StringSelectMenu,
@@ -147,17 +147,6 @@ export async function handleDiscordModelPickerInteraction(params: {
     return;
   }
 
-  let deferredUpdate = interaction.acknowledged;
-  if (!deferredUpdate) {
-    const deferred = await params.safeInteractionCall("model picker defer", () =>
-      interaction.acknowledge(),
-    );
-    if (deferred === null) {
-      return;
-    }
-    deferredUpdate = true;
-  }
-
   const route = await resolveDiscordModelPickerRoute({
     interaction,
     cfg: ctx.cfg,
@@ -186,9 +175,7 @@ export async function handleDiscordModelPickerInteraction(params: {
     limit: 5,
   });
   const updatePicker = async (payload: MessagePayload) =>
-    await params.safeInteractionCall("model picker update", () =>
-      deferredUpdate ? interaction.editReply(payload) : interaction.update(payload),
-    );
+    await params.safeInteractionCall("model picker update", () => interaction.update(payload));
   const showNotice = async (message: string) =>
     await updatePicker(buildDiscordModelPickerNoticePayload(message));
 

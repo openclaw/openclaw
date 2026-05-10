@@ -2,14 +2,15 @@ import {
   firstDefined,
   isSenderIdAllowed,
   mergeDmAllowFromSources,
+  type AllowlistMatch,
 } from "openclaw/plugin-sdk/allow-from";
 import type {
   DmPolicy,
   TelegramDirectConfig,
   TelegramGroupConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+} from "openclaw/plugin-sdk/config-types";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -17,6 +18,8 @@ export type NormalizedAllowFrom = {
   hasEntries: boolean;
   invalidEntries: string[];
 };
+
+type AllowFromMatch = AllowlistMatch<"wildcard" | "id">;
 
 const warnedInvalidEntries = new Set<string>();
 const log = createSubsystemLogger("telegram/bot-access");
@@ -90,3 +93,21 @@ export const isSenderAllowed = (params: {
 };
 
 export { firstDefined };
+
+export const resolveSenderAllowMatch = (params: {
+  allow: NormalizedAllowFrom;
+  senderId?: string;
+  senderUsername?: string;
+}): AllowFromMatch => {
+  const { allow, senderId } = params;
+  if (allow.hasWildcard) {
+    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
+  }
+  if (!allow.hasEntries) {
+    return { allowed: false };
+  }
+  if (senderId && allow.entries.includes(senderId)) {
+    return { allowed: true, matchKey: senderId, matchSource: "id" };
+  }
+  return { allowed: false };
+};

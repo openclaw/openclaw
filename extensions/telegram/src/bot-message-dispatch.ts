@@ -29,7 +29,7 @@ import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+} from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
@@ -57,7 +57,6 @@ import {
   resolveAgentDir,
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
-import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
 import { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 import {
   generateTopicLabel,
@@ -110,24 +109,6 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
-
-type DraftPartialTextUpdate = {
-  text: string;
-  delta?: string;
-  replace?: true;
-};
-
-function resolveDraftPartialText(
-  previous: string,
-  update: DraftPartialTextUpdate,
-): string | undefined {
-  const nextText =
-    update.replace || update.delta === undefined ? update.text : `${previous}${update.delta}`;
-  if (nextText === previous) {
-    return undefined;
-  }
-  return nextText;
-}
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -587,7 +568,6 @@ export const dispatchTelegramMessage = async ({
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let streamToolProgressSuppressed = false;
   let streamToolProgressLines: string[] = [];
-  let lastAnswerPartialText = "";
   const renderProgressDraft = async (options?: { flush?: boolean }) => {
     if (!answerLane.stream || streamMode !== "progress") {
       return;
@@ -688,36 +668,23 @@ export const dispatchTelegramMessage = async ({
     });
     return draftLaneEventQueue;
   };
-  type SplitLaneSegment = { lane: LaneName; update: DraftPartialTextUpdate };
+  type SplitLaneSegment = { lane: LaneName; text: string };
   type SplitLaneSegmentsResult = {
     segments: SplitLaneSegment[];
     suppressedReasoningOnly: boolean;
   };
   const splitTextIntoLaneSegments = (
-    update: { text?: string; delta?: string; replace?: true },
+    text?: string,
     isReasoning?: boolean,
   ): SplitLaneSegmentsResult => {
-    const split = splitTelegramReasoningText(update.text, isReasoning);
-    const splitSegments: Array<{ lane: LaneName; text: string }> = [];
-    const useDelta = !update.replace && update.delta !== undefined;
+    const split = splitTelegramReasoningText(text, isReasoning);
     const segments: SplitLaneSegment[] = [];
     const suppressReasoning = resolvedReasoningLevel === "off";
     if (split.reasoningText && !suppressReasoning) {
-      splitSegments.push({ lane: "reasoning", text: split.reasoningText });
+      segments.push({ lane: "reasoning", text: split.reasoningText });
     }
     if (split.answerText) {
-      splitSegments.push({ lane: "answer", text: split.answerText });
-    }
-    for (const segment of splitSegments) {
-      const canApplyDelta = useDelta && splitSegments.length === 1;
-      segments.push({
-        lane: segment.lane,
-        update: {
-          text: segment.text,
-          ...(canApplyDelta ? { delta: update.delta } : {}),
-          ...(update.replace ? { replace: true } : {}),
-        },
-      });
+      segments.push({ lane: "answer", text: split.answerText });
     }
     return {
       segments,
@@ -727,9 +694,6 @@ export const dispatchTelegramMessage = async ({
   };
   const resetDraftLaneState = (lane: DraftLaneState) => {
     lane.lastPartialText = "";
-    if (lane === answerLane) {
-      lastAnswerPartialText = "";
-    }
     lane.hasStreamedMessage = false;
     lane.finalized = false;
   };
@@ -748,14 +712,12 @@ export const dispatchTelegramMessage = async ({
     }
     await rotateLaneForNewMessage(answerLane);
   };
-  const updateDraftFromPartial = (lane: DraftLaneState, update: DraftPartialTextUpdate) => {
+  const updateDraftFromPartial = (lane: DraftLaneState, text: string | undefined) => {
     const laneStream = lane.stream;
-    if (!laneStream || !update.text) {
+    if (!laneStream || !text) {
       return;
     }
-    const previousText = lane === answerLane ? lastAnswerPartialText : lane.lastPartialText;
-    const nextText = resolveDraftPartialText(previousText, update);
-    if (!nextText) {
+    if (text === lane.lastPartialText) {
       return;
     }
     if (lane === answerLane) {
@@ -767,17 +729,18 @@ export const dispatchTelegramMessage = async ({
     }
     lane.hasStreamedMessage = true;
     lane.finalized = false;
-    if (lane === answerLane) {
-      lastAnswerPartialText = nextText;
+    if (
+      lane.lastPartialText &&
+      lane.lastPartialText.startsWith(text) &&
+      text.length < lane.lastPartialText.length
+    ) {
+      return;
     }
-    lane.lastPartialText = nextText;
-    laneStream.update(nextText);
+    lane.lastPartialText = text;
+    laneStream.update(text);
   };
-  const ingestDraftLaneSegments = async (
-    update: { text?: string; delta?: string; replace?: true },
-    isReasoning?: boolean,
-  ) => {
-    const split = splitTextIntoLaneSegments(update, isReasoning);
+  const ingestDraftLaneSegments = async (text: string | undefined, isReasoning?: boolean) => {
+    const split = splitTextIntoLaneSegments(text, isReasoning);
     for (const segment of split.segments) {
       if (segment.lane === "answer") {
         await prepareAnswerLaneForText();
@@ -786,7 +749,7 @@ export const dispatchTelegramMessage = async ({
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
       }
-      updateDraftFromPartial(lanes[segment.lane], segment.update);
+      updateDraftFromPartial(lanes[segment.lane], segment.text);
     }
   };
   const flushDraftLane = async (lane: DraftLaneState) => {
@@ -1165,10 +1128,8 @@ export const dispatchTelegramMessage = async ({
             ctxPayload,
             recordInboundSession: context.turn.recordInboundSession,
             record: context.turn.record,
-            runDispatch: () => {
-              const sentBlockMediaUrls = new Set<string>();
-
-              return telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
+            runDispatch: () =>
+              telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
                 ctx: ctxPayload,
                 cfg,
                 dispatcherOptions: {
@@ -1181,16 +1142,6 @@ export const dispatchTelegramMessage = async ({
                     if (payload.isError === true) {
                       hadErrorReplyFailureOrSkip = true;
                     }
-
-                    const deduped =
-                      info.kind === "final"
-                        ? deduplicateBlockSentMedia(payload, sentBlockMediaUrls)
-                        : payload;
-                    if (deduped === undefined) {
-                      return;
-                    }
-                    const effectivePayload = deduped;
-
                     if (info.kind === "final") {
                       await enqueueDraftLaneEvent(async () => {});
                     }
@@ -1205,16 +1156,13 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     const telegramButtons = (
-                      effectivePayload.channelData?.telegram as
+                      payload.channelData?.telegram as
                         | { buttons?: TelegramInlineButtons }
                         | undefined
                     )?.buttons;
-                    const split = splitTextIntoLaneSegments(
-                      { text: effectivePayload.text },
-                      payload.isReasoning,
-                    );
+                    const split = splitTextIntoLaneSegments(payload.text, payload.isReasoning);
                     const segments = split.segments;
-                    const reply = resolveSendableOutboundReplyParts(effectivePayload);
+                    const reply = resolveSendableOutboundReplyParts(payload);
                     const _hasMedia = reply.hasMedia;
 
                     const flushBufferedFinalAnswer = async () => {
@@ -1238,7 +1186,6 @@ export const dispatchTelegramMessage = async ({
                       reasoningStepState.resetForNextStep();
                     };
 
-                    let blockDelivered = false;
                     for (const segment of segments) {
                       if (
                         segment.lane === "answer" &&
@@ -1246,8 +1193,8 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.shouldBufferFinalAnswer()
                       ) {
                         reasoningStepState.bufferFinalAnswer({
-                          payload: effectivePayload,
-                          text: segment.update.text,
+                          payload,
+                          text: segment.text,
                           bufferedGeneration: replyFenceGeneration,
                         });
                         continue;
@@ -1259,21 +1206,17 @@ export const dispatchTelegramMessage = async ({
                         streamMode === "progress" &&
                         segment.lane === "answer" &&
                         info.kind === "final"
-                          ? await deliverProgressModeFinalAnswer(
-                              effectivePayload,
-                              segment.update.text,
-                            )
+                          ? await deliverProgressModeFinalAnswer(payload, segment.text)
                           : await deliverLaneText({
                               laneName: segment.lane,
-                              text: segment.update.text,
-                              payload: effectivePayload,
+                              text: segment.text,
+                              payload,
                               infoKind: info.kind,
                               buttons: telegramButtons,
                             });
                       if (info.kind === "final") {
                         emitPreviewFinalizedHook(result);
                       }
-                      blockDelivered = blockDelivered || result.kind !== "skipped";
                       if (segment.lane === "reasoning") {
                         if (result.kind !== "skipped") {
                           reasoningStepState.noteReasoningDelivered();
@@ -1285,33 +1228,20 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.resetForNextStep();
                       }
                     }
-                    const trackBlockMedia = (delivered: boolean) => {
-                      if (delivered && info.kind === "block" && payload.mediaUrls?.length) {
-                        for (const url of payload.mediaUrls) {
-                          sentBlockMediaUrls.add(url);
-                        }
-                      }
-                    };
-
                     if (segments.length > 0) {
-                      trackBlockMedia(blockDelivered);
                       return;
                     }
                     if (split.suppressedReasoningOnly) {
-                      let delivered = false;
                       if (reply.hasMedia) {
                         const payloadWithoutSuppressedReasoning =
-                          typeof effectivePayload.text === "string"
-                            ? { ...effectivePayload, text: "" }
-                            : effectivePayload;
-                        delivered = await sendPayload(payloadWithoutSuppressedReasoning, {
+                          typeof payload.text === "string" ? { ...payload, text: "" } : payload;
+                        await sendPayload(payloadWithoutSuppressedReasoning, {
                           durable: info.kind === "final",
                         });
                       }
                       if (info.kind === "final") {
                         await flushBufferedFinalAnswer();
                       }
-                      trackBlockMedia(delivered);
                       return;
                     }
 
@@ -1327,13 +1257,10 @@ export const dispatchTelegramMessage = async ({
                       }
                       return;
                     }
-                    const delivered = await sendPayload(effectivePayload, {
-                      durable: info.kind === "final",
-                    });
+                    await sendPayload(payload, { durable: info.kind === "final" });
                     if (info.kind === "final") {
                       await flushBufferedFinalAnswer();
                     }
-                    trackBlockMedia(delivered);
                   },
                   onSkip: (payload, info) => {
                     if (payload.isError === true) {
@@ -1377,7 +1304,7 @@ export const dispatchTelegramMessage = async ({
                     answerLane.stream || reasoningLane.stream
                       ? (payload) =>
                           enqueueDraftLaneEvent(async () => {
-                            await ingestDraftLaneSegments(payload);
+                            await ingestDraftLaneSegments(payload.text);
                           })
                       : undefined,
                   onReasoningStream: reasoningLane.stream
@@ -1388,7 +1315,7 @@ export const dispatchTelegramMessage = async ({
                             resetDraftLaneState(reasoningLane);
                             splitReasoningOnNextStream = false;
                           }
-                          await ingestDraftLaneSegments(payload, true);
+                          await ingestDraftLaneSegments(payload.text, true);
                         })
                     : undefined,
                   onAssistantMessageStart: answerLane.stream
@@ -1522,8 +1449,7 @@ export const dispatchTelegramMessage = async ({
                     : undefined,
                   onModelSelected,
                 },
-              });
-            },
+              }),
           }),
         },
       });
@@ -1617,9 +1543,7 @@ export const dispatchTelegramMessage = async ({
     !sentFallback &&
     !dispatchError &&
     !deliverySummary.delivered &&
-    !suppressSilentReplyFallback &&
-    !queuedFinal &&
-    isGroup
+    !suppressSilentReplyFallback
   ) {
     const policySessionKey =
       ctxPayload.CommandSource === "native"
@@ -1649,8 +1573,7 @@ export const dispatchTelegramMessage = async ({
     });
   }
 
-  const hasFinalResponse =
-    deliverySummary.delivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
+  const hasFinalResponse = deliverySummary.delivered || sentFallback || suppressSilentReplyFallback;
 
   if (statusReactionController && !hasFinalResponse) {
     void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(

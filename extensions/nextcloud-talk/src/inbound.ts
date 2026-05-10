@@ -1,94 +1,34 @@
-import {
-  channelIngressRoutes,
-  resolveStableChannelMessageIngress,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
-import {
-  normalizeOptionalString,
-  normalizeStringEntries,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  resolveAllowlistProviderRuntimeGroupPolicy,
+  createChannelMessageReplyPipeline,
   createChannelPairingController,
   deliverFormattedTextWithAttachments,
   logInboundDrop,
+  readStoreAllowFromForDmPolicy,
+  resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  resolveDmGroupAccessWithCommandGate,
   warnMissingProviderGroupPolicyFallbackOnce,
-  type GroupPolicy,
   type OpenClawConfig,
   type OutboundReplyPayload,
   type RuntimeEnv,
 } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
-  normalizeNextcloudTalkAllowEntry,
   normalizeNextcloudTalkAllowlist,
   resolveNextcloudTalkAllowlistMatch,
+  resolveNextcloudTalkGroupAllow,
+  resolveNextcloudTalkMentionGate,
   resolveNextcloudTalkRequireMention,
   resolveNextcloudTalkRoomMatch,
 } from "./policy.js";
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import type { CoreConfig, NextcloudTalkInboundMessage, NextcloudTalkRoomConfig } from "./types.js";
+import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
-
-type NextcloudTalkRoomMatch = ReturnType<typeof resolveNextcloudTalkRoomMatch>;
-
-function hasAllowEntries(entries: string[]): boolean {
-  return normalizeNextcloudTalkAllowlist(entries).length > 0;
-}
-
-function roomRoutes(params: {
-  isGroup: boolean;
-  groupPolicy: GroupPolicy;
-  roomMatch: NextcloudTalkRoomMatch;
-  roomConfig?: NextcloudTalkRoomConfig;
-  senderId: string;
-  outerGroupAllowFrom: string[];
-  roomAllowFrom: string[];
-}) {
-  if (!params.isGroup) {
-    return [];
-  }
-  const roomSenderConfigured =
-    params.groupPolicy === "allowlist" && hasAllowEntries(params.roomAllowFrom);
-  return channelIngressRoutes(
-    params.roomMatch.allowlistConfigured && {
-      id: "nextcloud-talk:room",
-      allowed: params.roomMatch.allowed,
-      precedence: 0,
-      matchId: "nextcloud-talk-room",
-      blockReason: "room_not_allowlisted",
-    },
-    params.roomConfig?.enabled === false && {
-      id: "nextcloud-talk:room-enabled",
-      enabled: false,
-      precedence: 10,
-      blockReason: "room_disabled",
-    },
-    roomSenderConfigured && {
-      id: "nextcloud-talk:room-sender",
-      kind: "nestedAllowlist",
-      precedence: 20,
-      blockReason: "room_sender_not_allowlisted",
-      ...(!hasAllowEntries(params.outerGroupAllowFrom)
-        ? {
-            senderPolicy: "replace" as const,
-            senderAllowFrom: params.roomAllowFrom,
-          }
-        : {
-            allowed: resolveNextcloudTalkAllowlistMatch({
-              allowFrom: params.roomAllowFrom,
-              senderId: params.senderId,
-            }).allowed,
-            matchId: "nextcloud-talk-room-sender",
-          }),
-    },
-  );
-}
 
 async function deliverNextcloudTalkReply(params: {
   cfg: CoreConfig;
@@ -144,87 +84,16 @@ export async function handleNextcloudTalkInbound(params: {
 
   statusSink?.({ lastInboundAt: message.timestamp });
 
-  const roomMatch = resolveNextcloudTalkRoomMatch({
-    rooms: account.config.rooms,
-    roomToken,
-  });
-  const roomConfig = roomMatch.roomConfig;
-  const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
-    cfg: config as OpenClawConfig,
-    surface: CHANNEL_ID,
-  });
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
-  const shouldRequireMention = isGroup
-    ? resolveNextcloudTalkRequireMention({
-        roomConfig,
-        wildcardConfig: roomMatch.wildcardConfig,
-      })
-    : false;
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(config as OpenClawConfig);
   const { groupPolicy, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent:
-        ((config.channels as Record<string, unknown> | undefined)?.[CHANNEL_ID] ?? undefined) !==
-        undefined,
+        ((config.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] ??
+          undefined) !== undefined,
       groupPolicy: account.config.groupPolicy,
-      defaultGroupPolicy: resolveDefaultGroupPolicy(config as OpenClawConfig),
+      defaultGroupPolicy,
     });
-  const allowFrom = normalizeStringEntries(account.config.allowFrom);
-  const outerGroupAllowFrom = account.config.groupAllowFrom?.length
-    ? normalizeStringEntries(account.config.groupAllowFrom)
-    : allowFrom;
-  const roomAllowFrom = normalizeStringEntries(roomConfig?.allowFrom);
-  const resolveAccess = async (wasMentioned?: boolean) =>
-    await resolveStableChannelMessageIngress({
-      channelId: CHANNEL_ID,
-      accountId: account.accountId,
-      identity: {
-        key: "nextcloud-talk-user-id",
-        normalize: (value) => normalizeNextcloudTalkAllowEntry(value) || null,
-        sensitivity: "pii",
-        entryIdPrefix: "nextcloud-talk-entry",
-      },
-      cfg: config as OpenClawConfig,
-      readStoreAllowFrom: async () =>
-        await pairing.readStoreForDmPolicy(CHANNEL_ID, account.accountId),
-      subject: { stableId: senderId },
-      conversation: {
-        kind: isGroup ? "group" : "direct",
-        id: isGroup ? roomToken : senderId,
-      },
-      route: roomRoutes({
-        isGroup,
-        groupPolicy,
-        roomMatch,
-        roomConfig,
-        senderId,
-        outerGroupAllowFrom,
-        roomAllowFrom,
-      }),
-      dmPolicy: account.config.dmPolicy ?? "pairing",
-      groupPolicy,
-      policy: {
-        groupAllowFromFallbackToAllowFrom: true,
-        activation: {
-          requireMention: isGroup && shouldRequireMention,
-          allowTextCommands,
-        },
-      },
-      mentionFacts:
-        isGroup && wasMentioned !== undefined
-          ? {
-              canDetectMention: true,
-              wasMentioned,
-              hasAnyMention: wasMentioned,
-            }
-          : undefined,
-      allowFrom,
-      groupAllowFrom: account.config.groupAllowFrom,
-      command: {
-        allowTextCommands,
-        hasControlCommand,
-      },
-    });
-  let access = await resolveAccess();
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "nextcloud-talk",
@@ -232,32 +101,79 @@ export async function handleNextcloudTalkInbound(params: {
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
     log: (message) => runtime.log?.(message),
   });
-  const commandAuthorized = access.commandAccess.authorized;
-  const accessReason =
-    access.ingress.reasonCode === "route_blocked"
-      ? "route blocked"
-      : access.senderAccess.reasonCode;
+
+  const configAllowFrom = normalizeNextcloudTalkAllowlist(account.config.allowFrom);
+  const configGroupAllowFrom = normalizeNextcloudTalkAllowlist(account.config.groupAllowFrom);
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: CHANNEL_ID,
+    accountId: account.accountId,
+    dmPolicy,
+    readStore: pairing.readStoreForDmPolicy,
+  });
+  const storeAllowList = normalizeNextcloudTalkAllowlist(storeAllowFrom);
+
+  const roomMatch = resolveNextcloudTalkRoomMatch({
+    rooms: account.config.rooms,
+    roomToken,
+  });
+  const roomConfig = roomMatch.roomConfig;
+  if (isGroup && !roomMatch.allowed) {
+    runtime.log?.(`nextcloud-talk: drop room ${roomToken} (not allowlisted)`);
+    return;
+  }
+  if (roomConfig?.enabled === false) {
+    runtime.log?.(`nextcloud-talk: drop room ${roomToken} (disabled)`);
+    return;
+  }
+
+  const roomAllowFrom = normalizeNextcloudTalkAllowlist(roomConfig?.allowFrom);
+
+  const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+    cfg: config as OpenClawConfig,
+    surface: CHANNEL_ID,
+  });
+  const useAccessGroups =
+    (config.commands as Record<string, unknown> | undefined)?.useAccessGroups !== false;
+  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+  const access = resolveDmGroupAccessWithCommandGate({
+    isGroup,
+    dmPolicy,
+    groupPolicy,
+    allowFrom: configAllowFrom,
+    groupAllowFrom: configGroupAllowFrom,
+    storeAllowFrom: storeAllowList,
+    isSenderAllowed: (allowFrom) =>
+      resolveNextcloudTalkAllowlistMatch({
+        allowFrom,
+        senderId,
+      }).allowed,
+    command: {
+      useAccessGroups,
+      allowTextCommands,
+      hasControlCommand,
+    },
+  });
+  const commandAuthorized = access.commandAuthorized;
+  const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
 
   if (isGroup) {
-    if (access.routeAccess.reason === "room_not_allowlisted") {
-      runtime.log?.(`nextcloud-talk: drop room ${roomToken} (not allowlisted)`);
+    if (access.decision !== "allow") {
+      runtime.log?.(`nextcloud-talk: drop group sender ${senderId} (reason=${access.reason})`);
       return;
     }
-    if (access.routeAccess.reason === "room_disabled") {
-      runtime.log?.(`nextcloud-talk: drop room ${roomToken} (disabled)`);
-      return;
-    }
-    if (access.routeAccess.reason === "room_sender_not_allowlisted") {
+    const groupAllow = resolveNextcloudTalkGroupAllow({
+      groupPolicy,
+      outerAllowFrom: effectiveGroupAllowFrom,
+      innerAllowFrom: roomAllowFrom,
+      senderId,
+    });
+    if (!groupAllow.allowed) {
       runtime.log?.(`nextcloud-talk: drop group sender ${senderId} (policy=${groupPolicy})`);
       return;
     }
-    if (access.senderAccess.decision !== "allow") {
-      runtime.log?.(`nextcloud-talk: drop group sender ${senderId} (reason=${accessReason})`);
-      return;
-    }
   } else {
-    if (access.senderAccess.decision !== "allow") {
-      if (access.senderAccess.decision === "pairing") {
+    if (access.decision !== "allow") {
+      if (access.decision === "pairing") {
         await pairing.issueChallenge({
           senderId,
           senderIdLine: `Your Nextcloud user id: ${senderId}`,
@@ -274,12 +190,12 @@ export async function handleNextcloudTalkInbound(params: {
           },
         });
       }
-      runtime.log?.(`nextcloud-talk: drop DM sender ${senderId} (reason=${accessReason})`);
+      runtime.log?.(`nextcloud-talk: drop DM sender ${senderId} (reason=${access.reason})`);
       return;
     }
   }
 
-  if (access.commandAccess.shouldBlockControlCommand) {
+  if (access.shouldBlockControlCommand) {
     logInboundDrop({
       log: (message) => runtime.log?.(message),
       channel: CHANNEL_ID,
@@ -293,15 +209,26 @@ export async function handleNextcloudTalkInbound(params: {
   const wasMentioned = mentionRegexes.length
     ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)
     : false;
-  if (isGroup) {
-    access = await resolveAccess(wasMentioned);
-  }
-
-  if (isGroup && access.activationAccess.shouldSkip) {
+  const shouldRequireMention = isGroup
+    ? resolveNextcloudTalkRequireMention({
+        roomConfig,
+        wildcardConfig: roomMatch.wildcardConfig,
+      })
+    : false;
+  const mentionGate = resolveNextcloudTalkMentionGate({
+    isGroup,
+    requireMention: shouldRequireMention,
+    wasMentioned,
+    allowTextCommands,
+    hasControlCommand,
+    commandAuthorized,
+  });
+  if (isGroup && mentionGate.shouldSkip) {
     runtime.log?.(`nextcloud-talk: drop room ${roomToken} (no mention)`);
     return;
   }
-  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
+
+  const route = core.channel.routing.resolveAgentRoute({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -309,17 +236,26 @@ export async function handleNextcloudTalkInbound(params: {
       kind: isGroup ? "group" : "direct",
       id: isGroup ? roomToken : senderId,
     },
-    runtime: core.channel,
-    sessionStore: (config.session as Record<string, unknown> | undefined)?.store as
-      | string
-      | undefined,
   });
 
   const fromLabel = isGroup ? `room:${roomName || roomToken}` : senderName || `user:${senderId}`;
-  const { storePath, body } = buildEnvelope({
+  const storePath = core.channel.session.resolveStorePath(
+    (config.session as Record<string, unknown> | undefined)?.store as string | undefined,
+    {
+      agentId: route.agentId,
+    },
+  );
+  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config as OpenClawConfig);
+  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
+    storePath,
+    sessionKey: route.sessionKey,
+  });
+  const body = core.channel.reply.formatAgentEnvelope({
     channel: "Nextcloud Talk",
     from: fromLabel,
     timestamp: message.timestamp,
+    previousTimestamp,
+    envelope: envelopeOptions,
     body: rawBody,
   });
 
@@ -350,39 +286,48 @@ export async function handleNextcloudTalkInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  await core.channel.turn.runAssembled({
+  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: config as OpenClawConfig,
+    agentId: route.agentId,
     channel: CHANNEL_ID,
     accountId: account.accountId,
-    agentId: route.agentId,
+  });
+
+  await core.channel.turn.runPrepared({
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
     routeSessionKey: route.sessionKey,
     storePath,
     ctxPayload,
     recordInboundSession: core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-    delivery: {
-      deliver: async (payload) => {
-        await deliverNextcloudTalkReply({
-          cfg: config,
-          payload,
-          roomToken,
-          accountId: account.accountId,
-          statusSink,
-        });
-      },
-      onError: (err, info) => {
-        runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
-      },
-    },
-    replyPipeline: {},
-    replyOptions: {
-      skillFilter: roomConfig?.skills,
-      disableBlockStreaming:
-        typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
-    },
+    runDispatch: async () =>
+      await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: ctxPayload,
+        cfg: config as OpenClawConfig,
+        dispatcherOptions: {
+          ...replyPipeline,
+          deliver: async (payload) => {
+            await deliverNextcloudTalkReply({
+              cfg: config,
+              payload,
+              roomToken,
+              accountId: account.accountId,
+              statusSink,
+            });
+          },
+          onError: (err, info) => {
+            runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
+          },
+        },
+        replyOptions: {
+          onModelSelected,
+          skillFilter: roomConfig?.skills,
+          disableBlockStreaming:
+            typeof account.config.blockStreaming === "boolean"
+              ? !account.config.blockStreaming
+              : undefined,
+        },
+      }),
     record: {
       onRecordError: (err) => {
         runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);

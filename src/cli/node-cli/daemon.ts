@@ -34,7 +34,6 @@ import {
   parsePort,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
-import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
@@ -95,12 +94,8 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
 
   const config = await loadNodeHostConfig();
   const { host, port } = resolveNodeDefaults(opts, config);
-  if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
-    fail(
-      opts.port !== undefined
-        ? formatInvalidPortOption("--port")
-        : formatInvalidConfigPort("node.gateway.port"),
-    );
+  if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0) {
+    fail("Invalid port");
     return;
   }
 

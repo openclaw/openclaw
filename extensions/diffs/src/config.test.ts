@@ -37,7 +37,6 @@ const FULL_DEFAULTS = {
   fileScale: 2.6,
   fileMaxWidth: 1280,
   mode: "file",
-  ttlSeconds: 21_600,
 } as const;
 
 function compileManifestConfigSchema() {
@@ -178,28 +177,6 @@ describe("resolveDiffsPluginDefaults", () => {
     });
   });
 
-  it("accepts plugin-wide artifact TTL defaults", () => {
-    expect(
-      resolveDiffsPluginDefaults({
-        defaults: {
-          ttlSeconds: 21_600,
-        },
-      }),
-    ).toMatchObject({
-      ttlSeconds: 21_600,
-    });
-
-    expect(
-      resolveDiffsPluginDefaults({
-        defaults: {
-          ttlSeconds: 99_999,
-        },
-      }),
-    ).toMatchObject({
-      ttlSeconds: 21_600,
-    });
-  });
-
   it("keeps loader-applied schema defaults from shadowing aliases and quality-derived defaults", () => {
     const validate = compileManifestConfigSchema();
 
@@ -273,7 +250,6 @@ describe("diffs plugin schema surfaces", () => {
         viewerBaseUrl: "https://example.com/openclaw/",
         defaults: {
           theme: "light",
-          ttlSeconds: 21_600,
         },
         security: {
           allowRemoteViewer: true,
@@ -298,7 +274,6 @@ describe("diffs plugin schema surfaces", () => {
           fileScale: 2,
           fileMaxWidth: 960,
           mode: "both",
-          ttlSeconds: 21_600,
         },
         security: {
           allowRemoteViewer: true,

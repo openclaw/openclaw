@@ -226,21 +226,20 @@ describe("secrets runtime snapshot core lanes", () => {
         }),
     });
 
-    const warningPaths = snapshot.warnings.map((warning) => warning.path);
-    expect(warningPaths).toContain("/tmp/openclaw-agent-main.auth-profiles.openai:default.key");
-    expect(warningPaths).toContain(
-      "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
+    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining([
+        "/tmp/openclaw-agent-main.auth-profiles.openai:default.key",
+        "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
+      ]),
     );
-    const openAiProfile = snapshot.authStores[0]?.store.profiles["openai:default"] as
-      | Record<string, unknown>
-      | undefined;
-    expect(openAiProfile?.type).toBe("api_key");
-    expect(openAiProfile?.key).toBe("sk-env-openai");
-    const copilotProfile = snapshot.authStores[0]?.store.profiles["github-copilot:default"] as
-      | Record<string, unknown>
-      | undefined;
-    expect(copilotProfile?.type).toBe("token");
-    expect(copilotProfile?.token).toBe("ghp-env-token");
+    expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
+      type: "api_key",
+      key: "sk-env-openai",
+    });
+    expect(snapshot.authStores[0]?.store.profiles["github-copilot:default"]).toMatchObject({
+      type: "token",
+      token: "ghp-env-token",
+    });
   });
 
   it("resolves inline placeholder auth profiles to env refs", async () => {
@@ -261,11 +260,13 @@ describe("secrets runtime snapshot core lanes", () => {
         }),
     });
 
+    expect(snapshot.authStores[0]?.store.profiles["openai:inline"]).toMatchObject({
+      type: "api_key",
+      key: "sk-env-openai",
+    });
     const inlineProfile = snapshot.authStores[0]?.store.profiles["openai:inline"] as
       | Record<string, unknown>
       | undefined;
-    expect(inlineProfile?.type).toBe("api_key");
-    expect(inlineProfile?.key).toBe("sk-env-openai");
     expect(inlineProfile?.keyRef).toEqual({
       source: "env",
       provider: "default",
@@ -284,10 +285,11 @@ describe("secrets runtime snapshot core lanes", () => {
     const prepared = await prepareOpenAiRuntimeSnapshot();
     activateSecretsRuntimeSnapshot(prepared);
 
-    const runtimeProfile = ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles[
-      "openai:default"
-    ] as Record<string, unknown> | undefined;
-    expect(runtimeProfile?.type).toBe("api_key");
-    expect(runtimeProfile?.key).toBe("sk-runtime");
+    expect(
+      ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles["openai:default"],
+    ).toMatchObject({
+      type: "api_key",
+      key: "sk-runtime",
+    });
   });
 });

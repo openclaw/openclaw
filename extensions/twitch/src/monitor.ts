@@ -5,10 +5,10 @@
  * resolves agent routes, and handles replies.
  */
 
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
@@ -268,34 +268,34 @@ export async function monitorTwitchProvider(
       return;
     }
 
-    void (async () => {
-      const botUsername = normalizeLowercaseStringOrEmpty(account.username);
-      if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
-        return;
-      }
+    // Access control check
+    const botUsername = normalizeLowercaseStringOrEmpty(account.username);
+    if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
+      return; // Ignore own messages
+    }
 
-      const access = await checkTwitchAccessControl({
-        message,
-        account,
-        botUsername,
-      });
+    const access = checkTwitchAccessControl({
+      message,
+      account,
+      botUsername,
+    });
 
-      if (stopped || !access.allowed) {
-        return;
-      }
+    if (!access.allowed) {
+      return;
+    }
 
-      statusSink?.({ lastInboundAt: Date.now() });
+    statusSink?.({ lastInboundAt: Date.now() });
 
-      await processTwitchMessage({
-        message,
-        account,
-        accountId,
-        config,
-        runtime,
-        core,
-        statusSink,
-      });
-    })().catch((err) => {
+    // Fire-and-forget: process message without blocking
+    void processTwitchMessage({
+      message,
+      account,
+      accountId,
+      config,
+      runtime,
+      core,
+      statusSink,
+    }).catch((err) => {
       runtime.error?.(`Message processing failed: ${String(err)}`);
     });
   });

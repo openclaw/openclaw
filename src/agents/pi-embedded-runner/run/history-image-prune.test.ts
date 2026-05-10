@@ -19,19 +19,6 @@ function expectArrayMessageContent(
   return message.content as Array<{ type: string; text?: string; data?: string }>;
 }
 
-function expectContentBlock(
-  block: { type: string; text?: string; data?: string } | undefined,
-  expected: { type: string; text?: string; data?: string },
-) {
-  expect(block?.type).toBe(expected.type);
-  if ("text" in expected) {
-    expect(block?.text).toBe(expected.text);
-  }
-  if ("data" in expected) {
-    expect(block?.data).toBe(expected.data);
-  }
-}
-
 function expectPrunedImageMessage(
   messages: AgentMessage[],
   errorMessage: string,
@@ -39,7 +26,7 @@ function expectPrunedImageMessage(
   const pruned = expectPrunedMessages(messages);
   const content = expectArrayMessageContent(pruned[0], errorMessage);
   expect(content).toHaveLength(2);
-  expectContentBlock(content[1], { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
+  expect(content[1]).toMatchObject({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
   return content;
 }
 
@@ -58,7 +45,7 @@ function expectImageMessagePreserved(messages: AgentMessage[], errorMessage: str
 
   expect(pruned).toBeNull();
   const content = expectArrayMessageContent(messages[0], errorMessage);
-  expectContentBlock(content[1], { type: "image", data: "abc" });
+  expect(content[1]).toMatchObject({ type: "image", data: "abc" });
 }
 
 function oldEnoughTail(): AgentMessage[] {
@@ -130,13 +117,13 @@ describe("pruneProcessedHistoryImages", () => {
         PRUNED_HISTORY_MEDIA_REFERENCE_MARKER,
       ].join("\n"),
     );
-    expectContentBlock(content[1], { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
+    expect(content[1]).toMatchObject({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
     const originalContent = expectArrayMessageContent(
       messages[0],
       "expected original user content",
     );
     expect(originalContent[0]?.text).toContain("[media attached: media://inbound/old.png]");
-    expectContentBlock(originalContent[1], { type: "image", data: "abc" });
+    expect(originalContent[1]).toMatchObject({ type: "image", data: "abc" });
   });
 
   it("scrubs old media attachment markers from string content without image blocks", () => {
@@ -220,7 +207,7 @@ describe("pruneProcessedHistoryImages", () => {
     expect(pruned).toBeNull();
     const content = expectArrayMessageContent(messages[0], "expected user array content");
     expect(content[0]?.text).toBe("recent [media attached: media://inbound/current.png]");
-    expectContentBlock(content[1], { type: "image", data: "abc" });
+    expect(content[1]).toMatchObject({ type: "image", data: "abc" });
   });
 
   it("does not count multiple assistant messages from one tool loop as separate turns", () => {
@@ -262,7 +249,7 @@ describe("pruneProcessedHistoryImages", () => {
     expect(pruned).toBeNull();
     const content = expectArrayMessageContent(messages[0], "expected user array content");
     expect(content).toHaveLength(2);
-    expectContentBlock(content[1], { type: "image", data: "abc" });
+    expect(content[1]).toMatchObject({ type: "image", data: "abc" });
   });
 
   it("prunes image blocks from toolResult messages older than 3 assistant turns", () => {
@@ -305,16 +292,16 @@ describe("pruneProcessedHistoryImages", () => {
     const pruned = expectPrunedMessages(messages);
 
     const oldContent = expectArrayMessageContent(pruned[0], "expected old user content");
-    expectContentBlock(oldContent[1], { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
+    expect(oldContent[1]).toMatchObject({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
 
     const recentContent = expectArrayMessageContent(pruned[6], "expected recent user content");
-    expectContentBlock(recentContent[1], { type: "image", data: "abc" });
+    expect(recentContent[1]).toMatchObject({ type: "image", data: "abc" });
 
     const originalOldContent = expectArrayMessageContent(
       messages[0],
       "expected original old user content",
     );
-    expectContentBlock(originalOldContent[1], { type: "image", data: "abc" });
+    expect(originalOldContent[1]).toMatchObject({ type: "image", data: "abc" });
   });
 
   it("does not change messages when no assistant turn exists", () => {
@@ -372,7 +359,7 @@ describe("installHistoryImagePruneContextTransform", () => {
       "expected replay user array content",
     );
     expect(replayContent[0]?.text).toBe(`stale ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER}`);
-    expectContentBlock(replayContent[1], {
+    expect(replayContent[1]).toMatchObject({
       type: "text",
       text: PRUNED_HISTORY_IMAGE_MARKER,
     });
@@ -381,7 +368,7 @@ describe("installHistoryImagePruneContextTransform", () => {
       "expected original transformed content",
     );
     expect(originalContent[0]?.text).toContain("media://inbound/old.png");
-    expectContentBlock(originalContent[1], { type: "image", data: "abc" });
+    expect(originalContent[1]).toMatchObject({ type: "image", data: "abc" });
 
     restore();
     expect(agent.transformContext).toBe(originalTransformContext);

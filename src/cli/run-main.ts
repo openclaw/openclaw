@@ -150,7 +150,6 @@ async function tryRunGatewayRunFastPath(
     { VERSION },
     { emitCliBanner },
     { resolveCliStartupPolicy },
-    { enableConsoleCapture },
   ] = await startupTrace.measure("gateway-run-imports", () =>
     Promise.all([
       import("commander"),
@@ -158,7 +157,6 @@ async function tryRunGatewayRunFastPath(
       import("../version.js"),
       import("./banner.js"),
       import("./command-startup-policy.js"),
-      import("../logging.js"),
     ]),
   );
   const invocation = resolveCliArgvInvocation(argv);
@@ -184,7 +182,6 @@ async function tryRunGatewayRunFastPath(
   addGatewayRunCommand(
     gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
   );
-  enableConsoleCapture();
   try {
     await startupTrace.measure("gateway-run-parse", () => program.parseAsync(argv));
   } catch (error) {
@@ -319,47 +316,6 @@ async function isPluginCliRoot(params: {
   }
 }
 
-function createAllowlistAgnosticCliLookupConfig(config: OpenClawConfig): OpenClawConfig {
-  if (!Array.isArray(config.plugins?.allow) || config.plugins.allow.length === 0) {
-    return config;
-  }
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      allow: [],
-    },
-  };
-}
-
-async function resolveCliCommandSurfaceOwner(params: {
-  primary: string;
-  config: OpenClawConfig;
-}): Promise<string | undefined> {
-  const { resolveManifestCliCommandSurfaceOwner } =
-    await import("../plugins/manifest-command-aliases.runtime.js");
-  const manifestOwner = resolveManifestCliCommandSurfaceOwner({
-    command: params.primary,
-    config: params.config,
-    env: process.env,
-  });
-  if (manifestOwner) {
-    return manifestOwner;
-  }
-  try {
-    const { resolvePluginCliRootOwnerIds } = await import("../plugins/cli-registry-loader.js");
-    return (
-      await resolvePluginCliRootOwnerIds({
-        cfg: createAllowlistAgnosticCliLookupConfig(params.config),
-        env: process.env,
-        primaryCommand: params.primary,
-      })
-    )?.[0];
-  } catch {
-    return undefined;
-  }
-}
-
 async function resolveUnownedCliPrimary(params: {
   argv: string[];
   config: OpenClawConfig;
@@ -388,12 +344,10 @@ async function resolveUnownedCliPrimaryMessage(params: {
 }): Promise<string> {
   const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
     await import("../plugins/manifest-command-aliases.runtime.js");
-  const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
   return (
     resolveMissingPluginCommandMessageFromPolicy(params.primary, params.config, {
       resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
       resolveToolOwner: resolveManifestToolOwner,
-      resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
     }) ??
     `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`
   );
@@ -447,11 +401,9 @@ export async function runCli(argv: string[] = process.argv) {
     return;
   }
   let normalizedArgv = parsedProfile.argv;
-  const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
-  const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   startupTrace.mark("argv");
 
-  if (!isHelpOrVersionInvocation && shouldLoadCliDotEnv()) {
+  if (shouldLoadCliDotEnv()) {
     await startupTrace.measure("dotenv", async () => {
       const { loadCliDotEnv } = await import("./dotenv.js");
       loadCliDotEnv({ quiet: true });
@@ -491,7 +443,7 @@ export async function runCli(argv: string[] = process.argv) {
     proxyHandle = null;
     handle?.kill("SIGTERM");
   };
-  if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
+  if (shouldStartProxyForCli(normalizedArgv)) {
     const config = await readBestEffortCliConfig();
     const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
     if (unownedPrimary) {
@@ -591,8 +543,7 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    const shouldUseCliEnvProxy =
-      !isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv);
+    const shouldUseCliEnvProxy = shouldStartProxyForCli(normalizedArgv);
     const bootstrapProxyBeforeFastPath =
       shouldUseCliEnvProxy && shouldBootstrapCliProxyBeforeFastPath();
     if (
@@ -602,11 +553,9 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    if (!isHelpOrVersionInvocation) {
-      await bootstrapCliProxyCaptureAndDispatcher(startupTrace, {
-        ensureDispatcher: shouldUseCliEnvProxy,
-      });
-    }
+    await bootstrapCliProxyCaptureAndDispatcher(startupTrace, {
+      ensureDispatcher: shouldUseCliEnvProxy,
+    });
 
     if (
       bootstrapProxyBeforeFastPath &&
@@ -739,17 +688,12 @@ export async function runCli(argv: string[] = process.argv) {
           ) {
             const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
               await import("../plugins/manifest-command-aliases.runtime.js");
-            const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner({
-              primary,
-              config,
-            });
             const missingPluginCommandMessage = resolveMissingPluginCommandMessageFromPolicy(
               primary,
               config,
               {
                 resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
                 resolveToolOwner: resolveManifestToolOwner,
-                resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
               },
             );
             if (missingPluginCommandMessage) {

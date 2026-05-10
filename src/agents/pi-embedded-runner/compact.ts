@@ -39,7 +39,6 @@ import {
   resolveRunModelFallbacksOverride,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
-import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import {
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
@@ -83,7 +82,7 @@ import {
   applyPiCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
 } from "../pi-settings.js";
-import { createOpenClawCodingTools, resolveProcessToolScopeKey } from "../pi-tools.js";
+import { createOpenClawCodingTools } from "../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
@@ -835,12 +834,6 @@ async function compactEmbeddedPiSessionDirectOnce(
       channel: runtimeChannel,
       capabilities: runtimeCapabilities,
       channelActions,
-      activeProcessSessions: listActiveProcessSessionReferences({
-        scopeKey: resolveProcessToolScopeKey({
-          sessionKey: sandboxSessionKey,
-          agentId: sessionAgentId,
-        }),
-      }),
     };
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(provider, {

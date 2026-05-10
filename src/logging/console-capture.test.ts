@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { setVerbose } from "../global-state.js";
 import {
   enableConsoleCapture,
   resetLogger,
@@ -29,7 +28,6 @@ beforeEach(() => {
   loggingState.forceConsoleToStderr = false;
   loggingState.consoleTimestampPrefix = false;
   loggingState.rawConsole = null;
-  setVerbose(false);
   resetLogger();
 });
 
@@ -39,7 +37,6 @@ afterEach(() => {
   loggingState.forceConsoleToStderr = false;
   loggingState.consoleTimestampPrefix = false;
   loggingState.rawConsole = null;
-  setVerbose(false);
   resetLogger();
   setLoggerOverride(null);
   vi.restoreAllMocks();
@@ -189,21 +186,6 @@ describe("enableConsoleCapture", () => {
     const other = new Error("EACCES") as NodeJS.ErrnoException;
     other.code = "EACCES";
     expect(() => process.stdout.emit("error", other)).toThrow("EACCES");
-  });
-
-  it("suppresses libsignal session dumps even in verbose mode", () => {
-    setLoggerOverride({ level: "info", file: tempLogPath() });
-    const info = vi.fn();
-    console.info = info;
-    setVerbose(true);
-    enableConsoleCapture();
-
-    console.info("Closing session:", {
-      currentRatchet: { rootKey: Buffer.from("root-key") },
-      privKey: "private-key",
-    });
-
-    expect(info).not.toHaveBeenCalled();
   });
 });
 

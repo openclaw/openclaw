@@ -1,29 +1,32 @@
 /** @deprecated Compatibility helper for legacy reply dispatch bridges. */
-export { buildChannelMessageReplyDispatchBase } from "./channel-message.js";
+export { buildChannelMessageReplyDispatchBase } from "./inbound-reply-dispatch.js";
 /** @deprecated Compatibility reply-dispatch bridge. Use `sendDurableMessageBatch(...)` or `deliverInboundReplyWithMessageSendContext(...)`. */
-export { dispatchChannelMessageReplyWithBase } from "./channel-message.js";
+export { dispatchChannelMessageReplyWithBase } from "./inbound-reply-dispatch.js";
 /** @deprecated Compatibility helper for legacy reply dispatch results. */
-export { hasFinalChannelMessageReplyDispatch } from "./channel-message.js";
+export { hasFinalChannelMessageReplyDispatch } from "./inbound-reply-dispatch.js";
 /** @deprecated Compatibility helper for legacy reply dispatch results. */
-export { hasVisibleChannelMessageReplyDispatch } from "./channel-message.js";
+export { hasVisibleChannelMessageReplyDispatch } from "./inbound-reply-dispatch.js";
 /** @deprecated Compatibility reply-dispatch bridge. Use `sendDurableMessageBatch(...)` or `deliverInboundReplyWithMessageSendContext(...)`. */
-export { recordChannelMessageReplyDispatch } from "./channel-message.js";
+export { recordChannelMessageReplyDispatch } from "./inbound-reply-dispatch.js";
 /** @deprecated Compatibility helper for legacy reply dispatch results. */
-export { resolveChannelMessageReplyDispatchCounts } from "./channel-message.js";
+export { resolveChannelMessageReplyDispatchCounts } from "./inbound-reply-dispatch.js";
 /** @deprecated Compatibility assembly for legacy buffered reply dispatchers. */
-export { createChannelTurnReplyPipeline } from "./channel-message.js";
+export { createChannelTurnReplyPipeline } from "../channels/turn/kernel.js";
 /** @deprecated Use `deliverInboundReplyWithMessageSendContext(...)`. */
-export { deliverDurableInboundReplyPayload } from "./channel-message.js";
-export { deliverInboundReplyWithMessageSendContext } from "./channel-message.js";
+export { deliverDurableInboundReplyPayload } from "../channels/turn/kernel.js";
+export { deliverInboundReplyWithMessageSendContext } from "../channels/turn/kernel.js";
 export type {
   DurableInboundReplyDeliveryOptions,
   DurableInboundReplyDeliveryParams,
   DurableInboundReplyDeliveryResult,
-} from "./channel-message.js";
-export { sendDurableMessageBatch, withDurableMessageSendContext } from "./channel-message.js";
+} from "../channels/turn/kernel.js";
+export {
+  sendDurableMessageBatch,
+  withDurableMessageSendContext,
+} from "../channels/message/runtime.js";
 export type {
   DurableMessageBatchSendParams,
   DurableMessageBatchSendResult,
   DurableMessageSendContext,
   DurableMessageSendContextParams,
-} from "./channel-message.js";
+} from "../channels/message/runtime.js";

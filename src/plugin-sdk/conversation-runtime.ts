@@ -1,7 +1,5 @@
-/**
- * @deprecated Broad public SDK barrel. Prefer focused conversation/thread
- * binding subpaths and avoid adding new imports here.
- */
+// Public binding helpers for both runtime plugin-owned bindings and
+// config-driven channel bindings.
 
 export {
   createConversationBindingRecord,
@@ -111,4 +109,4 @@ export {
   resolvePluginConversationBindingApproval,
   toPluginConversationBinding,
 } from "../plugins/conversation-binding.js";
-export { resolvePinnedMainDmOwnerFromAllowlist } from "./channel-access-compat.js";
+export { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";

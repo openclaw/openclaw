@@ -677,8 +677,7 @@ Platforms:
 - macOS: checks `/Applications` and `~/Applications`.
 - Linux: checks common Chrome/Brave/Edge/Chromium locations under `/usr/bin`,
   `/snap/bin`, `/opt/google`, `/opt/brave.com`, `/usr/lib/chromium`, and
-  `/usr/lib/chromium-browser`, plus Playwright-managed Chromium under
-  `PLAYWRIGHT_BROWSERS_PATH` or `~/.cache/ms-playwright`.
+  `/usr/lib/chromium-browser`.
 - Windows: checks common install locations.
 
 ## Control API (optional)

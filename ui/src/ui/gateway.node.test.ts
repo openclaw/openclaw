@@ -161,12 +161,6 @@ function stubInsecureCrypto() {
   });
 }
 
-function useNodeFakeTimers() {
-  vi.useFakeTimers({
-    toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-}
-
 function parseLatestConnectFrame(ws: MockWebSocket): ConnectFrame {
   return JSON.parse(ws.sent.at(-1) ?? "{}") as ConnectFrame;
 }
@@ -467,7 +461,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("retries once with device token after token mismatch when shared token is explicit", async () => {
-    useNodeFakeTimers();
+    vi.useFakeTimers();
     const { secondWs, secondConnect } = await expectRetriedDeviceTokenConnect({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -495,7 +489,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("retries startup-unavailable connect responses without terminal callbacks", async () => {
-    useNodeFakeTimers();
+    vi.useFakeTimers();
     const onClose = vi.fn();
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -536,7 +530,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("treats IPv6 loopback as trusted for bounded device-token retry", async () => {
-    useNodeFakeTimers();
+    vi.useFakeTimers();
     const { client } = await expectRetriedDeviceTokenConnect({
       url: "ws://[::1]:18789",
       token: "shared-auth-token",
@@ -547,7 +541,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("continues reconnecting on first token mismatch when no retry was attempted", async () => {
-    useNodeFakeTimers();
+    vi.useFakeTimers();
     localStorage.clear();
 
     const client = new GatewayBrowserClient({
@@ -578,7 +572,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("cancels a queued connect send when stopped before the timeout fires", async () => {
-    useNodeFakeTimers();
+    vi.useFakeTimers();
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -643,7 +637,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("cancels a scheduled reconnect when stopped before the retry fires", async () => {
-    useNodeFakeTimers();
+    vi.useFakeTimers();
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -663,7 +657,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("does not auto-reconnect on AUTH_TOKEN_MISSING", async () => {
-    useNodeFakeTimers();
+    vi.useFakeTimers();
     localStorage.clear();
 
     const client = new GatewayBrowserClient({
@@ -692,7 +686,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("clears stale stored device tokens and does not reconnect on AUTH_DEVICE_TOKEN_MISMATCH", async () => {
-    useNodeFakeTimers();
+    vi.useFakeTimers();
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",

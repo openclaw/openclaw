@@ -173,15 +173,12 @@ describe("security audit sandbox docker config", () => {
             ...collectSandboxDockerNoopFindings(testCase.cfg),
             ...collectSandboxDangerousConfigFindings(testCase.cfg),
           ];
-          for (const expectedFinding of testCase.expectedFindings) {
-            const finding = findings.find((entry) => entry.checkId === expectedFinding.checkId);
-            expect(finding?.checkId, testCase.name).toBe(expectedFinding.checkId);
-            if ("severity" in expectedFinding) {
-              expect(finding?.severity, testCase.name).toBe(expectedFinding.severity);
-            }
-            if ("title" in expectedFinding) {
-              expect(finding?.title, testCase.name).toBe(expectedFinding.title);
-            }
+          if (testCase.expectedFindings.length > 0) {
+            expect(findings, testCase.name).toEqual(
+              expect.arrayContaining(
+                testCase.expectedFindings.map((finding) => expect.objectContaining(finding)),
+              ),
+            );
           }
           expectFindingSet({
             findings,

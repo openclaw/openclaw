@@ -1,4 +1,4 @@
-import type { MiscMessageGenerationOptions } from "baileys";
+import type { MiscMessageGenerationOptions } from "@whiskeysockets/baileys";
 import { jidToE164 } from "./text-runtime.js";
 
 // ── Inbound message metadata cache ──────────────────────────────────────

@@ -2562,7 +2562,7 @@ describe("google-meet plugin", () => {
     expect(focusCall[3]).toEqual({ progress: false });
   });
 
-  it("refreshes blocked realtime browser health read-only when status is requested", async () => {
+  it("does not mutate realtime browser prompts when status is requested", async () => {
     let openedTab = false;
     const { methods, nodesInvoke } = setup(
       {
@@ -2574,22 +2574,7 @@ describe("google-meet plugin", () => {
           const raw = params as { path?: string; body?: { url?: string; targetId?: string } };
           if (command === "browser.proxy") {
             if (raw.path === "/tabs") {
-              return {
-                payload: {
-                  result: {
-                    running: true,
-                    tabs: openedTab
-                      ? [
-                          {
-                            targetId: "tab-1",
-                            title: "Meet",
-                            url: "https://meet.google.com/abc-defg-hij",
-                          },
-                        ]
-                      : [],
-                  },
-                },
-              };
+              return { payload: { result: { running: true, tabs: [] } } };
             }
             if (raw.path === "/tabs/open") {
               openedTab = true;
@@ -2636,7 +2621,6 @@ describe("google-meet plugin", () => {
     const join = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.join", {
       url: "https://meet.google.com/abc-defg-hij",
     })) as { session: { id: string } };
-    openedTab = true;
     nodesInvoke.mockClear();
 
     const status = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.status", {
@@ -2644,23 +2628,11 @@ describe("google-meet plugin", () => {
     })) as { session?: { chrome?: { health?: { manualActionRequired?: boolean } } } };
 
     expect(status.session?.chrome?.health?.manualActionRequired).toBe(true);
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "browser.proxy",
-        params: expect.objectContaining({
-          path: "/act",
-          body: expect.objectContaining({ targetId: "tab-1" }),
-        }),
-      }),
-    );
-    expect(nodesInvoke).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "browser.proxy",
-        params: expect.objectContaining({
-          path: "/permissions/grant",
-        }),
-      }),
-    );
+    expect(
+      nodesInvoke.mock.calls.some(
+        ([params]) => requireRecord(params, "node invoke").command === "browser.proxy",
+      ),
+    ).toBe(false);
   });
 
   it("retries caption enable until the captions button is available", async () => {
@@ -3601,52 +3573,6 @@ describe("google-meet plugin", () => {
     expect(result.speechOutputTimedOut).toBe(false);
   });
 
-  it("uses the requested bidirectional realtime mode for test speech", async () => {
-    const runtime = new GoogleMeetRuntime({
-      config: resolveGoogleMeetConfig({ defaultMode: "agent" }),
-      fullConfig: {} as never,
-      runtime: {} as never,
-      logger: noopLogger,
-    });
-    const session: GoogleMeetSession = {
-      id: "meet_1",
-      url: "https://meet.google.com/abc-defg-hij",
-      transport: "chrome",
-      mode: "bidi",
-      state: "active",
-      createdAt: "2026-04-27T00:00:00.000Z",
-      updatedAt: "2026-04-27T00:00:00.000Z",
-      participantIdentity: "signed-in Google Chrome profile",
-      realtime: {
-        enabled: true,
-        strategy: "bidi",
-        provider: "openai",
-        toolPolicy: "safe-read-only",
-      },
-      chrome: {
-        audioBackend: "blackhole-2ch",
-        launched: true,
-        health: { audioOutputActive: true, lastOutputBytes: 10 },
-      },
-      notes: [],
-    };
-    vi.spyOn(runtime, "list").mockReturnValue([]);
-    const join = vi.spyOn(runtime, "join").mockResolvedValue({ session, spoken: true });
-
-    await runtime.testSpeech({
-      url: "https://meet.google.com/abc-defg-hij",
-      mode: "bidi",
-      message: "Say exactly: hello.",
-    });
-
-    expect(join).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Say exactly: hello.",
-        mode: "bidi",
-      }),
-    );
-  });
-
   it("rejects observe-only mode for test speech", async () => {
     const runtime = new GoogleMeetRuntime({
       config: resolveGoogleMeetConfig({}),
@@ -4215,7 +4141,6 @@ describe("google-meet plugin", () => {
       .mockReturnValueOnce(outputProcess)
       .mockReturnValueOnce(inputProcess)
       .mockReturnValueOnce(replacementOutputProcess);
-    const fullConfig = { models: { providers: {} } } as never;
     const sessionStore: Record<string, unknown> = {};
     const runtime = {
       agent: {
@@ -4241,7 +4166,7 @@ describe("google-meet plugin", () => {
       config: resolveGoogleMeetConfig({
         realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime", agentId: "jay" },
       }),
-      fullConfig,
+      fullConfig: {} as never,
       runtime: runtime as never,
       meetingSessionId: "meet-1",
       inputCommand: ["capture-meet"],
@@ -4254,7 +4179,6 @@ describe("google-meet plugin", () => {
     expect(noopLogger.info).toHaveBeenCalledWith(
       "[google-meet] realtime voice bridge starting: strategy=bidi provider=openai model=gpt-realtime audioFormat=pcm16-24khz",
     );
-    expect(callbacks?.cfg).toBe(fullConfig);
     inputStdout.write(Buffer.from([1, 2, 3]));
     callbacks?.onAudio(Buffer.from([4, 5]));
     callbacks?.onMark?.("mark-1");
@@ -4691,7 +4615,6 @@ describe("google-meet plugin", () => {
       },
     };
     let pullCount = 0;
-    const fullConfig = { models: { providers: {} } } as never;
     const sessionStore: Record<string, unknown> = {};
     const runtime = {
       nodes: {
@@ -4730,7 +4653,7 @@ describe("google-meet plugin", () => {
       config: resolveGoogleMeetConfig({
         realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime" },
       }),
-      fullConfig,
+      fullConfig: {} as never,
       runtime: runtime as never,
       meetingSessionId: "meet-1",
       nodeId: "node-1",
@@ -4742,7 +4665,6 @@ describe("google-meet plugin", () => {
     expect(noopLogger.info).toHaveBeenCalledWith(
       "[google-meet] realtime voice bridge starting: strategy=bidi provider=openai model=gpt-realtime audioFormat=pcm16-24khz",
     );
-    expect(callbacks?.cfg).toBe(fullConfig);
     callbacks?.onAudio(Buffer.from([1, 2, 3]));
     callbacks?.onClearAudio();
     callbacks?.onReady?.();

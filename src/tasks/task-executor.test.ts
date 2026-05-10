@@ -163,13 +163,16 @@ function spyOnRuntimeCancel() {
 
 function expectCancelledAcpChildTask(
   child: ReturnType<typeof createRunningTaskRun>,
-  cancelled: { found?: boolean; cancelled?: boolean },
+  cancelled: unknown,
 ) {
-  expect(cancelled.found).toBe(true);
-  expect(cancelled.cancelled).toBe(true);
-  const task = getTaskById(child.taskId);
-  expect(task?.taskId).toBe(child.taskId);
-  expect(task?.status).toBe("cancelled");
+  expect(cancelled).toMatchObject({
+    found: true,
+    cancelled: true,
+  });
+  expect(getTaskById(child.taskId)).toMatchObject({
+    taskId: child.taskId,
+    status: "cancelled",
+  });
   expect(hoisted.cancelSessionMock).toHaveBeenCalledWith({
     cfg: {} as never,
     sessionKey: "agent:codex:acp:child",
@@ -224,12 +227,13 @@ describe("task-executor", () => {
         terminalSummary: "Done.",
       });
 
-      const task = getTaskById(created.taskId);
-      expect(task?.taskId).toBe(created.taskId);
-      expect(task?.status).toBe("succeeded");
-      expect(task?.startedAt).toBe(100);
-      expect(task?.endedAt).toBe(250);
-      expect(task?.terminalSummary).toBe("Done.");
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        status: "succeeded",
+        startedAt: 100,
+        endedAt: 250,
+        terminalSummary: "Done.",
+      });
     });
   });
 
@@ -264,12 +268,13 @@ describe("task-executor", () => {
         deliveryStatus: "failed",
       });
 
-      const task = getTaskById(created.taskId);
-      expect(task?.taskId).toBe(created.taskId);
-      expect(task?.status).toBe("failed");
-      expect(task?.progressSummary).toBe("Collecting results");
-      expect(task?.error).toBe("tool failed");
-      expect(task?.deliveryStatus).toBe("failed");
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        status: "failed",
+        progressSummary: "Collecting results",
+        error: "tool failed",
+        deliveryStatus: "failed",
+      });
     });
   });
 
@@ -288,13 +293,15 @@ describe("task-executor", () => {
         deliveryStatus: "not_applicable",
       });
 
-      const task = getTaskById(created.taskId);
-      expect(task?.taskId).toBe(created.taskId);
-      expect(task?.taskKind).toBe("video_generation");
-      expect(task?.sourceId).toBe("video_generate:openai");
-      const found = findTaskByRunId("run-executor-kind");
-      expect(found?.taskId).toBe(created.taskId);
-      expect(found?.taskKind).toBe("video_generation");
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        taskKind: "video_generation",
+        sourceId: "video_generate:openai",
+      });
+      expect(findTaskByRunId("run-executor-kind")).toMatchObject({
+        taskId: created.taskId,
+        taskKind: "video_generation",
+      });
     });
   });
 
@@ -312,12 +319,13 @@ describe("task-executor", () => {
       });
 
       const parentFlowId = expectParentFlowId(created);
-      const runningFlow = getTaskFlowById(parentFlowId);
-      expect(runningFlow?.flowId).toBe(parentFlowId);
-      expect(runningFlow?.ownerKey).toBe("agent:main:main");
-      expect(runningFlow?.status).toBe("running");
-      expect(runningFlow?.goal).toBe("Write summary");
-      expect(runningFlow?.notifyPolicy).toBe("done_only");
+      expect(getTaskFlowById(parentFlowId)).toMatchObject({
+        flowId: parentFlowId,
+        ownerKey: "agent:main:main",
+        status: "running",
+        goal: "Write summary",
+        notifyPolicy: "done_only",
+      });
 
       completeTaskRunByRunId({
         runId: "run-executor-flow",
@@ -326,12 +334,13 @@ describe("task-executor", () => {
         terminalSummary: "Done.",
       });
 
-      const succeededFlow = getTaskFlowById(parentFlowId);
-      expect(succeededFlow?.flowId).toBe(parentFlowId);
-      expect(succeededFlow?.status).toBe("succeeded");
-      expect(succeededFlow?.endedAt).toBe(40);
-      expect(succeededFlow?.goal).toBe("Write summary");
-      expect(succeededFlow?.notifyPolicy).toBe("done_only");
+      expect(getTaskFlowById(parentFlowId)).toMatchObject({
+        flowId: parentFlowId,
+        status: "succeeded",
+        endedAt: 40,
+        goal: "Write summary",
+        notifyPolicy: "done_only",
+      });
     });
   });
 
@@ -378,18 +387,20 @@ describe("task-executor", () => {
         terminalSummary: "Writable session required.",
       });
 
-      const blockedTask = getTaskById(created.taskId);
-      expect(blockedTask?.taskId).toBe(created.taskId);
-      expect(blockedTask?.status).toBe("succeeded");
-      expect(blockedTask?.terminalOutcome).toBe("blocked");
-      expect(blockedTask?.terminalSummary).toBe("Writable session required.");
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session required.",
+      });
       const parentFlowId = expectParentFlowId(created);
-      const blockedFlow = getTaskFlowById(parentFlowId);
-      expect(blockedFlow?.flowId).toBe(parentFlowId);
-      expect(blockedFlow?.status).toBe("blocked");
-      expect(blockedFlow?.blockedTaskId).toBe(created.taskId);
-      expect(blockedFlow?.blockedSummary).toBe("Writable session required.");
-      expect(blockedFlow?.endedAt).toBe(40);
+      expect(getTaskFlowById(parentFlowId)).toMatchObject({
+        flowId: parentFlowId,
+        status: "blocked",
+        blockedTaskId: created.taskId,
+        blockedSummary: "Writable session required.",
+        endedAt: 40,
+      });
 
       const retried = retryBlockedFlowAsQueuedTaskRun({
         flowId: parentFlowId,
@@ -397,28 +408,32 @@ describe("task-executor", () => {
         childSessionKey: "agent:codex:acp:retry-child",
       });
 
-      expect(retried.found).toBe(true);
-      expect(retried.retried).toBe(true);
-      if (!retried.retried) {
-        throw new Error("Expected blocked flow retry");
-      }
-      if (!retried.previousTask || !retried.task) {
-        throw new Error("Expected retry result payload");
-      }
-      expect(retried.previousTask.taskId).toBe(created.taskId);
-      expect(retried.task.parentFlowId).toBe(parentFlowId);
-      expect(retried.task.parentTaskId).toBe(created.taskId);
-      expect(retried.task.status).toBe("queued");
-      expect(retried.task.runId).toBe("run-executor-retry");
-      const queuedFlow = getTaskFlowById(parentFlowId);
-      expect(queuedFlow?.flowId).toBe(parentFlowId);
-      expect(queuedFlow?.status).toBe("queued");
-      expect(findLatestTaskForFlowId(parentFlowId)?.runId).toBe("run-executor-retry");
-      const original = findTaskByRunId("run-executor-blocked");
-      expect(original?.taskId).toBe(created.taskId);
-      expect(original?.status).toBe("succeeded");
-      expect(original?.terminalOutcome).toBe("blocked");
-      expect(original?.terminalSummary).toBe("Writable session required.");
+      expect(retried).toMatchObject({
+        found: true,
+        retried: true,
+        previousTask: expect.objectContaining({
+          taskId: created.taskId,
+        }),
+        task: expect.objectContaining({
+          parentFlowId,
+          parentTaskId: created.taskId,
+          status: "queued",
+          runId: "run-executor-retry",
+        }),
+      });
+      expect(getTaskFlowById(parentFlowId)).toMatchObject({
+        flowId: parentFlowId,
+        status: "queued",
+      });
+      expect(findLatestTaskForFlowId(parentFlowId)).toMatchObject({
+        runId: "run-executor-retry",
+      });
+      expect(findTaskByRunId("run-executor-blocked")).toMatchObject({
+        taskId: created.taskId,
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session required.",
+      });
     });
   });
 
@@ -452,14 +467,18 @@ describe("task-executor", () => {
         flowId: flow.flowId,
       });
 
-      expect(cancelled.found).toBe(true);
-      expect(cancelled.cancelled).toBe(true);
-      const task = findTaskByRunId("run-linear-cancel");
-      expect(task?.taskId).toBe(child.taskId);
-      expect(task?.status).toBe("cancelled");
-      const cancelledFlow = getTaskFlowById(flow.flowId);
-      expect(cancelledFlow?.flowId).toBe(flow.flowId);
-      expect(cancelledFlow?.status).toBe("cancelled");
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: true,
+      });
+      expect(findTaskByRunId("run-linear-cancel")).toMatchObject({
+        taskId: child.taskId,
+        status: "cancelled",
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "cancelled",
+      });
     });
   });
 
@@ -487,23 +506,22 @@ describe("task-executor", () => {
         lastEventAt: 10,
       });
 
-      expect(created.found).toBe(true);
-      expect(created.created).toBe(true);
-      if (!created.created) {
-        throw new Error("Expected managed flow child task creation");
-      }
-      if (!created.task) {
-        throw new Error("Expected managed flow child task payload");
-      }
-      expect(created.task.parentFlowId).toBe(flow.flowId);
-      expect(created.task.ownerKey).toBe("agent:main:main");
-      expect(created.task.status).toBe("running");
-      expect(created.task.runId).toBe("run-flow-child");
+      expect(created).toMatchObject({
+        found: true,
+        created: true,
+        task: expect.objectContaining({
+          parentFlowId: flow.flowId,
+          ownerKey: "agent:main:main",
+          status: "running",
+          runId: "run-flow-child",
+        }),
+      });
       const createdTask = requireCreatedFlowTask(created);
-      const task = getTaskById(createdTask.taskId);
-      expect(task?.parentFlowId).toBe(flow.flowId);
-      expect(task?.ownerKey).toBe("agent:main:main");
-      expect(task?.childSessionKey).toBe("agent:codex:acp:child");
+      expect(getTaskById(createdTask.taskId)).toMatchObject({
+        parentFlowId: flow.flowId,
+        ownerKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child",
+      });
     });
   });
 
@@ -520,8 +538,10 @@ describe("task-executor", () => {
         flowId: flow.flowId,
       });
 
-      expect(cancelled.found).toBe(true);
-      expect(cancelled.cancelled).toBe(true);
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: true,
+      });
 
       const created = runTaskInFlow({
         flowId: flow.flowId,
@@ -531,9 +551,11 @@ describe("task-executor", () => {
         task: "Should be denied",
       });
 
-      expect(created.found).toBe(true);
-      expect(created.created).toBe(false);
-      expect(created.reason).toBe("Flow cancellation has already been requested.");
+      expect(created).toMatchObject({
+        found: true,
+        created: false,
+        reason: "Flow cancellation has already been requested.",
+      });
     });
   });
 
@@ -563,11 +585,15 @@ describe("task-executor", () => {
         flowId: flow.flowId,
       });
 
-      expect(cancelled.found).toBe(true);
-      expect(cancelled.cancelled).toBe(false);
-      expect(cancelled.reason).toBe("One or more child tasks are still active.");
-      expect(cancelled.flow?.flowId).toBe(flow.flowId);
-      expect(cancelled.flow?.status).toBe("queued");
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "One or more child tasks are still active.",
+        flow: expect.objectContaining({
+          flowId: flow.flowId,
+          status: "queued",
+        }),
+      });
       const cancelRequestedAt = expectCancelRequestedAt(cancelled.flow?.cancelRequestedAt);
 
       failTaskRunByRunId({
@@ -578,14 +604,16 @@ describe("task-executor", () => {
         status: "cancelled",
       });
 
-      const task = getTaskById(child.taskId);
-      expect(task?.taskId).toBe(child.taskId);
-      expect(task?.status).toBe("cancelled");
-      const cancelledFlow = getTaskFlowById(flow.flowId);
-      expect(cancelledFlow?.flowId).toBe(flow.flowId);
-      expect(cancelledFlow?.cancelRequestedAt).toBe(cancelRequestedAt);
-      expect(cancelledFlow?.status).toBe("cancelled");
-      expect(cancelledFlow?.endedAt).toBe(50);
+      expect(getTaskById(child.taskId)).toMatchObject({
+        taskId: child.taskId,
+        status: "cancelled",
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        cancelRequestedAt,
+        status: "cancelled",
+        endedAt: 50,
+      });
     });
   });
 
@@ -603,12 +631,15 @@ describe("task-executor", () => {
         callerOwnerKey: "agent:main:other",
       });
 
-      expect(cancelled.found).toBe(false);
-      expect(cancelled.cancelled).toBe(false);
-      expect(cancelled.reason).toBe("Flow not found.");
-      const storedFlow = getTaskFlowById(flow.flowId);
-      expect(storedFlow?.flowId).toBe(flow.flowId);
-      expect(storedFlow?.status).toBe("queued");
+      expect(cancelled).toMatchObject({
+        found: false,
+        cancelled: false,
+        reason: "Flow not found.",
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "queued",
+      });
     });
   });
 
@@ -629,9 +660,11 @@ describe("task-executor", () => {
         task: "Should be denied",
       });
 
-      expect(created.found).toBe(false);
-      expect(created.created).toBe(false);
-      expect(created.reason).toBe("Flow not found.");
+      expect(created).toMatchObject({
+        found: false,
+        created: false,
+        reason: "Flow not found.",
+      });
       expect(findLatestTaskForFlowId(flow.flowId)).toBeUndefined();
     });
   });
@@ -672,8 +705,10 @@ describe("task-executor", () => {
         cfg: {} as never,
         taskId: child.taskId,
       });
-      expect(cancelled.found).toBe(true);
-      expect(cancelled.cancelled).toBe(true);
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: true,
+      });
     });
   });
 
@@ -733,16 +768,19 @@ describe("task-executor", () => {
         taskId: child.taskId,
       });
 
-      expect(cancelled.found).toBe(true);
-      expect(cancelled.cancelled).toBe(false);
-      expect(cancelled.reason).toBe("runtime refused cancel");
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "runtime refused cancel",
+      });
       expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
         cfg: {} as never,
         taskId: child.taskId,
       });
-      const task = getTaskById(child.taskId);
-      expect(task?.taskId).toBe(child.taskId);
-      expect(task?.status).toBe("running");
+      expect(getTaskById(child.taskId)).toMatchObject({
+        taskId: child.taskId,
+        status: "running",
+      });
       expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
     });
   });
@@ -770,11 +808,14 @@ describe("task-executor", () => {
         taskId: child.taskId,
       });
 
-      expect(cancelled.found).toBe(true);
-      expect(cancelled.cancelled).toBe(true);
-      const task = getTaskById(child.taskId);
-      expect(task?.taskId).toBe(child.taskId);
-      expect(task?.status).toBe("cancelled");
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: true,
+      });
+      expect(getTaskById(child.taskId)).toMatchObject({
+        taskId: child.taskId,
+        status: "cancelled",
+      });
       expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
         cfg: {} as never,
         sessionKey: "agent:codex:subagent:child",
@@ -819,10 +860,14 @@ describe("task-executor", () => {
         cfg: {} as never,
         taskId: childTask.taskId,
       });
-      expect(cancelled.found).toBe(true);
-      expect(cancelled.cancelled).toBe(true);
-      expect(cancelled.flow?.flowId).toBe(flow.flowId);
-      expect(cancelled.flow?.status).toBe("cancelled");
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: true,
+        flow: {
+          flowId: flow.flowId,
+          status: "cancelled",
+        },
+      });
     });
   });
 
@@ -856,10 +901,13 @@ describe("task-executor", () => {
         error: "attacker controlled error",
       });
 
-      const attackerTask = getTaskById(attacker.taskId);
-      expect(attackerTask?.status).toBe("failed");
-      expect(attackerTask?.error).toBe("attacker controlled error");
-      expect(getTaskById(victim.taskId)?.status).toBe("running");
+      expect(getTaskById(attacker.taskId)).toMatchObject({
+        status: "failed",
+        error: "attacker controlled error",
+      });
+      expect(getTaskById(victim.taskId)).toMatchObject({
+        status: "running",
+      });
     });
   });
 });

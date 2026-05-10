@@ -1,4 +1,4 @@
-import type { DiscordSlashCommandConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordSlashCommandConfig } from "openclaw/plugin-sdk/config-types";
 
 export function resolveDiscordSlashCommandConfig(
   raw?: DiscordSlashCommandConfig,

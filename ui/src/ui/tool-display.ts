@@ -6,7 +6,6 @@ import {
   resolveToolVerbAndDetailForArgs,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
-import type { ToolDetailMode } from "../../../src/agents/tool-display-exec.js";
 import type { IconName } from "./icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
@@ -101,7 +100,6 @@ export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
   meta?: string;
-  detailMode?: ToolDetailMode;
 }): ToolDisplay {
   const name = normalizeToolName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
@@ -116,7 +114,6 @@ export function resolveToolDisplay(params: {
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",
-    toolDetailMode: params.detailMode,
     detailCoerce: { includeFalse: true, includeZero: true },
   });
 

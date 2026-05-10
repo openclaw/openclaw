@@ -120,54 +120,6 @@ function plan(items: MigrationItem[]): MigrationPlan {
   };
 }
 
-function expectSummaryFields(
-  summary: MigrationPlan["summary"],
-  fields: Partial<MigrationPlan["summary"]>,
-) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(summary[key as keyof MigrationPlan["summary"]]).toBe(value);
-  }
-}
-
-function requireItem(items: MigrationItem[], id: string): MigrationItem {
-  const item = items.find((candidate) => candidate.id === id);
-  expect(item).toBeDefined();
-  if (!item) {
-    throw new Error(`missing migration item ${id}`);
-  }
-  return item;
-}
-
-function expectItemStatus(
-  items: MigrationItem[],
-  id: string,
-  status: MigrationItem["status"],
-  reason?: string,
-) {
-  const item = requireItem(items, id);
-  expect(item.status).toBe(status);
-  if (reason !== undefined) {
-    expect(item.reason).toBe(reason);
-  }
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireCodexPluginConfigPlugins(item: MigrationItem): Record<string, unknown> {
-  const details = requireRecord(item.details, "config details");
-  const value = requireRecord(details.value, "config value");
-  const config = requireRecord(value.config, "config object");
-  const codexPlugins = requireRecord(config.codexPlugins, "codex plugin config");
-  return requireRecord(codexPlugins.plugins, "configured plugins");
-}
-
 describe("applyMigrationSkillSelection", () => {
   it("keeps selected skills and skips unselected skill copy items", () => {
     const selected = applyMigrationSkillSelection(
@@ -190,15 +142,23 @@ describe("applyMigrationSkillSelection", () => {
       ["alpha"],
     );
 
-    expectSummaryFields(selected.summary, {
+    expect(selected.summary).toMatchObject({
       total: 4,
       planned: 2,
       skipped: 2,
       conflicts: 0,
     });
-    expectItemStatus(selected.items, "skill:alpha", "planned");
-    expectItemStatus(selected.items, "skill:beta", "skipped", MIGRATION_SKILL_NOT_SELECTED_REASON);
-    expectItemStatus(selected.items, "archive:config.toml", "planned");
+    expect(selected.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "skill:alpha", status: "planned" }),
+        expect.objectContaining({
+          id: "skill:beta",
+          status: "skipped",
+          reason: MIGRATION_SKILL_NOT_SELECTED_REASON,
+        }),
+        expect.objectContaining({ id: "archive:config.toml", status: "planned" }),
+      ]),
+    );
   });
 
   it("accepts item ids as non-interactive skill selectors", () => {
@@ -207,8 +167,9 @@ describe("applyMigrationSkillSelection", () => {
       ["skill:alpha"],
     );
 
-    expect(selected.items).toHaveLength(1);
-    expectItemStatus(selected.items, "skill:alpha", "planned");
+    expect(selected.items).toEqual([
+      expect.objectContaining({ id: "skill:alpha", status: "planned" }),
+    ]);
   });
 
   it("can skip conflicting skills before apply conflict checks run", () => {
@@ -226,8 +187,16 @@ describe("applyMigrationSkillSelection", () => {
     );
 
     expect(selected.summary.conflicts).toBe(0);
-    expectItemStatus(selected.items, "skill:alpha", "planned");
-    expectItemStatus(selected.items, "skill:beta", "skipped", MIGRATION_SKILL_NOT_SELECTED_REASON);
+    expect(selected.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "skill:alpha", status: "planned" }),
+        expect.objectContaining({
+          id: "skill:beta",
+          status: "skipped",
+          reason: MIGRATION_SKILL_NOT_SELECTED_REASON,
+        }),
+      ]),
+    );
   });
 
   it("allows interactive selection to choose no skills", () => {
@@ -239,7 +208,7 @@ describe("applyMigrationSkillSelection", () => {
       new Set(),
     );
 
-    expectSummaryFields(selected.summary, { planned: 0, skipped: 2 });
+    expect(selected.summary).toMatchObject({ planned: 0, skipped: 2 });
     expect(selected.items.map((item) => item.status)).toEqual(["skipped", "skipped"]);
   });
 
@@ -412,23 +381,45 @@ describe("applyMigrationPluginSelection", () => {
       ["google-calendar"],
     );
 
-    expectSummaryFields(selected.summary, { planned: 2, skipped: 1, conflicts: 0 });
-    expectItemStatus(selected.items, "plugin:google-calendar", "planned");
-    expectItemStatus(
-      selected.items,
-      "plugin:gmail",
-      "skipped",
-      MIGRATION_PLUGIN_NOT_SELECTED_REASON,
+    expect(selected.summary).toMatchObject({ planned: 2, skipped: 1, conflicts: 0 });
+    expect(selected.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "plugin:google-calendar", status: "planned" }),
+        expect.objectContaining({
+          id: "plugin:gmail",
+          status: "skipped",
+          reason: MIGRATION_PLUGIN_NOT_SELECTED_REASON,
+        }),
+        expect.objectContaining({ id: "config:codex-plugins", status: "planned" }),
+      ]),
     );
-    const configItem = requireItem(selected.items, "config:codex-plugins");
-    expect(configItem.status).toBe("planned");
-    const plugins = requireCodexPluginConfigPlugins(configItem);
-    expect(requireRecord(plugins["google-calendar"], "google calendar plugin config")).toEqual({
-      enabled: true,
-      marketplaceName: "openai-curated",
-      pluginName: "google-calendar",
+    expect(
+      selected.items.find((item) => item.id === "config:codex-plugins")?.details?.value,
+    ).toMatchObject({
+      config: {
+        codexPlugins: {
+          plugins: {
+            "google-calendar": {
+              enabled: true,
+              marketplaceName: "openai-curated",
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
     });
-    expect(Object.keys(plugins)).toEqual(["google-calendar"]);
+    expect(
+      Object.keys(
+        (
+          (
+            (
+              selected.items.find((item) => item.id === "config:codex-plugins")?.details
+                ?.value as Record<string, unknown>
+            ).config as Record<string, unknown>
+          ).codexPlugins as Record<string, unknown>
+        ).plugins as Record<string, unknown>,
+      ),
+    ).toEqual(["google-calendar"]);
   });
 
   it("skips the Codex plugin config item when no plugin remains selected", () => {
@@ -441,24 +432,25 @@ describe("applyMigrationPluginSelection", () => {
       [],
     );
 
-    expectSummaryFields(selected.summary, { planned: 0, skipped: 3, conflicts: 0 });
-    expectItemStatus(
-      selected.items,
-      "plugin:google-calendar",
-      "skipped",
-      MIGRATION_PLUGIN_NOT_SELECTED_REASON,
-    );
-    expectItemStatus(
-      selected.items,
-      "plugin:gmail",
-      "skipped",
-      MIGRATION_PLUGIN_NOT_SELECTED_REASON,
-    );
-    expectItemStatus(
-      selected.items,
-      "config:codex-plugins",
-      "skipped",
-      MIGRATION_PLUGIN_NOT_SELECTED_REASON,
+    expect(selected.summary).toMatchObject({ planned: 0, skipped: 3, conflicts: 0 });
+    expect(selected.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "plugin:google-calendar",
+          status: "skipped",
+          reason: MIGRATION_PLUGIN_NOT_SELECTED_REASON,
+        }),
+        expect.objectContaining({
+          id: "plugin:gmail",
+          status: "skipped",
+          reason: MIGRATION_PLUGIN_NOT_SELECTED_REASON,
+        }),
+        expect.objectContaining({
+          id: "config:codex-plugins",
+          status: "skipped",
+          reason: MIGRATION_PLUGIN_NOT_SELECTED_REASON,
+        }),
+      ]),
     );
   });
 
@@ -472,7 +464,7 @@ describe("applyMigrationPluginSelection", () => {
       new Set(),
     );
 
-    expectSummaryFields(selected.summary, { planned: 0, skipped: 3 });
+    expect(selected.summary).toMatchObject({ planned: 0, skipped: 3 });
     expect(selected.items.every((item) => item.status === "skipped")).toBe(true);
   });
 
@@ -540,8 +532,9 @@ describe("applyMigrationPluginSelection", () => {
       ["plugin:google-calendar"],
     );
 
-    expect(selected.items).toHaveLength(1);
-    expectItemStatus(selected.items, "plugin:google-calendar", "planned");
+    expect(selected.items).toEqual([
+      expect.objectContaining({ id: "plugin:google-calendar", status: "planned" }),
+    ]);
   });
 
   it("rejects unknown explicit plugin selectors with available choices", () => {

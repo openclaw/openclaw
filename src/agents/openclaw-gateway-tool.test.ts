@@ -47,51 +47,6 @@ function collectActionValues(schema: unknown, values: Set<string>): void {
   }
 }
 
-type GatewayCall = [method: string, options: unknown, params?: unknown];
-
-function gatewayCalls(): GatewayCall[] {
-  return vi.mocked(callGatewayTool).mock.calls as GatewayCall[];
-}
-
-function gatewayCall(method: string): GatewayCall {
-  const call = gatewayCalls().find(([candidate]) => candidate === method);
-  expect(call).toBeDefined();
-  return call as GatewayCall;
-}
-
-function expectGatewayCallFields(
-  method: string,
-  expectedParams: Record<string, unknown>,
-): Record<string, unknown> {
-  const [, , params] = gatewayCall(method);
-  expect(params).toBeDefined();
-  const record = params as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expectedParams)) {
-    expect(record[key]).toEqual(value);
-  }
-  return record;
-}
-
-function expectGatewayMethodCalled(method: string): void {
-  expect(gatewayCalls().some(([candidate]) => candidate === method)).toBe(true);
-}
-
-function expectGatewayMethodNotCalled(method: string): void {
-  expect(gatewayCalls().some(([candidate]) => candidate === method)).toBe(false);
-}
-
-function expectRecordFields(
-  record: unknown,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  expect(record).toBeDefined();
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
 function expectConfigMutationCall(params: {
   callGatewayTool: {
     mock: {
@@ -102,14 +57,16 @@ function expectConfigMutationCall(params: {
   raw: string;
   sessionKey: string;
 }) {
-  expect(params.callGatewayTool.mock.calls.some(([method]) => method === "config.get")).toBe(true);
-  const call = params.callGatewayTool.mock.calls.find(([method]) => method === params.action);
-  expect(call).toBeDefined();
-  expectRecordFields(call?.[2], {
-    raw: params.raw.trim(),
-    baseHash: "hash-1",
-    sessionKey: params.sessionKey,
-  });
+  expect(params.callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+  expect(params.callGatewayTool).toHaveBeenCalledWith(
+    params.action,
+    expect.any(Object),
+    expect.objectContaining({
+      raw: params.raw.trim(),
+      baseHash: "hash-1",
+      sessionKey: params.sessionKey,
+    }),
+  );
 }
 
 describe("gateway tool", () => {
@@ -169,9 +126,9 @@ describe("gateway tool", () => {
     const values = new Set<string>();
     collectActionValues(parameters.properties?.action, values);
 
-    for (const action of ["restart", "config.get", "config.patch", "config.apply"]) {
-      expect(values.has(action)).toBe(true);
-    }
+    expect([...values]).toEqual(
+      expect.arrayContaining(["restart", "config.get", "config.patch", "config.apply"]),
+    );
   });
 
   it("schedules SIGUSR1 restart", async () => {
@@ -194,7 +151,7 @@ describe("gateway tool", () => {
             action: "restart",
             delayMs: 0,
           });
-          expectRecordFields(result.details, {
+          expect(result.details).toMatchObject({
             ok: true,
             pid: process.pid,
             signal: "SIGUSR1",
@@ -338,8 +295,12 @@ describe("gateway tool", () => {
         raw: '{ tools: { exec: { ask: "off" } } }',
       }),
     ).rejects.toThrow("gateway config.patch cannot change protected config paths: tools.exec.ask");
-    expectGatewayMethodCalled("config.get");
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.patch when it changes safe bin approval paths", async () => {
@@ -353,8 +314,12 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: tools.exec.safeBinProfiles.bash.allowedValueFlags, tools.exec.safeBins",
     );
-    expectGatewayMethodCalled("config.get");
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("passes config.patch through gateway call when protected exec arrays and objects are unchanged", async () => {
@@ -428,8 +393,12 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: tools.exec.strictInlineEval",
     );
-    expectGatewayMethodCalled("config.get");
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.patch when a legacy tools.bash alias changes strict inline eval", async () => {
@@ -449,8 +418,12 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: tools.exec.strictInlineEval",
     );
-    expectGatewayMethodCalled("config.get");
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.patch when a legacy tools.bash alias changes exec security", async () => {
@@ -470,8 +443,12 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: tools.exec.security",
     );
-    expectGatewayMethodCalled("config.get");
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.apply when it changes exec security settings", async () => {
@@ -485,8 +462,12 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.apply cannot change protected config paths: tools.exec.security",
     );
-    expectGatewayMethodCalled("config.get");
-    expectGatewayMethodNotCalled("config.apply");
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.apply",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.apply when protected exec settings are omitted", async () => {
@@ -500,8 +481,12 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.apply cannot change protected config paths: tools.exec.ask, tools.exec.security",
     );
-    expectGatewayMethodCalled("config.get");
-    expectGatewayMethodNotCalled("config.apply");
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.apply",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.apply when it changes safe bin trusted directories", async () => {
@@ -515,8 +500,12 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.apply cannot change protected config paths: tools.exec.safeBinTrustedDirs",
     );
-    expectGatewayMethodCalled("config.get");
-    expectGatewayMethodNotCalled("config.apply");
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.apply",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.patch when it rewrites gateway.remote.url", async () => {
@@ -530,8 +519,12 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: gateway.remote.url",
     );
-    expectGatewayMethodCalled("config.get");
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.patch when it rewrites global tools policy", async () => {
@@ -545,8 +538,12 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: tools.allow, tools.elevated.enabled",
     );
-    expectGatewayMethodCalled("config.get");
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.patch that enables dangerouslyDisableDeviceAuth", async () => {
@@ -560,7 +557,11 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: gateway.controlUi.dangerouslyDisableDeviceAuth",
     );
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.patch that enables allowUnsafeExternalContent on gmail hooks", async () => {
@@ -574,7 +575,11 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: hooks.gmail.allowUnsafeExternalContent",
     );
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.patch that weakens applyPatch.workspaceOnly", async () => {
@@ -588,7 +593,11 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: tools.exec.applyPatch.workspaceOnly",
     );
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.patch that enables allowInsecureAuth on control UI", async () => {
@@ -602,7 +611,11 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: gateway.controlUi.allowInsecureAuth",
     );
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("rejects config.patch that enables dangerouslyAllowHostHeaderOriginFallback", async () => {
@@ -616,7 +629,11 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
     );
-    expectGatewayMethodNotCalled("config.patch");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("allows config.patch that does not enable any dangerous flag", async () => {
@@ -629,7 +646,11 @@ describe("gateway tool", () => {
       raw,
     });
 
-    expectGatewayCallFields("config.patch", { raw: raw.trim() });
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.objectContaining({ raw: raw.trim() }),
+    );
   });
 
   it("allows config.patch on allowlisted paths when a dangerous flag is already enabled", async () => {
@@ -654,7 +675,11 @@ describe("gateway tool", () => {
       raw,
     });
 
-    expectGatewayCallFields("config.patch", { raw: raw.trim() });
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.objectContaining({ raw: raw.trim() }),
+    );
   });
 
   it("rejects config.apply that introduces a dangerous flag", async () => {
@@ -668,7 +693,11 @@ describe("gateway tool", () => {
     ).rejects.toThrow(
       "gateway config.apply cannot change protected config paths: tools.exec.applyPatch.workspaceOnly",
     );
-    expectGatewayMethodNotCalled("config.apply");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.apply",
+      expect.any(Object),
+      expect.anything(),
+    );
   });
 
   it("passes update.run through gateway call", async () => {
@@ -681,15 +710,24 @@ describe("gateway tool", () => {
       continuationMessage: "Report the update result after restart.",
     });
 
-    const updateCall = gatewayCall("update.run");
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "update.run",
+      expect.any(Object),
+      expect.objectContaining({
+        continuationMessage: "Report the update result after restart.",
+        note: "test update",
+        sessionKey,
+      }),
+    );
+    const updateCall = vi
+      .mocked(callGatewayTool)
+      .mock.calls.find((call) => call[0] === "update.run");
+    if (updateCall === undefined) {
+      throw new Error("expected update.run gateway call");
+    }
     const [, opts, params] = updateCall;
-    expectRecordFields(params, {
-      continuationMessage: "Report the update result after restart.",
-      note: "test update",
-      sessionKey,
-      timeoutMs: 20 * 60_000,
-    });
-    expectRecordFields(opts, { timeoutMs: 20 * 60_000 });
+    expect(opts).toMatchObject({ timeoutMs: 20 * 60_000 });
+    expect(params).toMatchObject({ timeoutMs: 20 * 60_000 });
   });
 
   it("returns a path-scoped schema lookup result", async () => {
@@ -700,23 +738,23 @@ describe("gateway tool", () => {
       path: "gateway.auth",
     });
 
-    expect(gatewayCall("config.schema.lookup")[2]).toEqual({
+    expect(callGatewayTool).toHaveBeenCalledWith("config.schema.lookup", expect.any(Object), {
       path: "gateway.auth",
     });
-    const details = expectRecordFields(result.details, {
+    expect(result.details).toMatchObject({
       ok: true,
-    });
-    const lookupResult = expectRecordFields(details.result, {
-      path: "gateway.auth",
-      hintPath: "gateway.auth",
-    });
-    const children = lookupResult.children as Array<unknown>;
-    expect(children).toHaveLength(1);
-    expectRecordFields(children[0], {
-      key: "token",
-      path: "gateway.auth.token",
-      required: true,
-      hintPath: "gateway.auth.token",
+      result: {
+        path: "gateway.auth",
+        hintPath: "gateway.auth",
+        children: [
+          expect.objectContaining({
+            key: "token",
+            path: "gateway.auth.token",
+            required: true,
+            hintPath: "gateway.auth.token",
+          }),
+        ],
+      },
     });
     const schema = (result.details as { result?: { schema?: { properties?: unknown } } }).result
       ?.schema;

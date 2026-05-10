@@ -10,7 +10,7 @@ import {
   type SessionWriteLockAcquireTimeoutConfig,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
-type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
+type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" }>;
 
 const MIRROR_IDENTITY_META_KEY = "mirrorIdentity" as const;
 
@@ -75,7 +75,7 @@ export async function mirrorCodexAppServerTranscript(params: {
 }): Promise<void> {
   const messages = params.messages.filter(
     (message): message is MirroredAgentMessage =>
-      message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+      message.role === "user" || message.role === "assistant",
   );
   if (messages.length === 0) {
     return;

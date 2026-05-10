@@ -1,3 +1,4 @@
+import { explainShellCommand } from "../command-explainer/extract.js";
 import type { CommandExplanation, CommandRisk } from "../command-explainer/types.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
 import { analyzeCommandForPolicy } from "./policy.js";
@@ -121,7 +122,6 @@ export async function explainCommandForDisplay(
   command: string,
 ): Promise<{ explanation: CommandExplanation; summary: CommandExplanationSummary } | null> {
   try {
-    const { explainShellCommand } = await import("../command-explainer/extract.js");
     const explanation = await explainShellCommand(command);
     return { explanation, summary: summarizeCommandExplanation(explanation) };
   } catch {

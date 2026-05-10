@@ -61,31 +61,6 @@ function makeContext(params: {
   };
 }
 
-function findItem(items: readonly { id?: string }[], id: string) {
-  const item = items.find((entry) => entry.id === id);
-  if (!item) {
-    throw new Error(`Expected migration item ${id}`);
-  }
-  return item as Record<string, unknown>;
-}
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
 async function createCodexFixture(): Promise<{
   root: string;
   homeDir: string;
@@ -148,36 +123,47 @@ describe("buildCodexMigrationProvider", () => {
 
     expect(plan.providerId).toBe("codex");
     expect(plan.source).toBe(fixture.codexHome);
-    expectRecordFields(findItem(plan.items, "skill:tweet-helper"), {
-      kind: "skill",
-      action: "copy",
-      status: "planned",
-      target: path.join(fixture.workspaceDir, "skills", "tweet-helper"),
-    });
-    expectRecordFields(findItem(plan.items, "skill:personal-style"), {
-      kind: "skill",
-      action: "copy",
-      status: "planned",
-      target: path.join(fixture.workspaceDir, "skills", "personal-style"),
-    });
-    expectRecordFields(findItem(plan.items, "plugin:documents:1"), {
-      kind: "manual",
-      action: "manual",
-      status: "skipped",
-    });
-    expectRecordFields(findItem(plan.items, "archive:config.toml"), {
-      kind: "archive",
-      action: "archive",
-      status: "planned",
-    });
-    expectRecordFields(findItem(plan.items, "archive:hooks/hooks.json"), {
-      kind: "archive",
-      action: "archive",
-      status: "planned",
-    });
-    expect(plan.items.some((item) => item.id === "skill:system-skill")).toBe(false);
-    expect((plan.warnings ?? []).some((warning) => warning.includes("cached plugin bundles"))).toBe(
-      true,
+    expect(plan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "skill:tweet-helper",
+          kind: "skill",
+          action: "copy",
+          status: "planned",
+          target: path.join(fixture.workspaceDir, "skills", "tweet-helper"),
+        }),
+        expect.objectContaining({
+          id: "skill:personal-style",
+          kind: "skill",
+          action: "copy",
+          status: "planned",
+          target: path.join(fixture.workspaceDir, "skills", "personal-style"),
+        }),
+        expect.objectContaining({
+          id: "plugin:documents:1",
+          kind: "manual",
+          action: "manual",
+          status: "skipped",
+        }),
+        expect.objectContaining({
+          id: "archive:config.toml",
+          kind: "archive",
+          action: "archive",
+          status: "planned",
+        }),
+        expect.objectContaining({
+          id: "archive:hooks/hooks.json",
+          kind: "archive",
+          action: "archive",
+          status: "planned",
+        }),
+      ]),
+    );
+    expect(plan.items).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "skill:system-skill" })]),
+    );
+    expect(plan.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("cached plugin bundles")]),
     );
   });
 
@@ -197,31 +183,36 @@ describe("buildCodexMigrationProvider", () => {
     );
 
     expect(appServerRequest).toHaveBeenCalledTimes(1);
-    expectRecordFields(mockCallArg(appServerRequest), {
-      method: "plugin/list",
-      requestParams: { cwds: [] },
-    });
-    expect(
-      appServerRequest.mock.calls.some(
-        ([arg]) => (arg as { method?: string }).method === "plugin/install",
-      ),
-    ).toBe(false);
-    const pluginItem = findItem(plan.items, "plugin:google-calendar");
-    expectRecordFields(pluginItem, {
-      kind: "plugin",
-      action: "install",
-      status: "planned",
-    });
-    expectRecordFields(pluginItem.details, {
-      configKey: "google-calendar",
-      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-      pluginName: "google-calendar",
-    });
-    expectRecordFields(findItem(plan.items, "config:codex-plugins"), {
-      kind: "config",
-      action: "merge",
-      status: "planned",
-    });
+    expect(appServerRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugin/list",
+        requestParams: { cwds: [] },
+      }),
+    );
+    expect(appServerRequest).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "plugin/install" }),
+    );
+    expect(plan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "plugin:google-calendar",
+          kind: "plugin",
+          action: "install",
+          status: "planned",
+          details: expect.objectContaining({
+            configKey: "google-calendar",
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "google-calendar",
+          }),
+        }),
+        expect.objectContaining({
+          id: "config:codex-plugins",
+          kind: "config",
+          action: "merge",
+          status: "planned",
+        }),
+      ]),
+    );
   });
 
   it("copies planned skills and archives native config during apply", async () => {
@@ -247,9 +238,13 @@ describe("buildCodexMigrationProvider", () => {
     await expect(
       fs.access(path.join(reportDir, "archive", "config.toml")),
     ).resolves.toBeUndefined();
-    expectRecordFields(findItem(result.items, "plugin:documents:1"), { status: "skipped" });
-    expectRecordFields(findItem(result.items, "skill:tweet-helper"), { status: "migrated" });
-    expectRecordFields(findItem(result.items, "archive:config.toml"), { status: "migrated" });
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "plugin:documents:1", status: "skipped" }),
+        expect.objectContaining({ id: "skill:tweet-helper", status: "migrated" }),
+        expect.objectContaining({ id: "archive:config.toml", status: "migrated" }),
+      ]),
+    );
     await expect(fs.access(path.join(reportDir, "report.json"))).resolves.toBeUndefined();
   });
 
@@ -301,40 +296,46 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    const installCall = appServerRequest.mock.calls.find(
-      ([arg]) => (arg as { method?: string }).method === "plugin/install",
-    )?.[0] as Record<string, unknown>;
-    expectRecordFields(installCall, {
-      method: "plugin/install",
-      requestParams: {
-        marketplacePath: "/marketplaces/openai-curated",
-        pluginName: "google-calendar",
-      },
-    });
-    const pluginItem = findItem(result.items, "plugin:google-calendar");
-    expectRecordFields(pluginItem, {
-      status: "migrated",
-      reason: "already active",
-    });
-    expectRecordFields(pluginItem.details, {
-      code: "already_active",
-      installAttempted: true,
-    });
-    expectRecordFields(findItem(result.items, "config:codex-plugins"), {
-      status: "migrated",
-    });
-    expect(configState.plugins?.entries?.codex?.enabled).toBe(true);
-    expect(configState.plugins?.entries?.codex?.config?.appServer).toEqual({
-      sandbox: "workspace-write",
-    });
-    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
-      enabled: true,
-      allow_destructive_actions: false,
-      plugins: {
-        "google-calendar": {
-          enabled: true,
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    expect(appServerRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugin/install",
+        requestParams: {
+          marketplacePath: "/marketplaces/openai-curated",
           pluginName: "google-calendar",
+        },
+      }),
+    );
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "plugin:google-calendar",
+          status: "migrated",
+          reason: "already active",
+          details: expect.objectContaining({
+            code: "already_active",
+            installAttempted: true,
+          }),
+        }),
+        expect.objectContaining({
+          id: "config:codex-plugins",
+          status: "migrated",
+        }),
+      ]),
+    );
+    expect(configState.plugins?.entries?.codex).toMatchObject({
+      enabled: true,
+      config: {
+        appServer: { sandbox: "workspace-write" },
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: false,
+          plugins: {
+            "google-calendar": {
+              enabled: true,
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
         },
       },
     });
@@ -386,12 +387,23 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    expectRecordFields(findItem(result.items, "plugin:google-calendar"), {
-      status: "conflict",
-      reason: "plugin exists",
-    });
-    expectRecordFields(findItem(result.items, "plugin:gmail"), { status: "planned" });
-    expectRecordFields(findItem(result.items, "config:codex-plugins"), { status: "planned" });
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "plugin:google-calendar",
+          status: "conflict",
+          reason: "plugin exists",
+        }),
+        expect.objectContaining({
+          id: "plugin:gmail",
+          status: "planned",
+        }),
+        expect.objectContaining({
+          id: "config:codex-plugins",
+          status: "planned",
+        }),
+      ]),
+    );
   });
 
   it("preserves explicit app-server settings during plugin migration", async () => {
@@ -501,8 +513,15 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    expectRecordFields(findItem(result.items, "config:codex-plugins"), { status: "migrated" });
-    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "config:codex-plugins",
+          status: "migrated",
+        }),
+      ]),
+    );
+    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toMatchObject({
       allow_destructive_actions: true,
       plugins: {
         "google-calendar": {
@@ -516,7 +535,6 @@ describe("buildCodexMigrationProvider", () => {
           pluginName: "slack",
         },
       },
-      enabled: true,
     });
   });
 
@@ -571,8 +589,15 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    expectRecordFields(findItem(result.items, "config:codex-plugins"), { status: "migrated" });
-    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "config:codex-plugins",
+          status: "migrated",
+        }),
+      ]),
+    );
+    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toMatchObject({
       enabled: true,
       allow_destructive_actions: true,
       plugins: {
@@ -632,24 +657,27 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    const pluginItem = findItem(result.items, "plugin:google-calendar");
-    expectRecordFields(pluginItem, {
-      status: "skipped",
-      reason: "auth_required",
-    });
-    expectRecordFields(pluginItem.details, {
-      code: "auth_required",
-      appsNeedingAuth: [
-        {
-          id: "google-calendar",
-          name: "Google Calendar",
-          needsAuth: true,
-        },
-      ],
-    });
-    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "plugin:google-calendar",
+          status: "skipped",
+          reason: "auth_required",
+          details: expect.objectContaining({
+            code: "auth_required",
+            appsNeedingAuth: [
+              {
+                id: "google-calendar",
+                name: "Google Calendar",
+                needsAuth: true,
+              },
+            ],
+          }),
+        }),
+      ]),
+    );
+    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toMatchObject({
       enabled: true,
-      allow_destructive_actions: false,
       plugins: {
         "google-calendar": {
           enabled: false,
@@ -693,14 +721,20 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    expectRecordFields(findItem(result.items, "plugin:google-calendar"), {
-      status: "error",
-      reason: "install failed",
-    });
-    expectRecordFields(findItem(result.items, "config:codex-plugins"), {
-      status: "skipped",
-      reason: "no selected Codex plugins",
-    });
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "plugin:google-calendar",
+          status: "error",
+          reason: "install failed",
+        }),
+        expect.objectContaining({
+          id: "config:codex-plugins",
+          status: "skipped",
+          reason: "no selected Codex plugins",
+        }),
+      ]),
+    );
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toBeUndefined();
   });
 
@@ -725,10 +759,16 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    expectRecordFields(findItem(plan.items, "skill:tweet-helper"), { status: "conflict" });
-    expectRecordFields(findItem(overwritePlan.items, "skill:tweet-helper"), {
-      status: "planned",
-    });
+    expect(plan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "skill:tweet-helper", status: "conflict" }),
+      ]),
+    );
+    expect(overwritePlan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "skill:tweet-helper", status: "planned" }),
+      ]),
+    );
   });
 });
 

@@ -7,7 +7,7 @@ title: "Onboard"
 
 # `openclaw onboard`
 
-Full guided onboarding for local or remote Gateway setup. Use this when you want OpenClaw to walk through model auth, workspace, gateway, channels, skills, and health in one flow.
+Interactive onboarding for local or remote Gateway setup.
 
 ## Related guides
 
@@ -212,12 +212,9 @@ openclaw onboard --non-interactive \
 ## Common follow-up commands
 
 ```bash
-openclaw channels add
 openclaw configure
 openclaw agents add <name>
 ```
-
-Use `openclaw setup` instead when you only need the baseline config/workspace. Use `openclaw configure` later for targeted changes and `openclaw channels add` for channel-only setup.
 
 <Note>
 `--json` does not imply non-interactive mode. Use `--non-interactive` for scripts.

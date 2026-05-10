@@ -62,37 +62,6 @@ function classifyLoopbackAddressFamily(host: string): "ipv4" | "ipv6" | null {
   return null;
 }
 
-function isWildcardAddress(host: string): boolean {
-  return host === "0.0.0.0" || host === "::" || host === "*";
-}
-
-function isExpectedGatewayBindAddress(host: string): boolean {
-  return classifyLoopbackAddressFamily(host) !== null || isWildcardAddress(host);
-}
-
-export function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
-  if (listeners.length !== 1) {
-    return false;
-  }
-  const [listener] = listeners;
-  if (!listener || classifyPortListener(listener, port) !== "gateway") {
-    return false;
-  }
-  const pid = listener.pid;
-  if (typeof pid !== "number" || !Number.isFinite(pid)) {
-    return false;
-  }
-  if (typeof listener.address !== "string") {
-    return false;
-  }
-  const parsedAddress = parseListenerAddress(listener.address);
-  return Boolean(
-    parsedAddress &&
-    parsedAddress.port === port &&
-    isExpectedGatewayBindAddress(parsedAddress.host),
-  );
-}
-
 export function isDualStackLoopbackGatewayListeners(
   listeners: PortListener[],
   port: number,
@@ -127,21 +96,13 @@ export function isDualStackLoopbackGatewayListeners(
   return pids.size === 1 && families.has("ipv4") && families.has("ipv6");
 }
 
-export function isExpectedGatewayListeners(listeners: PortListener[], port: number): boolean {
-  return (
-    isSingleExpectedGatewayListener(listeners, port) ||
-    isDualStackLoopbackGatewayListeners(listeners, port)
-  );
-}
-
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) {
     return [];
   }
   const kinds = new Set(listeners.map((listener) => classifyPortListener(listener, port)));
   const hints: string[] = [];
-  const expectedGatewayListeners = isExpectedGatewayListeners(listeners, port);
-  if (kinds.has("gateway") && !expectedGatewayListeners) {
+  if (kinds.has("gateway")) {
     hints.push(
       `Gateway already running locally. Stop it (${formatCliCommand("openclaw gateway stop")}) or use a different port.`,
     );
@@ -154,7 +115,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   if (kinds.has("unknown")) {
     hints.push("Another process is listening on this port.");
   }
-  if (listeners.length > 1 && !expectedGatewayListeners) {
+  if (listeners.length > 1 && !isDualStackLoopbackGatewayListeners(listeners, port)) {
     hints.push(
       "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.",
     );

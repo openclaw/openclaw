@@ -7,11 +7,7 @@ import {
   resolveXaiCodeExecutionMaxTurns,
   resolveXaiCodeExecutionModel,
 } from "./src/code-execution-shared.js";
-import {
-  isXaiToolEnabled,
-  resolveXaiToolApiKeyWithAuth,
-  type XaiToolAuthContext,
-} from "./src/tool-auth-shared.js";
+import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
 
 type CodeExecutionConfig = {
   enabled?: boolean;
@@ -57,20 +53,17 @@ function resolveCodeExecutionEnabled(params: {
   sourceConfig?: unknown;
   runtimeConfig?: unknown;
   config?: CodeExecutionConfig;
-  auth?: XaiToolAuthContext;
 }): boolean {
   return isXaiToolEnabled({
     enabled: readCodeExecutionConfigRecord(params.config)?.enabled as boolean | undefined,
     runtimeConfig: params.runtimeConfig as never,
     sourceConfig: params.sourceConfig as never,
-    auth: params.auth,
   });
 }
 
 export function createCodeExecutionTool(options?: {
   config?: unknown;
   runtimeConfig?: Record<string, unknown> | null;
-  auth?: XaiToolAuthContext;
 }) {
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
   const codeExecutionConfig =
@@ -81,7 +74,6 @@ export function createCodeExecutionTool(options?: {
       sourceConfig: options?.config,
       runtimeConfig: runtimeConfig ?? undefined,
       config: codeExecutionConfig,
-      auth: options?.auth,
     })
   ) {
     return null;
@@ -99,16 +91,15 @@ export function createCodeExecutionTool(options?: {
       }),
     }),
     execute: async (_toolCallId: string, args: Record<string, unknown>) => {
-      const apiKey = await resolveXaiToolApiKeyWithAuth({
+      const apiKey = resolveXaiToolApiKey({
         runtimeConfig: (runtimeConfig ?? undefined) as never,
         sourceConfig: options?.config as never,
-        auth: options?.auth,
       });
       if (!apiKey) {
         return jsonResult({
           error: "missing_xai_api_key",
           message:
-            "code_execution needs an xAI API key. Run openclaw onboard --auth-choice xai-api-key, set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
+            "code_execution needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
           docs: "https://docs.openclaw.ai/tools/code-execution",
         });
       }

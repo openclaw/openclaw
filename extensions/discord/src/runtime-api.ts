@@ -21,7 +21,7 @@ export type {
   DiscordActionConfig,
   DiscordConfig,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+} from "openclaw/plugin-sdk/config-types";
 export {
   jsonResult,
   readNumberParam,

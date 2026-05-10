@@ -63,7 +63,6 @@ export function createSubagentRegistryTestDeps(
 ): Record<string, unknown> {
   return {
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-    captureSubagentCompletionReply: vi.fn(async () => undefined),
     ensureContextEnginesInitialized: vi.fn(),
     ensureRuntimePluginsLoaded: vi.fn(),
     getRuntimeConfig: vi.fn(() => ({})),

@@ -64,8 +64,6 @@ export type EmbeddedPiSubscribeState = {
   emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
-  lastDeliveredBlockReplyText?: string;
-  toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
   lastAssistantStreamItemId?: string;
@@ -218,7 +216,6 @@ type ToolHandlerState = Pick<
   | "heartbeatToolResponse"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
-  | "toolExecutionSinceLastBlockReply"
 >;
 
 export type ToolHandlerContext = {

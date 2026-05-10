@@ -1,12 +1,10 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ModelCompatConfig } from "../config/types.models.js";
 
 /**
  * Fully-resolved runtime model shape used after provider/plugin-owned
  * discovery, overrides, and compat normalization.
  */
-export type ProviderRuntimeModel = Omit<Model<Api>, "compat"> & {
-  compat?: ModelCompatConfig;
+export type ProviderRuntimeModel = Model<Api> & {
   contextTokens?: number;
   params?: Record<string, unknown>;
   requestTimeoutMs?: number;

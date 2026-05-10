@@ -11,7 +11,7 @@ import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+} from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   resolveMattermostAccount,
@@ -45,8 +45,9 @@ import {
 } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
+  isMattermostSenderAllowed,
   normalizeMattermostAllowEntry,
-  resolveMattermostMonitorInboundAccess,
+  normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import {
   evaluateMattermostMentionGate,
@@ -82,13 +83,18 @@ import {
   createChannelPairingController,
   createChannelMessageReplyPipeline,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  DM_GROUP_ACCESS_REASON,
+  isDangerousNameMatchingEnabled,
   logInboundDrop,
   logTypingFailure,
+  readStoreAllowFromForDmPolicy,
   recordPendingHistoryEntryIfEnabled,
   registerPluginHttpRoute,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveChannelMediaMaxBytes,
+  resolveControlCommandGate,
   resolveDefaultGroupPolicy,
+  resolveDmGroupAccessWithLists,
   warnMissingProviderGroupPolicyFallbackOnce,
   type HistoryEntry,
 } from "./runtime-api.js";
@@ -474,6 +480,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     channel: "mattermost",
     accountId: account.accountId,
   });
+  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
   const botToken =
     normalizeOptionalString(opts.botToken) ?? normalizeOptionalString(account.botToken);
   if (!botToken) {
@@ -585,18 +592,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       handleInteraction: handleModelPickerInteraction,
       authorizeButtonClick: async ({ payload, post }) => {
         const channelInfo = await resolveChannelInfo(payload.channel_id);
+        const isDirect = channelInfo?.type?.trim().toUpperCase() === "D";
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
           cfg,
           surface: "mattermost",
         });
-        const decision = await authorizeMattermostCommandInvocation({
+        const decision = authorizeMattermostCommandInvocation({
           account,
           cfg,
           senderId: payload.user_id,
           senderName: payload.user_name ?? "",
           channelId: payload.channel_id,
           channelInfo,
-          readStoreAllowFrom: pairing.readAllowFromStore,
+          storeAllowFrom: isDirect
+            ? await readStoreAllowFromForDmPolicy({
+                provider: "mattermost",
+                accountId: account.accountId,
+                dmPolicy: account.config.dmPolicy ?? "pairing",
+                readStore: pairing.readStoreForDmPolicy,
+              })
+            : undefined,
           allowTextCommands,
           hasControlCommand: false,
         });
@@ -795,7 +810,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-  const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.mattermost !== undefined,
@@ -1022,14 +1036,23 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       surface: "mattermost",
     });
     const hasControlCommand = core.channel.text.hasControlCommand(pickerCommandText, cfg);
-    const auth = await authorizeMattermostCommandInvocation({
+    const dmPolicy = account.config.dmPolicy ?? "pairing";
+    const storeAllowFrom = normalizeMattermostAllowList(
+      await readStoreAllowFromForDmPolicy({
+        provider: "mattermost",
+        accountId: account.accountId,
+        dmPolicy,
+        readStore: pairing.readStoreForDmPolicy,
+      }),
+    );
+    const auth = authorizeMattermostCommandInvocation({
       account,
       cfg,
       senderId: params.payload.user_id,
       senderName: params.userName,
       channelId: params.payload.channel_id,
       channelInfo,
-      readStoreAllowFrom: pairing.readAllowFromStore,
+      storeAllowFrom,
       allowTextCommands,
       hasControlCommand,
     });
@@ -1245,35 +1268,77 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           normalizeOptionalString((await resolveUserInfo(senderId))?.username) ??
           senderId;
         const rawText = normalizeOptionalString(post.message) ?? "";
+        const dmPolicy = account.config.dmPolicy ?? "pairing";
+        const normalizedAllowFrom = normalizeMattermostAllowList(account.config.allowFrom ?? []);
+        const normalizedGroupAllowFrom = normalizeMattermostAllowList(
+          account.config.groupAllowFrom ?? [],
+        );
+        const storeAllowFrom = normalizeMattermostAllowList(
+          await readStoreAllowFromForDmPolicy({
+            provider: "mattermost",
+            accountId: account.accountId,
+            dmPolicy,
+            readStore: pairing.readStoreForDmPolicy,
+          }),
+        );
+        const accessDecision = resolveDmGroupAccessWithLists({
+          isGroup: kind !== "direct",
+          dmPolicy,
+          groupPolicy,
+          allowFrom: normalizedAllowFrom,
+          groupAllowFrom: normalizedGroupAllowFrom,
+          storeAllowFrom,
+          isSenderAllowed: (allowFrom) =>
+            isMattermostSenderAllowed({
+              senderId,
+              senderName,
+              allowFrom,
+              allowNameMatching,
+            }),
+        });
+        const effectiveAllowFrom = accessDecision.effectiveAllowFrom;
+        const effectiveGroupAllowFrom = accessDecision.effectiveGroupAllowFrom;
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
           cfg,
           surface: "mattermost",
         });
         const hasControlCommand = core.channel.text.hasControlCommand(rawText, cfg);
         const isControlCommand = allowTextCommands && hasControlCommand;
-        const accessDecision = await resolveMattermostMonitorInboundAccess({
-          account,
-          cfg,
+        const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+        const commandDmAllowFrom = kind === "direct" ? effectiveAllowFrom : normalizedAllowFrom;
+        const senderAllowedForCommands = isMattermostSenderAllowed({
           senderId,
           senderName,
-          channelId,
-          kind,
-          groupPolicy,
-          readStoreAllowFrom: pairing.readAllowFromStore,
+          allowFrom: commandDmAllowFrom,
+          allowNameMatching,
+        });
+        const groupAllowedForCommands = isMattermostSenderAllowed({
+          senderId,
+          senderName,
+          allowFrom: effectiveGroupAllowFrom,
+          allowNameMatching,
+        });
+        const commandGate = resolveControlCommandGate({
+          useAccessGroups,
+          authorizers: [
+            { configured: commandDmAllowFrom.length > 0, allowed: senderAllowedForCommands },
+            {
+              configured: effectiveGroupAllowFrom.length > 0,
+              allowed: groupAllowedForCommands,
+            },
+          ],
           allowTextCommands,
           hasControlCommand,
-          eventKind: "message",
-          mayPair: true,
         });
-        const commandAuthorized = accessDecision.commandAccess.authorized;
+        const commandAuthorized = commandGate.commandAuthorized;
 
-        if (accessDecision.ingress.decision !== "allow") {
+        if (accessDecision.decision !== "allow") {
           if (kind === "direct") {
-            if (accessDecision.ingress.reasonCode === "dm_policy_disabled") {
+            if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED) {
               logVerboseMessage(`mattermost: drop dm (dmPolicy=disabled sender=${senderId})`);
               return;
             }
-            if (accessDecision.ingress.decision === "pairing") {
+            if (accessDecision.decision === "pairing") {
               const { code, created } = await pairing.upsertPairingRequest({
                 id: senderId,
                 meta: { name: senderName },
@@ -1304,25 +1369,25 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             logVerboseMessage(`mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`);
             return;
           }
-          if (accessDecision.ingress.reasonCode === "group_policy_disabled") {
+          if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
             logVerboseMessage("mattermost: drop group message (groupPolicy=disabled)");
             return;
           }
-          if (accessDecision.ingress.reasonCode === "group_policy_empty_allowlist") {
+          if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
             logVerboseMessage("mattermost: drop group message (no group allowlist)");
             return;
           }
-          if (accessDecision.ingress.reasonCode === "group_policy_not_allowlisted") {
+          if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED) {
             logVerboseMessage(`mattermost: drop group sender=${senderId} (not in groupAllowFrom)`);
             return;
           }
           logVerboseMessage(
-            `mattermost: drop group message (groupPolicy=${groupPolicy} reason=${accessDecision.senderAccess.reasonCode})`,
+            `mattermost: drop group message (groupPolicy=${groupPolicy} reason=${accessDecision.reason})`,
           );
           return;
         }
 
-        if (kind !== "direct" && accessDecision.commandAccess.shouldBlockControlCommand) {
+        if (kind !== "direct" && commandGate.shouldBlock) {
           logInboundDrop({
             log: logVerboseMessage,
             channel: "mattermost",
@@ -1903,29 +1968,39 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
     const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
 
-    // Enforce DM/group policy and allowlist checks (same as normal messages).
-    const reactionAccess = await resolveMattermostMonitorInboundAccess({
-      account,
-      cfg,
-      senderId: userId,
-      senderName,
-      channelId,
-      kind,
+    // Enforce DM/group policy and allowlist checks (same as normal messages)
+    const dmPolicy = account.config.dmPolicy ?? "pairing";
+    const storeAllowFrom = normalizeMattermostAllowList(
+      await readStoreAllowFromForDmPolicy({
+        provider: "mattermost",
+        accountId: account.accountId,
+        dmPolicy,
+        readStore: pairing.readStoreForDmPolicy,
+      }),
+    );
+    const reactionAccess = resolveDmGroupAccessWithLists({
+      isGroup: kind !== "direct",
+      dmPolicy,
       groupPolicy,
-      readStoreAllowFrom: pairing.readAllowFromStore,
-      allowTextCommands: false,
-      hasControlCommand: false,
-      eventKind: "reaction",
-      mayPair: false,
+      allowFrom: normalizeMattermostAllowList(account.config.allowFrom ?? []),
+      groupAllowFrom: normalizeMattermostAllowList(account.config.groupAllowFrom ?? []),
+      storeAllowFrom,
+      isSenderAllowed: (allowFrom) =>
+        isMattermostSenderAllowed({
+          senderId: userId,
+          senderName,
+          allowFrom,
+          allowNameMatching,
+        }),
     });
-    if (reactionAccess.ingress.decision !== "allow") {
+    if (reactionAccess.decision !== "allow") {
       if (kind === "direct") {
         logVerboseMessage(
-          `mattermost: drop reaction (dmPolicy=${dmPolicy} sender=${userId} reason=${reactionAccess.senderAccess.reasonCode})`,
+          `mattermost: drop reaction (dmPolicy=${dmPolicy} sender=${userId} reason=${reactionAccess.reason})`,
         );
       } else {
         logVerboseMessage(
-          `mattermost: drop reaction (groupPolicy=${groupPolicy} sender=${userId} reason=${reactionAccess.senderAccess.reasonCode} channel=${channelId})`,
+          `mattermost: drop reaction (groupPolicy=${groupPolicy} sender=${userId} reason=${reactionAccess.reason} channel=${channelId})`,
         );
       }
       return;
