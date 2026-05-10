@@ -111,6 +111,10 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
       const llm = await loadLlm();
       return llm.complete(params);
     },
+    completeStructured: async (params) => {
+      const llm = await loadLlm();
+      return llm.completeStructured(params);
+    },
   };
 }
 

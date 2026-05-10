@@ -178,6 +178,9 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
     complete: (
       params: import("../plugins/runtime/types-core.js").LlmCompleteParams,
     ) => Promise<import("../plugins/runtime/types-core.js").LlmCompleteResult>;
+    completeStructured: (
+      params: import("../plugins/runtime/types-core.js").LlmCompleteStructuredParams,
+    ) => Promise<import("../plugins/runtime/types-core.js").LlmCompleteStructuredResult>;
   };
 };
 

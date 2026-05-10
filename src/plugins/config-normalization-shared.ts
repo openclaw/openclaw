@@ -35,6 +35,7 @@ export type NormalizedPluginsConfig = {
         allowedModels?: string[];
         hasAllowedModelsConfig?: boolean;
         allowAgentIdOverride?: boolean;
+        allowProfileOverride?: boolean;
       };
       config?: unknown;
     }
@@ -185,6 +186,8 @@ function normalizePluginEntries(
               : undefined,
             allowAgentIdOverride: (llmRaw as { allowAgentIdOverride?: unknown })
               .allowAgentIdOverride,
+            allowProfileOverride: (llmRaw as { allowProfileOverride?: unknown })
+              .allowProfileOverride,
           }
         : undefined;
     const normalizedLlm =
@@ -192,7 +195,8 @@ function normalizePluginEntries(
       (typeof llm.allowModelOverride === "boolean" ||
         llm.hasAllowedModelsConfig ||
         (Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0) ||
-        typeof llm.allowAgentIdOverride === "boolean")
+        typeof llm.allowAgentIdOverride === "boolean" ||
+        typeof llm.allowProfileOverride === "boolean")
         ? {
             ...(typeof llm.allowModelOverride === "boolean"
               ? { allowModelOverride: llm.allowModelOverride }
@@ -203,6 +207,9 @@ function normalizePluginEntries(
               : {}),
             ...(typeof llm.allowAgentIdOverride === "boolean"
               ? { allowAgentIdOverride: llm.allowAgentIdOverride }
+              : {}),
+            ...(typeof llm.allowProfileOverride === "boolean"
+              ? { allowProfileOverride: llm.allowProfileOverride }
               : {}),
           }
         : undefined;

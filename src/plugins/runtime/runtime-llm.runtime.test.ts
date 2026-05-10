@@ -9,12 +9,17 @@ const hoisted = vi.hoisted(() => ({
   prepareSimpleCompletionModelForAgent: vi.fn(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
+  resolveAutoImageModel: vi.fn(),
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
   prepareSimpleCompletionModelForAgent: hoisted.prepareSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
+}));
+
+vi.mock("../../media-understanding/runner.js", () => ({
+  resolveAutoImageModel: hoisted.resolveAutoImageModel,
 }));
 
 const cfg = {
@@ -25,7 +30,7 @@ const cfg = {
   },
 } satisfies OpenClawConfig;
 
-function createPreparedModel(modelId = "gpt-5.5") {
+function createPreparedModel(modelId = "gpt-5.5", input: string[] = ["text"]) {
   return {
     selection: {
       provider: "openai",
@@ -37,7 +42,7 @@ function createPreparedModel(modelId = "gpt-5.5") {
       id: modelId,
       name: modelId,
       api: "openai",
-      input: ["text"],
+      input,
       reasoning: false,
       contextWindow: 128_000,
       maxTokens: 4096,
@@ -90,6 +95,7 @@ function primeCompletionMocks() {
       cost: { total: 0.0042 },
     },
   });
+  hoisted.resolveAutoImageModel.mockResolvedValue(null);
 }
 
 describe("runtime.llm.complete", () => {
@@ -97,6 +103,7 @@ describe("runtime.llm.complete", () => {
     hoisted.prepareSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
+    hoisted.resolveAutoImageModel.mockReset();
     primeCompletionMocks();
   });
 
@@ -125,6 +132,46 @@ describe("runtime.llm.complete", () => {
       purpose: "memory-maintenance",
       sessionKey: "agent:ada:session:abc",
     });
+  });
+
+  it("binds context-engine structured completions to the active session agent", async () => {
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: '{"summary":"ok"}' }],
+      usage: {
+        input: 4,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 7,
+        cost: { total: 0.001 },
+      },
+    });
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "agent:ada:session:abc",
+      purpose: "context-engine.after-turn",
+    });
+
+    const result = await runtimeContext.llm!.completeStructured({
+      instructions: "Extract a short summary.",
+      input: [{ type: "text", text: "Customer said the rollout worked." }],
+      jsonMode: true,
+      purpose: "memory-maintenance",
+    });
+
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        agentId: "ada",
+      }),
+    );
+    expect(result.agentId).toBe("ada");
+    expect(result.audit).toMatchObject({
+      caller: { kind: "context-engine", id: "context-engine.after-turn" },
+      purpose: "memory-maintenance",
+      sessionKey: "agent:ada:session:abc",
+    });
+    expect(result.parsed).toEqual({ summary: "ok" });
   });
 
   it("uses trusted context-engine attribution inside plugin runtime scope", async () => {
@@ -377,10 +424,10 @@ describe("runtime.llm.complete", () => {
 
     await expect(
       llm.complete({
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6",
         messages: [{ role: "user", content: "Ping" }],
       }),
-    ).rejects.toThrow('model override "openai/gpt-5.5" is not allowlisted');
+    ).rejects.toThrow('model override "openai/gpt-5.6" is not allowlisted');
   });
 
   it("uses runtime-scoped config and the host preparation/dispatch path", async () => {
@@ -575,11 +622,488 @@ describe("runtime.llm.complete", () => {
     await expect(
       withPluginRuntimePluginIdScope("trusted-plugin", () =>
         llm.complete({
-          model: "openai/gpt-5.5",
+          model: "openai/gpt-5.6",
           messages: [{ role: "user", content: "Ping" }],
         }),
       ),
-    ).rejects.toThrow('model override "openai/gpt-5.5" is not allowlisted');
+    ).rejects.toThrow('model override "openai/gpt-5.6" is not allowlisted');
+  });
+
+  it("rejects auth-profile suffixes on complete without explicit trust", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+        allowModelOverride: true,
+      },
+    });
+
+    await expect(
+      llm.complete({
+        model: "openai/gpt-5.5@openai-codex:work",
+        messages: [{ role: "user", content: "Ping" }],
+      }),
+    ).rejects.toThrow("cannot override the auth profile");
+  });
+
+  it("treats same-as-default auth-profile suffixes on complete as profile-only overrides", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+        allowProfileOverride: true,
+      },
+    });
+
+    await llm.complete({
+      model: "openai/gpt-5.5@openai-codex:work",
+      messages: [{ role: "user", content: "Ping" }],
+    });
+
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: undefined,
+        preferredProfile: "openai-codex:work",
+      }),
+    );
+  });
+
+  it("returns parsed structured JSON for text-only completion and validates the schema", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+      },
+    });
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: '```json\n{"summary":"ok"}\n```' }],
+      usage: {
+        input: 4,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 7,
+        cost: { total: 0.001 },
+      },
+    });
+
+    const result = await llm.completeStructured({
+      instructions: "Extract a short summary.",
+      input: [{ type: "text", text: "Customer said the rollout worked." }],
+      schemaName: "support.summary",
+      jsonSchema: {
+        type: "object",
+        properties: { summary: { type: "string" } },
+        required: ["summary"],
+      },
+      systemPrompt: "Be precise.",
+      purpose: "structured.summary",
+    });
+
+    expect(result).toMatchObject({
+      text: '```json\n{"summary":"ok"}\n```',
+      parsed: { summary: "ok" },
+      contentType: "json",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    expect(hoisted.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          systemPrompt: "Be precise.",
+          messages: [
+            expect.objectContaining({
+              role: "user",
+              content: [
+                expect.objectContaining({
+                  type: "text",
+                  text: expect.stringContaining("Schema name: support.summary"),
+                }),
+                expect.objectContaining({
+                  type: "text",
+                  text: "Customer said the rollout worked.",
+                }),
+              ],
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("supports image-plus-text structured completion with the host-owned llm runtime", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+      },
+    });
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce(
+      createPreparedModel("gpt-5.5", ["text", "image"]),
+    );
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: '{"caption":"receipt","tags":["finance"]}' }],
+      usage: {
+        input: 10,
+        output: 6,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 16,
+        cost: { total: 0.002 },
+      },
+    });
+
+    const result = await llm.completeStructured({
+      instructions: "Extract searchable receipt metadata.",
+      input: [
+        {
+          type: "image",
+          buffer: Buffer.from("hello"),
+          mimeType: "image/png",
+          fileName: "receipt.png",
+        },
+        { type: "text", text: "Prefer the printed total over handwritten notes." },
+      ],
+      jsonMode: true,
+    });
+
+    expect(result.parsed).toEqual({ caption: "receipt", tags: ["finance"] });
+    expect(hoisted.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              role: "user",
+              content: expect.arrayContaining([
+                expect.objectContaining({
+                  type: "image",
+                  mimeType: "image/png",
+                  data: Buffer.from("hello").toString("base64"),
+                }),
+                expect.objectContaining({
+                  type: "text",
+                  text: "Prefer the printed total over handwritten notes.",
+                }),
+              ]),
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("rejects structured auth-profile overrides without explicit trust", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+      },
+    });
+
+    await expect(
+      llm.completeStructured({
+        instructions: "Extract summary.",
+        input: [{ type: "text", text: "Hello" }],
+        profile: "openai-codex:work",
+        jsonMode: false,
+      }),
+    ).rejects.toThrow("cannot override the auth profile");
+  });
+
+  it("forwards preferred auth profiles into structured completion prep when trusted", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+        allowProfileOverride: true,
+      },
+    });
+
+    await llm.completeStructured({
+      instructions: "Extract summary.",
+      input: [{ type: "text", text: "Hello" }],
+      profile: "openai-codex:work",
+      jsonMode: false,
+    });
+
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferredProfile: "openai-codex:work",
+      }),
+    );
+  });
+
+  it("rejects auth-profile suffixes in structured model refs without explicit trust", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+        allowModelOverride: true,
+      },
+    });
+
+    await expect(
+      llm.completeStructured({
+        model: "openai/gpt-5.5@openai-codex:work",
+        instructions: "Extract summary.",
+        input: [{ type: "text", text: "Hello" }],
+        jsonMode: false,
+      }),
+    ).rejects.toThrow("cannot override the auth profile");
+  });
+
+  it("treats same-as-default auth-profile suffixes in structured model refs as profile-only overrides when trusted", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+        allowProfileOverride: true,
+      },
+    });
+
+    await llm.completeStructured({
+      model: "openai/gpt-5.5@openai-codex:work",
+      instructions: "Extract summary.",
+      input: [{ type: "text", text: "Hello" }],
+      jsonMode: false,
+    });
+
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: undefined,
+        preferredProfile: "openai-codex:work",
+      }),
+    );
+  });
+
+  it("allows same-as-default auth-profile suffixes through plugin llm policy", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        plugins: {
+          entries: {
+            "trusted-plugin": {
+              llm: {
+                allowProfileOverride: true,
+              },
+            },
+          },
+        },
+      }),
+      authority: {
+        allowComplete: true,
+      },
+    });
+
+    await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+      llm.completeStructured({
+        model: "openai/gpt-5.5@openai-codex:work",
+        instructions: "Extract summary.",
+        input: [{ type: "text", text: "Hello" }],
+        jsonMode: false,
+      }),
+    );
+
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: undefined,
+        preferredProfile: "openai-codex:work",
+      }),
+    );
+  });
+
+  it("requires both model and profile trust when the structured model ref changes the target model", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+        allowModelOverride: true,
+        allowedModels: ["openai/gpt-5.4"],
+        allowProfileOverride: true,
+      },
+    });
+
+    await llm.completeStructured({
+      model: "openai/gpt-5.4@openai-codex:work",
+      instructions: "Extract summary.",
+      input: [{ type: "text", text: "Hello" }],
+      jsonMode: false,
+    });
+
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "openai/gpt-5.4",
+        preferredProfile: "openai-codex:work",
+      }),
+    );
+  });
+
+  it("rejects conflicting explicit and embedded structured auth-profile overrides", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+        allowModelOverride: true,
+        allowProfileOverride: true,
+      },
+    });
+
+    await expect(
+      llm.completeStructured({
+        model: "openai/gpt-5.5@openai-codex:work",
+        profile: "openai-codex:other",
+        instructions: "Extract summary.",
+        input: [{ type: "text", text: "Hello" }],
+        jsonMode: false,
+      }),
+    ).rejects.toThrow("conflicting auth profiles");
+  });
+
+  it("falls back to the configured image model for structured image input", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+      },
+    });
+    hoisted.resolveAutoImageModel.mockResolvedValueOnce({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+    });
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce(
+      createPreparedModel("gemini-3.1-flash-image-preview", ["text", "image"]),
+    );
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: '{"summary":"ok"}' }],
+      usage: {
+        input: 2,
+        output: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 4,
+        cost: { total: 0.001 },
+      },
+    });
+
+    const result = await llm.completeStructured({
+      instructions: "Extract receipt fields.",
+      input: [{ type: "image", buffer: Buffer.from("hello"), mimeType: "image/png" }],
+      jsonMode: true,
+    });
+
+    expect(result.parsed).toEqual({ summary: "ok" });
+    expect(hoisted.resolveAutoImageModel).toHaveBeenCalledWith(expect.objectContaining({ cfg }));
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "google/gemini-3.1-flash-image-preview",
+      }),
+    );
+  });
+
+  it("rejects structured image input when neither the active nor fallback image model supports images", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+      },
+    });
+    hoisted.resolveAutoImageModel.mockResolvedValueOnce(null);
+
+    await expect(
+      llm.completeStructured({
+        instructions: "Extract receipt fields.",
+        input: [{ type: "image", buffer: Buffer.from("hello"), mimeType: "image/png" }],
+      }),
+    ).rejects.toThrow("does not support image input");
+  });
+
+  it("returns controlled errors for invalid structured JSON", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+      },
+    });
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: "not json" }],
+      usage: {
+        input: 2,
+        output: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 4,
+        cost: { total: 0.001 },
+      },
+    });
+
+    await expect(
+      llm.completeStructured({
+        instructions: "Extract summary.",
+        input: [{ type: "text", text: "Hello" }],
+        jsonMode: true,
+      }),
+    ).rejects.toThrow("returned invalid JSON");
+  });
+
+  it("aborts structured completions when timeoutMs elapses", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+      },
+    });
+    hoisted.completeWithPreparedSimpleCompletionModel.mockImplementationOnce(
+      async ({ options }: { options?: { signal?: AbortSignal } }) =>
+        await new Promise((_, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(options.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        }),
+    );
+
+    await expect(
+      llm.completeStructured({
+        instructions: "Extract summary.",
+        input: [{ type: "text", text: "Hello" }],
+        jsonMode: false,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("timed out");
+  });
+
+  it("applies the same model-override trust rules to structured completion", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        allowComplete: true,
+      },
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("plain-plugin", () =>
+        llm.completeStructured({
+          model: "openai/gpt-5.4",
+          instructions: "Extract summary.",
+          input: [{ type: "text", text: "Ping" }],
+        }),
+      ),
+    ).rejects.toThrow("cannot override the target model");
   });
 
   it("denies completions when runtime authority disables the capability", async () => {

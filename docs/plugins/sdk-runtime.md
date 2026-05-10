@@ -155,8 +155,49 @@ Provider and channel execution paths must use the active runtime config snapshot
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
 
+    For bounded structured work, use `api.runtime.llm.completeStructured(...)`.
+
+    ```typescript
+    const structured = await api.runtime.llm.completeStructured({
+      instructions: "Extract vendor, total, and searchable tags.",
+      input: [
+        {
+          type: "image",
+          buffer: receiptBuffer,
+          mimeType: "image/png",
+          fileName: "receipt.png",
+        },
+        { type: "text", text: "Prefer the printed total over handwritten notes." },
+      ],
+      schemaName: "receipt.evidence",
+      jsonSchema: {
+        type: "object",
+        properties: {
+          vendor: { type: "string" },
+          total: { type: "number" },
+          tags: { type: "array", items: { type: "string" } },
+        },
+        required: ["vendor", "total"],
+      },
+      purpose: "receipts.extract",
+      profile: "openai-codex:work",
+      maxTokens: 512,
+      timeoutMs: 30000,
+    });
+    ```
+
+    `completeStructured(...)` keeps auth, provider routing, and runtime execution
+    host-owned. Plugins provide instructions, optional text/image inputs, and an
+    optional JSON Schema; the host returns the raw text plus parsed JSON only
+    when `jsonMode: true` or `jsonSchema` is provided.
+
+    For provider/model-explicit media capability routing, use
+    `api.runtime.mediaUnderstanding.extractStructuredWithModel(...)` instead.
+    `completeStructured(...)` is the generic agent-bound runtime lane; the
+    media-understanding helper is the narrower provider-owned image/media lane.
+
     <Warning>
-    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
+    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`. Auth-profile selection for `completeStructured(...)` requires `plugins.entries.<id>.llm.allowProfileOverride: true`. The same host-owned trust gate applies across runtime LLM surfaces.
     </Warning>
 
   </Accordion>
