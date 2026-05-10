@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatAgentEntry
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
@@ -128,6 +129,7 @@ class MainViewModel(
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
+  val chatAgents: StateFlow<List<ChatAgentEntry>> = runtimeState(initial = emptyList()) { it.chatAgents }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
 
   init {
@@ -371,6 +373,10 @@ class MainViewModel(
 
   fun switchChatSession(sessionKey: String) {
     ensureRuntime().switchChatSession(sessionKey)
+  }
+
+  fun selectChatAgent(agentId: String) {
+    ensureRuntime().selectChatAgent(agentId)
   }
 
   fun abortChat() {
