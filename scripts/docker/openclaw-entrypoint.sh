@@ -48,6 +48,19 @@
 #                                   the API rejects the value.
 #   OPENCLAW_OLLAMA_MAX_TOKENS      output token cap per turn. Default
 #                                   8000.
+#   OPENCLAW_PROVIDER_BASE_URL      Override the OpenAI-compatible
+#                                   provider base URL. Default
+#                                   https://ollama.com/v1 (Ollama
+#                                   Cloud). Set to e.g.
+#                                   https://api.featherless.ai/v1
+#                                   for Featherless, or
+#                                   https://openrouter.ai/api/v1
+#                                   for OpenRouter, etc. Auth still
+#                                   flows through OPENAI_API_KEY.
+#                                   Provider key in the config stays
+#                                   "ollama" for stability across
+#                                   redeploys, but the actual HTTP
+#                                   target is whatever URL you set.
 set -e
 
 STATE_DIR="${OPENCLAW_STATE_DIR:-/root/.openclaw}"
@@ -66,12 +79,13 @@ if true; then
     "${OPENCLAW_OLLAMA_MODEL:-}" \
     "${OPENCLAW_COMPACTION_RESERVE:-20000}" \
     "${OPENCLAW_OLLAMA_CONTEXT_WINDOW:-128000}" \
-    "${OPENCLAW_OLLAMA_MAX_TOKENS:-8000}" <<'PY' || true
+    "${OPENCLAW_OLLAMA_MAX_TOKENS:-8000}" \
+    "${OPENCLAW_PROVIDER_BASE_URL:-https://ollama.com/v1}" <<'PY' || true
 import json, os, sys
 (
     config_path, public_origin, disable_dev_auth, ollama_model,
-    compaction_reserve, ollama_ctx, ollama_max,
-) = sys.argv[1:8]
+    compaction_reserve, ollama_ctx, ollama_max, provider_base_url,
+) = sys.argv[1:9]
 config = {}
 if os.path.exists(config_path):
     try:
@@ -114,7 +128,7 @@ if ollama_model:
     models = config.setdefault("models", {})
     providers = models.setdefault("providers", {})
     providers["ollama"] = {
-        "baseUrl": "https://ollama.com/v1",
+        "baseUrl": provider_base_url or "https://ollama.com/v1",
         "apiKey": {"source": "env", "provider": "default", "id": "OPENAI_API_KEY"},
         "api": "openai-completions",
         "models": [
@@ -135,18 +149,17 @@ if ollama_model:
         model_cfg["primary"] = f"ollama/{model_ids[0]}"
 with open(config_path, "w") as f:
     json.dump(config, f, indent=2)
-_provider_models = (
-    config.get("models", {})
-    .get("providers", {})
-    .get("ollama", {})
-    .get("models", [])
+_provider_block = (
+    config.get("models", {}).get("providers", {}).get("ollama", {})
 )
+_provider_models = _provider_block.get("models", [])
 _ctx = _provider_models[0].get("contextWindow") if _provider_models else None
 _max = _provider_models[0].get("maxTokens") if _provider_models else None
 print(
     "openclaw.json patched: "
     f"origins={ui.get('allowedOrigins')} "
     f"disableDeviceAuth={ui.get('dangerouslyDisableDeviceAuth', False)} "
+    f"providerBaseUrl={_provider_block.get('baseUrl')} "
     f"primaryModel={defaults.get('model', {}).get('primary')} "
     f"contextWindow={_ctx} "
     f"maxTokens={_max} "
