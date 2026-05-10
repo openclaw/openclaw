@@ -248,23 +248,19 @@ export function initFastReplySessionState(params: {
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,
-    thinkingLevel: resetTriggered ? existingEntry?.thinkingLevel : existingEntry?.thinkingLevel,
-    verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
-    reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,
-    ttsAuto: resetTriggered ? existingEntry?.ttsAuto : existingEntry?.ttsAuto,
+    thinkingLevel: resetTriggered ? undefined : existingEntry?.thinkingLevel,
+    verboseLevel: resetTriggered ? undefined : existingEntry?.verboseLevel,
+    reasoningLevel: resetTriggered ? undefined : existingEntry?.reasoningLevel,
+    ttsAuto: resetTriggered ? undefined : existingEntry?.ttsAuto,
     responseUsage: !resetTriggered ? existingEntry?.responseUsage : undefined,
-    modelOverride: resetTriggered ? existingEntry?.modelOverride : existingEntry?.modelOverride,
-    providerOverride: resetTriggered
-      ? existingEntry?.providerOverride
-      : existingEntry?.providerOverride,
-    authProfileOverride: resetTriggered
-      ? existingEntry?.authProfileOverride
-      : existingEntry?.authProfileOverride,
+    modelOverride: resetTriggered ? undefined : existingEntry?.modelOverride,
+    providerOverride: resetTriggered ? undefined : existingEntry?.providerOverride,
+    authProfileOverride: resetTriggered ? undefined : existingEntry?.authProfileOverride,
     authProfileOverrideSource: resetTriggered
-      ? existingEntry?.authProfileOverrideSource
+      ? undefined
       : existingEntry?.authProfileOverrideSource,
     authProfileOverrideCompactionCount: resetTriggered
-      ? existingEntry?.authProfileOverrideCompactionCount
+      ? undefined
       : existingEntry?.authProfileOverrideCompactionCount,
     ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
     ...(normalizeOptionalString(ctx.Provider)

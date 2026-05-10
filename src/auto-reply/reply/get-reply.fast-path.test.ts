@@ -393,4 +393,105 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe("existing-fast-reset-colon-soft");
   });
+
+  it("clears session-level overrides on /reset so agent defaults can apply", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-clears-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "existing-fast-reset-clears",
+          updatedAt: Date.now(),
+          thinkingLevel: "off",
+          verboseLevel: "low",
+          reasoningLevel: "off",
+          ttsAuto: "always",
+          modelOverride: "anthropic/claude-opus-4-6",
+          providerOverride: "anthropic",
+          authProfileOverride: "anthropic:work",
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 3,
+          responseUsage: "on",
+        },
+      }),
+      "utf8",
+    );
+
+    const result = initFastReplySessionState({
+      ctx: buildGetReplyCtx({
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        SessionKey: sessionKey,
+      }),
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: home,
+    });
+
+    expect(result.resetTriggered).toBe(true);
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.thinkingLevel).toBeUndefined();
+    expect(result.sessionEntry.verboseLevel).toBeUndefined();
+    expect(result.sessionEntry.reasoningLevel).toBeUndefined();
+    expect(result.sessionEntry.ttsAuto).toBeUndefined();
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+    expect(result.sessionEntry.providerOverride).toBeUndefined();
+    expect(result.sessionEntry.authProfileOverride).toBeUndefined();
+    expect(result.sessionEntry.authProfileOverrideSource).toBeUndefined();
+    expect(result.sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+    expect(result.sessionEntry.responseUsage).toBeUndefined();
+  });
+
+  it("preserves session-level overrides on a normal (non-reset) turn", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-noreset-preserves-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "existing-fast-noreset-preserves",
+          updatedAt: Date.now(),
+          thinkingLevel: "high",
+          verboseLevel: "medium",
+          reasoningLevel: "high",
+          ttsAuto: "always",
+          modelOverride: "anthropic/claude-opus-4-6",
+          providerOverride: "anthropic",
+          authProfileOverride: "anthropic:work",
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 2,
+        },
+      }),
+      "utf8",
+    );
+
+    const result = initFastReplySessionState({
+      ctx: buildGetReplyCtx({
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        SessionKey: sessionKey,
+      }),
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: home,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionEntry.thinkingLevel).toBe("high");
+    expect(result.sessionEntry.verboseLevel).toBe("medium");
+    expect(result.sessionEntry.reasoningLevel).toBe("high");
+    expect(result.sessionEntry.ttsAuto).toBe("always");
+    expect(result.sessionEntry.modelOverride).toBe("anthropic/claude-opus-4-6");
+    expect(result.sessionEntry.providerOverride).toBe("anthropic");
+    expect(result.sessionEntry.authProfileOverride).toBe("anthropic:work");
+    expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
+    expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(2);
+  });
 });
