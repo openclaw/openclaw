@@ -564,7 +564,6 @@ async function prepareCronRunContext(params: {
   const resolvedModelSelection = await resolveCronModelSelection({
     cfg: input.cfg,
     cfgWithAgentDefaults,
-    agentConfigOverride,
     sessionEntry: cronSession.sessionEntry,
     payload: input.job.payload,
     isGmailHook,

@@ -9,7 +9,6 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import {
-  resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
 } from "./agent-scope.js";
@@ -17,6 +16,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { resolveSubagentConfiguredModelSelection } from "./model-selection-resolve.js";
 export { resolveThinkingDefault } from "./model-thinking-default.js";
 import {
   type ModelRef,
@@ -80,6 +80,7 @@ export {
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveModelRefFromString,
+  resolveSubagentConfiguredModelSelection,
 };
 export { isCliProvider } from "./model-selection-cli.js";
 
@@ -310,18 +311,6 @@ function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string
     }
   }
   return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-}
-
-export function resolveSubagentConfiguredModelSelection(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): string | undefined {
-  const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
-  return (
-    normalizeModelSelection(agentConfig?.subagents?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model) ??
-    normalizeModelSelection(agentConfig?.model)
-  );
 }
 
 /**
