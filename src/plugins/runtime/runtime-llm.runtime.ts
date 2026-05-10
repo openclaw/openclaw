@@ -1,4 +1,5 @@
 import type { Api, Message } from "@mariozechner/pi-ai";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { normalizeModelRef } from "../../agents/model-selection.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
@@ -542,18 +543,33 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
             pluginPolicy?.allowAgentIdOverride === true,
     });
     const requestedModel = normalizeOptionalString(params.model);
+    const splitRequestedModel = requestedModel
+      ? splitTrailingAuthProfile(requestedModel)
+      : { model: undefined, profile: undefined };
+    const requestedModelRef = normalizeOptionalString(splitRequestedModel.model);
+    const requestedProfileFromModel = normalizeOptionalString(splitRequestedModel.profile);
     const requestedProfile = normalizeOptionalString(params.profile);
+    if (
+      requestedProfile &&
+      requestedProfileFromModel &&
+      requestedProfile !== requestedProfileFromModel
+    ) {
+      throw new Error(
+        "Plugin LLM completion received conflicting auth profiles in model and profile fields.",
+      );
+    }
+    const effectiveRequestedProfile = requestedProfile ?? requestedProfileFromModel;
     assertAllowedProfileOverride({
-      requestedProfile,
+      requestedProfile: effectiveRequestedProfile,
       pluginPolicyId,
       authorityPolicy,
       pluginPolicy,
     });
-    if (requestedModel) {
+    if (requestedModelRef) {
       const selection = resolveSimpleCompletionSelectionForAgent({
         cfg,
         agentId,
-        modelRef: requestedModel,
+        modelRef: requestedModelRef,
       });
       const normalizedSelection = selection
         ? normalizeModelRef(selection.provider, selection.modelId)
@@ -569,7 +585,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
       });
     }
 
-    let hostResolvedModelRef = requestedModel;
+    let hostResolvedModelRef = requestedModelRef;
     if (!hostResolvedModelRef && params.preferImageModel) {
       const [{ resolveAutoImageModel }, { resolveAgentDir }] = await Promise.all([
         import("../../media-understanding/runner.js"),
@@ -588,7 +604,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
       cfg,
       agentId,
       modelRef: hostResolvedModelRef,
-      preferredProfile: requestedProfile,
+      preferredProfile: effectiveRequestedProfile,
       allowMissingApiKeyModes: ["aws-sdk"],
     });
 

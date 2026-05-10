@@ -798,6 +798,74 @@ describe("runtime.llm.complete", () => {
     );
   });
 
+  it("rejects auth-profile suffixes in structured model refs without explicit trust", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+        allowModelOverride: true,
+      },
+    });
+
+    await expect(
+      llm.completeStructured({
+        model: "openai/gpt-5.5@openai-codex:work",
+        instructions: "Extract summary.",
+        input: [{ type: "text", text: "Hello" }],
+        jsonMode: false,
+      }),
+    ).rejects.toThrow("cannot override the auth profile");
+  });
+
+  it("treats auth-profile suffixes in structured model refs as profile overrides when trusted", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+        allowModelOverride: true,
+        allowProfileOverride: true,
+      },
+    });
+
+    await llm.completeStructured({
+      model: "openai/gpt-5.5@openai-codex:work",
+      instructions: "Extract summary.",
+      input: [{ type: "text", text: "Hello" }],
+      jsonMode: false,
+    });
+
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "openai/gpt-5.5",
+        preferredProfile: "openai-codex:work",
+      }),
+    );
+  });
+
+  it("rejects conflicting explicit and embedded structured auth-profile overrides", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+        allowModelOverride: true,
+        allowProfileOverride: true,
+      },
+    });
+
+    await expect(
+      llm.completeStructured({
+        model: "openai/gpt-5.5@openai-codex:work",
+        profile: "openai-codex:other",
+        instructions: "Extract summary.",
+        input: [{ type: "text", text: "Hello" }],
+        jsonMode: false,
+      }),
+    ).rejects.toThrow("conflicting auth profiles");
+  });
+
   it("falls back to the configured image model for structured image input", async () => {
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
