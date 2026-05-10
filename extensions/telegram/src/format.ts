@@ -73,7 +73,11 @@ function renderTelegramHtml(ir: MarkdownIR): string {
 }
 
 function leadingWhitespaceLength(line: string): number {
-  return line.match(/^[ \t]*/)?.[0]?.length ?? 0;
+  let length = 0;
+  while (line[length] === " " || line[length] === "\t") {
+    length++;
+  }
+  return length;
 }
 
 function isTelegramBulletLine(line: string): boolean {
@@ -84,28 +88,37 @@ function isTelegramListBoundaryLine(line: string): boolean {
   return /^[ \t]*(?:\d+\.|#{1,6})[ \t]+\S/.test(line);
 }
 
+function isMarkdownIndentedCodeLine(line: string): boolean {
+  return /^(?: {4}|\t)/.test(line);
+}
+
+function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
+  return (
+    !isMarkdownIndentedCodeLine(previous) &&
+    !isMarkdownIndentedCodeLine(next) &&
+    isTelegramBulletLine(previous) &&
+    isTelegramListBoundaryLine(next) &&
+    leadingWhitespaceLength(next) <= leadingWhitespaceLength(previous)
+  );
+}
+
 function preserveTelegramListBoundarySpacing(markdown: string): string {
   const lines = markdown.split("\n");
   const out: string[] = [];
   let inFence = false;
+  let previousLine = "";
 
   for (const line of lines) {
     const normalizedLine = line.replace(/\r$/, "");
     const isFenceLine = /^[ \t]*(?:```|~~~)/.test(normalizedLine);
-    if (!inFence && out.length > 0) {
-      const previous = out[out.length - 1] ?? "";
-      if (
-        isTelegramBulletLine(previous) &&
-        isTelegramListBoundaryLine(normalizedLine) &&
-        leadingWhitespaceLength(normalizedLine) <= leadingWhitespaceLength(previous)
-      ) {
-        out.push("");
-      }
+    if (!inFence && shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine)) {
+      out.push("");
     }
     out.push(line);
     if (isFenceLine) {
       inFence = !inFence;
     }
+    previousLine = normalizedLine;
   }
 
   return out.join("\n");
