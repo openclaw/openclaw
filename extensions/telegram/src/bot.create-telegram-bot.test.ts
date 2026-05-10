@@ -811,9 +811,9 @@ describe("createTelegramBot", () => {
       expect(sendMessageSpy, testCase.name).toHaveBeenCalledTimes(testCase.expectedSendCount);
       expect(sendMessageSpy.mock.calls[0]?.[0], testCase.name).toBe(1234);
       const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
-      expect(pairingText, testCase.name).toContain(`Your Telegram user id: ${senderId}`);
-      expect(pairingText, testCase.name).toContain("Pairing code:");
-      expect(pairingText, testCase.name).toContain("openclaw pairing approve telegram");
+      expect(pairingText, testCase.name).toContain("🔗 Almost done!");
+      expect(pairingText, testCase.name).toContain("Baseer Burhan");
+      expect(pairingText, testCase.name).toContain("PAIRCODE");
       expect(sendMessageSpy.mock.calls[0]?.[2], testCase.name).toEqual(
         expect.objectContaining({ parse_mode: "HTML" }),
       );
@@ -894,8 +894,8 @@ describe("createTelegramBot", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(sendMessageSpy).toHaveBeenCalledTimes(1);
       const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
-      expect(pairingText).toContain("Pairing code:");
-      expect(pairingText).toContain("<pre><code>");
+      expect(pairingText).toContain("🔗 Almost done!");
+      expect(pairingText).toContain("Baseer Burhan");
       expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
         expect.objectContaining({ parse_mode: "HTML" }),
       );
@@ -1014,8 +1014,8 @@ describe("createTelegramBot", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(sendMessageSpy).toHaveBeenCalledTimes(1);
       const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
-      expect(pairingText).toContain("Pairing code:");
-      expect(pairingText).toContain("<pre><code>");
+      expect(pairingText).toContain("🔗 Almost done!");
+      expect(pairingText).toContain("Baseer Burhan");
       expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
         expect.objectContaining({ parse_mode: "HTML" }),
       );

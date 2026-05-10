@@ -256,6 +256,26 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         docker-ce-cli docker-compose-plugin; \
     fi
 
+# Optionally install Azure CLI for Outlook OAuth setup.
+# Build with: docker build --build-arg OPENCLAW_INSTALL_AZURE_CLI=1 ...
+# Adds ~200MB. Only needed if running full Outlook setup inside the container.
+ARG OPENCLAW_INSTALL_AZURE_CLI=""
+RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+    if [ -n "$OPENCLAW_INSTALL_AZURE_CLI" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg lsb-release && \
+      mkdir -p /etc/apt/keyrings && \
+      curl -sLS https://packages.microsoft.com/keys/microsoft.asc | \
+        gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg && \
+      chmod a+r /etc/apt/keyrings/microsoft.gpg && \
+      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ bookworm main\n' \
+        "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/azure-cli.list && \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends azure-cli; \
+    fi
+
 # ──── Custom: Python venv for skill deps ────
 # Pass --build-arg OPENCLAW_DOCKER_APT_PACKAGES="python3 python3-pip python3-venv build-essential python3-dev gettext-base"
 # at build time so python3 + venv tooling is available before this RUN executes.
@@ -285,10 +305,12 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 
 # Pre-create the default state dir so first-run Docker named volumes mounted
 # here inherit node ownership instead of root-owned state.
-RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
-    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
+RUN install -d -m 0700 -o node -g node /home/node/.openclaw /home/node/.outlook-mcp && \
+    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700' && \
+    stat -c '%U:%G %a' /home/node/.outlook-mcp | grep -qx 'node:node 700'
 
 ENV NODE_ENV=production
+ENV HOME=/home/node
 
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)

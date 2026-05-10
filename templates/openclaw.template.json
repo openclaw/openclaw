@@ -2,11 +2,11 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "google/gemini-3-flash-preview"
+        "primary": "google-vertex/gemini-3-flash-preview"
       },
       "models": {
-        "google/gemini-3.1-pro-preview": {},
-        "google/gemini-3-flash-preview": {}
+        "google-vertex/gemini-3.1-pro-preview": {},
+        "google-vertex/gemini-3-flash-preview": {}
       }
     },
     "list": [
@@ -27,7 +27,7 @@
         "name": "Outlook Triage Agent",
         "workspace": "/home/node/workspace/outlook-traige-agent",
         "agentDir": "/home/node/.openclaw/agents/outlook-triage-agent/agent",
-        "model": "google/gemini-3-flash-preview",
+        "model": "google-vertex/gemini-3-flash-preview",
         "subagents": {
           "allowAgents": ["main"]
         }
@@ -73,14 +73,6 @@
     },
     "sessions": {
       "visibility": "all"
-    }
-  },
-  "auth": {
-    "profiles": {
-      "google:default": {
-        "provider": "google",
-        "mode": "api_key"
-      }
     }
   },
   "channels": {

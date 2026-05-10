@@ -8,16 +8,51 @@ AGENTS_STATE_DIR="$CONFIG_DIR/agents"
 echo "[entrypoint] === STARTUP DIAGNOSTICS ==="
 echo "[entrypoint] env vars received:"
 echo "[entrypoint]   TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:+<set, ${#TELEGRAM_BOT_TOKEN} chars>}"
-echo "[entrypoint]   LLM_API_KEY=${LLM_API_KEY:+<set, ${#LLM_API_KEY} chars>}"
+echo "[entrypoint]   GOOGLE_CLOUD_PROJECT='$GOOGLE_CLOUD_PROJECT'"
+echo "[entrypoint]   GOOGLE_CLOUD_LOCATION='$GOOGLE_CLOUD_LOCATION'"
+echo "[entrypoint]   GOOGLE_APPLICATION_CREDENTIALS='$GOOGLE_APPLICATION_CREDENTIALS'"
+echo "[entrypoint]   GOOGLE_CREDENTIALS_JSON_B64=${GOOGLE_CREDENTIALS_JSON_B64:+<set>}"
 echo "[entrypoint]   USER_TIMEZONE='$USER_TIMEZONE'"
 echo "[entrypoint]   USER_NAME='$USER_NAME'"
+echo "[entrypoint]   OUTLOOK_CLIENT_ID=${OUTLOOK_CLIENT_ID:+<set, ${#OUTLOOK_CLIENT_ID} chars>}"
+echo "[entrypoint]   OUTLOOK_CLIENT_SECRET=${OUTLOOK_CLIENT_SECRET:+<set, ${#OUTLOOK_CLIENT_SECRET} chars>}"
 echo "[entrypoint] === END STARTUP DIAGNOSTICS ==="
 
 # Validate user-provided env vars
 : "${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN is required}"
-: "${LLM_API_KEY:?LLM_API_KEY is required}"
+: "${GOOGLE_CLOUD_PROJECT:?GOOGLE_CLOUD_PROJECT is required}"
+: "${GOOGLE_CLOUD_LOCATION:?GOOGLE_CLOUD_LOCATION is required}"
+: "${GOOGLE_APPLICATION_CREDENTIALS:?GOOGLE_APPLICATION_CREDENTIALS is required}"
 : "${USER_TIMEZONE:?USER_TIMEZONE is required}"
 : "${USER_NAME:?USER_NAME is required}"
+
+# Write Google ADC credentials from base64 env var if provided.
+# This is useful when containers are started on remote servers via SSH and
+# mounting a local credential file is impractical.
+if [ -n "$GOOGLE_CREDENTIALS_JSON_B64" ]; then
+  echo "[entrypoint] Writing Google ADC credentials from GOOGLE_CREDENTIALS_JSON_B64"
+  mkdir -p "$(dirname "$GOOGLE_APPLICATION_CREDENTIALS")"
+  printf '%s' "$GOOGLE_CREDENTIALS_JSON_B64" | base64 -d > "$GOOGLE_APPLICATION_CREDENTIALS"
+  chmod 600 "$GOOGLE_APPLICATION_CREDENTIALS"
+fi
+
+# Validate Vertex AI ADC credential file
+if [ ! -f "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
+  echo "[entrypoint] ERROR: GOOGLE_APPLICATION_CREDENTIALS file not found at: $GOOGLE_APPLICATION_CREDENTIALS" >&2
+  exit 1
+fi
+
+# Seed Outlook credentials if provided via env
+OUTLOOK_CONFIG="/home/node/.outlook-mcp/config.json"
+if [ -n "$OUTLOOK_CLIENT_ID" ] && [ -n "$OUTLOOK_CLIENT_SECRET" ]; then
+  if [ ! -f "$OUTLOOK_CONFIG" ]; then
+    echo "[entrypoint] Seeding Outlook config from env vars"
+    mkdir -p "/home/node/.outlook-mcp"
+    printf '{\n  "client_id": "%s",\n  "client_secret": "%s",\n  "timezone": "%s"\n}\n' \
+      "$OUTLOOK_CLIENT_ID" "$OUTLOOK_CLIENT_SECRET" "$USER_TIMEZONE" > "$OUTLOOK_CONFIG"
+    chmod 600 "$OUTLOOK_CONFIG"
+  fi
+fi
 
 # Generate per-user internal tokens on first run
 TOKENS_FILE="$CONFIG_DIR/.tokens"
@@ -58,7 +93,6 @@ if [ -z "$(ls -A "$WORKSPACE_DIR" 2>/dev/null)" ]; then
   mkdir -p "$WORKSPACE_DIR"
   cp -r /app/agent-workspace/. "$WORKSPACE_DIR/"
 
-  # ────── USER.md substitution loop with diagnostics ──────
   echo "[entrypoint] === USER.MD SUBSTITUTION DIAGNOSTICS ==="
   echo "[entrypoint] Listing all subdirectories of $WORKSPACE_DIR:"
   ls -la "$WORKSPACE_DIR"
@@ -79,7 +113,6 @@ if [ -z "$(ls -A "$WORKSPACE_DIR" 2>/dev/null)" ]; then
     fi
   done
   echo "[entrypoint] === END USER.MD SUBSTITUTION DIAGNOSTICS ==="
-  # ────── end substitution loop ──────
 fi
 
 exec "$@"
