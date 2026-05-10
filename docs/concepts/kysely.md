@@ -242,9 +242,8 @@ Adapter rules:
 
 - Reuse Kysely's SQLite pieces: `SqliteAdapter`, `SqliteQueryCompiler`, and
   `SqliteIntrospector`.
-- Keep the Node floor high enough for the `node:sqlite` APIs we call. The
-  adapter relies on `StatementSync.columns()`, available in Node 22.16+ and
-  Node 24+.
+- Keep the Node floor high enough for the `node:sqlite` APIs we call. OpenClaw's
+  database-first runtime requires Node 24+.
 - Use `stmt.columns().length > 0` to distinguish row-returning statements from
   mutations. This is more robust than parsing SQL verbs because `RETURNING`,
   pragmas, CTEs, and raw SQL make verb heuristics brittle.
