@@ -91,7 +91,8 @@ Common fields:
 - `reason`: a lowercase snake-case reason from durable delivery or preflight validation. Known reasons include `cancelled_by_message_sending_hook`, `no_visible_payload`, `no_visible_result`, `channel_resolved_to_internal`, `unknown_channel`, `invalid_delivery_target`, and `no_delivery_target`; failed durable sends may also report the failed stage. Treat unknown values as opaque because the set can expand.
 - `resultCount`: number of channel send results when available.
 - `sentBeforeError`: `true` when a partial failure sent at least one payload before the error.
-- `error` and `errorMessage`: present for failed or partial-failed sends.
+- `error`: boolean `true` for failed or partial-failed sends.
+- `errorMessage`: included only when an underlying delivery error message is captured. Preflight failures carry `error` and `reason` but no `errorMessage`.
 - `payloadOutcomes`: optional per-payload results with `index`, `status`, `reason`, `resultCount`, `error`, `stage`, `sentBeforeError`, or hook metadata when available.
 
 ## Related
