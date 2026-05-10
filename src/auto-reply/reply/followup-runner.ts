@@ -70,9 +70,15 @@ async function forwardFollowupProgressEvent(params: {
   evt: FollowupAgentEvent;
   opts?: GetReplyOptions;
   detailMode?: "explain" | "raw";
+  emitChannelProgress?: boolean;
   onCompactionComplete?: () => void;
 }) {
   const { evt, opts } = params;
+  const emitChannelProgress = params.emitChannelProgress !== false;
+  if (!emitChannelProgress && evt.stream !== "compaction") {
+    return;
+  }
+
   if (evt.stream === "tool") {
     const phase = readStringValue(evt.data.phase) ?? "";
     const name = readStringValue(evt.data.name);
@@ -710,6 +716,9 @@ export function createFollowupRunner(params: {
                     evt,
                     opts,
                     detailMode: toolProgressDetail,
+                    emitChannelProgress:
+                      opts?.suppressDefaultToolProgressMessages !== true &&
+                      run.verboseLevel !== "off",
                     onCompactionComplete: () => {
                       attemptCompactionCount += 1;
                     },

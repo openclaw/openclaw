@@ -1159,6 +1159,76 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
   });
+
+  it("suppresses queued follow-up progress when verbose progress is disabled", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-progress-off-")),
+      "sessions.json",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+    const onToolStart = vi.fn(async () => {});
+    const onItemEvent = vi.fn(async () => {});
+    const onCommandOutput = vi.fn(async () => {});
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+        shouldEmitToolOutput?: () => boolean;
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(false);
+        expect(args.shouldEmitToolOutput?.()).toBe(false);
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "start", name: "exec", args: { command: "echo hidden" } },
+        });
+        await args.onAgentEvent?.({
+          stream: "item",
+          data: { phase: "start", itemId: "item-1", title: "hidden item" },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: { phase: "chunk", output: "hidden output" },
+        });
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
+        return { payloads: [{ text: "final" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onToolStart, onItemEvent, onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(sessionStore.main.compactionCount).toBe(1);
+  });
 });
 
 describe("createFollowupRunner compaction", () => {
