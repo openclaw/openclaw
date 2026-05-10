@@ -89,7 +89,7 @@ function createMockCronService(): CronServiceContract {
     stop: vi.fn(),
     status: vi.fn(async () => ({
       enabled: true,
-      storePath: "/tmp/openclaw-test-cron.json",
+      storeKey: "openclaw-test-cron",
       jobs: 0,
       nextWakeAtMs: null,
     })),
