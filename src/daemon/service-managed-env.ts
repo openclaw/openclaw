@@ -1,6 +1,6 @@
 /** Tracks managed service environment keys across reinstall and repair flows. */
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import { isDangerousHostEnvVarName, normalizeEnvVarKey } from "../infra/host-env-security.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
@@ -64,6 +64,29 @@ export function formatManagedServiceEnvKeys(
     })
     .toSorted();
   return keys.length > 0 ? keys.join(",") : undefined;
+}
+
+// Operator-inherited exec allowlist sourced from `OPENCLAW_SERVICE_MANAGED_ENV_KEYS`.
+// Returns the subset of managed keys that may be inherited into trusted exec
+// children. Internal gateway keys (`OPENCLAW_*`) and everywhere-dangerous keys
+// (`LD_PRELOAD`, `NODE_OPTIONS`, etc.) are excluded — the upstream durable
+// dotenv parser already strips the latter, but we re-check here for defense in
+// depth.
+export function readOperatorInheritedEnvAllowlist(
+  environment: Record<string, string | undefined>,
+): Set<string> {
+  const parsed = parseManagedServiceEnvKeys(environment[MANAGED_SERVICE_ENV_KEYS_VAR]);
+  const allowlist = new Set<string>();
+  for (const key of parsed) {
+    if (key.startsWith("OPENCLAW_")) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key)) {
+      continue;
+    }
+    allowlist.add(key);
+  }
+  return allowlist;
 }
 
 export function readManagedServiceEnvKeysFromEnvironment(

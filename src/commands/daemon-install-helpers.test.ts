@@ -1120,6 +1120,50 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     );
   });
 
+  it("tracks operator-curated GH_TOKEN from ~/.openclaw/.env as a managed durable key", async () => {
+    await writeStateDirDotEnv(
+      [
+        "GH_TOKEN=REDACTED-FIXTURE-gh",
+        "GITHUB_TOKEN=REDACTED-FIXTURE-github",
+        "AWS_ACCESS_KEY_ID=REDACTED-FIXTURE-aws",
+        "NPM_TOKEN=REDACTED-FIXTURE-npm",
+        "",
+      ].join("\n"),
+      {
+        stateDir: path.join(tmpDir, ".openclaw"),
+      },
+    );
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+    });
+
+    // Values are file-only (never inlined into plan.environment).
+    expect(plan.environment.GH_TOKEN).toBeUndefined();
+    expect(plan.environment.GITHUB_TOKEN).toBeUndefined();
+    expect(plan.environment.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(plan.environment.NPM_TOKEN).toBeUndefined();
+
+    // But the keys must show up in OPENCLAW_SERVICE_MANAGED_ENV_KEYS so the
+    // launchd env file picks them up and the gateway exec composition can
+    // honor them in trusted mode.
+    const managedKeys = (plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS ?? "")
+      .split(",")
+      .filter(Boolean);
+    expect(managedKeys).toContain("GH_TOKEN");
+    expect(managedKeys).toContain("GITHUB_TOKEN");
+    expect(managedKeys).toContain("AWS_ACCESS_KEY_ID");
+    expect(managedKeys).toContain("NPM_TOKEN");
+  });
+
   it("retains managed .env values for macOS LaunchAgent env files", async () => {
     await writeStateDirDotEnv("TAVILY_API_KEY=dotenv-tavily\nOPENROUTER_API_KEY=or-key\n", {
       stateDir: path.join(tmpDir, ".openclaw"),

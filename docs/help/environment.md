@@ -36,6 +36,17 @@ Use one of these trusted sources for provider credentials:
 If you previously stored provider keys only in a workspace `.env`, move them to one of the trusted sources above. Workspace `.env` can still provide ordinary project variables that are not credentials, endpoint redirects, host overrides, or `OPENCLAW_*` runtime controls.
 
 See [Workspace `.env` files](/gateway/security#workspace-env-files) for the security rationale.
+## Durable service env
+
+`~/.openclaw/.env` is an operator-curated, owner-only durable file. When you run `openclaw gateway install`, every key in this file is recorded under `OPENCLAW_SERVICE_MANAGED_ENV_KEYS` so the managed service (launchd LaunchAgent on macOS, systemd unit on Linux) sources its values from a service-env file rather than inlining them in the unit file.
+
+Filtering rules for this file:
+
+- Keys that are dangerous everywhere (`LD_PRELOAD`, `NODE_OPTIONS`, `BASH_ENV`, `DYLD_*`, `GIT_DIR`, …) are stripped.
+- Keys that are only blocked as agent request-overrides (`GH_TOKEN`, `GITHUB_TOKEN`, `AWS_ACCESS_KEY_ID`, `NPM_TOKEN`, `DATABASE_URL`, `SSH_AUTH_SOCK`, …) are accepted here. The exec layer then decides whether to inherit them into tool children based on the agent's exec posture (`tools.exec.security` and `tools.exec.ask`); they are not auto-propagated to untrusted commands.
+- Internal gateway keys (`OPENCLAW_*`, including `OPENCLAW_GATEWAY_TOKEN`) never gain trusted-mode inheritance through the durable-env / service-managed allowlist (they are filtered out of `OPENCLAW_SERVICE_MANAGED_ENV_KEYS` before it reaches the exec layer). This is an allowlist exclusion, not a global inheritance strip — the exec layer does not separately remove `OPENCLAW_*` keys that are already present in the gateway's own process environment.
+
+If you want a token like `GH_TOKEN` to reach `gh` invoked by the gateway in a trusted exec posture, place it in `~/.openclaw/.env` and reinstall the gateway.
 
 ## Config `env` block
 
