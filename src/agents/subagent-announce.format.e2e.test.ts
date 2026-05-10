@@ -69,6 +69,50 @@ function visibleAgentResponse(runId = "run-main") {
   };
 }
 
+function expectInputProvenance(
+  params: Record<string, unknown> | undefined,
+  sourceSessionKey: string,
+) {
+  const inputProvenance = params?.inputProvenance;
+  expect(inputProvenance).toBeTruthy();
+  if (!inputProvenance || typeof inputProvenance !== "object") {
+    throw new Error("Expected input provenance");
+  }
+  const provenance = inputProvenance as Record<string, unknown>;
+  expect(provenance.kind).toBe("inter_session");
+  expect(provenance.sourceSessionKey).toBe(sourceSessionKey);
+  expect(provenance.sourceTool).toBe("subagent_announce");
+}
+
+function getAgentCall(index = 0): AgentCallRequest {
+  const call = agentSpy.mock.calls[index]?.[0];
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`Expected agent call at index ${index}`);
+  }
+  return call;
+}
+
+function expectAgentCallFields(
+  call: AgentCallRequest,
+  expected: {
+    channel?: string;
+    deliver?: boolean;
+    sessionKey: string;
+    to?: string;
+  },
+) {
+  expect(call.method).toBe("agent");
+  expect(call.params?.sessionKey).toBe(expected.sessionKey);
+  expect(call.params?.deliver).toBe(expected.deliver);
+  if ("channel" in expected) {
+    expect(call.params?.channel).toBe(expected.channel);
+  }
+  if ("to" in expected) {
+    expect(call.params?.to).toBe(expected.to);
+  }
+}
+
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => visibleAgentResponse());
 const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
@@ -81,7 +125,10 @@ const getGlobalHookRunnerSpy = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner")
 const readLatestAssistantReplySpy = vi.spyOn(agentStep, "readLatestAssistantReply");
 const isEmbeddedPiRunActiveSpy = vi.spyOn(piEmbedded, "isEmbeddedPiRunActive");
 const isEmbeddedPiRunStreamingSpy = vi.spyOn(piEmbedded, "isEmbeddedPiRunStreaming");
-const queueEmbeddedPiMessageSpy = vi.spyOn(piEmbedded, "queueEmbeddedPiMessage");
+const queueEmbeddedPiMessageWithOutcomeSpy = vi.spyOn(
+  piEmbedded,
+  "queueEmbeddedPiMessageWithOutcome",
+);
 const waitForEmbeddedPiRunEndSpy = vi.spyOn(piEmbedded, "waitForEmbeddedPiRunEnd");
 const readLatestAssistantReplyMock = vi.fn(
   async (_sessionKey?: string): Promise<string | undefined> => "raw subagent reply",
@@ -92,20 +139,21 @@ const embeddedPiRunActiveMock = vi.fn<typeof piEmbedded.isEmbeddedPiRunActive>(
 const embeddedPiRunStreamingMock = vi.fn<typeof piEmbedded.isEmbeddedPiRunStreaming>(
   (_sessionId: string) => false,
 );
-const queueEmbeddedPiMessageMock = vi.fn<typeof piEmbedded.queueEmbeddedPiMessage>(
-  (
-    _sessionId: string,
-    _text: string,
-    _options?: Parameters<typeof piEmbedded.queueEmbeddedPiMessage>[2],
-  ) => false,
-);
+const queueEmbeddedPiMessageWithOutcomeMock = vi.fn<
+  typeof piEmbedded.queueEmbeddedPiMessageWithOutcome
+>((sessionId: string) => ({
+  queued: false,
+  sessionId,
+  reason: "not_streaming",
+  gatewayHealth: "live",
+}));
 const waitForEmbeddedPiRunEndMock = vi.fn<typeof piEmbedded.waitForEmbeddedPiRunEnd>(
   async (_sessionId: string, _timeoutMs?: number) => true,
 );
 const embeddedRunMock = {
   isEmbeddedPiRunActive: embeddedPiRunActiveMock,
   isEmbeddedPiRunStreaming: embeddedPiRunStreamingMock,
-  queueEmbeddedPiMessage: queueEmbeddedPiMessageMock,
+  queueEmbeddedPiMessageWithOutcome: queueEmbeddedPiMessageWithOutcomeMock,
   waitForEmbeddedPiRunEnd: waitForEmbeddedPiRunEndMock,
 };
 const { subagentRegistryMock } = vi.hoisted(() => ({
@@ -331,11 +379,8 @@ describe("subagent announce formatting", () => {
           isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedPiRunActive(sessionId)),
         };
       },
-      queueEmbeddedPiMessage: (
-        sessionId: string,
-        text: string,
-        options?: Parameters<typeof piEmbedded.queueEmbeddedPiMessage>[2],
-      ) => embeddedRunMock.queueEmbeddedPiMessage(sessionId, text, options),
+      queueEmbeddedPiMessageWithOutcome: (sessionId, text, options) =>
+        embeddedRunMock.queueEmbeddedPiMessageWithOutcome(sessionId, text, options),
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(
@@ -361,10 +406,10 @@ describe("subagent announce formatting", () => {
     isEmbeddedPiRunStreamingSpy
       .mockReset()
       .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedPiRunStreaming(sessionId));
-    queueEmbeddedPiMessageSpy
+    queueEmbeddedPiMessageWithOutcomeSpy
       .mockReset()
       .mockImplementation((sessionId, text, options) =>
-        embeddedRunMock.queueEmbeddedPiMessage(sessionId, text, options),
+        embeddedRunMock.queueEmbeddedPiMessageWithOutcome(sessionId, text, options),
       );
     waitForEmbeddedPiRunEndSpy
       .mockReset()
@@ -374,7 +419,14 @@ describe("subagent announce formatting", () => {
       );
     embeddedRunMock.isEmbeddedPiRunActive.mockClear().mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockClear().mockReturnValue(false);
-    embeddedRunMock.queueEmbeddedPiMessage.mockClear().mockReturnValue(false);
+    embeddedRunMock.queueEmbeddedPiMessageWithOutcome
+      .mockClear()
+      .mockImplementation((sessionId) => ({
+        queued: false,
+        sessionId,
+        reason: "not_streaming",
+        gatewayHealth: "live",
+      }));
     embeddedRunMock.waitForEmbeddedPiRunEnd.mockClear().mockResolvedValue(true);
     subagentRegistryMock.isSubagentSessionRunActive.mockClear().mockReturnValue(true);
     subagentRegistryMock.shouldIgnorePostCompletionAnnounceForSession
@@ -695,11 +747,7 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
     expect(call?.params?.sessionKey).toBe("agent:main:main");
-    expect(call?.params?.inputProvenance).toMatchObject({
-      kind: "inter_session",
-      sourceSessionKey: "agent:main:subagent:test",
-      sourceTool: "subagent_announce",
-    });
+    expectInputProvenance(call?.params, "agent:main:subagent:test");
     expect(msg).toContain("final answer: 2");
     expect(msg).not.toContain("✅ Subagent");
   });
@@ -1171,9 +1219,8 @@ describe("subagent announce formatting", () => {
     const directTargets = agentSpy.mock.calls.map(
       (call) => (call?.[0] as { params?: { to?: string } })?.params?.to,
     );
-    expect(directTargets).toEqual(
-      expect.arrayContaining(["channel:thread-child-a", "channel:thread-child-b"]),
-    );
+    expect(directTargets).toContain("channel:thread-child-a");
+    expect(directTargets).toContain("channel:thread-child-b");
     expect(directTargets).not.toContain("channel:main-parent-channel");
   });
 
@@ -1859,12 +1906,9 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(sendSpy).toHaveBeenCalledTimes(0);
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
-      method: "agent",
-      params: {
-        sessionKey: "agent:main:main",
-        deliver: false,
-      },
+    expectAgentCallFields(getAgentCall(), {
+      sessionKey: "agent:main:main",
+      deliver: false,
     });
   });
 
@@ -1888,14 +1932,11 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
-      method: "agent",
-      params: {
-        sessionKey: "agent:main:main",
-        channel: "discord",
-        to: "channel:12345",
-        deliver: true,
-      },
+    expectAgentCallFields(getAgentCall(), {
+      sessionKey: "agent:main:main",
+      channel: "discord",
+      to: "channel:12345",
+      deliver: true,
     });
   });
 
@@ -2118,7 +2159,8 @@ describe("subagent announce formatting", () => {
     const accountIds = agentSpy.mock.calls.map(
       (call) => (call?.[0] as { params?: { accountId?: string } })?.params?.accountId,
     );
-    expect(accountIds).toEqual(expect.arrayContaining(["acct-a", "acct-b"]));
+    expect(accountIds).toContain("acct-a");
+    expect(accountIds).toContain("acct-b");
   });
 
   it.each([
@@ -2206,11 +2248,7 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBeUndefined();
     expect(call?.params?.to).toBeUndefined();
     expect((call?.params as { role?: unknown } | undefined)?.role).toBeUndefined();
-    expect(call?.params?.inputProvenance).toMatchObject({
-      kind: "inter_session",
-      sourceSessionKey: "agent:main:subagent:worker",
-      sourceTool: "subagent_announce",
-    });
+    expectInputProvenance(call?.params, "agent:main:subagent:worker");
   });
 
   it("keeps completion-mode announce internal for nested requester subagent sessions", async () => {
@@ -2234,11 +2272,7 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.deliver).toBe(false);
     expect(call?.params?.channel).toBeUndefined();
     expect(call?.params?.to).toBeUndefined();
-    expect(call?.params?.inputProvenance).toMatchObject({
-      kind: "inter_session",
-      sourceSessionKey: "agent:main:subagent:orchestrator:subagent:worker",
-      sourceTool: "subagent_announce",
-    });
+    expectInputProvenance(call?.params, "agent:main:subagent:orchestrator:subagent:worker");
     const message = typeof call?.params?.message === "string" ? call.params.message : "";
     expect(message).toContain(
       "Convert this completion into a concise internal orchestration update for your parent agent",

@@ -4,7 +4,10 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
+import {
+  formatEmbeddedPiQueueFailureSummary,
+  queueEmbeddedPiMessageWithOutcome,
+} from "../../agents/pi-embedded-runner/runs.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -70,6 +73,7 @@ import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
@@ -1043,14 +1047,20 @@ export async function runReplyAgent(params: {
     const steerSessionId =
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;
-    const steered = queueEmbeddedPiMessage(steerSessionId, followupRun.prompt, {
+    const steerOutcome = queueEmbeddedPiMessageWithOutcome(steerSessionId, followupRun.prompt, {
       steeringMode: resolvePiSteeringModeForQueueMode(resolvedQueue.mode),
       ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
     });
-    if (steered && !effectiveShouldFollowup) {
+    if (steerOutcome.queued && !effectiveShouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
+    }
+    if (!steerOutcome.queued) {
+      const summary = formatEmbeddedPiQueueFailureSummary(steerOutcome);
+      if (summary) {
+        logVerbose(`reply queue steering failed: ${summary}`);
+      }
     }
   }
 
@@ -1170,7 +1180,7 @@ export async function runReplyAgent(params: {
     if (error instanceof ReplyRunAlreadyActiveError) {
       typing.cleanup();
       return markReplyPayloadForSourceSuppressionDelivery({
-        text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+        text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
       });
     }
     throw error;
@@ -1415,10 +1425,11 @@ export async function runReplyAgent(params: {
         });
       }
     }
-    const cliSessionId = isCliProvider(providerUsed, cfg)
+    const usedCliProvider = isCliProvider(providerUsed, cfg);
+    const cliSessionId = usedCliProvider
       ? normalizeOptionalString(runResult.meta?.agentMeta?.sessionId)
       : undefined;
-    const cliSessionBinding = isCliProvider(providerUsed, cfg)
+    const cliSessionBinding = usedCliProvider
       ? runResult.meta?.agentMeta?.cliSessionBinding
       : undefined;
     const runtimeContextTokens =
@@ -1446,6 +1457,7 @@ export async function runReplyAgent(params: {
       usage,
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
+      usageIsContextSnapshot: usedCliProvider ? true : undefined,
       modelUsed,
       providerUsed,
       contextTokensUsed,

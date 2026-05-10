@@ -141,6 +141,22 @@ describe("bedrock mantle discovery", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("skips IAM token generation when plugin discovery is disabled", async () => {
+    const tokenProviderFactory = vi.fn(() => {
+      throw new Error("disabled discovery should not generate a token");
+    });
+
+    await expect(
+      resolveImplicitMantleProvider({
+        env: { AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv,
+        pluginConfig: { discovery: { enabled: false } },
+        tokenProviderFactory,
+      }),
+    ).resolves.toBeNull();
+
+    expect(tokenProviderFactory).not.toHaveBeenCalled();
+  });
+
   it("getCachedIamToken returns cached token when valid", async () => {
     const tokenProvider = vi.fn(async () => "bedrock-cached-token"); // pragma: allowlist secret
     const tokenProviderFactory = createTokenProviderFactory(tokenProvider);

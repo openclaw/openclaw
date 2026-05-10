@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@whiskeysockets/baileys", () => {
+vi.mock("baileys", () => {
   throw new Error("setup plugin load must not load Baileys");
+});
+
+vi.mock("./src/setup-finalize.js", () => {
+  throw new Error("setup status load must not load finalize");
 });
 
 describe("whatsapp setup entry", () => {

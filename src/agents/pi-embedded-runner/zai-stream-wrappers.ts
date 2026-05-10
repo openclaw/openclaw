@@ -5,6 +5,8 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 /**
  * Inject `tool_stream=true` so tool-call deltas stream in real time.
  * Providers can disable this by setting `params.tool_stream=false`.
+ *
+ * @deprecated Provider-owned stream helper; do not use from third-party plugins.
  */
 export function createToolStreamWrapper(
   baseStreamFn: StreamFn | undefined,
@@ -22,4 +24,5 @@ export function createToolStreamWrapper(
   };
 }
 
+/** @deprecated Z.ai provider-owned stream helper; do not use from third-party plugins. */
 export const createZaiToolStreamWrapper = createToolStreamWrapper;

@@ -327,6 +327,8 @@ If the model loads cleanly but full agent turns misbehave, work top-down — con
 - Context errors? Lower `contextWindow` or raise your server limit.
 - OpenAI-compatible server returns `messages[].content ... expected a string`?
   Add `compat.requiresStringContent: true` on that model entry.
+- OpenAI-compatible server returns `validation.keys` or says message entries only allow `role` and `content`?
+  Add `compat.strictMessageKeys: true` on that model entry.
 - Direct tiny `/v1/chat/completions` calls work, but `openclaw infer model run --local`
   fails on Gemma or another local model? Check the provider URL, model ref, auth
   marker, and server logs first; local `model run` does not include agent tools.
